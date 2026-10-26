@@ -51,6 +51,24 @@ byte-for-byte afterwards.
 Writes vary a lot from run to run because the card itself pauses to reorganise
 its flash; the write figures are averages over three or four alternated rounds.
 
+### Latency
+
+How long each single read takes, timed call by call (median, and the slowest 1%
+in brackets). Three alternated rounds, same console.
+
+| Read size | Stock | Turbo Storage | Change |
+|---|---|---|---|
+| SD2Vita, 32 KiB | 3.3 ms (3.6) | **2.3 ms (2.7)** | **−31%** |
+| SD2Vita, 128 KiB | 9.8 ms (10.5) | **7.6 ms (8.7)** | **−23%** |
+| SD2Vita, 1 MiB | 73.9 ms (79.3) | **59.0 ms (62.2)** | **−20%** |
+| Internal, 128 KiB | 8.5 ms (9.9) | **6.4 ms (7.4)** | **−24%** |
+| Internal, 1 MiB | 63.5 ms (97.9) | **46.7 ms (72.0)** | **−26%** |
+
+The slowest reads improve as much as the typical ones. Reads under 32 KiB take the
+standard path and are unchanged. Writes are 0–15% quicker per call; their
+occasional multi-second pauses come from the card itself, with or without Turbo
+Storage.
+
 **What you'll notice:** faster copies, VPK installs and anything that reads or
 writes big files. **What you won't:** most game loading. A game launch we measured
 spent only about 4% of its time waiting for storage; the rest is the game itself.
@@ -145,8 +163,9 @@ The port has no password. Leave Developer mode off unless you're testing.
 
 ## How it compares
 
-Turbo Storage isn't the first attempt at this. **IOStaging** (2023) was built on
-the same observation and was withdrawn by its own author, who suspected it of
+Turbo Storage isn't the first attempt at this. **IOStaging** (2023) by
+[bythos14](https://github.com/bythos14) was built on the same observation, and was
+the inspiration for this project. Its author later withdrew it, suspecting it of
 corrupting data. Turbo Storage takes a deliberately more conservative approach:
 
 | | Turbo Storage |
@@ -299,7 +318,8 @@ Built on [taiHEN](https://github.com/yifanlu/taiHEN),
 [VitaSDK](https://vitasdk.org) and
 [vitacompanion](https://github.com/devnoname120/vitacompanion). The Settings page
 and HUD follow [Wi-Fi Turbo](https://github.com/juanjsebgarcia/vita-turbo-wifi). Thanks to the
-PS Vita homebrew community, and to IOStaging for spotting the problem first.
+PS Vita homebrew community, and especially to [bythos14](https://github.com/bythos14),
+whose IOStaging spotted the problem first and inspired Turbo Storage.
 
 ## License
 

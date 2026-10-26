@@ -48,7 +48,9 @@
       .h2   { font-size: 21px; font-weight: 400; fill: #ffdcb5; }
       .big  { font-size: 66px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }
       .lbl  { font-size: 21px; font-weight: 600; fill: #fff8ef; }
-      .sub  { font-size: 16px; font-weight: 400; fill: #ffc98f; }
+      .big  { font-size: 48px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }
+      .lbl  { font-size: 19px; font-weight: 600; fill: #fff8ef; }
+      .sub  { font-size: 15px; font-weight: 400; fill: #ffc98f; }
       .badge{ font-size: 17px; font-weight: 700; fill: #ffffff; letter-spacing: 0.4px; }
     </style>
   </defs>
@@ -87,43 +89,57 @@
 
   <!-- tiles -->
   <g>
-    <rect x="60" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <rect x="430" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <rect x="800" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <rect x="60" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <rect x="430" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <rect x="800" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
-    <!-- top highlight lines -->
+    <rect x="60" y="166" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="430" y="166" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="800" y="166" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="60" y="306" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="430" y="306" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="800" y="306" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="60" y="446" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="430" y="446" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="800" y="446" width="340" height="126" rx="18" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
     <g stroke="#ffffff" stroke-opacity="0.35" stroke-width="1">
-      <line x1="84" y1="171" x2="376" y2="171"/>
-      <line x1="454" y1="171" x2="746" y2="171"/>
-      <line x1="824" y1="171" x2="1116" y2="171"/>
-      <line x1="84" y1="379" x2="376" y2="379"/>
-      <line x1="454" y1="379" x2="746" y2="379"/>
-      <line x1="824" y1="379" x2="1116" y2="379"/>
+      <line x1="82" y1="167" x2="378" y2="167"/>
+      <line x1="452" y1="167" x2="748" y2="167"/>
+      <line x1="822" y1="167" x2="1118" y2="167"/>
+      <line x1="82" y1="307" x2="378" y2="307"/>
+      <line x1="452" y1="307" x2="748" y2="307"/>
+      <line x1="822" y1="307" x2="1118" y2="307"/>
+      <line x1="82" y1="447" x2="378" y2="447"/>
+      <line x1="452" y1="447" x2="748" y2="447"/>
+      <line x1="822" y1="447" x2="1118" y2="447"/>
     </g>
   </g>
 
   <g filter="url(#glow)">
-    <text class="t big" x="88" y="254">+26%</text>
-    <text class="t big" x="458" y="254">+36%</text>
-    <text class="t big" x="828" y="254">0</text>
-    <text class="t big" x="88" y="462">+36%</text>
-    <text class="t big" x="458" y="462">+11%</text>
-    <text class="t big" x="828" y="462">0</text>
+    <text class="t big" x="86" y="224">+26%</text>
+    <text class="t big" x="456" y="224">+36%</text>
+    <text class="t big" x="826" y="224">0</text>
+    <text class="t big" x="86" y="364">+36%</text>
+    <text class="t big" x="456" y="364">+11%</text>
+    <text class="t big" x="826" y="364">0</text>
+    <text class="t big" x="86" y="504">−23%</text>
+    <text class="t big" x="456" y="504">−24%</text>
+    <text class="t big" x="826" y="504">100%</text>
   </g>
 
-  <text class="t lbl" x="88" y="296">SD2Vita reads</text>
-  <text class="t sub" x="88" y="326">13.3 → 16.8 MB/s</text>
-  <text class="t lbl" x="458" y="296">internal storage reads</text>
-  <text class="t sub" x="458" y="326">15.5 → 21.1 MB/s</text>
-  <text class="t lbl" x="828" y="296">differences from stock</text>
-  <text class="t sub" x="828" y="326">80,000+ transfers checked byte for byte</text>
-  <text class="t lbl" x="88" y="504">SD2Vita writes</text>
-  <text class="t sub" x="88" y="534">4.4 → 6.0 MB/s</text>
-  <text class="t lbl" x="458" y="504">internal storage writes</text>
-  <text class="t sub" x="458" y="534">7.4 → 8.2 MB/s</text>
-  <text class="t lbl" x="828" y="504">writes held back or cached</text>
-  <text class="t sub" x="828" y="534">every write is on the card when it returns</text>
-  <text class="t sub" x="60" y="604">MB/s = megabytes per second (not megabits). Measured on one PS Vita (PCH-1000, 3.60); results depend on your microSD card.</text>
+  <text class="t lbl" x="86" y="254">SD2Vita reads</text>
+  <text class="t sub" x="86" y="277">13.3 → 16.8 MB/s</text>
+  <text class="t lbl" x="456" y="254">internal storage reads</text>
+  <text class="t sub" x="456" y="277">15.5 → 21.1 MB/s</text>
+  <text class="t lbl" x="826" y="254">differences from stock</text>
+  <text class="t sub" x="826" y="277">80,000+ transfers checked byte for byte</text>
+  <text class="t lbl" x="86" y="394">SD2Vita writes</text>
+  <text class="t sub" x="86" y="417">4.4 → 6.0 MB/s</text>
+  <text class="t lbl" x="456" y="394">internal storage writes</text>
+  <text class="t sub" x="456" y="417">7.4 → 8.2 MB/s</text>
+  <text class="t lbl" x="826" y="394">writes held back or cached</text>
+  <text class="t sub" x="826" y="417">every write is on the card when it returns</text>
+  <text class="t lbl" x="86" y="534">SD2Vita read latency</text>
+  <text class="t sub" x="86" y="557">9.8 → 7.6 ms per 128 KiB read</text>
+  <text class="t lbl" x="456" y="534">internal read latency</text>
+  <text class="t sub" x="456" y="557">8.5 → 6.4 ms per 128 KiB read</text>
+  <text class="t lbl" x="826" y="534">Sony's own storage driver</text>
+  <text class="t sub" x="826" y="557">unmodified: only the buffer changes</text>
+  <text class="t sub" x="60" y="608">MB/s = megabytes per second (not megabits). Measured on one PS Vita (PCH-1000, 3.60); results depend on your microSD card.</text>
 </svg>

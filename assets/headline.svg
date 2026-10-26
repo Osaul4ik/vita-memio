@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <!-- tangerine backdrop with a lighter bloom behind the title -->
+    <radialGradient id="bg" cx="0.32" cy="0.05" r="1.15">
+      <stop offset="0"    stop-color="#ff9500"/>
+      <stop offset="0.38" stop-color="#d45f00"/>
+      <stop offset="0.75" stop-color="#5c2300"/>
+      <stop offset="1"    stop-color="#200a00"/>
+    </radialGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.75">
+      <stop offset="0.6" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1"   stop-color="#000" stop-opacity="0.45"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"   stop-color="#ffd38a" stop-opacity="0"/>
+      <stop offset="0.3" stop-color="#fff0d6" stop-opacity="0.9"/>
+      <stop offset="0.7" stop-color="#ffb340" stop-opacity="0.7"/>
+      <stop offset="1"   stop-color="#ffd38a" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tileStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="tileFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.11"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/>
+    </linearGradient>
+    <linearGradient id="numFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffe4b8"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feColorMatrix in="b" type="matrix"
+        values="0 0 0 0 1  0 0 0 0 0.65  0 0 0 0 0.15  0 0 0 0.55 0" result="c"/>
+      <feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-10%" y="-50%" width="120%" height="200%">
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+    <filter id="bokeh" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <style>
+      .t    { font-family: -apple-system, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif; }
+      .h1   { font-size: 50px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .h1l  { font-size: 50px; font-weight: 300; fill: #ffe3c0; letter-spacing: -0.5px; }
+      .h2   { font-size: 21px; font-weight: 400; fill: #ffdcb5; }
+      .big  { font-size: 66px; font-weight: 800; fill: url(#numFill); letter-spacing: -1px; }
+      .lbl  { font-size: 21px; font-weight: 600; fill: #fff8ef; }
+      .sub  { font-size: 16px; font-weight: 400; fill: #ffc98f; }
+      .badge{ font-size: 17px; font-weight: 700; fill: #ffffff; letter-spacing: 0.4px; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- light ribbons (generic waves) -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M -40 470 C 220 380, 420 560, 700 470 S 1060 380, 1260 450" stroke="url(#ribbon)" stroke-width="2.4" opacity="0.55" filter="url(#soft)"/>
+    <path d="M -40 500 C 260 420, 460 590, 740 495 S 1080 410, 1260 485" stroke="url(#ribbon)" stroke-width="1.4" opacity="0.45"/>
+    <path d="M -40 535 C 240 470, 480 610, 760 525 S 1100 455, 1260 520" stroke="url(#ribbon)" stroke-width="3.2" opacity="0.25" filter="url(#soft)"/>
+    <path d="M -40 420 C 300 340, 500 500, 820 420 S 1120 350, 1260 400" stroke="url(#ribbon)" stroke-width="1" opacity="0.35"/>
+    <path d="M -40 120 C 260 60, 520 190, 820 110 S 1100 40, 1260 90" stroke="url(#ribbon)" stroke-width="1" opacity="0.18"/>
+  </g>
+
+  <!-- bokeh -->
+  <g fill="#ffd9a0" filter="url(#bokeh)">
+    <circle cx="1080" cy="150" r="7" opacity="0.30"/>
+    <circle cx="1010" cy="128" r="4" opacity="0.35"/>
+    <circle cx="880"  cy="40"  r="5" opacity="0.25"/>
+    <circle cx="160"  cy="600" r="6" opacity="0.28"/>
+    <circle cx="420"  cy="610" r="4" opacity="0.30"/>
+    <circle cx="690"  cy="598" r="8" opacity="0.18"/>
+    <circle cx="1140" cy="602" r="5" opacity="0.30"/>
+    <circle cx="560"  cy="30"  r="3" opacity="0.30"/>
+  </g>
+
+  <rect width="1200" height="630" fill="url(#vignette)"/>
+
+  <!-- title, subtitle, firmware badge -->
+  <text class="t" x="60" y="86"><tspan class="h1">Turbo Storage</tspan><tspan class="h1l"> for PS Vita</tspan></text>
+  <text class="t h2" x="60" y="122">A taiHEN plugin that speeds up SD2Vita and internal storage. Stock vs Turbo, measured on hardware.</text>
+  <text class="t h2" x="60" y="152">A safer, more conservative approach than the withdrawn IOStaging plugin.</text>
+  <rect x="898" y="52" width="242" height="42" rx="21" fill="#ffffff" fill-opacity="0.10" stroke="#ffffff" stroke-opacity="0.45"/>
+  <text class="t badge" x="1019" y="79" text-anchor="middle">FIRMWARE 3.60–3.74</text>
+
+  <!-- tiles -->
+  <g>
+    <rect x="60" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="430" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="800" y="170" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="60" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="430" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <rect x="800" y="378" width="340" height="190" rx="20" fill="url(#tileFill)" stroke="url(#tileStroke)" stroke-width="1.2"/>
+    <!-- top highlight lines -->
+    <g stroke="#ffffff" stroke-opacity="0.35" stroke-width="1">
+      <line x1="84" y1="171" x2="376" y2="171"/>
+      <line x1="454" y1="171" x2="746" y2="171"/>
+      <line x1="824" y1="171" x2="1116" y2="171"/>
+      <line x1="84" y1="379" x2="376" y2="379"/>
+      <line x1="454" y1="379" x2="746" y2="379"/>
+      <line x1="824" y1="379" x2="1116" y2="379"/>
+    </g>
+  </g>
+
+  <g filter="url(#glow)">
+    <text class="t big" x="88" y="254">+26%</text>
+    <text class="t big" x="458" y="254">+36%</text>
+    <text class="t big" x="828" y="254">0</text>
+    <text class="t big" x="88" y="462">+36%</text>
+    <text class="t big" x="458" y="462">+11%</text>
+    <text class="t big" x="828" y="462">0</text>
+  </g>
+
+  <text class="t lbl" x="88" y="296">SD2Vita reads</text>
+  <text class="t sub" x="88" y="326">13.3 → 16.8 MB/s</text>
+  <text class="t lbl" x="458" y="296">internal storage reads</text>
+  <text class="t sub" x="458" y="326">15.5 → 21.1 MB/s</text>
+  <text class="t lbl" x="828" y="296">differences from stock</text>
+  <text class="t sub" x="828" y="326">80,000+ transfers checked byte for byte</text>
+  <text class="t lbl" x="88" y="504">SD2Vita writes</text>
+  <text class="t sub" x="88" y="534">4.4 → 6.0 MB/s</text>
+  <text class="t lbl" x="458" y="504">internal storage writes</text>
+  <text class="t sub" x="458" y="534">7.4 → 8.2 MB/s</text>
+  <text class="t lbl" x="828" y="504">writes held back or cached</text>
+  <text class="t sub" x="828" y="534">every write is on the card when it returns</text>
+  <text class="t sub" x="60" y="604">MB/s = megabytes per second (not megabits). Measured on one PS Vita (PCH-1000, 3.60); results depend on your microSD card.</text>
+</svg>

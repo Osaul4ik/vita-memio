@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""gen_i18n.py - writes settings_app/storageturbo_i18n_table.h from the table below.
+
+Columns follow the Vita system-language order (TS_LANG_*). English (US/UK) is
+authoritative; the others are machine translations, open to correction.
+Run from the repo root:  python3 tools/gen_i18n.py
+"""
+LANGS = ["ja", "en", "fr", "es", "de", "it", "nl", "pt", "ru", "ko", "zht", "zhs",
+         "fi", "sv", "da", "no", "pl", "ptbr", "engb", "tr"]
+
+T = {}
+def s(id_, **kw):
+    T[id_] = kw
+
+s("TS_I18N_TITLE", **{l: "Turbo Storage" for l in LANGS})
+s("TS_I18N_ROW_SD2VITA", en="Faster SD2Vita", engb="Faster SD2Vita", ja="SD2Vitaを高速化",
+  fr="SD2Vita plus rapide", es="SD2Vita más rápido", de="Schnellere SD2Vita", it="SD2Vita più veloce",
+  nl="Snellere SD2Vita", pt="SD2Vita mais rápido", ptbr="SD2Vita mais rápido", ru="Ускорить SD2Vita",
+  ko="SD2Vita 가속", zht="加速 SD2Vita", zhs="加速 SD2Vita", fi="Nopeampi SD2Vita",
+  sv="Snabbare SD2Vita", da="Hurtigere SD2Vita", no="Raskere SD2Vita", pl="Szybsze SD2Vita",
+  tr="Daha hızlı SD2Vita")
+s("TS_I18N_ROW_INTERNAL", en="Faster internal storage", engb="Faster internal storage",
+  ja="本体ストレージを高速化", fr="Stockage interne plus rapide", es="Almacenamiento interno más rápido",
+  de="Schnellerer interner Speicher", it="Memoria interna più veloce", nl="Snellere interne opslag",
+  pt="Armazenamento interno mais rápido", ptbr="Armazenamento interno mais rápido",
+  ru="Ускорить встроенную память", ko="내장 저장소 가속", zht="加速內建儲存空間", zhs="加速内置存储",
+  fi="Nopeampi sisäinen tallennustila", sv="Snabbare intern lagring", da="Hurtigere intern lagring",
+  no="Raskere intern lagring", pl="Szybsza pamięć wewnętrzna", tr="Daha hızlı dahili depolama")
+s("TS_I18N_ROW_HUD", en="Storage HUD", engb="Storage HUD", ja="ストレージHUD", fr="HUD de stockage",
+  es="HUD de almacenamiento", de="Speicher-HUD", it="HUD memoria", nl="Opslag-HUD", pt="HUD de armazenamento",
+  ptbr="HUD de armazenamento", ru="HUD памяти", ko="저장소 HUD", zht="儲存 HUD", zhs="存储 HUD",
+  fi="Tallennus-HUD", sv="Lagrings-HUD", da="Lager-HUD", no="Lagrings-HUD", pl="HUD pamięci",
+  tr="Depolama HUD")
+s("TS_I18N_ROW_HUD_POS", en="HUD position", engb="HUD position", ja="HUDの位置", fr="Position du HUD",
+  es="Posición del HUD", de="HUD-Position", it="Posizione HUD", nl="HUD-positie", pt="Posição do HUD",
+  ptbr="Posição do HUD", ru="Положение HUD", ko="HUD 위치", zht="HUD 位置", zhs="HUD 位置",
+  fi="HUD:n sijainti", sv="HUD-position", da="HUD-placering", no="HUD-plassering", pl="Położenie HUD",
+  tr="HUD konumu")
+s("TS_I18N_ROW_DEVMODE", en="Developer mode", engb="Developer mode", ja="開発者モード",
+  fr="Mode développeur", es="Modo desarrollador", de="Entwicklermodus", it="Modalità sviluppatore",
+  nl="Ontwikkelaarsmodus", pt="Modo de programador", ptbr="Modo de desenvolvedor", ru="Режим разработчика",
+  ko="개발자 모드", zht="開發者模式", zhs="开发者模式", fi="Kehittäjätila", sv="Utvecklarläge",
+  da="Udviklertilstand", no="Utviklermodus", pl="Tryb programisty", tr="Geliştirici modu")
+s("TS_I18N_HINT_SD2VITA",
+  en="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
+  engb="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
+  ja="SD2Vitaアダプターに入れたmicroSDカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",
+  fr="Accélère la lecture et l'écriture d'une carte microSD dans un adaptateur SD2Vita. Vos fichiers et leur mode d'enregistrement ne changent pas. Désactivez en cas de doute. Prend effet immédiatement, sans redémarrage.",
+  es="Acelera la lectura y escritura de una tarjeta microSD en un adaptador SD2Vita. Tus archivos y la forma de guardarlos no cambian. Desactívalo si sospechas un problema. Se aplica al instante; no hace falta reiniciar.",
+  de="Beschleunigt Lesen und Schreiben einer microSD-Karte in einem SD2Vita-Adapter. Deine Dateien und ihre Speicherung bleiben unverändert. Bei Verdacht auf ein Problem ausschalten. Wirkt sofort, ohne Neustart.",
+  it="Velocizza la lettura e la scrittura di una microSD in un adattatore SD2Vita. I file e il modo in cui sono salvati non cambiano. Disattiva se sospetti un problema. Ha effetto subito, senza riavviare.",
+  nl="Versnelt het lezen en schrijven van een microSD-kaart in een SD2Vita-adapter. Je bestanden en de manier van opslaan veranderen niet. Zet uit als je een probleem vermoedt. Werkt meteen; opnieuw opstarten is niet nodig.",
+  pt="Acelera a leitura e a escrita de um cartão microSD num adaptador SD2Vita. Os seus ficheiros e a forma como são guardados não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não é preciso reiniciar.",
+  ptbr="Acelera a leitura e a gravação de um cartão microSD em um adaptador SD2Vita. Seus arquivos e a forma como são salvos não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não precisa reiniciar.",
+  ru="Ускоряет чтение и запись карты microSD в адаптере SD2Vita. Ваши файлы и способ их хранения не меняются. Выключите, если подозреваете проблему. Действует сразу, перезагрузка не нужна.",
+  ko="SD2Vita 어댑터에 넣은 microSD 카드의 읽기와 쓰기를 빠르게 합니다. 파일과 저장 방식은 바뀌지 않습니다. 문제가 의심되면 끄세요. 즉시 적용되며 재시작할 필요가 없습니다.",
+  zht="加快 SD2Vita 轉接器中 microSD 記憶卡的讀寫速度。檔案及其儲存方式不會改變。若懷疑有問題，請關閉。立即生效，無需重新啟動。",
+  zhs="加快 SD2Vita 转接器中 microSD 存储卡的读写速度。文件及其存储方式不会改变。若怀疑有问题，请关闭。立即生效，无需重启。",
+  fi="Nopeuttaa SD2Vita-sovittimessa olevan microSD-kortin lukemista ja kirjoittamista. Tiedostosi ja niiden tallennustapa eivät muutu. Kytke pois, jos epäilet ongelmaa. Tulee voimaan heti; uudelleenkäynnistystä ei tarvita.",
+  sv="Snabbar upp läsning och skrivning på ett microSD-kort i en SD2Vita-adapter. Dina filer och hur de lagras ändras inte. Stäng av om du misstänker ett problem. Gäller direkt; ingen omstart behövs.",
+  da="Gør læsning og skrivning på et microSD-kort i en SD2Vita-adapter hurtigere. Dine filer og måden, de gemmes på, ændres ikke. Slå fra, hvis du har mistanke om et problem. Træder i kraft med det samme; ingen genstart nødvendig.",
+  no="Gjør lesing og skriving på et microSD-kort i en SD2Vita-adapter raskere. Filene dine og måten de lagres på endres ikke. Slå av hvis du mistenker et problem. Trer i kraft umiddelbart; ingen omstart nødvendig.",
+  pl="Przyspiesza odczyt i zapis karty microSD w adapterze SD2Vita. Twoje pliki i sposób ich zapisu się nie zmieniają. Wyłącz, jeśli podejrzewasz problem. Działa od razu, bez ponownego uruchamiania.",
+  tr="SD2Vita adaptöründeki microSD kartın okuma ve yazma hızını artırır. Dosyalarınız ve saklanma biçimleri değişmez. Bir sorundan şüphelenirseniz kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
+s("TS_I18N_HINT_INTERNAL",
+  en="Speeds up reading and writing the console's built-in storage. Off by default as a precaution, because this storage also holds system data and plugin settings. As an extra precaution, turn it off before updating or downgrading the firmware. Takes effect immediately; no reboot needed.",
+  engb="Speeds up reading and writing the console's built-in storage. Off by default as a precaution, because this storage also holds system data and plugin settings. As an extra precaution, turn it off before updating or downgrading the firmware. Takes effect immediately; no reboot needed.",
+  ja="本体内蔵ストレージの読み書きを高速化します。このストレージにはシステムデータやプラグインの設定も保存されているため、念のため初期設定はオフです。念のため、ファームウェアのアップデートやダウングレードの前にはオフにしてください。すぐに反映され、再起動は不要です。",
+  fr="Accélère la lecture et l'écriture du stockage intégré de la console. Désactivé par défaut par précaution, car ce stockage contient aussi des données système et les réglages des plugins. Par précaution supplémentaire, désactivez-le avant de mettre à jour ou de rétrograder le firmware. Prend effet immédiatement, sans redémarrage.",
+  es="Acelera la lectura y escritura del almacenamiento integrado de la consola. Desactivado por defecto como precaución, porque este almacenamiento también guarda datos del sistema y la configuración de los plugins. Como precaución adicional, desactívalo antes de actualizar o volver a una versión anterior del firmware. Se aplica al instante; no hace falta reiniciar.",
+  de="Beschleunigt Lesen und Schreiben des eingebauten Speichers der Konsole. Vorsichtshalber standardmäßig aus, da dieser Speicher auch Systemdaten und Plugin-Einstellungen enthält. Schalte es zur zusätzlichen Sicherheit aus, bevor du die Firmware aktualisierst oder downgradest. Wirkt sofort, ohne Neustart.",
+  it="Velocizza la lettura e la scrittura della memoria integrata della console. Disattivato per impostazione predefinita per precauzione, perché questa memoria contiene anche dati di sistema e impostazioni dei plugin. Come ulteriore precauzione, disattivalo prima di aggiornare o fare il downgrade del firmware. Ha effetto subito, senza riavviare.",
+  nl="Versnelt het lezen en schrijven van de ingebouwde opslag van de console. Standaard uit uit voorzorg, omdat deze opslag ook systeemgegevens en plugininstellingen bevat. Zet het voor de zekerheid uit voordat je de firmware bijwerkt of downgradet. Werkt meteen; opnieuw opstarten is niet nodig.",
+  pt="Acelera a leitura e a escrita do armazenamento integrado da consola. Desligado por predefinição por precaução, porque este armazenamento também guarda dados do sistema e definições de plugins. Como precaução adicional, desligue-o antes de atualizar ou reverter o firmware. Tem efeito imediato; não é preciso reiniciar.",
+  ptbr="Acelera a leitura e a gravação do armazenamento integrado do console. Desligado por padrão por precaução, porque esse armazenamento também guarda dados do sistema e configurações de plugins. Como precaução extra, desligue antes de atualizar ou fazer downgrade do firmware. Tem efeito imediato; não precisa reiniciar.",
+  ru="Ускоряет чтение и запись встроенной памяти консоли. По умолчанию выключено из предосторожности: в этой памяти также хранятся системные данные и настройки плагинов. В качестве дополнительной меры предосторожности выключайте его перед обновлением или понижением версии прошивки. Действует сразу, перезагрузка не нужна.",
+  ko="본체 내장 저장소의 읽기와 쓰기를 빠르게 합니다. 이 저장소에는 시스템 데이터와 플러그인 설정도 있으므로 만일을 위해 기본값은 꺼짐입니다. 추가 예방 조치로, 펌웨어를 업데이트하거나 다운그레이드하기 전에 끄세요. 즉시 적용되며 재시작할 필요가 없습니다.",
+  zht="加快主機內建儲存空間的讀寫速度。由於此儲存空間也存放系統資料與外掛程式設定，為求謹慎，預設為關閉。為求更加謹慎，更新或降級韌體前請先關閉。立即生效，無需重新啟動。",
+  zhs="加快主机内置存储的读写速度。由于该存储还保存系统数据和插件设置，为谨慎起见，默认关闭。为进一步谨慎起见，更新或降级固件前请先关闭。立即生效，无需重启。",
+  fi="Nopeuttaa konsolin sisäisen tallennustilan lukemista ja kirjoittamista. Oletuksena pois päältä varotoimena, koska tässä tallennustilassa on myös järjestelmän tietoja ja liitännäisten asetuksia. Lisävarotoimena kytke se pois ennen laiteohjelmiston päivittämistä tai alentamista. Tulee voimaan heti; uudelleenkäynnistystä ei tarvita.",
+  sv="Snabbar upp läsning och skrivning på konsolens inbyggda lagring. Av som standard av försiktighetsskäl, eftersom lagringen även innehåller systemdata och plugininställningar. Som en extra försiktighetsåtgärd, stäng av det innan du uppdaterar eller nedgraderar firmwaren. Gäller direkt; ingen omstart behövs.",
+  da="Gør læsning og skrivning på konsollens indbyggede lager hurtigere. Slået fra som standard af forsigtighed, fordi lageret også rummer systemdata og plugin-indstillinger. Som en ekstra forholdsregel skal du slå det fra, før du opdaterer eller nedgraderer firmwaren. Træder i kraft med det samme; ingen genstart nødvendig.",
+  no="Gjør lesing og skriving på konsollens innebygde lagring raskere. Av som standard av forsiktighet, fordi lagringen også inneholder systemdata og plugininnstillinger. Som et ekstra forholdsregel bør du slå det av før du oppdaterer eller nedgraderer fastvaren. Trer i kraft umiddelbart; ingen omstart nødvendig.",
+  pl="Przyspiesza odczyt i zapis wbudowanej pamięci konsoli. Domyślnie wyłączone dla bezpieczeństwa, ponieważ ta pamięć przechowuje też dane systemowe i ustawienia wtyczek. Dla dodatkowego bezpieczeństwa wyłącz je przed aktualizacją lub obniżeniem wersji oprogramowania. Działa od razu, bez ponownego uruchamiania.",
+  tr="Konsolun dahili depolamasının okuma ve yazma hızını artırır. Bu depolama sistem verilerini ve eklenti ayarlarını da tuttuğu için önlem olarak varsayılan olarak kapalıdır. Ek bir önlem olarak, yazılımı güncellemeden veya eski sürüme düşürmeden önce kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
+s("TS_I18N_HINT_HUD",
+  en="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
+  engb="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
+  ja="すべてのアプリ上にストレージの速度をリアルタイム表示します。コンパクト：使用中のストレージごとに1行。拡張：合計とエラーも表示。",
+  fr="Affiche la vitesse du stockage en direct par-dessus toutes les applications. Compact : une ligne par stockage utilisé. Étendu : ajoute les totaux et les erreurs.",
+  es="Muestra la velocidad del almacenamiento en directo sobre cualquier aplicación. Compacto: una línea por almacenamiento en uso. Extendido: añade totales y errores.",
+  de="Zeigt die Speichergeschwindigkeit live über jeder App. Kompakt: eine Zeile pro genutztem Speicher. Erweitert: zusätzlich Summen und Fehler.",
+  it="Mostra la velocità della memoria in tempo reale sopra ogni app. Compatto: una riga per memoria in uso. Esteso: aggiunge totali ed errori.",
+  nl="Toont de opslagsnelheid live boven elke app. Compact: één regel per opslag in gebruik. Uitgebreid: voegt totalen en fouten toe.",
+  pt="Mostra a velocidade do armazenamento em tempo real sobre qualquer aplicação. Compacto: uma linha por armazenamento em uso. Alargado: acrescenta totais e erros.",
+  ptbr="Mostra a velocidade do armazenamento ao vivo sobre qualquer app. Compacto: uma linha por armazenamento em uso. Estendido: adiciona totais e erros.",
+  ru="Показывает скорость хранилища в реальном времени поверх любого приложения. Компактно: строка на каждое используемое хранилище. Расширенно: добавляет итоги и ошибки.",
+  ko="모든 앱 위에 저장소 속도를 실시간으로 표시합니다. 간단히: 사용 중인 저장소마다 한 줄. 자세히: 합계와 오류 추가.",
+  zht="在所有應用程式上即時顯示儲存速度。精簡：每個使用中的儲存空間一行。詳細：加入總計與錯誤。",
+  zhs="在所有应用上实时显示存储速度。精简：每个使用中的存储一行。详细：加入总计与错误。",
+  fi="Näyttää tallennuksen nopeuden reaaliajassa jokaisen sovelluksen päällä. Tiivis: rivi jokaista käytössä olevaa tallennustilaa kohden. Laaja: lisää summat ja virheet.",
+  sv="Visar lagringshastigheten live över alla appar. Kompakt: en rad per lagring som används. Utökad: lägger till summor och fel.",
+  da="Viser lagerhastigheden live over alle apps. Kompakt: én linje pr. lager i brug. Udvidet: tilføjer totaler og fejl.",
+  no="Viser lagringshastigheten live over alle apper. Kompakt: én linje per lagring i bruk. Utvidet: legger til totaler og feil.",
+  pl="Pokazuje prędkość pamięci na żywo nad każdą aplikacją. Kompaktowy: jedna linia na używaną pamięć. Rozszerzony: dodaje sumy i błędy.",
+  tr="Depolama hızını her uygulamanın üzerinde canlı gösterir. Kompakt: kullanılan her depolama için bir satır. Genişletilmiş: toplamları ve hataları ekler.")
+s("TS_I18N_HINT_HUD_POS", en="Which corner of the screen the HUD sits in.", engb="Which corner of the screen the HUD sits in.",
+  ja="HUDを表示する画面の隅。", fr="Le coin de l'écran où s'affiche le HUD.", es="En qué esquina de la pantalla aparece el HUD.",
+  de="In welcher Bildschirmecke das HUD erscheint.", it="In quale angolo dello schermo appare l'HUD.",
+  nl="In welke hoek van het scherm de HUD staat.", pt="Em que canto do ecrã aparece o HUD.",
+  ptbr="Em qual canto da tela o HUD aparece.", ru="В каком углу экрана отображается HUD.",
+  ko="HUD가 표시될 화면 모서리.", zht="HUD 顯示在螢幕的哪個角落。", zhs="HUD 显示在屏幕的哪个角落。",
+  fi="Missä näytön kulmassa HUD näkyy.", sv="I vilket hörn av skärmen HUD:en visas.",
+  da="Hvilket hjørne af skærmen HUD'en vises i.", no="Hvilket hjørne av skjermen HUD-en vises i.",
+  pl="W którym rogu ekranu pojawia się HUD.", tr="HUD'nin ekranın hangi köşesinde görüneceği.")
+s("TS_I18N_HINT_DEVMODE",
+  en="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
+  engb="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
+  ja="診断用にローカルネットワーク上でコマンドポート（TCP 1340）を開きます。テスト時以外はオフにしてください。",
+  fr="Ouvre un port de commande (TCP 1340) sur votre réseau local pour le diagnostic. Laissez désactivé sauf pour des tests.",
+  es="Abre un puerto de comandos (TCP 1340) en tu red local para diagnóstico. Déjalo desactivado salvo para pruebas.",
+  de="Öffnet einen Befehlsport (TCP 1340) im lokalen Netzwerk für die Diagnose. Nur zum Testen einschalten.",
+  it="Apre una porta comandi (TCP 1340) sulla rete locale per la diagnostica. Lascia disattivato se non stai testando.",
+  nl="Opent een opdrachtpoort (TCP 1340) op je lokale netwerk voor diagnose. Laat uit tenzij je test.",
+  pt="Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado exceto para testes.",
+  ptbr="Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado, a não ser para testes.",
+  ru="Открывает командный порт (TCP 1340) в локальной сети для диагностики. Включайте только для тестирования.",
+  ko="진단을 위해 로컬 네트워크에 명령 포트(TCP 1340)를 엽니다. 테스트할 때가 아니면 끄세요.",
+  zht="在區域網路上開啟命令連接埠（TCP 1340）以供診斷。除非正在測試，請保持關閉。",
+  zhs="在局域网上打开命令端口（TCP 1340）以供诊断。除非正在测试，请保持关闭。",
+  fi="Avaa komentoportin (TCP 1340) lähiverkkoon vianmääritystä varten. Pidä pois päältä, ellet testaa.",
+  sv="Öppnar en kommandoport (TCP 1340) i ditt lokala nätverk för felsökning. Låt vara av om du inte testar.",
+  da="Åbner en kommandoport (TCP 1340) på dit lokale netværk til fejlfinding. Lad den være slået fra, medmindre du tester.",
+  no="Åpner en kommandoport (TCP 1340) på det lokale nettverket for feilsøking. La være av med mindre du tester.",
+  pl="Otwiera port poleceń (TCP 1340) w sieci lokalnej do diagnostyki. Zostaw wyłączone, jeśli nie testujesz.",
+  tr="Tanılama için yerel ağınızda bir komut bağlantı noktası (TCP 1340) açar. Test etmiyorsanız kapalı bırakın.")
+def items(id_, d):
+    s(id_, **d)
+items("TS_I18N_ITEM_HUD_OFF", dict(en="Off", engb="Off", ja="オフ", fr="Désactivé", es="Desactivado", de="Aus", it="Disattivato", nl="Uit", pt="Desligado", ptbr="Desligado", ru="Выкл.", ko="끔", zht="關閉", zhs="关闭", fi="Pois", sv="Av", da="Fra", no="Av", pl="Wyłączony", tr="Kapalı"))
+items("TS_I18N_ITEM_HUD_COMPACT", dict(en="Compact", engb="Compact", ja="コンパクト", fr="Compact", es="Compacto", de="Kompakt", it="Compatto", nl="Compact", pt="Compacto", ptbr="Compacto", ru="Компактно", ko="간단히", zht="精簡", zhs="精简", fi="Tiivis", sv="Kompakt", da="Kompakt", no="Kompakt", pl="Kompaktowy", tr="Kompakt"))
+items("TS_I18N_ITEM_HUD_EXTENDED", dict(en="Extended", engb="Extended", ja="拡張", fr="Étendu", es="Extendido", de="Erweitert", it="Esteso", nl="Uitgebreid", pt="Alargado", ptbr="Estendido", ru="Расширенно", ko="자세히", zht="詳細", zhs="详细", fi="Laaja", sv="Utökad", da="Udvidet", no="Utvidet", pl="Rozszerzony", tr="Genişletilmiş"))
+items("TS_I18N_ITEM_POS_TL", dict(en="Top left", engb="Top left", ja="左上", fr="En haut à gauche", es="Arriba a la izquierda", de="Oben links", it="In alto a sinistra", nl="Linksboven", pt="Canto superior esquerdo", ptbr="Canto superior esquerdo", ru="Слева сверху", ko="왼쪽 위", zht="左上", zhs="左上", fi="Ylävasen", sv="Uppe till vänster", da="Øverst til venstre", no="Øverst til venstre", pl="Lewy górny", tr="Sol üst"))
+items("TS_I18N_ITEM_POS_TR", dict(en="Top right", engb="Top right", ja="右上", fr="En haut à droite", es="Arriba a la derecha", de="Oben rechts", it="In alto a destra", nl="Rechtsboven", pt="Canto superior direito", ptbr="Canto superior direito", ru="Справа сверху", ko="오른쪽 위", zht="右上", zhs="右上", fi="Yläoikea", sv="Uppe till höger", da="Øverst til højre", no="Øverst til høyre", pl="Prawy górny", tr="Sağ üst"))
+items("TS_I18N_ITEM_POS_BL", dict(en="Bottom left", engb="Bottom left", ja="左下", fr="En bas à gauche", es="Abajo a la izquierda", de="Unten links", it="In basso a sinistra", nl="Linksonder", pt="Canto inferior esquerdo", ptbr="Canto inferior esquerdo", ru="Слева снизу", ko="왼쪽 아래", zht="左下", zhs="左下", fi="Alavasen", sv="Nere till vänster", da="Nederst til venstre", no="Nederst til venstre", pl="Lewy dolny", tr="Sol alt"))
+items("TS_I18N_ITEM_POS_BR", dict(en="Bottom right", engb="Bottom right", ja="右下", fr="En bas à droite", es="Abajo a la derecha", de="Unten rechts", it="In basso a destra", nl="Rechtsonder", pt="Canto inferior direito", ptbr="Canto inferior direito", ru="Справа снизу", ko="오른쪽 아래", zht="右下", zhs="右下", fi="Alaoikea", sv="Nere till höger", da="Nederst til højre", no="Nederst til høyre", pl="Prawy dolny", tr="Sağ alt"))
+s("TS_I18N_ST_FALLBACK",
+  en="Switched back to standard after an error. Turn off and on to retry; please report it.",
+  engb="Switched back to standard after an error. Turn off and on to retry; please report it.",
+  ja="エラーのため通常に戻りました。オフにしてからオンにすると再試行します。報告をお願いします。",
+  fr="Repassé en mode standard après une erreur. Désactivez puis réactivez pour réessayer ; merci de le signaler.",
+  es="Volvió al modo estándar tras un error. Desactívalo y actívalo para reintentar; por favor, infórmalo.",
+  de="Nach einem Fehler auf Normalbetrieb zurückgeschaltet. Aus- und wieder einschalten zum erneuten Versuch; bitte melden.",
+  it="Tornato alla modalità standard dopo un errore. Disattiva e riattiva per riprovare; per favore segnalalo.",
+  nl="Na een fout teruggeschakeld naar standaard. Zet uit en weer aan om opnieuw te proberen; meld het alsjeblieft.",
+  pt="Voltou ao modo padrão após um erro. Desligue e ligue para tentar de novo; por favor, reporte.",
+  ptbr="Voltou ao modo padrão após um erro. Desligue e ligue para tentar de novo; por favor, reporte.",
+  ru="После ошибки возвращён обычный режим. Выключите и включите, чтобы повторить; пожалуйста, сообщите об этом.",
+  ko="오류로 일반 모드로 돌아갔습니다. 껐다 켜면 다시 시도합니다. 신고해 주세요.",
+  zht="發生錯誤後已切回標準模式。關閉再開啟即可重試；請回報此問題。",
+  zhs="发生错误后已切回标准模式。关闭再开启即可重试；请报告此问题。",
+  fi="Palasi tavalliseen tilaan virheen jälkeen. Kytke pois ja takaisin yrittääksesi uudelleen; ilmoitathan siitä.",
+  sv="Gick tillbaka till standard efter ett fel. Slå av och på för att försöka igen; rapportera gärna.",
+  da="Skiftede tilbage til standard efter en fejl. Slå fra og til for at prøve igen; rapportér det gerne.",
+  no="Gikk tilbake til standard etter en feil. Slå av og på for å prøve igjen; rapporter det gjerne.",
+  pl="Po błędzie przełączono z powrotem na tryb standardowy. Wyłącz i włącz, aby spróbować ponownie; zgłoś to.",
+  tr="Bir hatadan sonra standarda dönüldü. Yeniden denemek için kapatıp açın; lütfen bildirin.")
+s("TS_I18N_ST_NO_BUFFER", en="Unavailable: not enough memory at boot. Standard speed.", engb="Unavailable: not enough memory at boot. Standard speed.",
+  ja="利用不可：起動時のメモリ不足。通常の速度。", fr="Indisponible : mémoire insuffisante au démarrage. Vitesse standard.",
+  es="No disponible: memoria insuficiente al arrancar. Velocidad estándar.", de="Nicht verfügbar: zu wenig Speicher beim Start. Normale Geschwindigkeit.",
+  it="Non disponibile: memoria insufficiente all'avvio. Velocità standard.", nl="Niet beschikbaar: te weinig geheugen bij het opstarten. Standaardsnelheid.",
+  pt="Indisponível: memória insuficiente no arranque. Velocidade padrão.", ptbr="Indisponível: memória insuficiente na inicialização. Velocidade padrão.",
+  ru="Недоступно: не хватило памяти при запуске. Обычная скорость.", ko="사용 불가: 부팅 시 메모리 부족. 일반 속도.",
+  zht="無法使用：開機時記憶體不足。標準速度。", zhs="不可用：启动时内存不足。标准速度。",
+  fi="Ei käytettävissä: muisti ei riittänyt käynnistyksessä. Tavallinen nopeus.", sv="Ej tillgängligt: för lite minne vid start. Normal hastighet.",
+  da="Utilgængelig: for lidt hukommelse ved opstart. Normal hastighed.", no="Utilgjengelig: for lite minne ved oppstart. Normal hastighet.",
+  pl="Niedostępne: za mało pamięci przy uruchomieniu. Standardowa prędkość.", tr="Kullanılamıyor: açılışta bellek yetersiz. Standart hız.")
+s("TS_I18N_ST_FIRMWARE", en="Inactive: this firmware is not supported. Standard speed.", engb="Inactive: this firmware is not supported. Standard speed.",
+  ja="無効：このファームウェアには対応していません。通常の速度。", fr="Inactif : ce firmware n'est pas pris en charge. Vitesse standard.",
+  es="Inactivo: este firmware no es compatible. Velocidad estándar.", de="Inaktiv: Diese Firmware wird nicht unterstützt. Normale Geschwindigkeit.",
+  it="Inattivo: questo firmware non è supportato. Velocità standard.", nl="Inactief: deze firmware wordt niet ondersteund. Standaardsnelheid.",
+  pt="Inativo: este firmware não é suportado. Velocidade padrão.", ptbr="Inativo: este firmware não é suportado. Velocidade padrão.",
+  ru="Неактивно: эта прошивка не поддерживается. Обычная скорость.", ko="비활성: 이 펌웨어는 지원되지 않습니다. 일반 속도.",
+  zht="未啟用：不支援此韌體。標準速度。", zhs="未启用：不支持此固件。标准速度。",
+  fi="Ei käytössä: tätä laiteohjelmistoa ei tueta. Tavallinen nopeus.", sv="Inaktiv: den här firmwaren stöds inte. Normal hastighet.",
+  da="Inaktiv: denne firmware understøttes ikke. Normal hastighed.", no="Inaktiv: denne fastvaren støttes ikke. Normal hastighet.",
+  pl="Nieaktywne: to oprogramowanie nie jest obsługiwane. Standardowa prędkość.", tr="Etkin değil: bu yazılım desteklenmiyor. Standart hız.")
+s("TS_I18N_ST_HOOKS", en="Inactive: could not start. Standard speed.", engb="Inactive: could not start. Standard speed.",
+  ja="無効：開始できませんでした。通常の速度。", fr="Inactif : impossible de démarrer. Vitesse standard.", es="Inactivo: no se pudo iniciar. Velocidad estándar.",
+  de="Inaktiv: Start fehlgeschlagen. Normale Geschwindigkeit.", it="Inattivo: impossibile avviare. Velocità standard.", nl="Inactief: kon niet starten. Standaardsnelheid.",
+  pt="Inativo: não foi possível iniciar. Velocidade padrão.", ptbr="Inativo: não foi possível iniciar. Velocidade padrão.",
+  ru="Неактивно: не удалось запустить. Обычная скорость.", ko="비활성: 시작할 수 없습니다. 일반 속도.", zht="未啟用：無法啟動。標準速度。", zhs="未启用：无法启动。标准速度。",
+  fi="Ei käytössä: käynnistys epäonnistui. Tavallinen nopeus.", sv="Inaktiv: kunde inte starta. Normal hastighet.", da="Inaktiv: kunne ikke starte. Normal hastighed.",
+  no="Inaktiv: kunne ikke starte. Normal hastighet.", pl="Nieaktywne: nie udało się uruchomić. Standardowa prędkość.", tr="Etkin değil: başlatılamadı. Standart hız.")
+s("TS_I18N_ST_SAFE", en="Inactive: safe mode after an incomplete start. Standard speed.", engb="Inactive: safe mode after an incomplete start. Standard speed.",
+  ja="無効：前回の起動が完了しなかったためセーフモード。通常の速度。", fr="Inactif : mode sans échec après un démarrage incomplet. Vitesse standard.",
+  es="Inactivo: modo seguro tras un inicio incompleto. Velocidad estándar.", de="Inaktiv: abgesicherter Modus nach unvollständigem Start. Normale Geschwindigkeit.",
+  it="Inattivo: modalità provvisoria dopo un avvio incompleto. Velocità standard.", nl="Inactief: veilige modus na een onvolledige start. Standaardsnelheid.",
+  pt="Inativo: modo de segurança após um arranque incompleto. Velocidade padrão.", ptbr="Inativo: modo de segurança após uma inicialização incompleta. Velocidade padrão.",
+  ru="Неактивно: безопасный режим после незавершённого запуска. Обычная скорость.", ko="비활성: 시작이 완료되지 않아 안전 모드. 일반 속도.",
+  zht="未啟用：啟動未完成，已進入安全模式。標準速度。", zhs="未启用：启动未完成，已进入安全模式。标准速度。",
+  fi="Ei käytössä: vikasietotila keskeytyneen käynnistyksen jälkeen. Tavallinen nopeus.", sv="Inaktiv: felsäkert läge efter en ofullständig start. Normal hastighet.",
+  da="Inaktiv: sikker tilstand efter en ufuldstændig start. Normal hastighed.", no="Inaktiv: sikker modus etter en ufullstendig oppstart. Normal hastighet.",
+  pl="Nieaktywne: tryb awaryjny po niepełnym uruchomieniu. Standardowa prędkość.", tr="Etkin değil: tamamlanmayan başlatma sonrası güvenli mod. Standart hız.")
+s("TS_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb="Inactive: the kernel plugin is not loaded.",
+  ja="無効：カーネルプラグインが読み込まれていません。", fr="Inactif : le plugin noyau n'est pas chargé.", es="Inactivo: el plugin de kernel no está cargado.",
+  de="Inaktiv: Das Kernel-Plugin ist nicht geladen.", it="Inattivo: il plugin kernel non è caricato.", nl="Inactief: de kernelplugin is niet geladen.",
+  pt="Inativo: o plugin de kernel não está carregado.", ptbr="Inativo: o plugin de kernel não está carregado.", ru="Неактивно: плагин ядра не загружен.",
+  ko="비활성: 커널 플러그인이 로드되지 않았습니다.", zht="未啟用：未載入核心外掛程式。", zhs="未启用：未加载内核插件。",
+  fi="Ei käytössä: ydinliitännäistä ei ole ladattu.", sv="Inaktiv: kärnpluginet är inte laddat.", da="Inaktiv: kerne-pluginet er ikke indlæst.",
+  no="Inaktiv: kjerne-pluginen er ikke lastet.", pl="Nieaktywne: wtyczka jądra nie jest załadowana.", tr="Etkin değil: çekirdek eklentisi yüklenmedi.")
+def esc(t):
+    return t.replace("\\", "\\\\").replace('"', '\\"')
+
+ORDER = ['TS_I18N_TITLE', 'TS_I18N_ROW_SD2VITA', 'TS_I18N_ROW_INTERNAL', 'TS_I18N_ROW_HUD', 'TS_I18N_ROW_HUD_POS', 'TS_I18N_ROW_DEVMODE', 'TS_I18N_HINT_SD2VITA', 'TS_I18N_HINT_INTERNAL', 'TS_I18N_HINT_HUD', 'TS_I18N_HINT_HUD_POS', 'TS_I18N_HINT_DEVMODE', 'TS_I18N_ITEM_HUD_OFF', 'TS_I18N_ITEM_HUD_COMPACT', 'TS_I18N_ITEM_HUD_EXTENDED', 'TS_I18N_ITEM_POS_TL', 'TS_I18N_ITEM_POS_TR', 'TS_I18N_ITEM_POS_BL', 'TS_I18N_ITEM_POS_BR', 'TS_I18N_ST_FALLBACK', 'TS_I18N_ST_NO_BUFFER', 'TS_I18N_ST_FIRMWARE', 'TS_I18N_ST_HOOKS', 'TS_I18N_ST_SAFE', 'TS_I18N_ST_NO_KERNEL']
+assert set(ORDER) == set(T), set(ORDER) ^ set(T)
+out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
+       "/* clang-format off */"]
+for k in ORDER:
+    row = T[k]
+    missing = [l for l in LANGS if l not in row]
+    assert not missing, (k, missing)
+    out.append(f"[{k}] = {{")
+    for l in LANGS:
+        out.append(f'\t"{esc(row[l])}",   /* {l} */')
+    out.append("},")
+open("settings_app/storageturbo_i18n_table.h", "w").write("\n".join(out) + "\n")
+print("wrote", len(ORDER), "strings x", len(LANGS), "languages")

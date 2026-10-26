@@ -1,0 +1,306 @@
+<div align="center">
+
+# 🚀 Turbo Storage for PS Vita
+
+**Faster SD2Vita and internal storage, with the system's own driver doing all the work.**
+
+A taiHEN plugin (kernel module + Settings page) for HENkaku/Ensō on firmware 3.60–3.74.
+
+![Headline figures](assets/headline.png)
+
+</div>
+
+> [!IMPORTANT]
+> **Early release.** Turbo Storage is built for firmware **3.60 to 3.74**, but so far
+> it has only been tested on one console: a PCH-1000 at 3.60 with an SD2Vita. Treat
+> it as experimental. Read the [Disclaimer](#disclaimer), keep a backup of your
+> memory card, and if something doesn't work, please
+> [open an issue](https://github.com/juanjsebgarcia/vita-turbo-storage/issues) with your
+> logs.
+
+---
+
+## Why
+
+Every time the Vita reads or writes storage, the system first cleans and then
+invalidates the CPU's data cache over the whole buffer involved. That work is done
+one block at a time, and the transfer waits for it. On an SD2Vita it takes about
+**40% of the time** of every read, so a card on a bus that can move ~22 MB/s
+delivers about 13.
+
+Turbo Storage hands the system's storage driver a buffer that needs no cache
+maintenance, then copies the data to where it was going. The driver still sends
+every command, handles every error and moves the data; only the buffer changes.
+
+## Headline figures
+
+Measured on the test console (PCH-1000, firmware 3.60, a 128 GB microSD card in an
+SD2Vita, and the internal storage). 64 MiB per run, stock and Turbo Storage
+alternated so card behaviour can't favour either side, every run checked
+byte-for-byte afterwards.
+
+| | Stock | Turbo Storage | Change |
+|---|---|---|---|
+| SD2Vita reads (1 MiB requests) | 13.3 MB/s | **16.8 MB/s** | **+26%** |
+| SD2Vita reads (128 KiB requests) | 12.4 MB/s | **15.7 MB/s** | **+27%** |
+| SD2Vita writes | 4.4–5.4 MB/s | **6.0–6.3 MB/s** | **+17–36%** |
+| Internal storage reads | 14.2–15.5 MB/s | **19.0–21.1 MB/s** | **+34–36%** |
+| Internal storage writes | 7.4–8.1 MB/s | **8.2–8.8 MB/s** | **+9–11%** |
+| Data checked against stock | | **80,000+ transfers, 0 differences** | |
+
+Writes vary a lot from run to run because the card itself pauses to reorganise
+its flash; the write figures are averages over three or four alternated rounds.
+
+**What you'll notice:** faster copies, VPK installs and anything that reads or
+writes big files. **What you won't:** most game loading. A game launch we measured
+spent only about 4% of its time waiting for storage; the rest is the game itself.
+
+## Features
+
+- 🚀 **Faster SD2Vita.** Reads and writes on a microSD card in an SD2Vita adapter
+  (off by default; turn it on in Settings).
+- 💾 **Faster internal storage.** The same for the console's built-in storage
+  (off by default; turn it on in Settings).
+- ⚠️ **Tells you when it isn't working.** If a storage is running at standard
+  speed when you asked for faster (after an error, on unsupported firmware, in
+  safe mode), its Settings help text says why, and the HUD flags an error.
+- 📊 **Live HUD.** Optional read/write speed over any app, in the corner you choose.
+- 🎛️ **Native Settings page.** Everything lives in *Settings → System → Turbo
+  Storage*, in your system language.
+- 🛡️ **Safe by design.** The system's own driver does all the work, writes are
+  never held back, and any error drops that storage back to standard by itself.
+  See [Safety](#safety).
+- 🛠️ **Developer mode.** An optional command port for diagnostics (see
+  [Remote control](#remote-control-port-1340)).
+
+## Use cases
+
+### 📦 Installing and moving big files
+VPK installs, copying folders in VitaShell, and unpacking or backing up large
+files all spend their time reading and writing storage. Reads are a quarter to a
+third faster, and writes gain too, by how much depends on the card.
+
+### 🎮 Emulators and big homebrew
+Anything that streams large files from the card while it runs, such as disc
+images in emulators or homebrew with big asset files, should read them faster (we haven't measured
+specific emulators yet). Native
+Vita games mostly don't wait on storage, so expect little change there.
+
+## Screenshots
+
+| Live HUD (compact) | Live HUD (extended) |
+|---|---|
+| ![Compact HUD](assets/hud.jpg) | ![Extended HUD](assets/hud-extended.jpg) |
+
+| Settings page | |
+|---|---|
+| ![Turbo Storage settings](assets/settings.jpg) | |
+
+*The HUD shots were captured during an FTP download from the SD2Vita, so Wi-Fi sets the speed shown.*
+
+## Options
+
+### Settings → System → Turbo Storage
+
+| Option | What it does | Default |
+|---|---|---|
+| Faster SD2Vita | The faster path for an SD2Vita in the game-card slot | Off |
+| Faster internal storage | The faster path for the console's internal storage. Turn it off before updating or downgrading the firmware. Recommended off for most users | Off |
+| Storage HUD | Off, Compact (one line per storage in use) or Extended (adds totals and errors) | Off |
+| HUD position | Top left, top right, bottom left or bottom right | Top right |
+| Developer mode | Opens the command port on TCP 1340 | Off |
+
+Every option takes effect **immediately, with no reboot**, and is saved. Switching a
+storage off sends its next transfer the standard way; switching it back on resumes the
+faster path (and retries after an error).
+
+> [!TIP]
+> **For maximum stability, use it only when you need it.** The gains are in
+> storage-heavy jobs: installing VPKs, copying files and downloading large files.
+> Most games barely wait on storage, so you lose almost nothing by switching
+> Turbo Storage off while you play. It switches instantly, with no reboot, so
+> it's easy to turn it on for a big copy or download and off again afterwards.
+
+### Remote control (port 1340)
+
+With **Developer mode** on, Turbo Storage listens on TCP port 1340 on your local
+network. One command per line:
+
+| Command | Does |
+|---|---|
+| `status` | Settings, per-storage status and counters |
+| `set <key> <value>` | `sd2vita`, `internal`, `verify`, `devmode` (0/1), `hud` (0–2), `hud_pos` (0–3) |
+| `ping` | Checks the kernel module answers |
+| `version`, `help` | |
+
+`verify` is a diagnostic for bug reports, not a Settings option: it reads every
+faster transfer a second time the standard way and compares, so with it on,
+storage is slower than without the plugin.
+
+```sh
+printf 'status\n' | nc -w 3 <vita-ip> 1340
+```
+
+The port has no password. Leave Developer mode off unless you're testing.
+
+## How it compares
+
+Turbo Storage isn't the first attempt at this. **IOStaging** (2023) was built on
+the same observation and was withdrawn by its own author, who suspected it of
+corrupting data. Turbo Storage takes a deliberately more conservative approach:
+
+| | Turbo Storage |
+|---|---|
+| Storage driver | **Unchanged.** Turbo Storage only swaps the buffer handed to the system's own read and write functions; it doesn't re-implement any driver code |
+| Writes | **Never cached or deferred.** A write has reached the card before the call returns, exactly as without the plugin |
+| Copies | Done by the CPU, which keeps the data cache consistent. No extra DMA tricks |
+| Small transfers | **Left alone.** Anything under 32 KiB, which includes the file system's own bookkeeping, takes the standard path |
+| Errors | **Fall back to standard.** Any error on the faster path switches that storage back to standard for the session, and finishes the same request the standard way |
+| Scope | Only SD2Vita and internal storage. Game cards, the memory card, USB storage and Wi-Fi are not touched |
+| Unknown firmware | Turbo Storage checks the storage driver is one it knows and does nothing otherwise |
+
+Tested so far on the test console: real app data byte-identical to stock, two
+programs using the card at once, suspend and resume, and running alongside YAMT.
+
+## Compatibility
+
+- **Consoles:** PS Vita PCH-1000 tested. PCH-2000 and PS TV should work (same storage
+  system) but are untested.
+- **Firmware:** 3.60 to 3.74. The storage driver is the same across all of them;
+  on any other firmware Turbo Storage stays inactive.
+- **Storage:** SD2Vita (microSD in the game-card slot) and internal storage. The
+  official memory card, game cards and USB storage (PSVSD, PS TV USB) are not
+  accelerated.
+- **Storage managers:** works with YAMT (tested). StorageMgr and gamesd work at a
+  different layer and should be compatible, but are untested.
+- **Overclocking plugins:** compatible. Overclocking speeds up stock storage a little
+  on its own; with Turbo Storage on, it adds little more.
+- **Wi-Fi Turbo:** compatible. No measurable effect on Wi-Fi in our tests.
+
+## Limitations
+
+- Most game loading isn't storage-bound, so expect little change there.
+- Everything the console's processor reads is identical to standard, but one
+  thing differs: after a faster read the data can sit in the processor's cache
+  for a moment before it reaches main memory. A game that loads a file straight
+  into memory the graphics chip reads, without flushing, could in principle draw
+  a stale texture. Nothing on the card is affected. This is why both storages
+  start off and the tip above suggests leaving Turbo Storage off while you play.
+- Writes are limited mostly by the card itself.
+- Uses 512 KiB of kernel memory (one buffer per storage), plus 256 KiB while verify
+  mode has been used.
+
+## Languages
+
+The Settings page follows your system language. Supported:
+
+Japanese, English (US), English (UK), French, Spanish, German, Italian, Dutch,
+Portuguese (Portugal), Portuguese (Brazil), Russian, Korean,
+Chinese (Traditional), Chinese (Simplified), Finnish, Swedish, Danish,
+Norwegian, Polish and Turkish.
+
+Only English is written by a person; the others are machine translations, and
+corrections are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)). The HUD uses a
+compact ASCII font, so it's translated for the Latin-script languages and shows
+English for the others.
+
+## Disclaimer
+
+This software is provided **"as is", without warranty of any kind**, express or
+implied, including but not limited to the warranties of merchantability, fitness
+for a particular purpose and non-infringement. It changes how your console reads
+and writes its storage. **You use it entirely at your own risk.** The author is
+not responsible for any damage, **data loss or corruption**, bricked or unusable
+systems, lost warranty, or any other harm resulting from installing or using it.
+**Back up your memory card and SD card before installing**, and make sure you know
+how to boot without plugins (hold **L** at boot). See the [MIT License](LICENSE)
+for the full terms.
+
+## Install
+
+**Requirements:** a PS Vita or PS TV with HENkaku or Ensō (taiHEN) on firmware 3.60
+to 3.74, and an SD2Vita for the main feature.
+
+1. Download `storageturbo_kernel.skprx` and `storageturbo.suprx` from the
+   [releases page](https://github.com/juanjsebgarcia/vita-turbo-storage/releases).
+2. Copy both files to `ur0:tai/`, for example with VitaShell over FTP or USB.
+3. **Find your config file.** If `ux0:tai/config.txt` exists, edit **that** one:
+   taiHEN reads it first and ignores `ur0:tai/config.txt`. Otherwise edit
+   `ur0:tai/config.txt`. Keep the `ur0:tai/...` paths for the plugin files either
+   way.
+
+   Add one line under each of three sections:
+
+   | Section | Line to add |
+   |---|---|
+   | `*KERNEL` | `ur0:tai/storageturbo_kernel.skprx` |
+   | `*main` | `ur0:tai/storageturbo.suprx` |
+   | `*NPXS10015` | `ur0:tai/storageturbo.suprx` (adds the Settings page) |
+
+   A typical file afterwards looks like this:
+
+   ```
+   *KERNEL
+   ur0:tai/storageturbo_kernel.skprx
+   *main
+   ur0:tai/henkaku.suprx
+   ur0:tai/storageturbo.suprx
+   *NPXS10015
+   ur0:tai/henkaku.suprx
+   ur0:tai/storageturbo.suprx
+   *NPXS10016
+   ur0:tai/henkaku.suprx
+   ```
+
+4. **Reboot the Vita** (a "Refresh taiHEN config" is not enough). Then open
+   *Settings → System → Turbo Storage* and turn on **Faster SD2Vita** (and, if you
+   want, **Faster internal storage**). Both are off until you do.
+
+**Before a firmware update or downgrade**, turn *Faster internal storage* off as an
+extra precaution (no reboot needed).
+
+**To update Turbo Storage:** replace both files and reboot. **To uninstall:** remove the three
+lines from `config.txt`, reboot, then delete the two files and `ur0:data/turbostorage/`.
+
+## Build
+
+Requires Docker (the build uses a pinned VitaSDK image), or your own VitaSDK with
+`$VITASDK` set.
+
+```sh
+make                          # builds build/storageturbo_kernel.skprx and build/storageturbo.suprx
+make install VITA_IP=<ip>     # uploads both to ur0:tai/ over vitacompanion FTP
+make deploy  VITA_IP=<ip>     # install, then reboot the Vita
+make log     VITA_IP=<ip>     # fetch the logs into ./logs/
+make config                   # print the config.txt lines
+```
+
+## Safety
+
+- **Boot guard.** If a start ever fails to finish, the next boot runs with Turbo
+  Storage inactive (safe mode). Writing `0` to `ur0:data/turbostorage/boot_guard`
+  re-arms it.
+- **Automatic fallback.** Any error on the faster path switches that storage back to
+  standard for the session. Switching it off and on in Settings retries.
+- **Firmware check.** On a storage driver it doesn't recognise, Turbo Storage
+  installs nothing.
+- **Escape hatch.** Holding **L** at boot skips every plugin.
+- **Logs.** `ur0:data/turbostorage/kernel.log` and `user.log` record what Turbo
+  Storage did; please attach them to bug reports.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Test reports from other consoles,
+firmware versions and SD cards are especially welcome.
+
+## Credits
+
+Built on [taiHEN](https://github.com/yifanlu/taiHEN),
+[VitaSDK](https://vitasdk.org) and
+[vitacompanion](https://github.com/devnoname120/vitacompanion). The Settings page
+and HUD follow [Wi-Fi Turbo](https://github.com/juanjsebgarcia/vita-turbo-wifi). Thanks to the
+PS Vita homebrew community, and to IOStaging for spotting the problem first.
+
+## License
+
+[MIT](LICENSE) © 2026 Juan Garcia Alvite

@@ -2,7 +2,9 @@
  * settings.c - load, validate, apply and save Turbo Storage's settings.
  *
  * The file is tiny and versioned:
- *   magic 'TBCF' | version | count | count x int32 (enum ts_key order) | check
+ *   magic 'TSCF' | version | count | count x int32 (enum ts_key order) | check
+ * Keys are only ever appended, so a file from an older version (fewer keys)
+ * still loads: its keys are read and the newer ones take their defaults.
  * A missing, short or corrupt file means defaults. Each value is validated on
  * its own, so one bad field falls back to its default without losing the rest.
  *
@@ -35,13 +37,13 @@ static int          g_save_fails = 0;   /* retry a failed save a few times */
 
 static const int32_t g_defaults[TS_KEY_COUNT] = {
 	TS_DEF_SD2VITA, TS_DEF_INTERNAL, TS_DEF_VERIFY, TS_DEF_HUD, TS_DEF_HUD_POS,
-	TS_DEF_DEVMODE,
+	TS_DEF_DEVMODE, TS_DEF_MEMCARD,
 };
 
 static uint32_t file_check(const TsSettingsFile *f)
 {
 	uint32_t c = f->magic ^ (f->version << 8) ^ (f->count << 16);
-	for (int i = 0; i < TS_KEY_COUNT; i++)
+	for (uint32_t i = 0; i < f->count && i < TS_KEY_COUNT; i++)
 		c = (c << 5 | c >> 27) ^ (uint32_t)f->values[i];
 	return c;
 }
@@ -60,12 +62,20 @@ void ts_settings_init(void)
 	} else {
 		int n = ksceIoRead(fd, &f, sizeof(f));
 		ksceIoClose(fd);
-		if (n != (int)sizeof(f) || f.magic != TS_CFG_MAGIC ||
-		    f.version != TS_CFG_VERSION || f.count != TS_KEY_COUNT ||
-		    f.check != file_check(&f)) {
+		/* A file with fewer keys is shorter: its check word sits where the
+		 * first missing value would be. */
+		uint32_t cnt = f.count;
+		int ok = f.magic == TS_CFG_MAGIC && f.version == TS_CFG_VERSION &&
+		         cnt >= 1 && cnt <= TS_KEY_COUNT &&
+		         n == (int)(3 * sizeof(uint32_t) + (cnt + 1) * sizeof(int32_t));
+		if (ok) {
+			uint32_t stored = cnt == TS_KEY_COUNT ? f.check : (uint32_t)f.values[cnt];
+			ok = stored == file_check(&f);
+		}
+		if (!ok) {
 			TS_KLOGW("settings: saved file unusable (n=%d), using defaults", n);
 		} else {
-			for (int k = 0; k < TS_KEY_COUNT; k++) {
+			for (int k = 0; k < (int)cnt; k++) {
 				if (ts_setting_valid(k, f.values[k]))
 					*ts_setting_field(&s, k) = f.values[k];
 				else
@@ -75,8 +85,8 @@ void ts_settings_init(void)
 		}
 	}
 	memcpy((void *)&g_ts_settings, &s, sizeof(s));
-	TS_KLOGI("settings: sd2vita=%d internal=%d verify=%d hud=%d pos=%d devmode=%d", s.sd2vita,
-	         s.internal, s.verify, s.hud, s.hud_pos, s.devmode);
+	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 	ts_stage_apply(&s);
 }
 
@@ -139,6 +149,6 @@ void ts_settings_flush(void)
 		return;
 	}
 	g_save_fails = 0;
-	TS_KLOGI("settings: saved sd2vita=%d internal=%d verify=%d hud=%d pos=%d devmode=%d",
-	         s.sd2vita, s.internal, s.verify, s.hud, s.hud_pos, s.devmode);
+	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 }

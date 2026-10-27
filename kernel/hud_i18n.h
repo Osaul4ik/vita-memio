@@ -22,6 +22,8 @@ enum hud_tr_tok {
 	HTR_UNAVAILABLE,  /* cannot run (firmware, memory...)      */
 	HTR_ERR,          /* short "errors" counter label          */
 	HTR_VERIFY,       /* verify mode is on                     */
+	HTR_MEMCARD,      /* the memory card's name                */
+	HTR_SLOW,         /* memory card slow mode is on           */
 	HTR_COUNT
 };
 

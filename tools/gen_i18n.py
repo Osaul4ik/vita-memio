@@ -83,6 +83,54 @@ s("TS_I18N_HINT_INTERNAL",
   no="Gjør lesing og skriving på konsollens innebygde lagring raskere. Av som standard av forsiktighet, fordi lagringen også inneholder systemdata og plugininnstillinger. Som et ekstra forholdsregel bør du slå det av før du oppdaterer eller nedgraderer fastvaren. Trer i kraft umiddelbart; ingen omstart nødvendig.",
   pl="Przyspiesza odczyt i zapis wbudowanej pamięci konsoli. Domyślnie wyłączone dla bezpieczeństwa, ponieważ ta pamięć przechowuje też dane systemowe i ustawienia wtyczek. Dla dodatkowego bezpieczeństwa wyłącz je przed aktualizacją lub obniżeniem wersji oprogramowania. Działa od razu, bez ponownego uruchamiania.",
   tr="Konsolun dahili depolamasının okuma ve yazma hızını artırır. Bu depolama sistem verilerini ve eklenti ayarlarını da tuttuğu için önlem olarak varsayılan olarak kapalıdır. Ek bir önlem olarak, yazılımı güncellemeden veya eski sürüme düşürmeden önce kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
+s("TS_I18N_ROW_MEMCARD", en="Faster memory card", engb="Faster memory card", ja="メモリーカードを高速化",
+  fr="Carte mémoire plus rapide", es="Tarjeta de memoria más rápida", de="Schnellere Speicherkarte",
+  it="Scheda di memoria più veloce", nl="Snellere geheugenkaart", pt="Cartão de memória mais rápido",
+  ptbr="Cartão de memória mais rápido", ru="Ускорить карту памяти", ko="메모리 카드 가속",
+  zht="加速記憶卡", zhs="加速存储卡", fi="Nopeampi muistikortti", sv="Snabbare minneskort",
+  da="Hurtigere hukommelseskort", no="Raskere minnekort", pl="Szybsza karta pamięci", tr="Daha hızlı hafıza kartı")
+s("TS_I18N_HINT_MEMCARD",
+  en="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
+  engb="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
+  ja="PS Vita専用メモリーカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",
+  fr="Accélère la lecture et l'écriture de la carte mémoire officielle PS Vita. Vos fichiers et leur mode d'enregistrement ne changent pas. Désactivez en cas de doute. Prend effet immédiatement, sans redémarrage.",
+  es="Acelera la lectura y escritura de la tarjeta de memoria oficial de PS Vita. Tus archivos y la forma de guardarlos no cambian. Desactívalo si sospechas un problema. Se aplica al instante; no hace falta reiniciar.",
+  de="Beschleunigt Lesen und Schreiben der offiziellen PS Vita-Speicherkarte. Deine Dateien und ihre Speicherung bleiben unverändert. Bei Verdacht auf ein Problem ausschalten. Wirkt sofort, ohne Neustart.",
+  it="Velocizza la lettura e la scrittura della scheda di memoria ufficiale PS Vita. I file e il modo in cui sono salvati non cambiano. Disattiva se sospetti un problema. Ha effetto subito, senza riavviare.",
+  nl="Versnelt het lezen en schrijven van de officiële PS Vita-geheugenkaart. Je bestanden en de manier van opslaan veranderen niet. Zet uit als je een probleem vermoedt. Werkt meteen; opnieuw opstarten is niet nodig.",
+  pt="Acelera a leitura e a escrita do cartão de memória oficial da PS Vita. Os seus ficheiros e a forma como são guardados não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não é preciso reiniciar.",
+  ptbr="Acelera a leitura e a gravação do cartão de memória oficial do PS Vita. Seus arquivos e a forma como são salvos não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não precisa reiniciar.",
+  ru="Ускоряет чтение и запись официальной карты памяти PS Vita. Ваши файлы и способ их хранения не меняются. Выключите, если подозреваете проблему. Действует сразу, перезагрузка не нужна.",
+  ko="정품 PS Vita 메모리 카드의 읽기와 쓰기를 빠르게 합니다. 파일과 저장 방식은 바뀌지 않습니다. 문제가 의심되면 끄세요. 즉시 적용되며 재시작할 필요가 없습니다.",
+  zht="加快 PS Vita 專用記憶卡的讀寫速度。檔案及其儲存方式不會改變。若懷疑有問題，請關閉。立即生效，無需重新啟動。",
+  zhs="加快 PS Vita 专用存储卡的读写速度。文件及其存储方式不会改变。若怀疑有问题，请关闭。立即生效，无需重启。",
+  fi="Nopeuttaa virallisen PS Vita -muistikortin lukemista ja kirjoittamista. Tiedostosi ja niiden tallennustapa eivät muutu. Kytke pois, jos epäilet ongelmaa. Tulee voimaan heti; uudelleenkäynnistystä ei tarvita.",
+  sv="Snabbar upp läsning och skrivning på det officiella PS Vita-minneskortet. Dina filer och hur de lagras ändras inte. Stäng av om du misstänker ett problem. Gäller direkt; ingen omstart behövs.",
+  da="Gør læsning og skrivning på det officielle PS Vita-hukommelseskort hurtigere. Dine filer og måden, de gemmes på, ændres ikke. Slå fra, hvis du har mistanke om et problem. Træder i kraft med det samme; ingen genstart nødvendig.",
+  no="Gjør lesing og skriving på det offisielle PS Vita-minnekortet raskere. Filene dine og måten de lagres på endres ikke. Slå av hvis du mistenker et problem. Trer i kraft umiddelbart; ingen omstart nødvendig.",
+  pl="Przyspiesza odczyt i zapis oficjalnej karty pamięci PS Vita. Twoje pliki i sposób ich zapisu się nie zmieniają. Wyłącz, jeśli podejrzewasz problem. Działa od razu, bez ponownego uruchamiania.",
+  tr="Resmi PS Vita hafıza kartının okuma ve yazma hızını artırır. Dosyalarınız ve saklanma biçimleri değişmez. Bir sorundan şüphelenirseniz kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
+s("TS_I18N_ST_SLOW",
+  en="Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",
+  engb="Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",
+  ja="注意：システムのメモリーカード低速モードがオンになっており、すべての転送が意図的に遅くなっています。",
+  fr="Remarque : le mode lent de la carte mémoire du système est activé ; il ralentit volontairement chaque transfert.",
+  es="Nota: el modo lento de la tarjeta de memoria del sistema está activado y ralentiza a propósito cada transferencia.",
+  de="Hinweis: Der Langsam-Modus des Systems für Speicherkarten ist aktiv und bremst absichtlich jede Übertragung.",
+  it="Nota: la modalità lenta della scheda di memoria del sistema è attiva e rallenta di proposito ogni trasferimento.",
+  nl="Let op: de trage modus van het systeem voor geheugenkaarten staat aan en vertraagt bewust elke overdracht.",
+  pt="Nota: o modo lento do cartão de memória do sistema está ligado e abranda propositadamente cada transferência.",
+  ptbr="Observação: o modo lento do cartão de memória do sistema está ligado e deixa cada transferência mais lenta de propósito.",
+  ru="Примечание: системный медленный режим карты памяти включён и намеренно замедляет каждую передачу.",
+  ko="참고: 시스템의 메모리 카드 저속 모드가 켜져 있어 모든 전송을 의도적으로 느리게 합니다.",
+  zht="注意：系統的記憶卡慢速模式已開啟，會刻意減慢每次傳輸。",
+  zhs="注意：系统的存储卡慢速模式已开启，会刻意减慢每次传输。",
+  fi="Huomio: järjestelmän muistikortin hidas tila on päällä ja hidastaa tarkoituksella jokaista siirtoa.",
+  sv="Obs! Systemets långsamma läge för minneskort är på och gör avsiktligt varje överföring långsammare.",
+  da="Bemærk: systemets langsomme tilstand for hukommelseskort er slået til og gør bevidst hver overførsel langsommere.",
+  no="Merk: systemets trege modus for minnekort er på og gjør bevisst hver overføring tregere.",
+  pl="Uwaga: systemowy tryb wolnej karty pamięci jest włączony i celowo spowalnia każdy transfer.",
+  tr="Not: sistemin hafıza kartı yavaş modu açık; her aktarımı bilerek yavaşlatır.")
 s("TS_I18N_HINT_HUD",
   en="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
   engb="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
@@ -211,7 +259,7 @@ s("TS_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb=
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['TS_I18N_TITLE', 'TS_I18N_ROW_SD2VITA', 'TS_I18N_ROW_INTERNAL', 'TS_I18N_ROW_HUD', 'TS_I18N_ROW_HUD_POS', 'TS_I18N_ROW_DEVMODE', 'TS_I18N_HINT_SD2VITA', 'TS_I18N_HINT_INTERNAL', 'TS_I18N_HINT_HUD', 'TS_I18N_HINT_HUD_POS', 'TS_I18N_HINT_DEVMODE', 'TS_I18N_ITEM_HUD_OFF', 'TS_I18N_ITEM_HUD_COMPACT', 'TS_I18N_ITEM_HUD_EXTENDED', 'TS_I18N_ITEM_POS_TL', 'TS_I18N_ITEM_POS_TR', 'TS_I18N_ITEM_POS_BL', 'TS_I18N_ITEM_POS_BR', 'TS_I18N_ST_FALLBACK', 'TS_I18N_ST_NO_BUFFER', 'TS_I18N_ST_FIRMWARE', 'TS_I18N_ST_HOOKS', 'TS_I18N_ST_SAFE', 'TS_I18N_ST_NO_KERNEL']
+ORDER = ['TS_I18N_TITLE', 'TS_I18N_ROW_SD2VITA', 'TS_I18N_ROW_INTERNAL', 'TS_I18N_ROW_HUD', 'TS_I18N_ROW_HUD_POS', 'TS_I18N_ROW_DEVMODE', 'TS_I18N_ROW_MEMCARD', 'TS_I18N_HINT_SD2VITA', 'TS_I18N_HINT_INTERNAL', 'TS_I18N_HINT_HUD', 'TS_I18N_HINT_HUD_POS', 'TS_I18N_HINT_DEVMODE', 'TS_I18N_HINT_MEMCARD', 'TS_I18N_ITEM_HUD_OFF', 'TS_I18N_ITEM_HUD_COMPACT', 'TS_I18N_ITEM_HUD_EXTENDED', 'TS_I18N_ITEM_POS_TL', 'TS_I18N_ITEM_POS_TR', 'TS_I18N_ITEM_POS_BL', 'TS_I18N_ITEM_POS_BR', 'TS_I18N_ST_FALLBACK', 'TS_I18N_ST_NO_BUFFER', 'TS_I18N_ST_FIRMWARE', 'TS_I18N_ST_HOOKS', 'TS_I18N_ST_SAFE', 'TS_I18N_ST_NO_KERNEL', 'TS_I18N_ST_SLOW']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

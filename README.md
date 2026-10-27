@@ -2,7 +2,7 @@
 
 # 🚀 Turbo Storage for PS Vita
 
-**Faster SD2Vita and internal storage, with the system's own driver doing all the work.**
+**Faster SD2Vita, memory card and internal storage, with the system's own drivers doing all the work.**
 
 A taiHEN plugin (kernel module + Settings page) for HENkaku/Ensō on firmware 3.60–3.74.
 
@@ -12,7 +12,8 @@ A taiHEN plugin (kernel module + Settings page) for HENkaku/Ensō on firmware 3.
 
 > [!IMPORTANT]
 > **Early release.** Turbo Storage is built for firmware **3.60 to 3.74**, but so far
-> it has only been tested on one console: a PCH-1000 at 3.60 with an SD2Vita. Treat
+> it has only been tested on one console: a PCH-1000 at 3.60 with an SD2Vita and an
+> official 4 GB memory card. Treat
 > it as experimental. Read the [Disclaimer](#disclaimer), keep a backup of your
 > memory card, and if something doesn't work, please
 > [open an issue](https://github.com/juanjsebgarcia/vita-turbo-storage/issues) with your
@@ -35,7 +36,8 @@ every command, handles every error and moves the data; only the buffer changes.
 ## Headline figures
 
 Measured on the test console (PCH-1000, firmware 3.60, a 128 GB microSD card in an
-SD2Vita, and the internal storage). 64 MiB per run, stock and Turbo Storage
+SD2Vita, an official 4 GB PS Vita memory card, and the internal storage). 64 MiB per
+run, stock and Turbo Storage
 alternated so card behaviour can't favour either side, every run checked
 byte-for-byte afterwards.
 
@@ -44,9 +46,11 @@ byte-for-byte afterwards.
 | SD2Vita reads (1 MiB requests) | 13.3 MB/s | **16.8 MB/s** | **+26%** |
 | SD2Vita reads (128 KiB requests) | 12.4 MB/s | **15.7 MB/s** | **+27%** |
 | SD2Vita writes | 4.4–5.4 MB/s | **6.0–6.3 MB/s** | **+17–36%** |
+| Memory card reads (1 MiB requests) | 10.5 MB/s | **13.8 MB/s** | **+32%** |
+| Memory card writes (1 MiB requests) | 9.1 MB/s | **10.0 MB/s** | **+10%** |
 | Internal storage reads | 14.2–15.5 MB/s | **19.0–21.1 MB/s** | **+34–36%** |
 | Internal storage writes | 7.4–8.1 MB/s | **8.2–8.8 MB/s** | **+9–11%** |
-| Data checked against stock | | **80,000+ transfers, 0 differences** | |
+| Data checked against stock | | **130,000+ transfers, 0 differences** | |
 
 Writes vary a lot from run to run because the card itself pauses to reorganise
 its flash; the write figures are averages over three or four alternated rounds.
@@ -61,6 +65,9 @@ in brackets). Three alternated rounds, same console.
 | SD2Vita, 32 KiB | 3.3 ms (3.6) | **2.3 ms (2.7)** | **−31%** |
 | SD2Vita, 128 KiB | 9.8 ms (10.5) | **7.6 ms (8.7)** | **−23%** |
 | SD2Vita, 1 MiB | 73.9 ms (79.3) | **59.0 ms (62.2)** | **−20%** |
+| Memory card, 32 KiB | 3.6 ms (3.9) | **2.9 ms (3.0)** | **−22%** |
+| Memory card, 128 KiB | 12.2 ms (12.8) | **9.3 ms (9.5)** | **−24%** |
+| Memory card, 1 MiB | 95.1 ms (96.6) | **72.2 ms (73.2)** | **−24%** |
 | Internal, 128 KiB | 8.5 ms (9.9) | **6.4 ms (7.4)** | **−24%** |
 | Internal, 1 MiB | 63.5 ms (97.9) | **46.7 ms (72.0)** | **−26%** |
 
@@ -77,6 +84,10 @@ spent only about 4% of its time waiting for storage; the rest is the game itself
 
 - 🚀 **Faster SD2Vita.** Reads and writes on a microSD card in an SD2Vita adapter
   (off by default; turn it on in Settings).
+- 💳 **Faster memory card.** The same for the official PS Vita memory card, wherever
+  your storage manager mounts it (off by default). Turbo Storage also tells you if the
+  system's own memory card "slow mode" is on, which deliberately pauses after every
+  transfer; it never changes it.
 - 💾 **Faster internal storage.** The same for the console's built-in storage
   (off by default; turn it on in Settings).
 - ⚠️ **Tells you when it isn't working.** If a storage is running at standard
@@ -123,6 +134,7 @@ Vita games mostly don't wait on storage, so expect little change there.
 | Option | What it does | Default |
 |---|---|---|
 | Faster SD2Vita | The faster path for an SD2Vita in the game-card slot | Off |
+| Faster memory card | The faster path for the official PS Vita memory card | Off |
 | Faster internal storage | The faster path for the console's internal storage. Turn it off before updating or downgrading the firmware. Recommended off for most users | Off |
 | Storage HUD | Off, Compact (one line per storage in use) or Extended (adds totals and errors) | Off |
 | HUD position | Top left, top right, bottom left or bottom right | Top right |
@@ -147,7 +159,7 @@ network. One command per line:
 | Command | Does |
 |---|---|
 | `status` | Settings, per-storage status and counters |
-| `set <key> <value>` | `sd2vita`, `internal`, `verify`, `devmode` (0/1), `hud` (0–2), `hud_pos` (0–3) |
+| `set <key> <value>` | `sd2vita`, `memcard`, `internal`, `verify`, `devmode` (0/1), `hud` (0–2), `hud_pos` (0–3) |
 | `ping` | Checks the kernel module answers |
 | `version`, `help` | |
 
@@ -175,10 +187,11 @@ corrupting data. Turbo Storage takes a deliberately more conservative approach:
 | Copies | Done by the CPU, which keeps the data cache consistent. No extra DMA tricks |
 | Small transfers | **Left alone.** Anything under 32 KiB, which includes the file system's own bookkeeping, takes the standard path |
 | Errors | **Fall back to standard.** Any error on the faster path switches that storage back to standard for the session, and finishes the same request the standard way |
-| Scope | Only SD2Vita and internal storage. Game cards, the memory card, USB storage and Wi-Fi are not touched |
+| Scope | Only the SD2Vita, the official memory card and internal storage. Game cards, USB storage and Wi-Fi are not touched |
 | Unknown firmware | Turbo Storage checks the storage driver is one it knows and does nothing otherwise |
 
-Tested so far on the test console: real app data byte-identical to stock, two
+Tested so far on the test console: real app data byte-identical to stock (including
+50,000+ verified memory card transfers), two
 programs using the card at once, suspend and resume, and running alongside YAMT.
 
 ## Compatibility
@@ -187,8 +200,8 @@ programs using the card at once, suspend and resume, and running alongside YAMT.
   system) but are untested.
 - **Firmware:** 3.60 to 3.74. The storage driver is the same across all of them;
   on any other firmware Turbo Storage stays inactive.
-- **Storage:** SD2Vita (microSD in the game-card slot) and internal storage. The
-  official memory card, game cards and USB storage (PSVSD, PS TV USB) are not
+- **Storage:** SD2Vita (microSD in the game-card slot), the official PS Vita memory
+  card, and internal storage. Game cards and USB storage (PSVSD, PS TV USB) are not
   accelerated. USB storage has nothing to gain: Sony's USB storage driver already
   moves data through a buffer that needs no cache maintenance, the same technique
   Turbo Storage brings to the SD2Vita.
@@ -207,10 +220,10 @@ programs using the card at once, suspend and resume, and running alongside YAMT.
   into memory the graphics chip reads, without flushing, could in principle draw
   a stale texture. Nothing on the card is affected. Sony's own USB storage driver
   (PSVSD, PS TV) ends every read the same way, so games already run with this
-  pattern there. Still, this is why both storages start off and the tip above
+  pattern there. Still, this is why every storage starts off and the tip above
   suggests leaving Turbo Storage off while you play.
 - Writes are limited mostly by the card itself.
-- Uses 512 KiB of kernel memory (one buffer per storage), plus 256 KiB while verify
+- Uses 768 KiB of kernel memory (one buffer per storage), plus 256 KiB while verify
   mode has been used.
 
 ## Languages
@@ -276,8 +289,9 @@ to 3.74, and an SD2Vita for the main feature.
    ```
 
 4. **Reboot the Vita** (a "Refresh taiHEN config" is not enough). Then open
-   *Settings → System → Turbo Storage* and turn on **Faster SD2Vita** (and, if you
-   want, **Faster internal storage**). Both are off until you do.
+   *Settings → System → Turbo Storage* and turn on **Faster SD2Vita** and/or
+   **Faster memory card** (and, if you want, **Faster internal storage**). All are
+   off until you do.
 
 **Before a firmware update or downgrade**, turn *Faster internal storage* off as an
 extra precaution (no reboot needed).

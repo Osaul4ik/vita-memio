@@ -132,6 +132,28 @@
 	"Developer mode",   /* engb */
 	"Geliştirici modu",   /* tr */
 },
+[TS_I18N_ROW_MEMCARD] = {
+	"メモリーカードを高速化",   /* ja */
+	"Faster memory card",   /* en */
+	"Carte mémoire plus rapide",   /* fr */
+	"Tarjeta de memoria más rápida",   /* es */
+	"Schnellere Speicherkarte",   /* de */
+	"Scheda di memoria più veloce",   /* it */
+	"Snellere geheugenkaart",   /* nl */
+	"Cartão de memória mais rápido",   /* pt */
+	"Ускорить карту памяти",   /* ru */
+	"메모리 카드 가속",   /* ko */
+	"加速記憶卡",   /* zht */
+	"加速存储卡",   /* zhs */
+	"Nopeampi muistikortti",   /* fi */
+	"Snabbare minneskort",   /* sv */
+	"Hurtigere hukommelseskort",   /* da */
+	"Raskere minnekort",   /* no */
+	"Szybsza karta pamięci",   /* pl */
+	"Cartão de memória mais rápido",   /* ptbr */
+	"Faster memory card",   /* engb */
+	"Daha hızlı hafıza kartı",   /* tr */
+},
 [TS_I18N_HINT_SD2VITA] = {
 	"SD2Vitaアダプターに入れたmicroSDカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",   /* ja */
 	"Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",   /* en */
@@ -241,6 +263,28 @@
 	"Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado, a não ser para testes.",   /* ptbr */
 	"Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",   /* engb */
 	"Tanılama için yerel ağınızda bir komut bağlantı noktası (TCP 1340) açar. Test etmiyorsanız kapalı bırakın.",   /* tr */
+},
+[TS_I18N_HINT_MEMCARD] = {
+	"PS Vita専用メモリーカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",   /* ja */
+	"Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",   /* en */
+	"Accélère la lecture et l'écriture de la carte mémoire officielle PS Vita. Vos fichiers et leur mode d'enregistrement ne changent pas. Désactivez en cas de doute. Prend effet immédiatement, sans redémarrage.",   /* fr */
+	"Acelera la lectura y escritura de la tarjeta de memoria oficial de PS Vita. Tus archivos y la forma de guardarlos no cambian. Desactívalo si sospechas un problema. Se aplica al instante; no hace falta reiniciar.",   /* es */
+	"Beschleunigt Lesen und Schreiben der offiziellen PS Vita-Speicherkarte. Deine Dateien und ihre Speicherung bleiben unverändert. Bei Verdacht auf ein Problem ausschalten. Wirkt sofort, ohne Neustart.",   /* de */
+	"Velocizza la lettura e la scrittura della scheda di memoria ufficiale PS Vita. I file e il modo in cui sono salvati non cambiano. Disattiva se sospetti un problema. Ha effetto subito, senza riavviare.",   /* it */
+	"Versnelt het lezen en schrijven van de officiële PS Vita-geheugenkaart. Je bestanden en de manier van opslaan veranderen niet. Zet uit als je een probleem vermoedt. Werkt meteen; opnieuw opstarten is niet nodig.",   /* nl */
+	"Acelera a leitura e a escrita do cartão de memória oficial da PS Vita. Os seus ficheiros e a forma como são guardados não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não é preciso reiniciar.",   /* pt */
+	"Ускоряет чтение и запись официальной карты памяти PS Vita. Ваши файлы и способ их хранения не меняются. Выключите, если подозреваете проблему. Действует сразу, перезагрузка не нужна.",   /* ru */
+	"정품 PS Vita 메모리 카드의 읽기와 쓰기를 빠르게 합니다. 파일과 저장 방식은 바뀌지 않습니다. 문제가 의심되면 끄세요. 즉시 적용되며 재시작할 필요가 없습니다.",   /* ko */
+	"加快 PS Vita 專用記憶卡的讀寫速度。檔案及其儲存方式不會改變。若懷疑有問題，請關閉。立即生效，無需重新啟動。",   /* zht */
+	"加快 PS Vita 专用存储卡的读写速度。文件及其存储方式不会改变。若怀疑有问题，请关闭。立即生效，无需重启。",   /* zhs */
+	"Nopeuttaa virallisen PS Vita -muistikortin lukemista ja kirjoittamista. Tiedostosi ja niiden tallennustapa eivät muutu. Kytke pois, jos epäilet ongelmaa. Tulee voimaan heti; uudelleenkäynnistystä ei tarvita.",   /* fi */
+	"Snabbar upp läsning och skrivning på det officiella PS Vita-minneskortet. Dina filer och hur de lagras ändras inte. Stäng av om du misstänker ett problem. Gäller direkt; ingen omstart behövs.",   /* sv */
+	"Gør læsning og skrivning på det officielle PS Vita-hukommelseskort hurtigere. Dine filer og måden, de gemmes på, ændres ikke. Slå fra, hvis du har mistanke om et problem. Træder i kraft med det samme; ingen genstart nødvendig.",   /* da */
+	"Gjør lesing og skriving på det offisielle PS Vita-minnekortet raskere. Filene dine og måten de lagres på endres ikke. Slå av hvis du mistenker et problem. Trer i kraft umiddelbart; ingen omstart nødvendig.",   /* no */
+	"Przyspiesza odczyt i zapis oficjalnej karty pamięci PS Vita. Twoje pliki i sposób ich zapisu się nie zmieniają. Wyłącz, jeśli podejrzewasz problem. Działa od razu, bez ponownego uruchamiania.",   /* pl */
+	"Acelera a leitura e a gravação do cartão de memória oficial do PS Vita. Seus arquivos e a forma como são salvos não mudam. Desligue se suspeitar de um problema. Tem efeito imediato; não precisa reiniciar.",   /* ptbr */
+	"Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",   /* engb */
+	"Resmi PS Vita hafıza kartının okuma ve yazma hızını artırır. Dosyalarınız ve saklanma biçimleri değişmez. Bir sorundan şüphelenirseniz kapatın. Hemen etkili olur; yeniden başlatma gerekmez.",   /* tr */
 },
 [TS_I18N_ITEM_HUD_OFF] = {
 	"オフ",   /* ja */
@@ -527,4 +571,26 @@
 	"Inativo: o plugin de kernel não está carregado.",   /* ptbr */
 	"Inactive: the kernel plugin is not loaded.",   /* engb */
 	"Etkin değil: çekirdek eklentisi yüklenmedi.",   /* tr */
+},
+[TS_I18N_ST_SLOW] = {
+	"注意：システムのメモリーカード低速モードがオンになっており、すべての転送が意図的に遅くなっています。",   /* ja */
+	"Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",   /* en */
+	"Remarque : le mode lent de la carte mémoire du système est activé ; il ralentit volontairement chaque transfert.",   /* fr */
+	"Nota: el modo lento de la tarjeta de memoria del sistema está activado y ralentiza a propósito cada transferencia.",   /* es */
+	"Hinweis: Der Langsam-Modus des Systems für Speicherkarten ist aktiv und bremst absichtlich jede Übertragung.",   /* de */
+	"Nota: la modalità lenta della scheda di memoria del sistema è attiva e rallenta di proposito ogni trasferimento.",   /* it */
+	"Let op: de trage modus van het systeem voor geheugenkaarten staat aan en vertraagt bewust elke overdracht.",   /* nl */
+	"Nota: o modo lento do cartão de memória do sistema está ligado e abranda propositadamente cada transferência.",   /* pt */
+	"Примечание: системный медленный режим карты памяти включён и намеренно замедляет каждую передачу.",   /* ru */
+	"참고: 시스템의 메모리 카드 저속 모드가 켜져 있어 모든 전송을 의도적으로 느리게 합니다.",   /* ko */
+	"注意：系統的記憶卡慢速模式已開啟，會刻意減慢每次傳輸。",   /* zht */
+	"注意：系统的存储卡慢速模式已开启，会刻意减慢每次传输。",   /* zhs */
+	"Huomio: järjestelmän muistikortin hidas tila on päällä ja hidastaa tarkoituksella jokaista siirtoa.",   /* fi */
+	"Obs! Systemets långsamma läge för minneskort är på och gör avsiktligt varje överföring långsammare.",   /* sv */
+	"Bemærk: systemets langsomme tilstand for hukommelseskort er slået til og gør bevidst hver overførsel langsommere.",   /* da */
+	"Merk: systemets trege modus for minnekort er på og gjør bevisst hver overføring tregere.",   /* no */
+	"Uwaga: systemowy tryb wolnej karty pamięci jest włączony i celowo spowalnia każdy transfer.",   /* pl */
+	"Observação: o modo lento do cartão de memória do sistema está ligado e deixa cada transferência mais lenta de propósito.",   /* ptbr */
+	"Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",   /* engb */
+	"Not: sistemin hafıza kartı yavaş modu açık; her aktarımı bilerek yavaşlatır.",   /* tr */
 },

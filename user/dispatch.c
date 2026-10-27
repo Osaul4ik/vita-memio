@@ -29,10 +29,10 @@
 #define TS_DEFERRED_BRINGUP_DELAY_US  (3 * 1000 * 1000)
 
 static const char *const k_keys[TS_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode",
+	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
 };
 static const char *const k_status[] = { "off", "active", "fallback", "no-buffer", "unavailable" };
-static const char *const k_dev[TS_DEV_COUNT] = { "sd2vita", "internal" };
+static const char *const k_dev[TS_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
 
 static int    g_run = 0;
 static SceUID g_thread = -1;
@@ -110,7 +110,7 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 	out[0] = 0;
 	if (!strcmp(line, "help")) {
 		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
-		            "keys: sd2vita internal verify devmode (0/1), hud (0-2), hud_pos (0-3)");
+		            "keys: sd2vita memcard internal verify devmode (0/1), hud (0-2), hud_pos (0-3)");
 	} else if (!strcmp(line, "version")) {
 		put(p, end, "turbo-storage %s", TS_VERSION_STR);
 	} else if (!strcmp(line, "ping")) {
@@ -126,9 +126,12 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		p += put(p, end, "turbo-storage %s disabled=%d fingerprint=0x%08x uptime=%us verify_ready=%d\n",
 		         TS_VERSION_STR, (int)st.disabled, (unsigned)st.fingerprint,
 		         (unsigned)st.uptime_s, (int)st.verify_ready);
-		p += put(p, end, "settings: sd2vita=%d internal=%d verify=%d hud=%d hud_pos=%d devmode=%d\n",
-		         (int)st.settings.sd2vita, (int)st.settings.internal, (int)st.settings.verify,
-		         (int)st.settings.hud, (int)st.settings.hud_pos, (int)st.settings.devmode);
+		p += put(p, end, "settings: sd2vita=%d memcard=%d internal=%d verify=%d hud=%d hud_pos=%d devmode=%d\n",
+		         (int)st.settings.sd2vita, (int)st.settings.memcard, (int)st.settings.internal,
+		         (int)st.settings.verify, (int)st.settings.hud, (int)st.settings.hud_pos,
+		         (int)st.settings.devmode);
+		p += put(p, end, "memcard slow mode: %s\n", st.memcard_slow == 1 ? "ON" :
+		         st.memcard_slow == 0 ? "off" : "unknown");
 		for (int i = 0; i < TS_DEV_COUNT; i++) {
 			const TsDevState *d = &st.dev[i];
 			int s = d->status >= 0 && d->status <= TS_ST_UNAVAIL ? d->status : TS_ST_UNAVAIL;

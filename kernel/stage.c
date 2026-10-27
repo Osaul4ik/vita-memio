@@ -17,6 +17,8 @@
  *   ksceSdifReadSectorSd / ksceSdifWriteSectorSd    -> SD2Vita (port 1, SD card)
  *   ksceSdifReadSectorMmc / ksceSdifWriteSectorMmc  -> internal (port 0 only;
  *                                                      game cards stay stock)
+ * and (SceMsifForDriver):
+ *   ksceMsifReadSector / ksceMsifWriteSector        -> the memory card (one slot)
  * Never touched: small transfers (< 32 KiB: file-system metadata), other ports
  * (the Wi-Fi chip is on its own port and never calls these), USB storage.
  *
@@ -45,6 +47,9 @@
 #define NID_WRITE_SD   0xE0781171    /* ksceSdifWriteSectorSd                  */
 #define NID_READ_MMC   0x6F8D529B    /* ksceSdifReadSectorMmc                  */
 #define NID_WRITE_MMC  0x175543D2    /* ksceSdifWriteSectorMmc                 */
+#define LIB_MSIF       0xB706084A    /* SceMsifForDriver                       */
+#define NID_READ_MS    0x58654AA3    /* ksceMsifReadSector(sector, buf, count) */
+#define NID_WRITE_MS   0x329035EF    /* ksceMsifWriteSector                    */
 
 /* The largest request the storage stack issues is 512 sectors (256 KiB);
  * anything larger is moved in pieces. */
@@ -59,7 +64,7 @@
 void *ksceSdifGetSdContextGlobal(int port);
 
 typedef struct Dev {
-	int           port;          /* storage controller port                    */
+	int           port;          /* SDIF port, or -1: the memory card          */
 	SceUID        uid;
 	void         *buf;           /* NC staging buffer                          */
 	volatile int  busy;
@@ -73,6 +78,7 @@ typedef struct Dev {
 static Dev g_dev[TS_DEV_COUNT] = {
 	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
 	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1 },
+	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
 };
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
@@ -81,9 +87,25 @@ static void        *g_shadow;
 static SceUID       g_shadow_uid = -1;
 static volatile int g_shadow_busy;
 
-enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_COUNT };
+enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_RD_MS, H_WR_MS, H_COUNT };
+#define H_SDIF_COUNT H_RD_MS          /* the SceSdif hooks come first          */
 static volatile tai_hook_ref_t g_ref[H_COUNT];
-static SceUID g_hook[H_COUNT] = { -1, -1, -1, -1 };
+static SceUID g_hook[H_COUNT] = { -1, -1, -1, -1, -1, -1 };
+
+/* Calling the original: SceSdif takes the card context first, SceMsif has a
+ * single slot and no context. `part` is NULL for the memory card. */
+typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n);
+
+static int io_sdif(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
+{
+	return TAI_CONTINUE(int, ref, part, sector, buf, n);
+}
+
+static int io_msif(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
+{
+	(void)part;
+	return TAI_CONTINUE(int, ref, sector, buf, n);
+}
 
 /* taiHEN can make a hook live a moment before it stores the ref. A call that
  * lands in that window waits for it (bounded) instead of sleeping blindly. */
@@ -96,6 +118,8 @@ static tai_hook_ref_t ref_of(int h)
 
 static int on_port(void *part, int port)
 {
+	if (port < 0)
+		return 1;              /* the memory card hooks only see the card      */
 	/* A card context's first word is its controller context. */
 	return part && *(void **)part == ksceSdifGetSdContextGlobal(port);
 }
@@ -136,8 +160,8 @@ static int take_shadow(void)
 	return g_verify && g_shadow && !__sync_lock_test_and_set(&g_shadow_busy, 1);
 }
 
-static int stage_read(Dev *d, tai_hook_ref_t ref, void *part, uint32_t sector, void *buf,
-                      uint32_t nsec)
+static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                      void *buf, uint32_t nsec)
 {
 	uint8_t *dst = buf;
 	uint32_t left = nsec;
@@ -146,16 +170,16 @@ static int stage_read(Dev *d, tai_hook_ref_t ref, void *part, uint32_t sector, v
 	if (mine)
 		d->all_rd += (uint64_t)nsec * 512;
 	if (!take(d, mine, nsec))
-		return TAI_CONTINUE(int, ref, part, sector, buf, nsec);
+		return io(ref, part, sector, buf, nsec);
 	verify = take_shadow();
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
-		ret = TAI_CONTINUE(int, ref, part, sector, d->buf, n);
+		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)
 			break;
 		memcpy(dst, d->buf, bytes);
-		if (verify && TAI_CONTINUE(int, ref, part, sector, g_shadow, n) >= 0) {
+		if (verify && io(ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
 			if (memcmp(dst, g_shadow, bytes) != 0) {
 				d->st.mismatches++;
@@ -178,11 +202,11 @@ static int stage_read(Dev *d, tai_hook_ref_t ref, void *part, uint32_t sector, v
 		d->st.reads++;
 	}
 	/* Anything not done on the faster path (error, mismatch) is done stock. */
-	return left ? TAI_CONTINUE(int, ref, part, sector, dst, left) : ret;
+	return left ? io(ref, part, sector, dst, left) : ret;
 }
 
-static int stage_write(Dev *d, tai_hook_ref_t ref, tai_hook_ref_t rd_ref, void *part,
-                       uint32_t sector, void *buf, uint32_t nsec)
+static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
 	const uint8_t *src = buf;
 	uint32_t left = nsec;
@@ -191,22 +215,22 @@ static int stage_write(Dev *d, tai_hook_ref_t ref, tai_hook_ref_t rd_ref, void *
 	if (mine)
 		d->all_wr += (uint64_t)nsec * 512;
 	if (!take(d, mine, nsec))
-		return TAI_CONTINUE(int, ref, part, sector, buf, nsec);
+		return io(ref, part, sector, buf, nsec);
 	verify = take_shadow() && rd_ref;
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
 		memcpy(d->buf, src, bytes);
-		ret = TAI_CONTINUE(int, ref, part, sector, d->buf, n);
+		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)
 			break;
-		if (verify && TAI_CONTINUE(int, rd_ref, part, sector, g_shadow, n) >= 0) {
+		if (verify && io(rd_ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
 			if (memcmp(g_shadow, src, bytes) != 0) {
 				d->st.mismatches++;
 				d->fallback = 1;
 				/* rewrite this chunk the stock way, from the caller's data */
-				ret = TAI_CONTINUE(int, ref, part, sector, (void *)src, n);
+				ret = io(ref, part, sector, (void *)src, n);
 				if (ret < 0)
 					break;
 			}
@@ -225,28 +249,39 @@ static int stage_write(Dev *d, tai_hook_ref_t ref, tai_hook_ref_t rd_ref, void *
 	} else {
 		d->st.writes++;
 	}
-	return left ? TAI_CONTINUE(int, ref, part, sector, (void *)src, left) : ret;
+	return left ? io(ref, part, sector, (void *)src, left) : ret;
 }
 
 static int h_rd_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_read(&g_dev[TS_DEV_SD2VITA], ref_of(H_RD_SD), part, sector, buf, nsec);
+	return stage_read(&g_dev[TS_DEV_SD2VITA], io_sdif, ref_of(H_RD_SD), part, sector, buf, nsec);
 }
 
 static int h_wr_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_write(&g_dev[TS_DEV_SD2VITA], ref_of(H_WR_SD), g_ref[H_RD_SD], part, sector,
-	                   buf, nsec);
+	return stage_write(&g_dev[TS_DEV_SD2VITA], io_sdif, ref_of(H_WR_SD), g_ref[H_RD_SD], part,
+	                   sector, buf, nsec);
 }
 
 static int h_rd_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_read(&g_dev[TS_DEV_INTERNAL], ref_of(H_RD_MMC), part, sector, buf, nsec);
+	return stage_read(&g_dev[TS_DEV_INTERNAL], io_sdif, ref_of(H_RD_MMC), part, sector, buf, nsec);
 }
 
 static int h_wr_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_write(&g_dev[TS_DEV_INTERNAL], ref_of(H_WR_MMC), g_ref[H_RD_MMC], part,
+	return stage_write(&g_dev[TS_DEV_INTERNAL], io_sdif, ref_of(H_WR_MMC), g_ref[H_RD_MMC], part,
+	                   sector, buf, nsec);
+}
+
+static int h_rd_ms(uint32_t sector, void *buf, uint32_t nsec)
+{
+	return stage_read(&g_dev[TS_DEV_MEMCARD], io_msif, ref_of(H_RD_MS), NULL, sector, buf, nsec);
+}
+
+static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
+{
+	return stage_write(&g_dev[TS_DEV_MEMCARD], io_msif, ref_of(H_WR_MS), g_ref[H_RD_MS], NULL,
 	                   sector, buf, nsec);
 }
 
@@ -257,6 +292,8 @@ int ts_stage_init(void)
 		{ H_WR_SD,  NID_WRITE_SD,  h_wr_sd  },
 		{ H_RD_MMC, NID_READ_MMC,  h_rd_mmc },
 		{ H_WR_MMC, NID_WRITE_MMC, h_wr_mmc },
+		{ H_RD_MS,  NID_READ_MS,   h_rd_ms  },
+		{ H_WR_MS,  NID_WRITE_MS,  h_wr_ms  },
 	};
 
 	/* Buffers first, at boot while contiguous memory is easy to find. A device
@@ -270,7 +307,7 @@ int ts_stage_init(void)
 			         (unsigned)r);
 		}
 	}
-	for (int i = 0; i < H_COUNT; i++) {
+	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceSdif", LIB_SDIF, k_hooks[i].nid,
 			k_hooks[i].fn);
@@ -281,9 +318,33 @@ int ts_stage_init(void)
 			return TS_ERR_RESOLVE;
 		}
 	}
-	TS_KLOGI("stage: hooks installed; buffers sd2vita=%s internal=%s",
+	/* The memory card is optional: if its hooks can't be installed, only the
+	 * memory card stays stock (its buffer is released). */
+	for (int i = H_SDIF_COUNT; i < H_COUNT; i++) {
+		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
+			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceMsif", LIB_MSIF, k_hooks[i].nid,
+			k_hooks[i].fn);
+		if (g_hook[k_hooks[i].h] < 0) {
+			TS_KLOGW("stage: memory card hook %d failed (0x%08x) - memory card stays stock",
+			         i, (unsigned)g_hook[k_hooks[i].h]);
+			for (int j = H_SDIF_COUNT; j < H_COUNT; j++)
+				if (g_hook[j] >= 0) {
+					taiHookReleaseForKernel(g_hook[j], g_ref[j]);
+					g_hook[j] = -1;
+				}
+			Dev *m = &g_dev[TS_DEV_MEMCARD];
+			if (m->uid >= 0) {
+				ksceKernelFreeMemBlock(m->uid);
+				m->uid = -1;
+			}
+			m->buf = NULL;
+			break;
+		}
+	}
+	TS_KLOGI("stage: hooks installed; buffers sd2vita=%s internal=%s memcard=%s",
 	         g_dev[TS_DEV_SD2VITA].buf ? "ok" : "none",
-	         g_dev[TS_DEV_INTERNAL].buf ? "ok" : "none");
+	         g_dev[TS_DEV_INTERNAL].buf ? "ok" : "none",
+	         g_dev[TS_DEV_MEMCARD].buf ? "ok" : "none");
 	return TS_OK;
 }
 
@@ -315,7 +376,7 @@ void ts_stage_fini(void)
 
 void ts_stage_apply(const TsSettings *s)
 {
-	const int32_t want[TS_DEV_COUNT] = { s->sd2vita, s->internal };
+	const int32_t want[TS_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
 
 	for (int i = 0; i < TS_DEV_COUNT; i++) {
 		if (want[i] && !g_dev[i].enabled)
@@ -365,4 +426,24 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		                !d->buf        ? TS_ST_NO_BUFFER :
 		                d->fallback    ? TS_ST_FALLBACK : TS_ST_ACTIVE;
 	}
+}
+
+/* Memory card slow mode (Sony's own throttle: it sleeps after every memory
+ * card transfer). Read only; Turbo Storage never changes it. 1 on, 0 off,
+ * -1 if the driver's getter isn't available. */
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
+                           uint32_t funcnid, uintptr_t *func);
+
+int ts_stage_memcard_slow(void)
+{
+	static int (*get)(void);
+	static int tried;
+
+	if (!tried) {
+		uintptr_t f = 0;
+		tried = 1;
+		if (module_get_export_func(KERNEL_PID, "SceMsif", LIB_MSIF, 0x491E25B5, &f) >= 0)
+			get = (int (*)(void))f;   /* ksceMsifGetSlowCardModeState */
+	}
+	return get ? (get() ? 1 : 0) : -1;
 }

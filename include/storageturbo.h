@@ -23,7 +23,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.1); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define TS_VERSION_STR    "0.1.0-alpha"
+#define TS_VERSION_STR    "0.2.0-alpha"
 
 /* Everything the plugin writes lives here (created on first use). */
 #define TS_DATA_DIR       "ur0:data/turbostorage"
@@ -44,6 +44,7 @@
 enum ts_dev {
 	TS_DEV_SD2VITA = 0,   /* microSD in the game-card slot (SD2Vita adapter) */
 	TS_DEV_INTERNAL,      /* the console's built-in storage (ur0:, imc0:...) */
+	TS_DEV_MEMCARD,       /* the official PS Vita memory card                */
 	TS_DEV_COUNT
 };
 
@@ -60,6 +61,7 @@ enum ts_key {
 	TS_KEY_HUD,            /* TS_HUD_*                                       */
 	TS_KEY_HUD_POS,        /* TS_POS_*                                       */
 	TS_KEY_DEVMODE,        /* 0/1: developer command server on TCP :1340     */
+	TS_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	TS_KEY_COUNT
 };
 
@@ -82,6 +84,7 @@ enum ts_key {
 #define TS_DEF_HUD       TS_HUD_OFF
 #define TS_DEF_HUD_POS   TS_POS_TOP_RIGHT
 #define TS_DEF_DEVMODE   0
+#define TS_DEF_MEMCARD   0
 
 /* One int per key, in enum ts_key order. */
 typedef struct TsSettings {
@@ -91,6 +94,7 @@ typedef struct TsSettings {
 	int32_t hud;
 	int32_t hud_pos;
 	int32_t devmode;
+	int32_t memcard;
 } TsSettings;
 
 /* 1 if `v` is a legal value for `key`, else 0. Shared so the kernel's
@@ -102,6 +106,7 @@ static inline int ts_setting_valid(int key, int v)
 	case TS_KEY_INTERNAL:
 	case TS_KEY_VERIFY:
 	case TS_KEY_DEVMODE:
+	case TS_KEY_MEMCARD:
 		return v == 0 || v == 1;
 	case TS_KEY_HUD:
 		return v >= TS_HUD_OFF && v <= TS_HUD_EXTENDED;

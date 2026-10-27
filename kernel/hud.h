@@ -9,7 +9,7 @@
 #define STORAGETURBO_HUD_H
 
 #define TS_HUD_LINES     6
-#define TS_HUD_LINE_MAX  40   /* chars incl. NUL; ASCII only               */
+#define TS_HUD_LINE_MAX  48   /* chars incl. NUL; ASCII only               */
 
 int  ts_hud_init(void);   /* install the set-framebuffer hook              */
 void ts_hud_fini(void);

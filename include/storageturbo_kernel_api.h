@@ -32,6 +32,7 @@ typedef struct TsState {
 	uint32_t   fingerprint;      /* storage driver module fingerprint         */
 	int32_t    verify_ready;     /* 1 once the verify buffer is allocated     */
 	uint32_t   uptime_s;         /* seconds since the kernel module started   */
+	int32_t    memcard_slow;     /* memory card slow mode: 1 on, 0 off, -1 n/a */
 	TsDevState dev[TS_DEV_COUNT];
 } TsState;
 

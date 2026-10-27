@@ -19,6 +19,9 @@ void ts_stage_worker_tick(void);
 
 int  ts_stage_verify_ready(void);
 
+/* Memory card slow mode: 1 on, 0 off, -1 unknown. Read only. */
+int  ts_stage_memcard_slow(void);
+
 /* Bytes read/written on `dev` since boot, faster path or not (for the HUD). */
 void ts_stage_bytes(int dev, uint64_t *rd, uint64_t *wr);
 

@@ -110,7 +110,10 @@ static int firmware_known(void)
 
 /* ---- 1 Hz worker ------------------------------------------------------------ */
 
-static const char *const k_dev_short[TS_DEV_COUNT] = { "SD2V", "INT " };   /* compact */
+static const char *const k_dev_short[TS_DEV_COUNT] = { "SD2V", "INT ", "MC  " };   /* compact */
+static const char *const k_dev_log[TS_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
+/* HUD order: the removable storages first. */
+static const int k_hud_order[TS_DEV_COUNT] = { TS_DEV_SD2VITA, TS_DEV_MEMCARD, TS_DEV_INTERNAL };
 
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);
@@ -161,8 +164,11 @@ static void hud_feed(const TsDevState *now)
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
 	 * or not they took the faster path. Extended adds totals and state. */
-	for (int i = 0; i < TS_DEV_COUNT; i++) {
+	int slow = ts_stage_memcard_slow() == 1;
+
+	for (int o = 0; o < TS_DEV_COUNT; o++) {
 		static uint64_t seen[TS_DEV_COUNT];
+		int i = k_hud_order[o];
 		uint64_t rd, wr;
 		char r[12], w[12];
 
@@ -175,9 +181,11 @@ static void hud_feed(const TsDevState *now)
 		if (s.hud == TS_HUD_OFF || !seen[i])
 			continue;
 		const char *name = s.hud == TS_HUD_COMPACT ? k_dev_short[i]
-		                 : i == TS_DEV_INTERNAL ? hud_tr(g_lang, HTR_INTERNAL) : "SD2VITA";
-		const char *flag = now[i].status == TS_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR) : "";
-		snprintf(L[n++], TS_HUD_LINE_MAX, "%.12s R %.6s W %.6s MB/s%s%.12s", name, r, w,
+		                 : i == TS_DEV_INTERNAL ? hud_tr(g_lang, HTR_INTERNAL)
+		                 : i == TS_DEV_MEMCARD  ? hud_tr(g_lang, HTR_MEMCARD) : "SD2VITA";
+		const char *flag = now[i].status == TS_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR)
+		                 : i == TS_DEV_MEMCARD && slow     ? hud_tr(g_lang, HTR_SLOW) : "";
+		snprintf(L[n++], TS_HUD_LINE_MAX, "%.14s R %.6s W %.6s MB/s%s%.12s", name, r, w,
 		         flag[0] ? " " : "", flag);
 		if (s.hud != TS_HUD_EXTENDED)
 			continue;
@@ -210,7 +218,7 @@ static const char *status_name(int st)
 static void log_status(const TsDevState *d, int i)
 {
 	TS_KLOGI("dev %s: %s reads=%u (%u MiB) writes=%u (%u MiB) busy=%u errors=%u "
-	         "verified=%u mismatches=%u", i == TS_DEV_SD2VITA ? "sd2vita" : "internal",
+	         "verified=%u mismatches=%u", k_dev_log[i],
 	         status_name(d->status), (unsigned)d->reads, (unsigned)d->read_mib,
 	         (unsigned)d->writes, (unsigned)d->write_mib, (unsigned)d->passthru,
 	         (unsigned)d->errors, (unsigned)d->verified, (unsigned)d->mismatches);
@@ -229,6 +237,16 @@ static int worker(SceSize args, void *argp)
 		g_uptime++;
 		ts_settings_flush();
 		ts_stage_worker_tick();
+		{
+			static int last_slow = -2;
+			int sl = ts_stage_memcard_slow();
+			if (sl != last_slow) {
+				TS_KLOGI("memory card slow mode: %s",
+				         sl == 1 ? "ON (Sony throttles memory card transfers)" :
+				         sl == 0 ? "off" : "unknown");
+				last_slow = sl;
+			}
+		}
 		if (g_uptime == TS_GUARD_SECS) {
 			guard_write('0', "worker");
 			TS_KLOGI("stable for %us - boot_guard set to 0", (unsigned)TS_GUARD_SECS);
@@ -267,6 +285,7 @@ int tsGetState(TsState *out)
 	k.fingerprint = g_fingerprint;
 	k.verify_ready = ts_stage_verify_ready();
 	k.uptime_s = g_uptime;
+	k.memcard_slow = ts_stage_memcard_slow();
 	ts_stage_get(k.dev, g_disabled == TS_DIS_NONE);
 	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
 		return TS_ERR_ARG;

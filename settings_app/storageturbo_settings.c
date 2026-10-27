@@ -44,7 +44,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 
 /* Registry key names under /CONFIG/TURBOSTOR, in enum ts_key order. */
 static const char *const g_keys[TS_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode",
+	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
 };
 
 #define ROW_LIST(k) \
@@ -59,6 +59,7 @@ static const char *const g_keys[TS_KEY_COUNT] = {
 static const char X_GROUP[] =
 	"<setting_list id=\"turbostorage_settings\" title=\"ts_t_title\" icon=\"tex_spanner\">"
 	ROW_TOGGLE("sd2vita")
+	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
 	ROW_LIST("hud")
 		ITEM("ts_i_hud0", "0") ITEM("ts_i_hud1", "1") ITEM("ts_i_hud2", "2")
@@ -127,6 +128,8 @@ static const ts_u16 *device_hint(int dev, int help_id)
 		id = TS_I18N_ST_FALLBACK;
 	else if (st.dev[dev].status == TS_ST_NO_BUFFER)
 		id = TS_I18N_ST_NO_BUFFER;
+	else if (dev == TS_DEV_MEMCARD && st.memcard_slow == 1)
+		id = TS_I18N_ST_SLOW;
 
 	l_put(&l, ts_i18n(help_id));
 	if (id >= 0) {
@@ -144,11 +147,13 @@ static const signed char k_row[TS_KEY_COUNT] = {
 	[TS_KEY_SD2VITA] = TS_I18N_ROW_SD2VITA, [TS_KEY_INTERNAL] = TS_I18N_ROW_INTERNAL,
 	[TS_KEY_VERIFY] = -1, [TS_KEY_HUD] = TS_I18N_ROW_HUD,
 	[TS_KEY_HUD_POS] = TS_I18N_ROW_HUD_POS, [TS_KEY_DEVMODE] = TS_I18N_ROW_DEVMODE,
+	[TS_KEY_MEMCARD] = TS_I18N_ROW_MEMCARD,
 };
 static const signed char k_hint[TS_KEY_COUNT] = {
 	[TS_KEY_SD2VITA] = TS_I18N_HINT_SD2VITA, [TS_KEY_INTERNAL] = TS_I18N_HINT_INTERNAL,
 	[TS_KEY_VERIFY] = -1, [TS_KEY_HUD] = TS_I18N_HINT_HUD,
 	[TS_KEY_HUD_POS] = TS_I18N_HINT_HUD_POS, [TS_KEY_DEVMODE] = TS_I18N_HINT_DEVMODE,
+	[TS_KEY_MEMCARD] = TS_I18N_HINT_MEMCARD,
 };
 
 static int key_index(const char *name)
@@ -174,6 +179,8 @@ static const ts_u16 *ts_text(const char *id)
 			return device_hint(TS_DEV_SD2VITA, k_hint[k]);
 		if (k == TS_KEY_INTERNAL)
 			return device_hint(TS_DEV_INTERNAL, k_hint[k]);
+		if (k == TS_KEY_MEMCARD)
+			return device_hint(TS_DEV_MEMCARD, k_hint[k]);
 		return fixed_text(k_hint[k]);
 	}
 	if (s_pfx(id, "ts_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])

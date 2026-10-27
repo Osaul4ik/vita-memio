@@ -82,7 +82,7 @@
 
   <!-- title, subtitle, firmware badge -->
   <text class="t" x="60" y="86"><tspan class="h1">Turbo Storage</tspan><tspan class="h1l"> for PS Vita</tspan></text>
-  <text class="t h2" x="60" y="122">A taiHEN plugin that speeds up SD2Vita, the memory card and internal storage. Measured on hardware.</text>
+  <text class="t h2" x="60" y="122">A taiHEN plugin that speeds up SD2Vita, the Vita memory card and internal storage. Measured on hardware.</text>
   <text class="t h2" x="60" y="152">A safer, more conservative approach than the withdrawn IOStaging plugin.</text>
   <rect x="898" y="52" width="242" height="42" rx="21" fill="#ffffff" fill-opacity="0.10" stroke="#ffffff" stroke-opacity="0.45"/>
   <text class="t badge" x="1019" y="79" text-anchor="middle">FIRMWARE 3.60–3.74</text>
@@ -134,7 +134,7 @@
 
   <text class="t lbl" x="82" y="252">SD2Vita reads</text>
   <text class="t sub" x="82" y="275">13.3 → 16.8 MB/s</text>
-  <text class="t lbl" x="354" y="252">memory card reads</text>
+  <text class="t lbl" x="354" y="252">Vita memory card reads</text>
   <text class="t sub" x="354" y="275">10.5 → 13.8 MB/s</text>
   <text class="t lbl" x="626" y="252">internal reads</text>
   <text class="t sub" x="626" y="275">15.5 → 21.1 MB/s</text>
@@ -142,7 +142,7 @@
   <text class="t sub" x="898" y="275">130,000+ transfers checked</text>
   <text class="t lbl" x="82" y="392">SD2Vita writes</text>
   <text class="t sub" x="82" y="415">4.4 → 6.0 MB/s</text>
-  <text class="t lbl" x="354" y="392">memory card writes</text>
+  <text class="t lbl" x="354" y="392">Vita memory card writes</text>
   <text class="t sub" x="354" y="415">9.1 → 10.0 MB/s</text>
   <text class="t lbl" x="626" y="392">internal writes</text>
   <text class="t sub" x="626" y="415">7.4 → 8.2 MB/s</text>
@@ -150,7 +150,7 @@
   <text class="t sub" x="898" y="415">each is on the card on return</text>
   <text class="t lbl" x="82" y="532">SD2Vita read latency</text>
   <text class="t sub" x="82" y="555">9.8 → 7.6 ms per 128 KiB</text>
-  <text class="t lbl" x="354" y="532">memory card read latency</text>
+  <text class="t lbl" x="354" y="532">Vita memory card latency</text>
   <text class="t sub" x="354" y="555">12.2 → 9.3 ms per 128 KiB</text>
   <text class="t lbl" x="626" y="532">internal read latency</text>
   <text class="t sub" x="626" y="555">8.5 → 6.4 ms per 128 KiB</text>

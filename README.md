@@ -46,8 +46,8 @@ byte-for-byte afterwards.
 | SD2Vita reads (1 MiB requests) | 13.3 MB/s | **16.8 MB/s** | **+26%** |
 | SD2Vita reads (128 KiB requests) | 12.4 MB/s | **15.7 MB/s** | **+27%** |
 | SD2Vita writes | 4.4–5.4 MB/s | **6.0–6.3 MB/s** | **+17–36%** |
-| Memory card reads (1 MiB requests) | 10.5 MB/s | **13.8 MB/s** | **+32%** |
-| Memory card writes (1 MiB requests) | 9.1 MB/s | **10.0 MB/s** | **+10%** |
+| Vita memory card reads (1 MiB requests) | 10.5 MB/s | **13.8 MB/s** | **+32%** |
+| Vita memory card writes (1 MiB requests) | 9.1 MB/s | **10.0 MB/s** | **+10%** |
 | Internal storage reads | 14.2–15.5 MB/s | **19.0–21.1 MB/s** | **+34–36%** |
 | Internal storage writes | 7.4–8.1 MB/s | **8.2–8.8 MB/s** | **+9–11%** |
 | Data checked against stock | | **130,000+ transfers, 0 differences** | |
@@ -65,9 +65,9 @@ in brackets). Three alternated rounds, same console.
 | SD2Vita, 32 KiB | 3.3 ms (3.6) | **2.3 ms (2.7)** | **−31%** |
 | SD2Vita, 128 KiB | 9.8 ms (10.5) | **7.6 ms (8.7)** | **−23%** |
 | SD2Vita, 1 MiB | 73.9 ms (79.3) | **59.0 ms (62.2)** | **−20%** |
-| Memory card, 32 KiB | 3.6 ms (3.9) | **2.9 ms (3.0)** | **−22%** |
-| Memory card, 128 KiB | 12.2 ms (12.8) | **9.3 ms (9.5)** | **−24%** |
-| Memory card, 1 MiB | 95.1 ms (96.6) | **72.2 ms (73.2)** | **−24%** |
+| Vita memory card, 32 KiB | 3.6 ms (3.9) | **2.9 ms (3.0)** | **−22%** |
+| Vita memory card, 128 KiB | 12.2 ms (12.8) | **9.3 ms (9.5)** | **−24%** |
+| Vita memory card, 1 MiB | 95.1 ms (96.6) | **72.2 ms (73.2)** | **−24%** |
 | Internal, 128 KiB | 8.5 ms (9.9) | **6.4 ms (7.4)** | **−24%** |
 | Internal, 1 MiB | 63.5 ms (97.9) | **46.7 ms (72.0)** | **−26%** |
 

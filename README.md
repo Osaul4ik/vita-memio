@@ -189,7 +189,9 @@ programs using the card at once, suspend and resume, and running alongside YAMT.
   on any other firmware Turbo Storage stays inactive.
 - **Storage:** SD2Vita (microSD in the game-card slot) and internal storage. The
   official memory card, game cards and USB storage (PSVSD, PS TV USB) are not
-  accelerated.
+  accelerated. USB storage has nothing to gain: Sony's USB storage driver already
+  moves data through a buffer that needs no cache maintenance, the same technique
+  Turbo Storage brings to the SD2Vita.
 - **Storage managers:** works with YAMT (tested). StorageMgr and gamesd work at a
   different layer and should be compatible, but are untested.
 - **Overclocking plugins:** compatible. Overclocking speeds up stock storage a little
@@ -203,8 +205,10 @@ programs using the card at once, suspend and resume, and running alongside YAMT.
   thing differs: after a faster read the data can sit in the processor's cache
   for a moment before it reaches main memory. A game that loads a file straight
   into memory the graphics chip reads, without flushing, could in principle draw
-  a stale texture. Nothing on the card is affected. This is why both storages
-  start off and the tip above suggests leaving Turbo Storage off while you play.
+  a stale texture. Nothing on the card is affected. Sony's own USB storage driver
+  (PSVSD, PS TV) ends every read the same way, so games already run with this
+  pattern there. Still, this is why both storages start off and the tip above
+  suggests leaving Turbo Storage off while you play.
 - Writes are limited mostly by the card itself.
 - Uses 512 KiB of kernel memory (one buffer per storage), plus 256 KiB while verify
   mode has been used.

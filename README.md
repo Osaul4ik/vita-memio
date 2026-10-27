@@ -71,10 +71,60 @@ in brackets). Three alternated rounds, same console.
 | Internal, 128 KiB | 8.5 ms (9.9) | **6.4 ms (7.4)** | **−24%** |
 | Internal, 1 MiB | 63.5 ms (97.9) | **46.7 ms (72.0)** | **−26%** |
 
-The slowest reads improve as much as the typical ones. Reads under 32 KiB take the
-standard path and are unchanged. Writes are 0–15% quicker per call; their
+The slowest reads improve as much as the typical ones. Requests under 32 KiB take
+the standard path and are unchanged (see random reads below for why small file reads
+still gain). Writes are 0–15% quicker per call; their
 occasional multi-second pauses come from the card itself, with or without Turbo
 Storage.
+
+### Random reads
+
+Reads from random places in a 64 MiB file, one at a time, as a game or emulator
+reading assets would. Operations per second (IOPS) and throughput; three alternated
+rounds, every read checked against the data written.
+
+| Storage, read size | Stock | Turbo Storage | Change |
+|---|---|---|---|
+| SD2Vita, 4 KiB | 277 IOPS (1.1 MB/s) | **353 IOPS (1.4 MB/s)** | **+28%** |
+| SD2Vita, 32 KiB | 268 IOPS (8.8 MB/s) | **332 IOPS (10.9 MB/s)** | **+24%** |
+| SD2Vita, 128 KiB | 91 IOPS (12.0 MB/s) | **116 IOPS (15.2 MB/s)** | **+27%** |
+| SD2Vita, 1 MiB | 12 IOPS (13.4 MB/s) | **16 IOPS (17.3 MB/s)** | **+29%** |
+| Vita memory card, 4 KiB | 276 IOPS (1.1 MB/s) | **348 IOPS (1.4 MB/s)** | **+26%** |
+| Vita memory card, 32 KiB | 269 IOPS (8.8 MB/s) | **342 IOPS (11.2 MB/s)** | **+27%** |
+| Vita memory card, 128 KiB | 80 IOPS (10.6 MB/s) | **106 IOPS (14.0 MB/s)** | **+32%** |
+| Vita memory card, 1 MiB | 10 IOPS (11.0 MB/s) | **13 IOPS (14.6 MB/s)** | **+33%** |
+| Internal, 4 KiB | 313 IOPS (1.3 MB/s) | **459 IOPS (1.9 MB/s)** | **+47%** |
+| Internal, 32 KiB | 302 IOPS (9.9 MB/s) | **445 IOPS (14.6 MB/s)** | **+47%** |
+| Internal, 128 KiB | 106 IOPS (14.0 MB/s) | **142 IOPS (18.7 MB/s)** | **+33%** |
+| Internal, 1 MiB | 15 IOPS (15.9 MB/s) | **20 IOPS (21.8 MB/s)** | **+37%** |
+
+Small random reads gain too: for a 4 KiB read from a new place, the file system
+fetches a whole cluster from the card, which is big enough for the faster path
+(4 KiB and 32 KiB reads run at the same rate).
+
+### Random writes
+
+Writes to random places in the same file, timed call by call (typical write, the
+median). Two alternated rounds.
+
+| Storage, write size | Stock | Turbo Storage | Change |
+|---|---|---|---|
+| SD2Vita, 4 KiB | 7.3 ms | **6.5 ms** | **−11%** |
+| SD2Vita, 32 KiB | 4.0 ms | **3.7 ms** | **−8%** |
+| SD2Vita, 128 KiB | 18.2 ms | **16.8 ms** | **−8%** |
+| SD2Vita, 1 MiB | 137 ms | **125 ms** | **−9%** |
+| Vita memory card, 4–128 KiB | 350–370 ms | 350–370 ms | none |
+| Vita memory card, 1 MiB | 464 ms | **454 ms** | **−2%** |
+| Internal, 4 KiB | 16.1 ms | **15.0 ms** | **−7%** |
+| Internal, 32 KiB | 13.4 ms | **13.0 ms** | **−3%** |
+| Internal, 128 KiB and 1 MiB | | | no clear change |
+
+Random writes are mostly the card's own work, so Turbo Storage helps them least.
+The Vita memory card takes about a third of a second for every scattered write,
+whatever its size; the SD2Vita's microSD card sometimes pauses for over 2 seconds
+on one write, with or without Turbo Storage (the SD2Vita 4 and 32 KiB figures are
+from the round without those pauses). Large sequential writes, such as copies and
+installs, gain more (see the headline figures).
 
 **What you'll notice:** faster copies, VPK installs and anything that reads or
 writes big files. **What you won't:** most game loading. A game launch we measured

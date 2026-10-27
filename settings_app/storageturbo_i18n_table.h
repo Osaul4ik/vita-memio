@@ -133,26 +133,26 @@
 	"Geliştirici modu",   /* tr */
 },
 [TS_I18N_ROW_MEMCARD] = {
-	"メモリーカードを高速化",   /* ja */
-	"Faster memory card",   /* en */
-	"Carte mémoire plus rapide",   /* fr */
-	"Tarjeta de memoria más rápida",   /* es */
-	"Schnellere Speicherkarte",   /* de */
-	"Scheda di memoria più veloce",   /* it */
-	"Snellere geheugenkaart",   /* nl */
-	"Cartão de memória mais rápido",   /* pt */
-	"Ускорить карту памяти",   /* ru */
-	"메모리 카드 가속",   /* ko */
-	"加速記憶卡",   /* zht */
-	"加速存储卡",   /* zhs */
-	"Nopeampi muistikortti",   /* fi */
-	"Snabbare minneskort",   /* sv */
-	"Hurtigere hukommelseskort",   /* da */
-	"Raskere minnekort",   /* no */
-	"Szybsza karta pamięci",   /* pl */
-	"Cartão de memória mais rápido",   /* ptbr */
-	"Faster memory card",   /* engb */
-	"Daha hızlı hafıza kartı",   /* tr */
+	"Vitaメモリーカードを高速化",   /* ja */
+	"Faster Vita memory card",   /* en */
+	"Carte mémoire Vita plus rapide",   /* fr */
+	"Tarjeta de memoria Vita más rápida",   /* es */
+	"Schnellere Vita-Speicherkarte",   /* de */
+	"Scheda di memoria Vita più veloce",   /* it */
+	"Snellere Vita-geheugenkaart",   /* nl */
+	"Cartão de memória Vita mais rápido",   /* pt */
+	"Ускорить карту памяти Vita",   /* ru */
+	"Vita 메모리 카드 가속",   /* ko */
+	"加速 Vita 記憶卡",   /* zht */
+	"加速 Vita 存储卡",   /* zhs */
+	"Nopeampi Vita-muistikortti",   /* fi */
+	"Snabbare Vita-minneskort",   /* sv */
+	"Hurtigere Vita-hukommelseskort",   /* da */
+	"Raskere Vita-minnekort",   /* no */
+	"Szybsza karta pamięci Vita",   /* pl */
+	"Cartão de memória Vita mais rápido",   /* ptbr */
+	"Faster Vita memory card",   /* engb */
+	"Daha hızlı Vita hafıza kartı",   /* tr */
 },
 [TS_I18N_HINT_SD2VITA] = {
 	"SD2Vitaアダプターに入れたmicroSDカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",   /* ja */

@@ -2,7 +2,7 @@
 
 # 🚀 Turbo Storage for PS Vita
 
-**Faster SD2Vita, memory card and internal storage, with the system's own drivers doing all the work.**
+**Faster SD2Vita, Vita memory card and internal storage, with the system's own drivers doing all the work.**
 
 A taiHEN plugin (kernel module + Settings page) for HENkaku/Ensō on firmware 3.60–3.74.
 
@@ -84,7 +84,7 @@ spent only about 4% of its time waiting for storage; the rest is the game itself
 
 - 🚀 **Faster SD2Vita.** Reads and writes on a microSD card in an SD2Vita adapter
   (off by default; turn it on in Settings).
-- 💳 **Faster memory card.** The same for the official PS Vita memory card, wherever
+- 💳 **Faster Vita memory card.** The same for the official PS Vita memory card, wherever
   your storage manager mounts it (off by default). Turbo Storage also tells you if the
   system's own memory card "slow mode" is on, which deliberately pauses after every
   transfer; it never changes it.
@@ -134,7 +134,7 @@ Vita games mostly don't wait on storage, so expect little change there.
 | Option | What it does | Default |
 |---|---|---|
 | Faster SD2Vita | The faster path for an SD2Vita in the game-card slot | Off |
-| Faster memory card | The faster path for the official PS Vita memory card | Off |
+| Faster Vita memory card | The faster path for the official PS Vita memory card | Off |
 | Faster internal storage | The faster path for the console's internal storage. Turn it off before updating or downgrading the firmware. Recommended off for most users | Off |
 | Storage HUD | Off, Compact (one line per storage in use) or Extended (adds totals and errors) | Off |
 | HUD position | Top left, top right, bottom left or bottom right | Top right |
@@ -290,7 +290,7 @@ to 3.74, and an SD2Vita for the main feature.
 
 4. **Reboot the Vita** (a "Refresh taiHEN config" is not enough). Then open
    *Settings → System → Turbo Storage* and turn on **Faster SD2Vita** and/or
-   **Faster memory card** (and, if you want, **Faster internal storage**). All are
+   **Faster Vita memory card** (and, if you want, **Faster internal storage**). All are
    off until you do.
 
 **Before a firmware update or downgrade**, turn *Faster internal storage* off as an

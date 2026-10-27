@@ -83,12 +83,12 @@ s("TS_I18N_HINT_INTERNAL",
   no="Gjør lesing og skriving på konsollens innebygde lagring raskere. Av som standard av forsiktighet, fordi lagringen også inneholder systemdata og plugininnstillinger. Som et ekstra forholdsregel bør du slå det av før du oppdaterer eller nedgraderer fastvaren. Trer i kraft umiddelbart; ingen omstart nødvendig.",
   pl="Przyspiesza odczyt i zapis wbudowanej pamięci konsoli. Domyślnie wyłączone dla bezpieczeństwa, ponieważ ta pamięć przechowuje też dane systemowe i ustawienia wtyczek. Dla dodatkowego bezpieczeństwa wyłącz je przed aktualizacją lub obniżeniem wersji oprogramowania. Działa od razu, bez ponownego uruchamiania.",
   tr="Konsolun dahili depolamasının okuma ve yazma hızını artırır. Bu depolama sistem verilerini ve eklenti ayarlarını da tuttuğu için önlem olarak varsayılan olarak kapalıdır. Ek bir önlem olarak, yazılımı güncellemeden veya eski sürüme düşürmeden önce kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
-s("TS_I18N_ROW_MEMCARD", en="Faster memory card", engb="Faster memory card", ja="メモリーカードを高速化",
-  fr="Carte mémoire plus rapide", es="Tarjeta de memoria más rápida", de="Schnellere Speicherkarte",
-  it="Scheda di memoria più veloce", nl="Snellere geheugenkaart", pt="Cartão de memória mais rápido",
-  ptbr="Cartão de memória mais rápido", ru="Ускорить карту памяти", ko="메모리 카드 가속",
-  zht="加速記憶卡", zhs="加速存储卡", fi="Nopeampi muistikortti", sv="Snabbare minneskort",
-  da="Hurtigere hukommelseskort", no="Raskere minnekort", pl="Szybsza karta pamięci", tr="Daha hızlı hafıza kartı")
+s("TS_I18N_ROW_MEMCARD", en="Faster Vita memory card", engb="Faster Vita memory card", ja="Vitaメモリーカードを高速化",
+  fr="Carte mémoire Vita plus rapide", es="Tarjeta de memoria Vita más rápida", de="Schnellere Vita-Speicherkarte",
+  it="Scheda di memoria Vita più veloce", nl="Snellere Vita-geheugenkaart", pt="Cartão de memória Vita mais rápido",
+  ptbr="Cartão de memória Vita mais rápido", ru="Ускорить карту памяти Vita", ko="Vita 메모리 카드 가속",
+  zht="加速 Vita 記憶卡", zhs="加速 Vita 存储卡", fi="Nopeampi Vita-muistikortti", sv="Snabbare Vita-minneskort",
+  da="Hurtigere Vita-hukommelseskort", no="Raskere Vita-minnekort", pl="Szybsza karta pamięci Vita", tr="Daha hızlı Vita hafıza kartı")
 s("TS_I18N_HINT_MEMCARD",
   en="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",

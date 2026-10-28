@@ -90,6 +90,13 @@ add_executable(storageturbo
 
 add_dependencies(storageturbo storageturbo-stubs)
 
+# Diagnostics build: lets the TCP :1340 command port change `internal` and
+# `verify`. Off in normal builds, where those two can only be changed in Settings.
+option(TS_DEV_ALLOW_RISKY "Allow set internal/verify over the command port" OFF)
+if(TS_DEV_ALLOW_RISKY)
+  target_compile_definitions(storageturbo PRIVATE TS_DEV_ALLOW_RISKY=1)
+endif()
+
 target_link_libraries(storageturbo
   # STRONG - must be present, fail loudly if not:
   taihen_stub

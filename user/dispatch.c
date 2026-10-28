@@ -9,8 +9,15 @@
  *   version                   plugin version
  *   ping                      round-trip to the kernel module
  *   status                    settings, per-device status and counters
- *   set <key> <value>         sd2vita|internal|verify|devmode 0/1,
+ *   set <key> <value>         sd2vita|memcard|devmode 0/1,
  *                             hud 0-2 (off/compact/extended), hud_pos 0-3
+ *                             (internal and verify too, but only in a build made
+ *                             with -DTS_DEV_ALLOW_RISKY=1: in a normal build the
+ *                             network port cannot change them)
+ *
+ * The port has no password, so it is kept small: Developer mode (kernel side)
+ * switches itself off after TS_DEVMODE_MINUTES, and an idle client is dropped
+ * after TS_DEV_IDLE_SECS so it cannot hold the single connection forever.
  *
  * BOOT-SAFE: module_start only starts this thread; it waits ~3 s before any
  * SceNet call (touching the network during early SceShell boot can wedge the
@@ -109,8 +116,14 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 
 	out[0] = 0;
 	if (!strcmp(line, "help")) {
+#ifdef TS_DEV_ALLOW_RISKY
 		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
 		            "keys: sd2vita memcard internal verify devmode (0/1), hud (0-2), hud_pos (0-3)");
+#else
+		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
+		            "keys: sd2vita memcard devmode (0/1), hud (0-2), hud_pos (0-3)\n"
+		            "internal and verify: Settings only (diagnostics build to change them here)");
+#endif
 	} else if (!strcmp(line, "version")) {
 		put(p, end, "turbo-storage %s", TS_VERSION_STR);
 	} else if (!strcmp(line, "ping")) {
@@ -160,6 +173,15 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 			put(p, end, "set: usage: set <key> <value> (see help)");
 			return;
 		}
+#ifndef TS_DEV_ALLOW_RISKY
+		/* The port is open to the whole network with no password: it must not be
+		 * able to switch on the internal-storage path or the verify diagnostic. */
+		if (key == TS_KEY_INTERNAL || key == TS_KEY_VERIFY) {
+			put(p, end, "set %s: not allowed over the network (use Settings)", k_keys[key]);
+			TS_LOGI("[DEV] set %s refused", k_keys[key]);
+			return;
+		}
+#endif
 		int r = tsSetSetting(key, v);
 		put(p, end, "set %s = %d -> %s", k_keys[key], v, r == TS_OK ? "ok" : "rejected");
 		TS_LOGI("[DEV] set %s = %d -> %d", k_keys[key], v, r);
@@ -222,6 +244,14 @@ static int server_thread(SceSize args, void *argp)
 				continue;
 			}
 			accept_fails = 0;
+			/* An idle or half-open client must not hold the only connection:
+			 * recv/send give up after TS_DEV_IDLE_SECS and the client is closed. */
+			{
+				int tmo = TS_DEV_IDLE_SECS * 1000 * 1000;   /* microseconds */
+
+				sceNetSetsockopt(cli, SCE_NET_SOL_SOCKET, SCE_NET_SO_RCVTIMEO, &tmo, sizeof(tmo));
+				sceNetSetsockopt(cli, SCE_NET_SOL_SOCKET, SCE_NET_SO_SNDTIMEO, &tmo, sizeof(tmo));
+			}
 			char line[160];
 			char reply[1024];
 			for (;;) {

@@ -13,6 +13,8 @@
 
 BUILD   ?= build
 VITA_IP ?=
+# Extra CMake options, e.g. make CMAKE_ARGS="-DTS_DEV_ALLOW_RISKY=ON"
+CMAKE_ARGS ?=
 # Pinned so every build uses the same toolchain (VitaSDK 2026.08, GCC 15.2).
 VITASDK_IMAGE ?= vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
 
@@ -25,11 +27,11 @@ all: build
 
 build:
 ifdef VITASDK
-	cmake -S . -B $(BUILD) -DCMAKE_TOOLCHAIN_FILE=$(VITASDK)/share/vita.toolchain.cmake
+	cmake -S . -B $(BUILD) -DCMAKE_TOOLCHAIN_FILE=$(VITASDK)/share/vita.toolchain.cmake $(CMAKE_ARGS)
 	cmake --build $(BUILD) -j
 else
 	docker run --rm -v "$(CURDIR)":/src -w /src $(VITASDK_IMAGE) sh -c '\
-	  cmake -S . -B $(BUILD) -DCMAKE_TOOLCHAIN_FILE=$$VITASDK/share/vita.toolchain.cmake && \
+	  cmake -S . -B $(BUILD) -DCMAKE_TOOLCHAIN_FILE=$$VITASDK/share/vita.toolchain.cmake $(CMAKE_ARGS) && \
 	  cmake --build $(BUILD) -j$$(nproc) && \
 	  chown -R $(shell id -u):$(shell id -g) $(BUILD)'
 endif

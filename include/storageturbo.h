@@ -76,6 +76,12 @@ enum ts_key {
 
 #define TS_DEV_PORT       1340   /* developer command server (turbo-wifi: 1339) */
 
+/* Developer mode switches itself off this many minutes after it was turned on
+ * (or after boot, if it was saved as on), so the port is never left open. */
+#define TS_DEVMODE_MINUTES  15
+/* An idle command-port client is dropped after this many seconds. */
+#define TS_DEV_IDLE_SECS    30
+
 /* Defaults: the SD2Vita, the case the plugin is for, starts on; internal
  * storage (which also holds the system's own data) starts off. */
 #define TS_DEF_SD2VITA   0   /* opt-in: see README, "use it when you need it" */

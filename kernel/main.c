@@ -247,6 +247,23 @@ static int worker(SceSize args, void *argp)
 				last_slow = sl;
 			}
 		}
+		{
+			/* Developer mode (the open TCP port) times out by itself. */
+			static uint32_t dev_on_since;
+			TsSettings cur;
+
+			ts_settings_copy(&cur);
+			if (!cur.devmode) {
+				dev_on_since = 0;
+			} else if (!dev_on_since) {
+				dev_on_since = g_uptime;        /* g_uptime is >= 1 here */
+			} else if (g_uptime - dev_on_since >= TS_DEVMODE_MINUTES * 60u) {
+				ts_settings_set(TS_KEY_DEVMODE, 0);
+				dev_on_since = 0;
+				TS_KLOGI("developer mode switched off after %u minutes",
+				         (unsigned)TS_DEVMODE_MINUTES);
+			}
+		}
 		if (g_uptime == TS_GUARD_SECS) {
 			guard_write('0', "worker");
 			TS_KLOGI("stable for %us - boot_guard set to 0", (unsigned)TS_GUARD_SECS);

@@ -86,6 +86,11 @@ static volatile int g_verify;
 static void        *g_shadow;
 static SceUID       g_shadow_uid = -1;
 static volatile int g_shadow_busy;
+static volatile int g_shadow_failed;   /* allocation failed: do not retry every tick */
+
+/* Returned to the caller when a hook is entered before taiHEN has stored its
+ * continuation (SCE_ERROR_ERRNO_EIO): a failed transfer, never a jump to NULL. */
+#define TS_IO_ERROR  ((int)0x80010005)
 
 enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_RD_MS, H_WR_MS, H_COUNT };
 #define H_SDIF_COUNT H_RD_MS          /* the SceSdif hooks come first          */
@@ -152,6 +157,14 @@ static int take(Dev *d, int mine, uint32_t nsec)
 		d->st.passthru++;
 		return 0;
 	}
+	/* Re-check after taking the buffer: ts_stage_fini clears `enabled` first and
+	 * then waits for `busy` to drop, so a request that passed the check above
+	 * just before that must not go on to use the buffer. */
+	__sync_synchronize();
+	if (!d->enabled || d->fallback) {
+		__sync_lock_release(&d->busy);
+		return 0;
+	}
 	return 1;
 }
 
@@ -216,7 +229,11 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 		d->all_wr += (uint64_t)nsec * 512;
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
-	verify = take_shadow() && rd_ref;
+	verify = take_shadow();
+	if (verify && !rd_ref) {            /* no read hook yet: cannot verify this one */
+		__sync_lock_release(&g_shadow_busy);
+		verify = 0;
+	}
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
@@ -254,34 +271,58 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 
 static int h_rd_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_read(&g_dev[TS_DEV_SD2VITA], io_sdif, ref_of(H_RD_SD), part, sector, buf, nsec);
+	tai_hook_ref_t r = ref_of(H_RD_SD);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_read(&g_dev[TS_DEV_SD2VITA], io_sdif, r, part, sector, buf, nsec);
 }
 
 static int h_wr_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_write(&g_dev[TS_DEV_SD2VITA], io_sdif, ref_of(H_WR_SD), g_ref[H_RD_SD], part,
+	tai_hook_ref_t r = ref_of(H_WR_SD);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_write(&g_dev[TS_DEV_SD2VITA], io_sdif, r, g_ref[H_RD_SD], part,
 	                   sector, buf, nsec);
 }
 
 static int h_rd_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_read(&g_dev[TS_DEV_INTERNAL], io_sdif, ref_of(H_RD_MMC), part, sector, buf, nsec);
+	tai_hook_ref_t r = ref_of(H_RD_MMC);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_read(&g_dev[TS_DEV_INTERNAL], io_sdif, r, part, sector, buf, nsec);
 }
 
 static int h_wr_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_write(&g_dev[TS_DEV_INTERNAL], io_sdif, ref_of(H_WR_MMC), g_ref[H_RD_MMC], part,
+	tai_hook_ref_t r = ref_of(H_WR_MMC);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_write(&g_dev[TS_DEV_INTERNAL], io_sdif, r, g_ref[H_RD_MMC], part,
 	                   sector, buf, nsec);
 }
 
 static int h_rd_ms(uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_read(&g_dev[TS_DEV_MEMCARD], io_msif, ref_of(H_RD_MS), NULL, sector, buf, nsec);
+	tai_hook_ref_t r = ref_of(H_RD_MS);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_read(&g_dev[TS_DEV_MEMCARD], io_msif, r, NULL, sector, buf, nsec);
 }
 
 static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 {
-	return stage_write(&g_dev[TS_DEV_MEMCARD], io_msif, ref_of(H_WR_MS), g_ref[H_RD_MS], NULL,
+	tai_hook_ref_t r = ref_of(H_WR_MS);
+
+	if (!r)
+		return TS_IO_ERROR;
+	return stage_write(&g_dev[TS_DEV_MEMCARD], io_msif, r, g_ref[H_RD_MS], NULL,
 	                   sector, buf, nsec);
 }
 
@@ -384,17 +425,20 @@ void ts_stage_apply(const TsSettings *s)
 		g_dev[i].enabled = want[i] ? 1 : 0;
 	}
 	g_verify = s->verify ? 1 : 0;
+	if (!g_verify)
+		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
 }
 
 void ts_stage_worker_tick(void)
 {
 	/* The verify buffer is only allocated once verify mode is first turned on. */
-	if (g_verify && !g_shadow && g_shadow_uid < 0) {
+	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
 		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, &g_shadow_uid, &g_shadow);
 
 		if (r < 0) {
 			g_shadow = NULL;
-			g_shadow_uid = -2;      /* do not retry every second */
+			g_shadow_uid = -1;
+			g_shadow_failed = 1;    /* do not retry every second */
 			TS_KLOGW("stage: verify buffer not allocated (0x%08x)", (unsigned)r);
 		} else {
 			TS_KLOGI("stage: verify buffer allocated");

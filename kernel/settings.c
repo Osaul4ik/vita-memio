@@ -48,42 +48,53 @@ static uint32_t file_check(const TsSettingsFile *f)
 	return c;
 }
 
+/* Read and check one settings file into `s` (which already holds the defaults).
+ * 1 = loaded, 0 = missing or unusable (`s` untouched). */
+static int load_file(const char *path, TsSettings *s)
+{
+	TsSettingsFile f;
+	memset(&f, 0, sizeof(f));
+	SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	if (fd < 0) {
+		TS_KLOGI("settings: %s not readable (0x%08x)", path, (unsigned)fd);
+		return 0;
+	}
+	int n = ksceIoRead(fd, &f, sizeof(f));
+	ksceIoClose(fd);
+	/* A file with fewer keys is shorter: its check word sits where the
+	 * first missing value would be. */
+	uint32_t cnt = f.count;
+	int ok = f.magic == TS_CFG_MAGIC && f.version == TS_CFG_VERSION &&
+	         cnt >= 1 && cnt <= TS_KEY_COUNT &&
+	         n == (int)(3 * sizeof(uint32_t) + (cnt + 1) * sizeof(int32_t));
+	if (ok) {
+		uint32_t stored = cnt == TS_KEY_COUNT ? f.check : (uint32_t)f.values[cnt];
+		ok = stored == file_check(&f);
+	}
+	if (!ok) {
+		TS_KLOGW("settings: %s unusable (n=%d)", path, n);
+		return 0;
+	}
+	for (int k = 0; k < (int)cnt; k++) {
+		if (ts_setting_valid(k, f.values[k]))
+			*ts_setting_field(s, k) = f.values[k];
+		else
+			TS_KLOGW("settings: key %d value %d out of range, default %d",
+			         k, f.values[k], g_defaults[k]);
+	}
+	return 1;
+}
+
 void ts_settings_init(void)
 {
 	TsSettings s;
 	for (int k = 0; k < TS_KEY_COUNT; k++)
 		*ts_setting_field(&s, k) = g_defaults[k];
 
-	TsSettingsFile f;
-	memset(&f, 0, sizeof(f));
-	SceUID fd = ksceIoOpen(TS_SETTINGS_PATH, SCE_O_RDONLY, 0);
-	if (fd < 0) {
-		TS_KLOGI("settings: no saved file (0x%08x), using defaults", (unsigned)fd);
-	} else {
-		int n = ksceIoRead(fd, &f, sizeof(f));
-		ksceIoClose(fd);
-		/* A file with fewer keys is shorter: its check word sits where the
-		 * first missing value would be. */
-		uint32_t cnt = f.count;
-		int ok = f.magic == TS_CFG_MAGIC && f.version == TS_CFG_VERSION &&
-		         cnt >= 1 && cnt <= TS_KEY_COUNT &&
-		         n == (int)(3 * sizeof(uint32_t) + (cnt + 1) * sizeof(int32_t));
-		if (ok) {
-			uint32_t stored = cnt == TS_KEY_COUNT ? f.check : (uint32_t)f.values[cnt];
-			ok = stored == file_check(&f);
-		}
-		if (!ok) {
-			TS_KLOGW("settings: saved file unusable (n=%d), using defaults", n);
-		} else {
-			for (int k = 0; k < (int)cnt; k++) {
-				if (ts_setting_valid(k, f.values[k]))
-					*ts_setting_field(&s, k) = f.values[k];
-				else
-					TS_KLOGW("settings: key %d value %d out of range, default %d",
-					         k, f.values[k], g_defaults[k]);
-			}
-		}
-	}
+	/* The main file first; if a save was cut short between removing the old file
+	 * and renaming the new one, the finished copy is still in the .tmp file. */
+	if (!load_file(TS_SETTINGS_PATH, &s) && !load_file(TS_SETTINGS_TMP, &s))
+		TS_KLOGI("settings: no usable saved file, using defaults");
 	memcpy((void *)&g_ts_settings, &s, sizeof(s));
 	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
 	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
@@ -133,11 +144,19 @@ void ts_settings_flush(void)
 
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(TS_DATA_DIR, 0777);
-	SceUID fd = ksceIoOpen(TS_SETTINGS_PATH,
+	/* Write the new copy aside, then swap it in. The live file is never left
+	 * truncated: at any moment either it or the finished .tmp copy is intact. */
+	SceUID fd = ksceIoOpen(TS_SETTINGS_TMP,
 	                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	int w = fd >= 0 ? ksceIoWrite(fd, &f, sizeof(f)) : fd;
 	if (fd >= 0)
 		ksceIoClose(fd);
+	if (w == (int)sizeof(f)) {
+		ksceIoRemove(TS_SETTINGS_PATH);
+		int r = ksceIoRename(TS_SETTINGS_TMP, TS_SETTINGS_PATH);
+		if (r < 0)
+			w = r;      /* the .tmp copy stays and is loaded at the next boot */
+	}
 	if (w != (int)sizeof(f)) {
 		if (g_save_fails++ < 5) {
 			TS_KLOGW("settings: save failed (0x%08x), will retry", (unsigned)w);

@@ -14,8 +14,10 @@
  * and height each frame, so it lands correctly in titles that render at a
  * lower resolution. Below 720 px wide the font is drawn at 1x instead of 2x.
  *
- * Drawing is guarded by a plausibility check on pitch and size and is simply
- * skipped if the buffer looks wrong, rather than risk a bad write.
+ * Drawing is guarded by a plausibility check on width, height, pitch and pixel
+ * format and is simply skipped if the frame looks wrong, rather than risk a bad
+ * write. (The framebuffer descriptor carries no buffer length, so the real
+ * buffer size cannot be checked; the limits below are what can be.)
  */
 #include <psp2kern/kernel/sysclib.h>   /* memcpy/memset                        */
 #include <psp2kern/display.h>
@@ -153,7 +155,7 @@ static int hook_set_framebuf(int head, int index,
 	}
 
 	/* Plausibility guard: only draw into a sane 32bpp linear buffer. */
-	if (w <= 0 || h <= 0 || pitch < w || w > 1920 || h > 1088) {
+	if (w <= 0 || h <= 0 || pitch < w || pitch > 2048 || w > 1920 || h > 1088) {
 		g_d_why = HD_BAD_SIZE; g_d_n[HD_BAD_SIZE]++;
 		return ret;
 	}
@@ -241,5 +243,6 @@ void ts_hud_set_text(const char lines[][TS_HUD_LINE_MAX], int n, int pos)
 	}
 	t->pos = pos;
 	t->n = n;
+	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
 }

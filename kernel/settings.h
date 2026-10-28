@@ -9,6 +9,8 @@
 #include "../include/storageturbo.h"
 
 #define TS_SETTINGS_PATH  TS_DATA_DIR "/settings.bin"
+/* A save is written here first and then renamed over TS_SETTINGS_PATH. */
+#define TS_SETTINGS_TMP   TS_DATA_DIR "/settings.tmp"
 
 /* The live settings. Read freely (each field is one aligned word); write only
  * through ts_settings_set(). */

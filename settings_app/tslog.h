@@ -3,9 +3,10 @@
  * Settings app).
  *
  * Appends timestamped lines to ur0:data/turbostorage/user.log (rotated to
- * user.old.log past TS_LOG_MAX_BYTES). It logs only on start, page loads,
- * setting changes and developer-server events, so each line opens, appends and
- * closes the file: nothing stays open. Failure-tolerant: a line that cannot
+ * user.old.log past TS_LOG_MAX_BYTES). It logs only problems (kernel module
+ * not answering, Settings hooks or page not installed, a rejected setting, the
+ * developer server failing), so each line opens, appends and closes the file:
+ * nothing stays open. Failure-tolerant: a line that cannot
  * be written is dropped.
  *
  * Same printf subset as the kernel logger: %s %d %i %u %x %X %c %p %%, with an

@@ -262,8 +262,9 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 		}
 		const char *ins = system_insert_at(s, size);
 		int gl = (int)sizeof(X_GROUP) - 1;
-		TS_LOGI("[SET] system page (size=%d): insert point %s at %d", size,
-		        ins ? "found" : "NOT found", ins ? (int)(ins - s) : -1);
+		if (!ins)
+			TS_LOGI("[SET] system page (size=%d): insert point not found - page not added",
+			        size);
 		if (ins) {
 			int head = (int)(ins - s);
 			s_cpy(g_pagebuf, s, head);
@@ -295,7 +296,8 @@ static int set_hook(const char *cat, const char *name, int v)
 	if (is_ts(cat)) {
 		int k = name ? key_index(name) : -1;
 		int r = k >= 0 ? tsSetSetting(k, v) : TS_ERR_ARG;
-		TS_LOGI("[SET] %s = %d -> %d", name ? name : "?", v, r);
+		if (r != TS_OK)
+			TS_LOGI("[SET] %s = %d rejected (%d)", name ? name : "?", v, r);
 		return 0;
 	}
 	return TAI_CONTINUE(int, r_set, cat, name, v);
@@ -336,7 +338,8 @@ static SceUID load_hook(const char *path, SceSize args, void *argp,
 		              0xC436F916, 0x58421DD1, info_hook);
 		g_h_text = taiHookFunctionImport(&r_text,"SceSystemSettingsCore",
 		              0x4D9A9DD0, 0x19CEFDA7, text_hook);   /* scePafToplevelGetText */
-		TS_LOGI("[SET] core loaded - UI hooks xml=0x%08x get=0x%08x set=0x%08x "
+		if (g_h_xml < 0 || g_h_get < 0 || g_h_set < 0 || g_h_info < 0 || g_h_text < 0)
+			TS_LOGI("[SET] UI hooks not all installed: xml=0x%08x get=0x%08x set=0x%08x "
 		        "info=0x%08x text=0x%08x", (unsigned)g_h_xml, (unsigned)g_h_get,
 		        (unsigned)g_h_set, (unsigned)g_h_info, (unsigned)g_h_text);
 	}
@@ -347,7 +350,8 @@ void ts_settings_hooks_install(void)
 {
 	g_h_load = taiHookFunctionImport(&r_load, "SceSettings",
 	              0xCAE9ACE6, 0x2DCC4AFA, load_hook);   /* sceKernelLoadStartModule */
-	TS_LOGI("[SET] LoadStartModule import hook: uid=0x%08x", (unsigned)g_h_load);
+	if (g_h_load < 0)
+		TS_LOGI("[SET] LoadStartModule import hook failed (0x%08x)", (unsigned)g_h_load);
 }
 
 void ts_settings_hooks_release(void)

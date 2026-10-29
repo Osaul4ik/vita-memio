@@ -45,12 +45,6 @@ typedef struct {
 static HudText      g_text[2];
 static volatile int g_front = 0;
 
-/* Diagnostics, written by the frame hook and logged by the worker
- * (ts_hud_diag_poll): the last frame seen and why it was or wasn't drawn. */
-enum { HD_DRAWN = 0, HD_NO_TEXT, HD_BAD_SIZE, HD_BAD_FORMAT, HD_COUNT };
-static volatile uint32_t g_d_fmt, g_d_w, g_d_h, g_d_why;
-static volatile uint32_t g_d_n[HD_COUNT];
-
 /* ---- framebuffer text blitter ------------------------------------------ */
 
 static inline void put_px(uint32_t *fb, int pitch, int w, int h,
@@ -147,23 +141,14 @@ static int hook_set_framebuf(int head, int index,
 		return ret;
 	int w = (int)pParam->width, h = (int)pParam->height,
 	    pitch = (int)pParam->pitch;
-	g_d_fmt = pParam->pixelformat; g_d_w = w; g_d_h = h;
-
-	if (g_text[g_front].n <= 0) {
-		g_d_why = HD_NO_TEXT; g_d_n[HD_NO_TEXT]++;
+	if (g_text[g_front].n <= 0)
 		return ret;
-	}
 
 	/* Plausibility guard: only draw into a sane 32bpp linear buffer. */
-	if (w <= 0 || h <= 0 || pitch < w || pitch > 2048 || w > 1920 || h > 1088) {
-		g_d_why = HD_BAD_SIZE; g_d_n[HD_BAD_SIZE]++;
+	if (w <= 0 || h <= 0 || pitch < w || pitch > 2048 || w > 1920 || h > 1088)
 		return ret;
-	}
-	if (pParam->pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8) {
-		g_d_why = HD_BAD_FORMAT; g_d_n[HD_BAD_FORMAT]++;
+	if (pParam->pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8)
 		return ret;
-	}
-	g_d_why = HD_DRAWN; g_d_n[HD_DRAWN]++;
 
 	uint32_t prev_dacr = hud_dacr_open();
 	render((uint32_t *)pParam->base, pitch, w, h);
@@ -188,7 +173,6 @@ int ts_hud_init(void)
 		TS_KLOGW("hud: set-framebuffer hook failed (0x%08x)", (unsigned)g_hook);
 		return TS_ERR_RESOLVE;
 	}
-	TS_KLOGI("hud: set-framebuffer hook installed (uid=0x%08x)", (unsigned)g_hook);
 	return TS_OK;
 }
 
@@ -199,24 +183,6 @@ void ts_hud_fini(void)
 		taiHookReleaseForKernel(g_hook, g_ref);
 		g_hook = -1;
 	}
-}
-
-/* Called once a second by the worker: log when the frame situation changes,
- * and a frame-count summary every 30 s. */
-void ts_hud_diag_poll(unsigned secs)
-{
-	static uint32_t last_fmt = 0xFFFFFFFFu, last_w, last_h, last_why = 0xFFFFFFFFu;
-	if (g_d_fmt != last_fmt || g_d_w != last_w || g_d_h != last_h || g_d_why != last_why) {
-		static const char *const why[HD_COUNT] = { "drawn", "no text (off)",
-		                                           "odd size", "pixel format" };
-		TS_KLOGI("hud: frame %ux%u fmt 0x%08x -> %s", (unsigned)g_d_w, (unsigned)g_d_h,
-		         (unsigned)g_d_fmt, g_d_why < HD_COUNT ? why[g_d_why] : "?");
-		last_fmt = g_d_fmt; last_w = g_d_w; last_h = g_d_h; last_why = g_d_why;
-	}
-	if (secs % 30 == 0)
-		TS_KLOGI("hud: frames drawn=%u off=%u size=%u format=%u",
-		         (unsigned)g_d_n[HD_DRAWN], (unsigned)g_d_n[HD_NO_TEXT],
-		         (unsigned)g_d_n[HD_BAD_SIZE], (unsigned)g_d_n[HD_BAD_FORMAT]);
 }
 
 int ts_hud_installed(void)

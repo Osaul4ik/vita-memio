@@ -205,25 +205,16 @@ static void hud_feed(const TsDevState *now)
 }
 
 
-static const char *status_name(int st)
+/* Only problems are logged: a device that went back to stock after an error,
+ * or new errors / verify mismatches. Its counters go with it. */
+static void log_problem(const TsDevState *d, int i)
 {
-	switch (st) {
-	case TS_ST_OFF:       return "off";
-	case TS_ST_ACTIVE:    return "active";
-	case TS_ST_FALLBACK:  return "FALLBACK (stock after an error)";
-	case TS_ST_NO_BUFFER: return "no buffer (stock)";
-	default:              return "unavailable";
-	}
-}
-
-static void log_status(const TsDevState *d, int i)
-{
-	TS_KLOGI("dev %s: %s reads=%u (%u MiB) writes=%u (%u MiB) busy=%u errors=%u "
-	         "verified=%u mismatches=%u time=%ums max=%ums", k_dev_log[i],
-	         status_name(d->status), (unsigned)d->reads, (unsigned)d->read_mib,
-	         (unsigned)d->writes, (unsigned)d->write_mib, (unsigned)d->passthru,
-	         (unsigned)d->errors, (unsigned)d->verified, (unsigned)d->mismatches,
-	         (unsigned)d->time_ms, (unsigned)d->max_ms);
+	TS_KLOGW("dev %s: %s errors=%u mismatches=%u reads=%u (%u MiB) writes=%u (%u MiB) "
+	         "verified=%u", k_dev_log[i],
+	         d->status == TS_ST_FALLBACK ? "FALLBACK (stock after an error)" : "error",
+	         (unsigned)d->errors, (unsigned)d->mismatches, (unsigned)d->reads,
+	         (unsigned)d->read_mib, (unsigned)d->writes, (unsigned)d->write_mib,
+	         (unsigned)d->verified);
 }
 
 static int worker(SceSize args, void *argp)
@@ -240,45 +231,26 @@ static int worker(SceSize args, void *argp)
 		ts_settings_flush();
 		ts_stage_worker_tick();
 		{
-			static int last_slow = -2;
-			int sl = ts_stage_memcard_slow();
-			if (sl != last_slow) {
-				TS_KLOGI("memory card slow mode: %s",
-				         sl == 1 ? "ON (Sony throttles memory card transfers)" :
-				         sl == 0 ? "off" : "unknown");
-				last_slow = sl;
-			}
-		}
-		{
 			/* Developer mode (the open TCP port) times out by itself. */
 			static uint32_t dev_on_since;
 			TsSettings cur;
 
 			ts_settings_copy(&cur);
-			if (ts_devmode_tick(g_uptime, cur.devmode, &dev_on_since)) {   /* g_uptime >= 1 */
+			if (ts_devmode_tick(g_uptime, cur.devmode, &dev_on_since))   /* g_uptime >= 1 */
 				ts_settings_set(TS_KEY_DEVMODE, 0);
-				TS_KLOGI("developer mode switched off after %u minutes",
-				         (unsigned)TS_DEVMODE_MINUTES);
-			}
 		}
-		if (g_uptime == TS_GUARD_SECS) {
+		if (g_uptime == TS_GUARD_SECS)
 			guard_write('0', "worker");
-			TS_KLOGI("stable for %us - boot_guard set to 0", (unsigned)TS_GUARD_SECS);
-		}
-		/* Log a device on any status change, an error or a mismatch at once,
-		 * and its counters every five minutes while it is busy. */
 		ts_stage_get(now, 1);
 		hud_feed(now);
 		for (int i = 0; i < TS_DEV_COUNT; i++) {
-			int changed = now[i].status != prev[i].status ||
-			              now[i].errors != prev[i].errors ||
+			int fell_back = now[i].status == TS_ST_FALLBACK && prev[i].status != TS_ST_FALLBACK;
+			int new_err = now[i].errors != prev[i].errors ||
 			              now[i].mismatches != prev[i].mismatches;
-			int busy = now[i].reads != prev[i].reads || now[i].writes != prev[i].writes;
 
-			if (changed || (busy && g_uptime % 300 == 0)) {
-				log_status(&now[i], i);
-				prev[i] = now[i];
-			}
+			if (fell_back || new_err)
+				log_problem(&now[i], i);
+			prev[i] = now[i];
 		}
 	}
 	return 0;
@@ -346,15 +318,14 @@ int module_start(SceSize argc, const void *args)
 	(void)argc; (void)args;
 
 	ts_klog_init();   /* FIRST, so the whole bring-up is captured (makes the dir) */
-	TS_KLOGI("=== SceStorageTurbo kernel v%s start ===", TS_VERSION_STR);
-
 	if (!firmware_known()) {
 		g_disabled = TS_DIS_FIRMWARE;
-		TS_KLOGW("storage driver fingerprint 0x%08x not supported - nothing installed",
-		         (unsigned)g_fingerprint);
+		TS_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
+		         TS_VERSION_STR, (unsigned)g_fingerprint);
 		return SCE_KERNEL_START_SUCCESS;
 	}
-	TS_KLOGI("storage driver fingerprint 0x%08x: supported", (unsigned)g_fingerprint);
+	/* The one line every start writes: which build, on which storage driver. */
+	TS_KLOGI("kernel v%s start, storage driver 0x%08x", TS_VERSION_STR, (unsigned)g_fingerprint);
 
 	/* Crash-loop guard: the file holds '1' from here until the worker has run
 	 * for TS_GUARD_SECS, then '0'. Finding '1' at start means the last start
@@ -367,7 +338,6 @@ int module_start(SceSize argc, const void *args)
 		         TS_GUARD_PATH " to retry)", g_guard_txt);
 		return SCE_KERNEL_START_SUCCESS;
 	}
-	TS_KLOGI("boot_guard was [%s], setting 1", g_guard_txt);
 	guard_write('1', "start");
 
 	if (ts_stage_init() != TS_OK) {
@@ -383,14 +353,12 @@ int module_start(SceSize argc, const void *args)
 		TS_KLOGW("worker thread not started (0x%08x): settings will not be saved",
 		         (unsigned)g_worker);
 
-	TS_KLOGI("kernel start complete");
 	return SCE_KERNEL_START_SUCCESS;
 }
 
 int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
-	TS_KLOGI("=== SceStorageTurbo kernel stop ===");
 	if (g_disabled == TS_DIS_FIRMWARE || g_disabled == TS_DIS_SAFE) {
 		ts_klog_fini();
 		return SCE_KERNEL_STOP_SUCCESS;

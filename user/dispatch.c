@@ -183,13 +183,11 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		 * able to switch on the internal-storage path or the verify diagnostic. */
 		if (key == TS_KEY_INTERNAL || key == TS_KEY_VERIFY) {
 			put(p, end, "set %s: not allowed over the network (use Settings)", k_keys[key]);
-			TS_LOGI("[DEV] set %s refused", k_keys[key]);
 			return;
 		}
 #endif
 		int r = tsSetSetting(key, v);
 		put(p, end, "set %s = %d -> %s", k_keys[key], v, r == TS_OK ? "ok" : "rejected");
-		TS_LOGI("[DEV] set %s = %d -> %d", k_keys[key], v, r);
 	} else {
 		put(p, end, "unknown command (try: help)");
 	}
@@ -221,13 +219,14 @@ static int server_thread(SceSize args, void *argp)
 			addr.sin_port = sceNetHtons(TS_DEV_PORT);
 			addr.sin_addr.s_addr = sceNetHtonl(SCE_NET_INADDR_ANY);
 			if (sceNetBind(srv, (SceNetSockaddr *)&addr, sizeof(addr)) < 0) {
-				TS_LOGI("[DEV] bind :%d failed - retrying", TS_DEV_PORT);
+				static int bind_logged;     /* once, not every retry */
+				if (!bind_logged++)
+					TS_LOGI("[DEV] bind :%d failed - retrying", TS_DEV_PORT);
 				sceNetSocketClose(srv);
 				srv = -1;
 			} else {
 				sceNetListen(srv, 1);
 				g_srv = srv;
-				TS_LOGI("[DEV] listening on TCP :%d", TS_DEV_PORT);
 			}
 		}
 		if (srv < 0) {
@@ -279,7 +278,6 @@ static int server_thread(SceSize args, void *argp)
 		}
 		g_srv = -1;
 		sceNetSocketClose(srv);
-		TS_LOGI("[DEV] listener closed");
 	}
 	return 0;
 }

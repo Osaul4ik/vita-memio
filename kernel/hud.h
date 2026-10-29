@@ -14,7 +14,6 @@
 int  ts_hud_init(void);   /* install the set-framebuffer hook              */
 void ts_hud_fini(void);
 int  ts_hud_installed(void);
-void ts_hud_diag_poll(unsigned secs);   /* worker: log why frames are (not) drawn */
 
 /* Replace the text (n lines, n = 0 hides the HUD) and the screen corner
  * (TS_POS_*). Worker thread only. */

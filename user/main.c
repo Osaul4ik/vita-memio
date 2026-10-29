@@ -39,12 +39,11 @@ int module_start(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 
+	/* Logged only when the kernel module does not answer. */
 	int ping = tsSelfTestPing();
-	TsState st;
-	int r = tsGetState(&st);
-	TS_LOGI("=== storageturbo user v%s (%s) === kernel ping=0x%08x state rc=%d disabled=%d",
-	        TS_VERSION_STR, in_shell() ? "shell" : "settings", (unsigned)ping, r,
-	        r == TS_OK ? (int)st.disabled : -1);
+	if (ping != (int)TS_SELFTEST_MAGIC)
+		TS_LOGI("user v%s (%s): kernel module not answering (ping 0x%08x)",
+		        TS_VERSION_STR, in_shell() ? "shell" : "settings", (unsigned)ping);
 
 	if (in_shell())
 		ts_dispatch_start();          /* deferred; returns immediately */

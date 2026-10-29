@@ -8,6 +8,9 @@
  * kernel.old.log and a fresh one is started, so an overnight run keeps about
  * twice that much history.
  *
+ * What is logged: one line per start (build and storage driver), and
+ * otherwise only problems - warnings and errors. Routine events are not.
+ *
  * HOT-PATH RULE: the storage I/O hooks (kernel/stage.c) must NOT call
  * these. They only bump counters; the 1 Hz worker (kernel/main.c) does the
  * logging.

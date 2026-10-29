@@ -429,10 +429,6 @@ int ts_stage_init(void)
 			break;
 		}
 	}
-	TS_KLOGI("stage: hooks installed; buffers sd2vita=%s internal=%s memcard=%s",
-	         g_dev[TS_DEV_SD2VITA].buf ? "ok" : "none",
-	         g_dev[TS_DEV_INTERNAL].buf ? "ok" : "none",
-	         g_dev[TS_DEV_MEMCARD].buf ? "ok" : "none");
 	return TS_OK;
 }
 
@@ -487,8 +483,6 @@ void ts_stage_worker_tick(void)
 			g_shadow_uid = -1;
 			g_shadow_failed = 1;    /* do not retry every second */
 			TS_KLOGW("stage: verify buffer not allocated (0x%08x)", (unsigned)r);
-		} else {
-			TS_KLOGI("stage: verify buffer allocated");
 		}
 	}
 }

@@ -100,11 +100,9 @@ void ts_settings_init(void)
 
 	/* The main file first; if a save was cut short between removing the old file
 	 * and renaming the new one, the finished copy is still in the .tmp file. */
-	if (!load_file(TS_SETTINGS_PATH, &s) && !load_file(TS_SETTINGS_TMP, &s))
-		TS_KLOGI("settings: no usable saved file, using defaults");
+	if (!load_file(TS_SETTINGS_PATH, &s))
+		load_file(TS_SETTINGS_TMP, &s);       /* none at all: the defaults */
 	memcpy((void *)&g_ts_settings, &s, sizeof(s));
-	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 	ts_stage_apply(&s);
 }
 
@@ -175,6 +173,4 @@ void ts_settings_flush(void)
 		return;
 	}
 	g_save_fails = 0;
-	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 }

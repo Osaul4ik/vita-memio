@@ -18,18 +18,18 @@ Before and after every transfer, the system's storage driver cleans and invalida
 
 | Test | Original: stock | Original: Turbo Storage | vita-memio (my console) |
 |---|---:|---:|---:|
-| SD2Vita reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | **17.7 MiB/s** |
-| SD2Vita reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | **16.8 MiB/s** |
-| SD2Vita writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–16.9 MiB/s** |
-| Memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
-| Memory card writes, 1 MiB requests | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
+| SD2Vita (microSD) reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | **17.7 MiB/s** |
+| SD2Vita (microSD) reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | **16.8 MiB/s** |
+| SD2Vita (microSD) writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–16.9 MiB/s** |
+| Sony memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
+| Sony memory card writes, 1 MiB requests | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
 | Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
 | Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
 
 - **Original:** the figures published in the [original README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures). PCH-1000, firmware 3.60, a 128 GB microSD in an SD2Vita, an official 4 GB memory card; 64 MiB per run, stock and Turbo Storage alternated.
-- **vita-memio:** my console on firmware 3.65, with the plugin on, measured with the included tester. Quick profile: a 16 MiB file and three runs, every byte checked; a range means the averages of separate sessions. For comparison, the stock SD2Vita on the same console reads 1 MiB requests at 13.6 MiB/s.
+- **vita-memio:** my console on firmware 3.65, with the plugin on, measured with the included tester: my microSD in an SD2Vita (`ux0:`), the official Sony memory card (`uma0:`) and the internal storage (`ur0:`). Quick profile: a 16 MiB file and three runs, every byte checked; a range means the averages of separate sessions. For comparison, the stock SD2Vita on the same console reads 1 MiB requests at 13.6 MiB/s.
 
-Different cards write at very different speeds, so the write rows compare cards more than plugins. Results depend on the console, the card and the workload.
+Different microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Results depend on the console, the card and the workload.
 
 ## Install
 

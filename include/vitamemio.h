@@ -10,10 +10,9 @@
  *   kernel/        vitamemio_kernel.skprx - the storage I/O hooks (staging),
  *                  settings persistence, the 1 Hz worker, the boot guard, and
  *                  the user-callable "SceVitaMemio" syscall library.
- *   user/          vitamemio.suprx in SceShell (*main): the developer
- *                  command server (TCP :1340, only while Developer mode is on).
- *   settings_app/  the same vitamemio.suprx in the Settings app
- *                  (*NPXS10015): the vita-memio page. Both instances talk to
+ *   user/          vitamemio.suprx entry point (loaded only in the Settings
+ *                  app, *NPXS10015).
+ *   settings_app/  the vita-memio page under Settings > Devices; it talks to
  *                  the kernel module through the syscalls.
  */
 #ifndef VITAMEMIO_H
@@ -60,7 +59,8 @@ enum vm_key {
 	VM_KEY_VERIFY,         /* 0/1: check every faster transfer (diagnostic)  */
 	VM_KEY_HUD,            /* VM_HUD_*                                       */
 	VM_KEY_HUD_POS,        /* VM_POS_*                                       */
-	VM_KEY_DEVMODE,        /* 0/1: developer command server on TCP :1340     */
+	VM_KEY_RESERVED5,      /* unused, always 0 (was Developer mode). Kept so
+	                        * saved files and VmState keep their layout.    */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_COUNT
 };
@@ -74,14 +74,6 @@ enum vm_key {
 #define VM_POS_BOTTOM_LEFT  2
 #define VM_POS_BOTTOM_RIGHT 3
 
-#define VM_DEV_PORT       1340   /* developer command server */
-
-/* Developer mode switches itself off this many minutes after it was turned on
- * (or after boot, if it was saved as on), so the port is never left open. */
-#define VM_DEVMODE_MINUTES  15
-/* An idle command-port client is dropped after this many seconds. */
-#define VM_DEV_IDLE_SECS    30
-
 /* Defaults: the SD2Vita, the case the plugin is for, starts on; internal
  * storage (which also holds the system's own data) starts off. */
 #define VM_DEF_SD2VITA   0   /* opt-in: see README, "use it when you need it" */
@@ -89,7 +81,7 @@ enum vm_key {
 #define VM_DEF_VERIFY    0
 #define VM_DEF_HUD       VM_HUD_OFF
 #define VM_DEF_HUD_POS   VM_POS_TOP_RIGHT
-#define VM_DEF_DEVMODE   0
+#define VM_DEF_RESERVED5 0
 #define VM_DEF_MEMCARD   0
 
 /* One int per key, in enum vm_key order. */
@@ -99,7 +91,7 @@ typedef struct VmSettings {
 	int32_t verify;
 	int32_t hud;
 	int32_t hud_pos;
-	int32_t devmode;
+	int32_t reserved5;   /* VM_KEY_RESERVED5 */
 	int32_t memcard;
 } VmSettings;
 
@@ -111,9 +103,10 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SD2VITA:
 	case VM_KEY_INTERNAL:
 	case VM_KEY_VERIFY:
-	case VM_KEY_DEVMODE:
 	case VM_KEY_MEMCARD:
 		return v == 0 || v == 1;
+	case VM_KEY_RESERVED5:
+		return v == 0;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_POS:

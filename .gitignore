@@ -4,8 +4,6 @@ logs/
 build-dev/# host test binaries and the simulator (make -C tests / make sim)
 tests/test_stage
 tests/test_settings
-tests/test_dispatch
-tests/test_dispatch_risky
 tests/test_util
 tests/test_i18n
 tests/test_bench

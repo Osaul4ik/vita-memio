@@ -29,7 +29,6 @@
 
 #include "../include/vitamemio.h"
 #include "../include/vitamemio_kernel_api.h"
-#include "../include/vm_devmode.h"
 #include "klog.h"
 #include "settings.h"
 #include "stage.h"
@@ -230,15 +229,6 @@ static int worker(SceSize args, void *argp)
 		g_uptime++;
 		vm_settings_flush();
 		vm_stage_worker_tick();
-		{
-			/* Developer mode (the open TCP port) times out by itself. */
-			static uint32_t dev_on_since;
-			VmSettings cur;
-
-			vm_settings_copy(&cur);
-			if (vm_devmode_tick(g_uptime, cur.devmode, &dev_on_since))   /* g_uptime >= 1 */
-				vm_settings_set(VM_KEY_DEVMODE, 0);
-		}
 		if (g_uptime == VM_GUARD_SECS)
 			guard_write('0', "worker");
 		vm_stage_get(now, 1);

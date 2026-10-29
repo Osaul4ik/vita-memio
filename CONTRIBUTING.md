@@ -37,19 +37,15 @@ You need HENkaku/Ensō on firmware 3.60–3.74 and
 [vitacompanion](https://github.com/devnoname120/vitacompanion), which provides FTP
 on :1337 and commands on :1338.
 
-Turn on *Developer mode* in *Settings → System → vita-memio* so the plugin's
-port 1340 is open.
-
 ```sh
 make deploy VITA_IP=<vita>                 # upload to ur0:tai/ and reboot
 make log    VITA_IP=<vita>                 # fetch the kernel and user logs
-printf 'status\n' | nc -w 3 <vita> 1340    # live status and counters
-printf 'set verify 1\n' | nc -w 3 <vita> 1340
+make results VITA_IP=<vita>                # fetch the tester's results.txt
 ```
 
-**Test with verify mode on.** It re-reads every faster transfer the standard way
-and compares; `status` shows `verified` and `mismatches` per storage. Any
-mismatch is a bug: please report it.
+The tester app (`vitamemio_tester.vpk`) measures reads and writes and reports
+each storage's counters, including `mismatches`. Any mismatch is a bug: please
+report it.
 
 A simple end-to-end check: download a large file from the Vita over FTP with
 vita-memio off, again with it on, and compare the two copies.

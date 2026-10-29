@@ -37,7 +37,7 @@ static int          g_save_fails = 0;   /* retry a failed save a few times */
 
 static const int32_t g_defaults[VM_KEY_COUNT] = {
 	VM_DEF_SD2VITA, VM_DEF_INTERNAL, VM_DEF_VERIFY, VM_DEF_HUD, VM_DEF_HUD_POS,
-	VM_DEF_DEVMODE, VM_DEF_MEMCARD,
+	VM_DEF_RESERVED5, VM_DEF_MEMCARD,
 };
 
 /* A file may hold more keys than this build knows (one written by a newer

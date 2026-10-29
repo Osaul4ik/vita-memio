@@ -5,9 +5,8 @@
 #   vitamemio_kernel.skprx - kernel module: the faster storage path (staging),
 #                               settings, the HUD, the boot guard, and the
 #                               user-callable SceVitaMemio syscall library.
-#   vitamemio.suprx        - user module, listed under *main (SceShell: the
-#                               developer command server) and *NPXS10015 (the
-#                               Settings app: the vita-memio page).
+#   vitamemio.suprx        - user module, listed under *NPXS10015 (the
+#                               Settings app: the vita-memio page under Devices).
 #
 # BUILD REQUIREMENTS: the VitaSDK toolchain (https://vitasdk.org) and taiHEN's
 # headers/stubs (taihen):
@@ -70,7 +69,7 @@ vita_create_stubs(vitamemio-stubs vitamemio_kernel
   ${CMAKE_SOURCE_DIR}/vitamemio_kernel.yml KERNEL)
 
 # --------------------------------------------------------------------------
-# User module: vitamemio.suprx (SceShell + the Settings app)
+# User module: vitamemio.suprx (the Settings app)
 # --------------------------------------------------------------------------
 #
 # LINK RECIPE (why weak stubs): a STRONG import of a user
@@ -82,7 +81,6 @@ vita_create_stubs(vitamemio-stubs vitamemio_kernel
 # module must not load at all.
 add_executable(vitamemio
   user/main.c
-  user/dispatch.c                       # developer command server (SceShell only)
   settings_app/vitamemio_settings.c  # Settings-app hooks (NPXS10015 only)
   settings_app/vitamemio_i18n.c
   settings_app/vmlog.c
@@ -90,21 +88,12 @@ add_executable(vitamemio
 
 add_dependencies(vitamemio vitamemio-stubs)
 
-# Diagnostics build: lets the TCP :1340 command port change `internal` and
-# `verify`. Off in normal builds, where those two can only be changed in Settings.
-option(VM_DEV_ALLOW_RISKY "Allow set internal/verify over the command port" OFF)
-if(VM_DEV_ALLOW_RISKY)
-  target_compile_definitions(vitamemio PRIVATE VM_DEV_ALLOW_RISKY=1)
-endif()
-
 target_link_libraries(vitamemio
   # STRONG - must be present, fail loudly if not:
   taihen_stub
   ${CMAKE_BINARY_DIR}/libvitamemio_kernel_stub.a   # SceVitaMemio syscalls
   # WEAK - host-resident libs:
-  SceNet_stub_weak              # sceNet* sockets (dispatch.c, SceShell only)
   SceLibKernel_stub_weak        # sceKernel* / sceIo* helpers
-  SceKernelThreadMgr_stub_weak  # sceKernelDelayThread, threads
   SceIofilemgr_stub_weak        # sceIoOpen/Write/Close (the log file)
   SceProcessmgr_stub_weak       # sceKernelGetProcessTimeWide (log stamps)
   SceRegistryMgr_stub_weak      # sceRegMgrGetKeyInt (system language)

@@ -1,5 +1,5 @@
 # Host tests for the logic that does not need a Vita: the storage staging path,
-# settings load/save, the command-port parser, the formatter and the translations.
+# settings load/save, the formatter and the translations.
 # Plain gcc, AddressSanitizer + UBSan; no VitaSDK needed.
 #
 #   make -C tests          build and run everything
@@ -11,7 +11,7 @@ CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer
 CFLAGS  += -Istubs
 
-TESTS := test_stage test_settings test_dispatch test_dispatch_risky test_util test_i18n test_bench test_fastcopy
+TESTS := test_stage test_settings test_util test_i18n test_bench test_fastcopy
 
 .PHONY: all run clean
 all: run
@@ -25,13 +25,7 @@ test_stage: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/s
 test_settings: test_settings.c fakes.c fakes.h vm_test.h ../kernel/settings.c ../kernel/settings.h
 	$(CC) $(CFLAGS) -o $@ test_settings.c fakes.c
 
-test_dispatch: test_dispatch.c fakes.c fakes.h vm_test.h ../user/dispatch.c
-	$(CC) $(CFLAGS) -o $@ test_dispatch.c fakes.c
-
-test_dispatch_risky: test_dispatch.c fakes.c fakes.h vm_test.h ../user/dispatch.c
-	$(CC) $(CFLAGS) -DVM_DEV_ALLOW_RISKY=1 -o $@ test_dispatch.c fakes.c
-
-test_util: test_util.c vm_test.h fakes.c ../include/vm_fmt.h ../include/vm_devmode.h
+test_util: test_util.c vm_test.h fakes.c ../include/vm_fmt.h
 	$(CC) $(CFLAGS) -o $@ test_util.c fakes.c
 
 test_i18n: test_i18n.c vm_test.h fakes.c ../settings_app/vitamemio_i18n.c ../settings_app/vitamemio_i18n_table.h

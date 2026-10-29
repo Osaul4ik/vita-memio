@@ -4,8 +4,8 @@
  * HENkaku's 3.60 Settings recipe: hook sceKernelLoadStartModule in SceSettings to wait
  * for system_settings_core.suprx, then hook
  *   - scePafMiscLoadXmlLayout: splice a nested "vita-memio" setting_list into
- *     the System page (plugin="system_settings_plugin"), just before that
- *     page's own closing </setting_list>;
+ *     the Devices page (plugin="peripherals_settings_plugin"), last in its
+ *     main list (id="peripherals_settings");
  *   - the SceRegMgr get/set/info in SceSystemSettingsCore: back the rows with a
  *     private /CONFIG/VITAMEMIO namespace that goes straight to the kernel
  *     module's syscalls (vmGetState / vmSetSetting), so a change applies and
@@ -40,9 +40,10 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 
 /* ---- the vita-memio page --------------------------------------------- */
 
-/* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order. */
+/* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
+ * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
+	"sd2vita", "internal", "verify", "hud", "hud_pos", NULL, "memcard",
 };
 
 #define ROW_LIST(k) \
@@ -65,11 +66,12 @@ static const char X_GROUP[] =
 	ROW_LIST("hud_pos")
 		ITEM("vm_i_pos0", "0") ITEM("vm_i_pos1", "1") ITEM("vm_i_pos2", "2") ITEM("vm_i_pos3", "3")
 	"</list>"
-	ROW_TOGGLE("devmode")
 	"</setting_list>";
 
-/* Accept a System page up to this size; leave it alone if it is ever bigger. */
-#define VM_PAGE_ORIG_MAX 16384
+/* Accept a Devices page up to this size; leave it alone if it is ever bigger.
+ * The stock page is a few KB; YAMT replaces it with its own (~50 KB), and when
+ * YAMT's hook runs first that is the page that reaches us. */
+#define VM_PAGE_ORIG_MAX 65536
 
 static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_GROUP)];
 
@@ -107,7 +109,7 @@ static void l_put(Line *l, const char *t)
 }
 
 /* A storage row's help text, plus why it isn't working when it isn't.
- * Speeds and counters are the HUD's and the command port's job. */
+ * Speeds and counters are the HUD's and the tester's job. */
 static const vm_u16 *device_hint(int dev, int help_id)
 {
 	VmState st;
@@ -140,24 +142,24 @@ static const vm_u16 *device_hint(int dev, int help_id)
 }
 
 /* Row title / help ids per setting key; -1 = not on the page (verify is a
- * diagnostic, set over the command port only). */
+ * diagnostic with no switch; the reserved slot is unused). */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
 	[VM_KEY_VERIFY] = -1, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
-	[VM_KEY_HUD_POS] = VM_I18N_ROW_HUD_POS, [VM_KEY_DEVMODE] = VM_I18N_ROW_DEVMODE,
+	[VM_KEY_HUD_POS] = VM_I18N_ROW_HUD_POS, [VM_KEY_RESERVED5] = -1,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
 	[VM_KEY_VERIFY] = -1, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
-	[VM_KEY_HUD_POS] = VM_I18N_HINT_HUD_POS, [VM_KEY_DEVMODE] = VM_I18N_HINT_DEVMODE,
+	[VM_KEY_HUD_POS] = VM_I18N_HINT_HUD_POS, [VM_KEY_RESERVED5] = -1,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD,
 };
 
 static int key_index(const char *name)
 {
 	for (int k = 0; k < VM_KEY_COUNT; k++)
-		if (s_eqn(name, g_keys[k], s_len(g_keys[k]) + 1))
+		if (g_keys[k] && s_eqn(name, g_keys[k], s_len(g_keys[k]) + 1))
 			return k;
 	return -1;
 }
@@ -226,42 +228,36 @@ static const char *list_close(const char *s, int size, const char *open, int ope
 	return 0;
 }
 
-/* Where to splice in the System layout: second on the page, straight after
- * System Information (id_about_system). If that isn't found inside the
- * id_system list, last on the page instead. The layout also holds other
- * top-level lists (e.g. the error-details page) after id_system, so the
- * file's last </setting_list> is never used. NULL if id_system isn't found. */
-static const char *system_insert_at(const char *s, int size)
+/* Where to splice in the Devices layout: last in its main list
+ * (id="peripherals_settings"), just before that list's own </setting_list>.
+ * The file holds another top-level list after it (the PS TV controller page),
+ * so the file's last </setting_list> is never used. NULL if not found. */
+static const char *devices_insert_at(const char *s, int size)
 {
-	static const char SYS[] = "<setting_list id=\"id_system\"";
-	static const char ABOUT[] = "<setting_list id=\"id_about_system\"";
-	const char *sys_end = list_close(s, size, SYS, (int)sizeof(SYS) - 1);
-	const char *about_end = list_close(s, size, ABOUT, (int)sizeof(ABOUT) - 1);
-
-	if (!sys_end)
-		return 0;
-	if (about_end && about_end < sys_end)
-		return about_end + sizeof(CLOSE_LIST) - 1;
-	return sys_end;
+	static const char DEV[] = "<setting_list id=\"peripherals_settings\"";
+	return list_close(s, size, DEV, (int)sizeof(DEV) - 1);
 }
 
 /* scePafMiscLoadXmlLayout(out, buf, size, a4): splice our group into the
- * System page (Settings -> System). */
+ * Devices page (Settings -> Devices). */
 static int xml_hook(void *out, void *buf, int size, void *a4)
 {
-	static const char PLUG[] = "plugin=\"console_info_plugin\"";
+	static const char PLUG[] = "plugin=\"peripherals_settings_plugin\"";
+	static const char MINE[] = "<setting_list id=\"vitamemio_settings\"";
 	const char *s = (const char *)buf;
 
 	if (s && size > 0 && mem_find(s, size, PLUG, (int)sizeof(PLUG) - 1)) {
+		if (mem_find(s, size, MINE, (int)sizeof(MINE) - 1))   /* already there */
+			return TAI_CONTINUE(int, r_xml, out, buf, size, a4);
 		if (size > VM_PAGE_ORIG_MAX) {
-			VM_LOGI("[SET] system page too big (%d > %d) - not touched",
+			VM_LOGI("[SET] devices page too big (%d > %d) - not touched",
 			        size, VM_PAGE_ORIG_MAX);
 			return TAI_CONTINUE(int, r_xml, out, buf, size, a4);
 		}
-		const char *ins = system_insert_at(s, size);
+		const char *ins = devices_insert_at(s, size);
 		int gl = (int)sizeof(X_GROUP) - 1;
 		if (!ins)
-			VM_LOGI("[SET] system page (size=%d): insert point not found - page not added",
+			VM_LOGI("[SET] devices page (size=%d): insert point not found - page not added",
 			        size);
 		if (ins) {
 			int head = (int)(ins - s);

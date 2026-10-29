@@ -19,8 +19,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Host tests: the staging path, settings load/save, the command-port parser and
-  # the translation table, run with AddressSanitizer + UBSan. No VitaSDK needed.
+  # Host tests: the staging path, settings load/save, the formatter and the
+  # translation table, run with AddressSanitizer + UBSan. No VitaSDK needed.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -76,13 +76,3 @@ jobs:
             build/vitamemio_tester.vpk
             build/SHA256SUMS
           if-no-files-found: error
-
-  # Same build with the diagnostics build option on, so a change that breaks
-  # `-DVM_DEV_ALLOW_RISKY=1` is caught too. Not uploaded.
-  build-dev-diagnostics:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build with VM_DEV_ALLOW_RISKY
-        run: make build BUILD=build-dev CMAKE_ARGS="-DVM_DEV_ALLOW_RISKY=ON"

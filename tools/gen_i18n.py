@@ -36,11 +36,6 @@ s("VM_I18N_ROW_HUD_POS", en="HUD position", engb="HUD position", ja="HUDの位�
   ptbr="Posição do HUD", ru="Положение HUD", ko="HUD 위치", zht="HUD 位置", zhs="HUD 位置",
   fi="HUD:n sijainti", sv="HUD-position", da="HUD-placering", no="HUD-plassering", pl="Położenie HUD",
   tr="HUD konumu")
-s("VM_I18N_ROW_DEVMODE", en="Developer mode", engb="Developer mode", ja="開発者モード",
-  fr="Mode développeur", es="Modo desarrollador", de="Entwicklermodus", it="Modalità sviluppatore",
-  nl="Ontwikkelaarsmodus", pt="Modo de programador", ptbr="Modo de desenvolvedor", ru="Режим разработчика",
-  ko="개발자 모드", zht="開發者模式", zhs="开发者模式", fi="Kehittäjätila", sv="Utvecklarläge",
-  da="Udviklertilstand", no="Utviklermodus", pl="Tryb programisty", tr="Geliştirici modu")
 s("VM_I18N_HINT_SD2VITA",
   en="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
@@ -161,27 +156,6 @@ s("VM_I18N_HINT_HUD_POS", en="Which corner of the screen the HUD sits in.", engb
   fi="Missä näytön kulmassa HUD näkyy.", sv="I vilket hörn av skärmen HUD:en visas.",
   da="Hvilket hjørne af skærmen HUD'en vises i.", no="Hvilket hjørne av skjermen HUD-en vises i.",
   pl="W którym rogu ekranu pojawia się HUD.", tr="HUD'nin ekranın hangi köşesinde görüneceği.")
-s("VM_I18N_HINT_DEVMODE",
-  en="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
-  engb="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
-  ja="診断用にローカルネットワーク上でコマンドポート（TCP 1340）を開きます。テスト時以外はオフにしてください。",
-  fr="Ouvre un port de commande (TCP 1340) sur votre réseau local pour le diagnostic. Laissez désactivé sauf pour des tests.",
-  es="Abre un puerto de comandos (TCP 1340) en tu red local para diagnóstico. Déjalo desactivado salvo para pruebas.",
-  de="Öffnet einen Befehlsport (TCP 1340) im lokalen Netzwerk für die Diagnose. Nur zum Testen einschalten.",
-  it="Apre una porta comandi (TCP 1340) sulla rete locale per la diagnostica. Lascia disattivato se non stai testando.",
-  nl="Opent een opdrachtpoort (TCP 1340) op je lokale netwerk voor diagnose. Laat uit tenzij je test.",
-  pt="Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado exceto para testes.",
-  ptbr="Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado, a não ser para testes.",
-  ru="Открывает командный порт (TCP 1340) в локальной сети для диагностики. Включайте только для тестирования.",
-  ko="진단을 위해 로컬 네트워크에 명령 포트(TCP 1340)를 엽니다. 테스트할 때가 아니면 끄세요.",
-  zht="在區域網路上開啟命令連接埠（TCP 1340）以供診斷。除非正在測試，請保持關閉。",
-  zhs="在局域网上打开命令端口（TCP 1340）以供诊断。除非正在测试，请保持关闭。",
-  fi="Avaa komentoportin (TCP 1340) lähiverkkoon vianmääritystä varten. Pidä pois päältä, ellet testaa.",
-  sv="Öppnar en kommandoport (TCP 1340) i ditt lokala nätverk för felsökning. Låt vara av om du inte testar.",
-  da="Åbner en kommandoport (TCP 1340) på dit lokale netværk til fejlfinding. Lad den være slået fra, medmindre du tester.",
-  no="Åpner en kommandoport (TCP 1340) på det lokale nettverket for feilsøking. La være av med mindre du tester.",
-  pl="Otwiera port poleceń (TCP 1340) w sieci lokalnej do diagnostyki. Zostaw wyłączone, jeśli nie testujesz.",
-  tr="Tanılama için yerel ağınızda bir komut bağlantı noktası (TCP 1340) açar. Test etmiyorsanız kapalı bırakın.")
 def items(id_, d):
     s(id_, **d)
 items("VM_I18N_ITEM_HUD_OFF", dict(en="Off", engb="Off", ja="オフ", fr="Désactivé", es="Desactivado", de="Aus", it="Disattivato", nl="Uit", pt="Desligado", ptbr="Desligado", ru="Выкл.", ko="끔", zht="關閉", zhs="关闭", fi="Pois", sv="Av", da="Fra", no="Av", pl="Wyłączony", tr="Kapalı"))
@@ -259,7 +233,7 @@ s("VM_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb=
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_HUD_POS', 'VM_I18N_ROW_DEVMODE', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_HUD_POS', 'VM_I18N_HINT_DEVMODE', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ITEM_POS_TL', 'VM_I18N_ITEM_POS_TR', 'VM_I18N_ITEM_POS_BL', 'VM_I18N_ITEM_POS_BR', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_HUD_POS', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_HUD_POS', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ITEM_POS_TL', 'VM_I18N_ITEM_POS_TR', 'VM_I18N_ITEM_POS_BL', 'VM_I18N_ITEM_POS_BR', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

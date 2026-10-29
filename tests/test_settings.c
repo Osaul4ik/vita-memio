@@ -80,7 +80,7 @@ static int all_defaults(const VmSettings *s)
 {
 	return s->sd2vita == VM_DEF_SD2VITA && s->internal == VM_DEF_INTERNAL &&
 	       s->verify == VM_DEF_VERIFY && s->hud == VM_DEF_HUD &&
-	       s->hud_pos == VM_DEF_HUD_POS && s->devmode == VM_DEF_DEVMODE &&
+	       s->hud_pos == VM_DEF_HUD_POS && s->reserved5 == VM_DEF_RESERVED5 &&
 	       s->memcard == VM_DEF_MEMCARD;
 }
 
@@ -134,7 +134,7 @@ static void test_save_and_load_roundtrip(void)
 	vm_settings_init();                       /* "reboot" */
 	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
-	CHECK(s.internal == 0 && s.verify == 0 && s.devmode == 0);
+	CHECK(s.internal == 0 && s.verify == 0 && s.reserved5 == 0);
 }
 
 static void test_invalid_set_is_rejected(void)
@@ -149,6 +149,7 @@ static void test_invalid_set_is_rejected(void)
 	CHECK(vm_settings_set(VM_KEY_HUD_POS, 4) == VM_ERR_ARG);
 	CHECK(vm_settings_set(99, 0) == VM_ERR_ARG);
 	CHECK(vm_settings_set(-1, 0) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_RESERVED5, 1) == VM_ERR_ARG);   /* the old Developer mode */
 	vm_settings_copy(&s);
 	CHECK(all_defaults(&s) && apply_calls == 0 && !g_dirty);
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 0) == VM_OK);   /* same value: nothing to do */
@@ -278,6 +279,24 @@ static void test_one_bad_value_keeps_the_rest(void)
 	CHECK(s.sd2vita == 1 && s.hud_pos == 3 && s.memcard == 1);
 }
 
+/* A file saved while the old Developer mode was on: that slot comes back as 0,
+ * every other value is kept. */
+static void test_old_devmode_on_is_dropped(void)
+{
+	uint8_t buf[256];
+	const int32_t v[7] = { 1, 0, 0, 2, 1, 1, 1 };
+	VmSettings s;
+	size_t n;
+
+	clean();
+	n = make_file(buf, 7, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.reserved5 == 0);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 1 && s.memcard == 1);
+}
+
 static void test_cut_save_after_remove_loads_tmp(void)
 {
 	VmSettings s;
@@ -346,6 +365,7 @@ int main(void)
 	RUN(test_file_with_more_keys);
 	RUN(test_settings_from_the_old_folder);
 	RUN(test_one_bad_value_keeps_the_rest);
+	RUN(test_old_devmode_on_is_dropped);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);

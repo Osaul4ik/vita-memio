@@ -15,13 +15,11 @@ enum vm_i18n_id {
 	VM_I18N_ROW_INTERNAL,
 	VM_I18N_ROW_HUD,
 	VM_I18N_ROW_HUD_POS,
-	VM_I18N_ROW_DEVMODE,
 	VM_I18N_ROW_MEMCARD,
 	VM_I18N_HINT_SD2VITA,       /* help text, same order as the rows              */
 	VM_I18N_HINT_INTERNAL,
 	VM_I18N_HINT_HUD,
 	VM_I18N_HINT_HUD_POS,
-	VM_I18N_HINT_DEVMODE,
 	VM_I18N_HINT_MEMCARD,
 	VM_I18N_ITEM_HUD_OFF,       /* HUD list items, in VM_HUD_* order              */
 	VM_I18N_ITEM_HUD_COMPACT,

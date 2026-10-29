@@ -16,7 +16,7 @@
 
 BUILD   ?= build
 VITA_IP ?=
-# Extra CMake options, e.g. make CMAKE_ARGS="-DVM_DEV_ALLOW_RISKY=ON"
+# Extra CMake options passed to cmake
 CMAKE_ARGS ?=
 # Pinned so every build uses the same toolchain (VitaSDK 2026.08, GCC 15.2).
 VITASDK_IMAGE ?= vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
@@ -65,7 +65,7 @@ results: check-ip
 	@echo "Saved logs/results.txt"
 
 config:
-	@printf '%s\n' '*KERNEL' 'ur0:tai/vitamemio_kernel.skprx' '' '*main' 'ur0:tai/vitamemio.suprx' '' \
+	@printf '%s\n' '*KERNEL' 'ur0:tai/vitamemio_kernel.skprx' '' \
 	  '*NPXS10015' 'ur0:tai/vitamemio.suprx'
 
 # Host tests (no VitaSDK needed): see tests/Makefile.

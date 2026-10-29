@@ -110,28 +110,6 @@
 	"HUD position",   /* engb */
 	"HUD konumu",   /* tr */
 },
-[VM_I18N_ROW_DEVMODE] = {
-	"開発者モード",   /* ja */
-	"Developer mode",   /* en */
-	"Mode développeur",   /* fr */
-	"Modo desarrollador",   /* es */
-	"Entwicklermodus",   /* de */
-	"Modalità sviluppatore",   /* it */
-	"Ontwikkelaarsmodus",   /* nl */
-	"Modo de programador",   /* pt */
-	"Режим разработчика",   /* ru */
-	"개발자 모드",   /* ko */
-	"開發者模式",   /* zht */
-	"开发者模式",   /* zhs */
-	"Kehittäjätila",   /* fi */
-	"Utvecklarläge",   /* sv */
-	"Udviklertilstand",   /* da */
-	"Utviklermodus",   /* no */
-	"Tryb programisty",   /* pl */
-	"Modo de desenvolvedor",   /* ptbr */
-	"Developer mode",   /* engb */
-	"Geliştirici modu",   /* tr */
-},
 [VM_I18N_ROW_MEMCARD] = {
 	"Vitaメモリーカードを高速化",   /* ja */
 	"Faster Vita memory card",   /* en */
@@ -241,28 +219,6 @@
 	"Em qual canto da tela o HUD aparece.",   /* ptbr */
 	"Which corner of the screen the HUD sits in.",   /* engb */
 	"HUD'nin ekranın hangi köşesinde görüneceği.",   /* tr */
-},
-[VM_I18N_HINT_DEVMODE] = {
-	"診断用にローカルネットワーク上でコマンドポート（TCP 1340）を開きます。テスト時以外はオフにしてください。",   /* ja */
-	"Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",   /* en */
-	"Ouvre un port de commande (TCP 1340) sur votre réseau local pour le diagnostic. Laissez désactivé sauf pour des tests.",   /* fr */
-	"Abre un puerto de comandos (TCP 1340) en tu red local para diagnóstico. Déjalo desactivado salvo para pruebas.",   /* es */
-	"Öffnet einen Befehlsport (TCP 1340) im lokalen Netzwerk für die Diagnose. Nur zum Testen einschalten.",   /* de */
-	"Apre una porta comandi (TCP 1340) sulla rete locale per la diagnostica. Lascia disattivato se non stai testando.",   /* it */
-	"Opent een opdrachtpoort (TCP 1340) op je lokale netwerk voor diagnose. Laat uit tenzij je test.",   /* nl */
-	"Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado exceto para testes.",   /* pt */
-	"Открывает командный порт (TCP 1340) в локальной сети для диагностики. Включайте только для тестирования.",   /* ru */
-	"진단을 위해 로컬 네트워크에 명령 포트(TCP 1340)를 엽니다. 테스트할 때가 아니면 끄세요.",   /* ko */
-	"在區域網路上開啟命令連接埠（TCP 1340）以供診斷。除非正在測試，請保持關閉。",   /* zht */
-	"在局域网上打开命令端口（TCP 1340）以供诊断。除非正在测试，请保持关闭。",   /* zhs */
-	"Avaa komentoportin (TCP 1340) lähiverkkoon vianmääritystä varten. Pidä pois päältä, ellet testaa.",   /* fi */
-	"Öppnar en kommandoport (TCP 1340) i ditt lokala nätverk för felsökning. Låt vara av om du inte testar.",   /* sv */
-	"Åbner en kommandoport (TCP 1340) på dit lokale netværk til fejlfinding. Lad den være slået fra, medmindre du tester.",   /* da */
-	"Åpner en kommandoport (TCP 1340) på det lokale nettverket for feilsøking. La være av med mindre du tester.",   /* no */
-	"Otwiera port poleceń (TCP 1340) w sieci lokalnej do diagnostyki. Zostaw wyłączone, jeśli nie testujesz.",   /* pl */
-	"Abre uma porta de comandos (TCP 1340) na sua rede local para diagnóstico. Deixe desligado, a não ser para testes.",   /* ptbr */
-	"Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",   /* engb */
-	"Tanılama için yerel ağınızda bir komut bağlantı noktası (TCP 1340) açar. Test etmiyorsanız kapalı bırakın.",   /* tr */
 },
 [VM_I18N_HINT_MEMCARD] = {
 	"PS Vita専用メモリーカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",   /* ja */

@@ -1,12 +1,10 @@
 /*
- * test_util.c - the small pure helpers: the shared printf subset (vm_fmt.h) and
- * the Developer mode auto-off rule (vm_devmode.h).
+ * test_util.c - the small pure helpers: the shared printf subset (vm_fmt.h).
  */
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../include/vm_devmode.h"
 #include "../include/vm_fmt.h"
 #include "vm_test.h"
 
@@ -80,36 +78,11 @@ static void test_truncation(void)
 	CHECK(fmt(NULL, 0, "x") == 0);            /* zero capacity: nothing to write to */
 }
 
-static void test_devmode_auto_off(void)
-{
-	uint32_t since = 0;
-	const uint32_t limit = (uint32_t)VM_DEVMODE_MINUTES * 60u;
-
-	CHECK(!vm_devmode_tick(1, 0, &since) && since == 0);   /* off: nothing counts */
-	CHECK(!vm_devmode_tick(5, 1, &since) && since == 5);   /* on: starts counting */
-	CHECK(!vm_devmode_tick(5 + limit - 1, 1, &since));     /* one second short    */
-	CHECK(vm_devmode_tick(5 + limit, 1, &since));          /* time is up          */
-	CHECK(since == 0);
-
-	/* switched off by the user before the limit: the clock restarts next time */
-	CHECK(!vm_devmode_tick(100, 1, &since) && since == 100);
-	CHECK(!vm_devmode_tick(200, 0, &since) && since == 0);
-	CHECK(!vm_devmode_tick(300, 1, &since) && since == 300);
-	CHECK(!vm_devmode_tick(300 + limit - 1, 1, &since));
-	CHECK(vm_devmode_tick(300 + limit, 1, &since));
-
-	/* left on across a boot: counts from the first tick */
-	since = 0;
-	CHECK(!vm_devmode_tick(1, 1, &since) && since == 1);
-	CHECK(vm_devmode_tick(1 + limit, 1, &since));
-}
-
 int main(void)
 {
 	RUN(test_matches_libc);
 	RUN(test_odd_formats);
 	RUN(test_truncation);
-	RUN(test_devmode_auto_off);
 
 	printf(vm_failures ? "test_util: %d FAILED\n" : "test_util: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

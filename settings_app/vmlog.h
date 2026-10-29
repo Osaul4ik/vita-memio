@@ -1,11 +1,10 @@
 /*
- * vmlog.h - tiny logger for the user module (both instances: SceShell and the
- * Settings app).
+ * vmlog.h - tiny logger for the user module (the Settings app).
  *
  * Appends timestamped lines to ur0:data/vita-memio/user.log (rotated to
  * user.old.log past VM_LOG_MAX_BYTES). It logs only problems (kernel module
- * not answering, Settings hooks or page not installed, a rejected setting, the
- * developer server failing), so each line opens, appends and closes the file:
+ * not answering, Settings hooks or page not installed, a rejected setting),
+ * so each line opens, appends and closes the file:
  * nothing stays open. Failure-tolerant: a line that cannot
  * be written is dropped.
  *

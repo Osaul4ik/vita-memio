@@ -51,16 +51,15 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
    *KERNEL
    ur0:tai/vitamemio_kernel.skprx
 
-   *main
-   ur0:tai/vitamemio.suprx
-
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Reboot. The switches are in **Settings > System > vita-memio**.
+3. Reboot. The switches are in **Settings > Devices > vita-memio**.
 4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings).
 
 Settings, logs and test results live in `ur0:data/vita-memio/`. The log holds one line per start and otherwise only problems.
+
+**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing.
 
 **Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both). Your settings are taken over from `ur0:data/turbostorage/` on the first start. The old tester (`TURBOTST0`) can be deleted in LiveArea.
 

@@ -86,7 +86,7 @@ enum vm_key {
 #define VM_DEF_LOG       0   /* logging is opt-in (Settings > Advanced)        */
 #define VM_DEF_MEMCARD   0
 #define VM_DEF_SMALL     0   /* opt-in: small transfers are file-system bookkeeping */
-#define VM_DEF_STATS     0   /* only the tester needs them                     */
+#define VM_DEF_STATS     1   /* on; switch off to save the work               */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {

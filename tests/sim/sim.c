@@ -13,7 +13,6 @@
  *   SIM_NOBUF=1                        a device that is on reports "no buffer"
  *   SIM_VERIFY=0|1                     the plugin's verify mode (default 1)
  *   SIM_SMALL=0|1                      the plugin's "small transfers too" (default 0)
- *   SIM_STATS=0|1                      the plugin's statistics (default 1)
  *   SIM_MISMATCH=n                     the nth checked transfer differs (falls back)
  *
  * This is a test aid for the screens and the control flow, not a Vita emulator: it
@@ -272,8 +271,6 @@ int main(int argc, char **argv)
 	if ((s = getenv("SIM_SD2VITA"))) g_set.sd2vita = atoi(s);   /* "as set in Settings" */
 	if ((s = getenv("SIM_VERIFY"))) g_set.verify = atoi(s);
 	if ((s = getenv("SIM_SMALL"))) g_set.small = atoi(s);
-	g_set.stats = 1;
-	if ((s = getenv("SIM_STATS"))) g_set.stats = atoi(s);
 	if ((s = getenv("SIM_MISMATCH"))) g_sim_mismatch_at = atoi(s);
 	return tester_main();
 }

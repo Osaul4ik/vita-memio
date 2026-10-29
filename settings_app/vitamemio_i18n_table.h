@@ -639,26 +639,26 @@
 	"Güvenli modu sıfırla",   /* tr */
 },
 [VM_I18N_HINT_SAFE_ON] = {
-	"セーフモード中：前回の起動がホーム画面まで到達しなかったため、vita-memio は起動していません。解除してから本体を再起動してください。",   /* ja */
-	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Reset it, then restart the console.",   /* en */
-	"Le mode sans échec est ACTIVÉ : vita-memio n'a pas démarré, car le dernier démarrage n'a pas atteint l'écran d'accueil. Réinitialisez-le, puis redémarrez la console.",   /* fr */
-	"El modo seguro está ACTIVADO: vita-memio no se inició porque el último arranque no llegó a la pantalla de inicio. Restablécelo y reinicia la consola.",   /* es */
-	"Der abgesicherte Modus ist AN: vita-memio wurde nicht gestartet, weil der letzte Start den Startbildschirm nicht erreicht hat. Zurücksetzen und die Konsole neu starten.",   /* de */
-	"La modalità provvisoria è ATTIVA: vita-memio non è partito perché l'ultimo avvio non ha raggiunto la schermata iniziale. Reimpostala, poi riavvia la console.",   /* it */
-	"Veilige modus staat AAN: vita-memio is niet gestart, omdat de laatste start het startscherm niet bereikte. Herstel hem en start de console opnieuw.",   /* nl */
-	"O modo de segurança está LIGADO: o vita-memio não arrancou, porque o último arranque não chegou ao ecrã inicial. Reponha-o e reinicie a consola.",   /* pt */
-	"Безопасный режим ВКЛЮЧЁН: vita-memio не запущен, так как прошлый запуск не дошёл до главного экрана. Сбросьте его и перезагрузите консоль.",   /* ru */
-	"안전 모드 켜짐: 지난 시작이 홈 화면까지 가지 못해 vita-memio가 시작되지 않았습니다. 초기화한 뒤 본체를 다시 시작하세요.",   /* ko */
-	"安全模式已開啟：由於上次啟動未能進入主畫面，vita-memio 未啟動。請重設後重新啟動主機。",   /* zht */
-	"安全模式已开启：由于上次启动未能进入主屏幕，vita-memio 未启动。请重置后重新启动主机。",   /* zhs */
-	"Vikasietotila on PÄÄLLÄ: vita-memio ei käynnistynyt, koska edellinen käynnistys ei päässyt aloitusnäyttöön. Nollaa se ja käynnistä konsoli uudelleen.",   /* fi */
-	"Felsäkert läge är PÅ: vita-memio startade inte, eftersom den senaste starten inte nådde hemskärmen. Återställ det och starta om konsolen.",   /* sv */
-	"Fejlsikret tilstand er SLÅET TIL: vita-memio startede ikke, fordi den sidste opstart ikke nåede startskærmen. Nulstil den, og genstart konsollen.",   /* da */
-	"Sikker modus er PÅ: vita-memio startet ikke, fordi forrige oppstart ikke nådde startskjermen. Tilbakestill den og start konsollen på nytt.",   /* no */
-	"Tryb awaryjny jest WŁĄCZONY: vita-memio nie wystartował, bo ostatni start nie dotarł do ekranu głównego. Zresetuj go i uruchom konsolę ponownie.",   /* pl */
-	"O modo de segurança está LIGADO: o vita-memio não iniciou, porque a última inicialização não chegou à tela inicial. Redefina-o e reinicie o console.",   /* ptbr */
-	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Reset it, then restart the console.",   /* engb */
-	"Güvenli mod AÇIK: son başlatma ana ekrana ulaşmadığı için vita-memio başlamadı. Sıfırlayın, ardından konsolu yeniden başlatın.",   /* tr */
+	"セーフモード中：前回の起動がホーム画面まで到達しなかったため、vita-memio は起動していません。設定は変更できます。原因の項目をオフにしてから解除し、本体を再起動してください。",   /* ja */
+	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* en */
+	"Le mode sans échec est ACTIVÉ : vita-memio n'a pas démarré, car le dernier démarrage n'a pas atteint l'écran d'accueil. Les réglages restent modifiables : désactivez ce qui l'a causé, réinitialisez le mode sans échec, puis redémarrez la console.",   /* fr */
+	"El modo seguro está ACTIVADO: vita-memio no se inició porque el último arranque no llegó a la pantalla de inicio. Los ajustes se pueden cambiar: desactiva lo que lo causó, restablece el modo seguro y reinicia la consola.",   /* es */
+	"Der abgesicherte Modus ist AN: vita-memio wurde nicht gestartet, weil der letzte Start den Startbildschirm nicht erreicht hat. Die Einstellungen lassen sich weiter ändern: die Ursache ausschalten, den Modus zurücksetzen und die Konsole neu starten.",   /* de */
+	"La modalità provvisoria è ATTIVA: vita-memio non è partito perché l'ultimo avvio non ha raggiunto la schermata iniziale. Le impostazioni si possono cambiare: disattiva ciò che l'ha causato, reimposta la modalità e riavvia la console.",   /* it */
+	"Veilige modus staat AAN: vita-memio is niet gestart, omdat de laatste start het startscherm niet bereikte. Instellingen kunnen nog worden gewijzigd: zet uit wat het veroorzaakte, herstel de veilige modus en start de console opnieuw.",   /* nl */
+	"O modo de segurança está LIGADO: o vita-memio não arrancou, porque o último arranque não chegou ao ecrã inicial. As definições podem ser alteradas: desligue o que o causou, reponha o modo de segurança e reinicie a consola.",   /* pt */
+	"Безопасный режим ВКЛЮЧЁН: vita-memio не запущен, так как прошлый запуск не дошёл до главного экрана. Настройки можно менять: выключите то, что вызвало сбой, сбросьте безопасный режим и перезагрузите консоль.",   /* ru */
+	"안전 모드 켜짐: 지난 시작이 홈 화면까지 가지 못해 vita-memio가 시작되지 않았습니다. 설정은 바꿀 수 있습니다. 원인이 된 항목을 끄고 안전 모드를 초기화한 뒤 본체를 다시 시작하세요.",   /* ko */
+	"安全模式已開啟：由於上次啟動未能進入主畫面，vita-memio 未啟動。仍可變更設定：關閉造成問題的項目，重設安全模式後重新啟動主機。",   /* zht */
+	"安全模式已开启：由于上次启动未能进入主屏幕，vita-memio 未启动。仍可更改设置：关闭导致问题的项目，重置安全模式后重新启动主机。",   /* zhs */
+	"Vikasietotila on PÄÄLLÄ: vita-memio ei käynnistynyt, koska edellinen käynnistys ei päässyt aloitusnäyttöön. Asetuksia voi yhä muuttaa: kytke syy pois, nollaa vikasietotila ja käynnistä konsoli uudelleen.",   /* fi */
+	"Felsäkert läge är PÅ: vita-memio startade inte, eftersom den senaste starten inte nådde hemskärmen. Inställningarna kan fortfarande ändras: stäng av det som orsakade det, återställ läget och starta om konsolen.",   /* sv */
+	"Fejlsikret tilstand er SLÅET TIL: vita-memio startede ikke, fordi den sidste opstart ikke nåede startskærmen. Indstillingerne kan stadig ændres: slå årsagen fra, nulstil tilstanden, og genstart konsollen.",   /* da */
+	"Sikker modus er PÅ: vita-memio startet ikke, fordi forrige oppstart ikke nådde startskjermen. Innstillingene kan fortsatt endres: slå av det som forårsaket det, tilbakestill sikker modus og start konsollen på nytt.",   /* no */
+	"Tryb awaryjny jest WŁĄCZONY: vita-memio nie wystartował, bo ostatni start nie dotarł do ekranu głównego. Ustawienia można zmieniać: wyłącz to, co spowodowało problem, zresetuj tryb awaryjny i uruchom konsolę ponownie.",   /* pl */
+	"O modo de segurança está LIGADO: o vita-memio não iniciou, porque a última inicialização não chegou à tela inicial. As configurações podem ser alteradas: desligue o que causou isso, redefina o modo de segurança e reinicie o console.",   /* ptbr */
+	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* engb */
+	"Güvenli mod AÇIK: son başlatma ana ekrana ulaşmadığı için vita-memio başlamadı. Ayarlar yine de değiştirilebilir: soruna yol açanı kapatın, güvenli modu sıfırlayın ve konsolu yeniden başlatın.",   /* tr */
 },
 [VM_I18N_HINT_SAFE_OFF] = {
 	"セーフモードはオフです。起動がホーム画面まで到達しなかった場合、vita-memio は自動でセーフモードになります。",   /* ja */

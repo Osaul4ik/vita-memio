@@ -331,11 +331,18 @@ static int worker(SceSize args, void *argp)
 
 		ksceKernelDelayThread(1000 * 1000);
 		g_uptime++;
+		/* Always, also in safe mode or on an unknown firmware: settings can
+		 * still be changed there (to switch off what broke the last start),
+		 * so they are saved, and the log follows its switch. */
 		vm_settings_flush();
 		vm_klog_set_enabled(g_vm_settings.log);   /* follows the switch */
+		/* Safe mode stays until it is reset, and an unknown firmware never
+		 * set the guard: nothing else runs in those two. */
+		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE)
+			continue;
+		guard_tick();
 		vm_gpumap_tick(g_vm_settings.log && g_vm_settings.gpusafe, g_uptime);
 		vm_stage_worker_tick();
-		guard_tick();
 		vm_stage_get(now, 1);
 		hud_feed(now);
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -378,10 +385,11 @@ int vmGetState(VmState *out)
 	return VM_OK;
 }
 
+/* Accepted in every state, safe mode included: that is when a setting that
+ * broke the last start has to be switched off. Without the hooks a change
+ * only takes effect at the next start. */
 int vmSetSetting(int key, int value)
 {
-	if (g_disabled != VM_DIS_NONE)
-		return VM_ERR_NOT_READY;
 	if (!vm_setting_valid(key, value))
 		return VM_ERR_ARG;
 	return vm_settings_set(key, value);   /* applies now; worker saves + logs */
@@ -428,6 +436,16 @@ int module_start(SceSize argc, const void *args);
 /* Entry symbol for the linker; taiHEN itself enters through module_start. */
 int _start(SceSize argc, const void *args) __attribute__ ((weak, alias("module_start")));
 
+static void start_worker(void)
+{
+	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0, NULL);
+	if (g_worker >= 0)
+		ksceKernelStartThread(g_worker, 0, NULL);
+	else
+		VM_KLOGW("worker thread not started (0x%08x): settings will not be saved",
+		         (unsigned)g_worker);
+}
+
 int module_start(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
@@ -441,6 +459,7 @@ int module_start(SceSize argc, const void *args)
 		g_disabled = VM_DIS_FIRMWARE;
 		VM_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
 		         VM_VERSION_STR, (unsigned)g_fingerprint);
+		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	/* The one line every start writes: which build, on which storage driver. */
@@ -456,6 +475,7 @@ int module_start(SceSize argc, const void *args)
 		g_disabled = VM_DIS_SAFE;
 		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (reset it in "
 		         "Settings > Devices > vita-memio > Advanced)", g_guard_txt);
+		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	guard_write('1', "start");
@@ -465,23 +485,14 @@ int module_start(SceSize argc, const void *args)
 		g_disabled = VM_DIS_HOOKS;
 		VM_KLOGW("storage hooks NOT installed: storage stays stock");
 	}
-	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0, NULL);
-	if (g_worker >= 0)
-		ksceKernelStartThread(g_worker, 0, NULL);
-	else
-		VM_KLOGW("worker thread not started (0x%08x): settings will not be saved",
-		         (unsigned)g_worker);
-
+	start_worker();
 	return SCE_KERNEL_START_SUCCESS;
 }
 
 int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
-	if (g_disabled == VM_DIS_FIRMWARE || g_disabled == VM_DIS_SAFE) {
-		vm_klog_fini();
-		return SCE_KERNEL_STOP_SUCCESS;
-	}
+	/* Every state runs the worker; the rest releases only what was set up. */
 	g_run = 0;
 	if (g_worker >= 0)
 		ksceKernelWaitThreadEnd(g_worker, NULL, NULL);

@@ -106,9 +106,9 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 | HUD style | Classic (white text) or PSVshell (a black panel with coloured values) | PSVshell |
 | Reset safe mode | Ends safe mode; vita-memio starts normally after the next restart | |
 
-Settings apply at once, with no restart. They are kept in `ur0:data/vita-memio/`, together with the logs and the tester's results.
+Settings apply at once, with no restart (in safe mode or on an unsupported firmware they are saved and take effect at the next normal start). They are kept in `ur0:data/vita-memio/`, together with the logs and the tester's results.
 
-**Safe mode.** If a start never reaches the home screen, the next start installs nothing, so a broken setup cannot loop. The Driver row then shows safe mode. Holding L while the console starts skips all plugins.
+**Safe mode.** If a start never reaches the home screen, the next start installs nothing, so a broken setup cannot loop. The Driver row then shows safe mode. Settings can still be changed in safe mode: switch off the option that caused it, then **Reset safe mode** and restart. Holding L while the console starts skips all plugins.
 
 ## Tester
 

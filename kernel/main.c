@@ -211,7 +211,7 @@ static void pad(char *o, int cap, const char *s, int width, int max, int right)
 {
 	int len = 0, n = 0;
 
-	while (s[len] && len < max)
+	while (len < max && s[len])
 		len++;
 	if (width > cap - 1)
 		width = cap - 1;

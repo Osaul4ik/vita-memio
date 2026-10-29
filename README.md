@@ -33,6 +33,38 @@ Before and after every transfer, the system's storage driver cleans and invalida
 
 Different microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Results depend on the console, the card and the workload.
 
+## Compared with the original
+
+Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://github.com/juanjsebgarcia/vita-turbo-storage/commit/e48f309)).
+
+**Added**
+
+- **Tester app** (`vitamemio_tester.vpk`): sequential, random and small-file tests on one storage, every byte checked. It shows where the time goes per block (system call vs. CPU copy), the plugin's live counters, verify results and buffer-busy counts, and saves every run to `results.txt`.
+- **Driver status row** at the top of the Settings page: active, not loaded, safe mode, firmware not supported, or could not start. The page also appears, and says so, when the kernel module is missing.
+- **GPU-safe reads**: an option that writes read data out of the CPU cache to memory, removing the one difference the original lists under its limitations.
+- **Small transfers too**: an option to speed up transfers under 32 KiB (the file system's own bookkeeping) as well.
+- **Verify transfers** as a Settings switch (in the original it is set over the command port only).
+- **Statistics** switch: the per-transfer timers and data counters can be turned off.
+- **PSVshell-style HUD**: a black panel with coloured values in the Terminus font, sized for the game's resolution, next to the original look (*HUD style*).
+- **Host tests** for the storage path, settings, HUD drawing and tester engine, run with sanitizers and an ARM build under QEMU on every push.
+
+**Changed**
+
+- The Settings page is under **Settings > Devices** (the original: Settings > System), with an **Advanced** sub-page.
+- Only the kernel module and the Settings app load the plugin: no `*main` line in `config.txt`.
+- Reads copy out of the staging buffer with 8-word burst loads instead of `memcpy` (SD2Vita: 4.5 to 4.2 µs per 512-byte block).
+- Staging buffers are allocated only for the storages that are switched on (the original always allocates 768 KiB).
+- Logging is off unless **Enable log** is on, and then it records one line per start plus problems.
+- The HUD panel is composed once per text change and only copied each frame.
+
+**Removed**
+
+- Developer mode and its TCP command port (1340).
+
+**In the original but not here**
+
+- The HUD's corner choice (here always top right), *In-game HUD* and *HUD recent activity only*.
+
 ## Install
 
 Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester `vitamemio_tester.vpk`.

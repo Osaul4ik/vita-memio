@@ -14,3 +14,4 @@ vitamemio_kernel:
         - vmSetSetting
         - vmSelfTestPing
         - vmGetTiming
+        - vmResetSafeMode

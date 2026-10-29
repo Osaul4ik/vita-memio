@@ -11,7 +11,7 @@ CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer
 CFLAGS  += -Istubs
 
-TESTS := test_stage test_settings test_util test_i18n test_bench test_fastcopy
+TESTS := test_stage test_settings test_hud test_util test_i18n test_bench test_fastcopy
 
 .PHONY: all run clean
 all: run
@@ -24,6 +24,9 @@ test_stage: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/s
 
 test_settings: test_settings.c fakes.c fakes.h vm_test.h ../kernel/settings.c ../kernel/settings.h
 	$(CC) $(CFLAGS) -o $@ test_settings.c fakes.c
+
+test_hud: test_hud.c fakes.c vm_test.h ../kernel/hud_draw.h ../kernel/hud.h ../kernel/font8x8.h ../include/vm_font_terminus.h
+	$(CC) $(CFLAGS) -o $@ test_hud.c fakes.c
 
 test_util: test_util.c vm_test.h fakes.c ../include/vm_fmt.h
 	$(CC) $(CFLAGS) -o $@ test_util.c fakes.c

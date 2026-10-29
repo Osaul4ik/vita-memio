@@ -6,6 +6,11 @@
  * best-effort and disabled silently on any failure. One rotation step
  * (kernel.log -> kernel.old.log) keeps the previous chunk.
  *
+ * Both sinks only run while logging is switched on (Settings > Advanced >
+ * Enable log, VmSettings.log). Until the settings are known at boot, lines are
+ * held in a small buffer: written out if logging turns out to be on, dropped
+ * if it is off.
+ *
  * A single mutex guards the fd. The formatter is a self-contained printf subset
  * (no libc in kernel), the same one the Settings-page logger uses.
  */
@@ -13,6 +18,7 @@
 #include <psp2kern/kernel/debug.h>       /* ksceDebugPrintf                      */
 #include <psp2kern/io/fcntl.h>           /* ksceIoOpen/Write/Close/Lseek/Remove  */
 #include <psp2kern/io/stat.h>            /* ksceIoMkdir                          */
+#include <psp2kern/kernel/sysclib.h>     /* memcpy                               */
 #include <stdarg.h>
 
 #include "klog.h"
@@ -24,6 +30,13 @@ static int      g_level  = VM_KLOG_DEFAULT_LEVEL;
 static SceUID   g_fd = -1;
 static int      g_file_disabled = 0;
 static uint32_t g_file_bytes = 0;
+static int      g_enabled = -1;        /* -1: not known yet, 0: off, 1: on   */
+
+/* Lines logged before the settings were loaded. */
+#define EARLY_LINES 8
+static char g_early[EARLY_LINES][192];
+static int  g_early_len[EARLY_LINES];
+static int  g_early_n;
 
 static void lock(void)   { if (g_mtx >= 0) ksceKernelLockMutex(g_mtx, 1, NULL); }
 static void unlock(void) { if (g_mtx >= 0) ksceKernelUnlockMutex(g_mtx, 1); }
@@ -92,8 +105,30 @@ void vm_klog_init(void)
 	if (g_mtx < 0)
 		g_mtx = ksceKernelCreateMutex("VmKLogMtx", 0, 0, NULL);
 	g_inited = 1;
+}
+
+static void emit_locked(const char *line, int len)
+{
+	ksceDebugPrintf("%s\n", line);
+	file_write_locked(line, len);
+}
+
+void vm_klog_set_enabled(int on)
+{
+	on = on ? 1 : 0;
 	lock();
-	file_open_locked();
+	if (on != g_enabled) {
+		g_enabled = on;
+		if (on) {
+			g_file_disabled = 0;           /* a fresh chance for the file */
+			for (int i = 0; i < g_early_n; i++)
+				emit_locked(g_early[i], g_early_len[i]);
+		} else if (g_fd >= 0) {
+			ksceIoClose(g_fd);
+			g_fd = -1;
+		}
+		g_early_n = 0;
+	}
 	unlock();
 }
 
@@ -122,7 +157,7 @@ static const char *level_name(int level)
 
 void vm_klog(int level, const char *fmt, ...)
 {
-	if (level > g_level || !fmt)
+	if (level > g_level || !fmt || g_enabled == 0)   /* off: not even formatted */
 		return;
 
 	char line[192];
@@ -149,14 +184,19 @@ void vm_klog(int level, const char *fmt, ...)
 	pos += vm_fmt_v(line + pos, (int)sizeof(line) - pos, fmt, ap);
 	va_end(ap);
 
-	/* Primary sink: always. The debug channel adds its own newline handling, so
-	 * we feed the composed line as a single %s plus an explicit newline. */
-	ksceDebugPrintf("%s\n", line);
+	if (pos > (int)sizeof(line) - 1)
+		pos = (int)sizeof(line) - 1;
+	line[pos] = 0;
 
-	/* Secondary sink: the ur0 file, best-effort. */
-	if (g_inited) {
-		lock();
-		file_write_locked(line, pos);
-		unlock();
+	/* Both sinks only while logging is on; before that is known, hold it. */
+	if (!g_inited)
+		return;
+	lock();
+	if (g_enabled > 0)
+		emit_locked(line, pos);
+	else if (g_enabled < 0 && g_early_n < EARLY_LINES) {
+		memcpy(g_early[g_early_n], line, sizeof(line));
+		g_early_len[g_early_n++] = pos;
 	}
+	unlock();
 }

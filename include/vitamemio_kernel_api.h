@@ -86,6 +86,11 @@ _Static_assert(sizeof(VmTiming) == 80, "VmTiming is frozen (its size since teste
 /* Copy the timing counters to *out (user pointer). Returns VM_OK or VM_ERR_ARG. */
 int vmGetTiming(VmTiming *out);
 
+/* Clear the crash-loop guard (safe mode). The plugin starts normally again at
+ * the next boot; a boot already in safe mode stays inactive until then.
+ * Returns VM_OK or VM_ERR_IO (the guard file could not be written). */
+int vmResetSafeMode(void);
+
 /* Round-trip cookie: proves the syscall path reaches the kernel module.
  * Always returns VM_SELFTEST_MAGIC; changes nothing. 'TST1'. */
 #define VM_SELFTEST_MAGIC  0x54535431u

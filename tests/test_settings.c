@@ -80,19 +80,19 @@ static int all_defaults(const VmSettings *s)
 {
 	return s->sd2vita == VM_DEF_SD2VITA && s->internal == VM_DEF_INTERNAL &&
 	       s->verify == VM_DEF_VERIFY && s->hud == VM_DEF_HUD &&
-	       s->hud_pos == VM_DEF_HUD_POS && s->reserved5 == VM_DEF_RESERVED5 &&
+	       s->hud_style == VM_DEF_HUD_STYLE && s->log == VM_DEF_LOG &&
 	       s->memcard == VM_DEF_MEMCARD;
 }
 
 /* Build a settings file by hand, with a correct check word. */
-static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
+static size_t make_file_v(uint8_t *out, uint32_t count, const int32_t *vals, uint32_t version)
 {
 	VmSettingsFile f;
 	size_t n;
 
 	memset(&f, 0, sizeof(f));
 	f.magic = VM_CFG_MAGIC;
-	f.version = VM_CFG_VERSION;
+	f.version = version;
 	f.count = count;
 	for (uint32_t i = 0; i < count; i++)
 		f.values[i] = vals[i];
@@ -104,6 +104,11 @@ static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
 	memcpy(out + 12 + count * 4, &check, 4);
 	n = 12 + count * 4 + 4;
 	return n;
+}
+
+static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
+{
+	return make_file_v(out, count, vals, VM_CFG_VERSION);
 }
 
 static void test_no_file_gives_defaults(void)
@@ -125,7 +130,8 @@ static void test_save_and_load_roundtrip(void)
 	vm_settings_init();
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK);
 	CHECK(vm_settings_set(VM_KEY_HUD, 2) == VM_OK);
-	CHECK(vm_settings_set(VM_KEY_HUD_POS, 3) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_HUD_STYLE, VM_HUD_STYLE_CLASSIC) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_LOG, 1) == VM_OK);
 	CHECK(vm_settings_set(VM_KEY_MEMCARD, 1) == VM_OK);
 	CHECK(last_applied.sd2vita == 1 && last_applied.memcard == 1);
 	vm_settings_flush();
@@ -133,8 +139,8 @@ static void test_save_and_load_roundtrip(void)
 
 	vm_settings_init();                       /* "reboot" */
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
-	CHECK(s.internal == 0 && s.verify == 0 && s.reserved5 == 0);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_style == VM_HUD_STYLE_CLASSIC && s.memcard == 1);
+	CHECK(s.log == 1 && s.internal == 0 && s.verify == 0);
 }
 
 static void test_invalid_set_is_rejected(void)
@@ -146,10 +152,10 @@ static void test_invalid_set_is_rejected(void)
 	apply_calls = 0;
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_HUD, -1) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_HUD_POS, 4) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_HUD_STYLE, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(99, 0) == VM_ERR_ARG);
 	CHECK(vm_settings_set(-1, 0) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_RESERVED5, 1) == VM_ERR_ARG);   /* the old Developer mode */
+	CHECK(vm_settings_set(VM_KEY_LOG, 2) == VM_ERR_ARG);
 	vm_settings_copy(&s);
 	CHECK(all_defaults(&s) && apply_calls == 0 && !g_dirty);
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 0) == VM_OK);   /* same value: nothing to do */
@@ -194,11 +200,12 @@ static void test_older_file_with_fewer_keys(void)
 	size_t n;
 
 	clean();
-	n = make_file(buf, 6, v);
+	n = make_file_v(buf, 6, v, VM_CFG_VERSION_OLD);
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3);
+	CHECK(s.sd2vita == 1 && s.hud == 2);
+	CHECK(s.hud_style == VM_DEF_HUD_STYLE && s.log == VM_DEF_LOG);   /* old slots 4, 5 */
 	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
 }
 
@@ -207,7 +214,7 @@ static void test_older_file_with_fewer_keys(void)
 static void test_file_with_more_keys(void)
 {
 	uint8_t buf[256];
-	int32_t v[8] = { 1, 0, 0, 2, 3, 0, 1, 1 };
+	int32_t v[8] = { 1, 0, 0, 2, 0, 1, 1, 1 };
 	uint32_t hdr[3] = { VM_CFG_MAGIC, VM_CFG_VERSION, 8 }, check;
 	VmSettings s;
 	size_t n;
@@ -221,7 +228,7 @@ static void test_file_with_more_keys(void)
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_style == 0 && s.log == 1 && s.memcard == 1);
 
 	/* the same file with a wrong check word is refused */
 	buf[n - 1] ^= 1;
@@ -243,11 +250,12 @@ static void test_settings_from_the_old_folder(void)
 	size_t n;
 
 	clean();
-	n = make_file(buf, 7, old_v);
+	n = make_file_v(buf, 7, old_v, VM_CFG_VERSION_OLD);   /* builds of that time wrote 1 */
 	put_file("old-settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1);
+	CHECK(s.hud_style == VM_DEF_HUD_STYLE);
 	vm_settings_flush();                       /* the worker saves it */
 	CHECK(get_file("settings.bin", back, sizeof(back)) > 0);
 	vm_settings_init();                        /* now from the new place */
@@ -266,7 +274,7 @@ static void test_settings_from_the_old_folder(void)
 static void test_one_bad_value_keeps_the_rest(void)
 {
 	uint8_t buf[64];
-	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 3, 0, 1 };
+	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 0, 0, 1 };
 	VmSettings s;
 	size_t n;
 
@@ -276,25 +284,34 @@ static void test_one_bad_value_keeps_the_rest(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.hud == VM_DEF_HUD);
-	CHECK(s.sd2vita == 1 && s.hud_pos == 3 && s.memcard == 1);
+	CHECK(s.sd2vita == 1 && s.hud_style == 0 && s.memcard == 1);
 }
 
-/* A file saved while the old Developer mode was on: that slot comes back as 0,
- * every other value is kept. */
-static void test_old_devmode_on_is_dropped(void)
+/* A version 1 file (HUD corner in slot 4, developer mode on in slot 5): both
+ * slots load as defaults, the rest is kept, and the file is saved again in
+ * the new format. */
+static void test_version1_file_is_converted(void)
 {
 	uint8_t buf[256];
-	const int32_t v[7] = { 1, 0, 0, 2, 1, 1, 1 };
+	const int32_t v[7] = { 1, 0, 0, 2, 0 /* top left */, 1 /* devmode on */, 1 };
 	VmSettings s;
+	uint32_t hdr[2];
 	size_t n;
 
 	clean();
-	n = make_file(buf, 7, v);
+	n = make_file_v(buf, 7, v, VM_CFG_VERSION_OLD);
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.reserved5 == 0);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 1 && s.memcard == 1);
+	CHECK(s.hud_style == VM_DEF_HUD_STYLE && s.log == VM_DEF_LOG);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1);
+	CHECK(g_dirty);                            /* to be written as version 2 */
+	vm_settings_flush();
+	CHECK(get_file("settings.bin", (uint8_t *)hdr, sizeof(hdr)) == sizeof(hdr));
+	CHECK(hdr[0] == VM_CFG_MAGIC && hdr[1] == VM_CFG_VERSION);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1 && !g_dirty);
 }
 
 static void test_cut_save_after_remove_loads_tmp(void)
@@ -365,7 +382,7 @@ int main(void)
 	RUN(test_file_with_more_keys);
 	RUN(test_settings_from_the_old_folder);
 	RUN(test_one_bad_value_keeps_the_rest);
-	RUN(test_old_devmode_on_is_dropped);
+	RUN(test_version1_file_is_converted);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);

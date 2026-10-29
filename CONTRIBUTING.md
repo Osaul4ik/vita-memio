@@ -39,12 +39,15 @@ on :1337 and commands on :1338.
 
 ```sh
 make deploy VITA_IP=<vita>                 # upload to ur0:tai/ and reboot
-make log    VITA_IP=<vita>                 # fetch the kernel and user logs
+make log    VITA_IP=<vita>                 # fetch the kernel and user logs (needs Enable log on)
 make results VITA_IP=<vita>                # fetch the tester's results.txt
 ```
 
+Logs are only written while *Enable log* is on (*Settings → Devices → vita-memio →
+Advanced*).
+
 **Test with verify mode on.** Turn on *Verify transfers* in *Settings → Devices →
-vita-memio*: every faster transfer is then read again the standard way and
+vita-memio → Advanced*: every faster transfer is then read again the standard way and
 compared. The tester app (`vitamemio_tester.vpk`) shows the `verified` and
 `mismatches` counters live and adds a `plugin verify: PASS/FAIL` line to each
 result. Any mismatch is a bug: please report it.

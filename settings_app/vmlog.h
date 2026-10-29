@@ -6,7 +6,8 @@
  * not answering, Settings hooks or page not installed, a rejected setting),
  * so each line opens, appends and closes the file:
  * nothing stays open. Failure-tolerant: a line that cannot
- * be written is dropped.
+ * be written is dropped. Nothing is written unless logging is switched on
+ * (Settings > Devices > vita-memio > Advanced > Enable log).
  *
  * Same printf subset as the kernel logger: %s %d %i %u %x %X %c %p %%, with an
  * optional zero-pad width.

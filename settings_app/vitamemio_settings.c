@@ -12,7 +12,13 @@
  *     is saved immediately - no registry write;
  *   - scePafToplevelGetText: every title and hint carries an id resolved here.
  *     Each device row's hint is its live status, read from the kernel module
- *     whenever the page draws it.
+ *     whenever the page draws it;
+ *   - scePafToplevelInitPluginFunctions: the Devices page plugin's button
+ *     handler is wrapped (as HENkaku does for its own page), so the
+ *     "Reset safe mode" button reaches the kernel module.
+ *
+ * The page: the three storage switches, then an "Advanced" sub-page with
+ * verify, logging, the HUD, its style and the safe-mode reset.
  *
  * All hooks are import hooks (passthrough), so if anything doesn't match, the
  * page simply doesn't appear; nothing crashes.
@@ -43,7 +49,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
  * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", NULL, "memcard",
+	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard",
 };
 
 #define ROW_LIST(k) \
@@ -55,18 +61,26 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 	"<toggle_switch id=\"vm_" k "\" title=\"vm_t_" k "\" icon=\"tex_spanner\" " \
 	"hint=\"vm_h_" k "\" key=\"/CONFIG/VITAMEMIO/" k "\"/>"
 
+#define SAFE_BUTTON_ID "vm_safe_reset"
+
 static const char X_GROUP[] =
 	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">"
 	ROW_TOGGLE("sd2vita")
 	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
-	ROW_TOGGLE("verify")
-	ROW_LIST("hud")
-		ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
-	"</list>"
-	ROW_LIST("hud_pos")
-		ITEM("vm_i_pos0", "0") ITEM("vm_i_pos1", "1") ITEM("vm_i_pos2", "2") ITEM("vm_i_pos3", "3")
-	"</list>"
+	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">"
+		ROW_TOGGLE("verify")
+		ROW_TOGGLE("log")
+		ROW_LIST("hud")
+			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
+		"</list>"
+		ROW_LIST("hud_style")
+			ITEM("vm_i_style0", "0") ITEM("vm_i_style1", "1")
+		"</list>"
+		"<button id=\"" SAFE_BUTTON_ID "\" title=\"vm_t_safe\" icon=\"tex_spanner\" "
+		"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" "
+		"error_dialog_message=\"vm_m_safe_err\"/>"
+	"</setting_list>"
 	"</setting_list>";
 
 /* Accept a Devices page up to this size; leave it alone if it is ever bigger.
@@ -142,20 +156,29 @@ static const vm_u16 *device_hint(int dev, int help_id)
 	return o;
 }
 
-/* Row title / help ids per setting key; -1 = not on the page (the reserved
- * slot is unused). */
+/* Row title / help ids per setting key. */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
-	[VM_KEY_HUD_POS] = VM_I18N_ROW_HUD_POS, [VM_KEY_RESERVED5] = -1,
+	[VM_KEY_HUD_STYLE] = VM_I18N_ROW_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
-	[VM_KEY_HUD_POS] = VM_I18N_HINT_HUD_POS, [VM_KEY_RESERVED5] = -1,
+	[VM_KEY_HUD_STYLE] = VM_I18N_HINT_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD,
 };
+
+/* The safe-mode row's help: whether this start is in safe mode. */
+static const vm_u16 *safe_hint(void)
+{
+	VmState st;
+	int on = vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC &&
+	         st.disabled == VM_DIS_SAFE;
+
+	return fixed_text(on ? VM_I18N_HINT_SAFE_ON : VM_I18N_HINT_SAFE_OFF);
+}
 
 static int key_index(const char *name)
 {
@@ -173,6 +196,16 @@ static const vm_u16 *vm_text(const char *id)
 		return 0;
 	if (s_eqn(id, "vm_t_title", 11))
 		return fixed_text(VM_I18N_TITLE);
+	if (s_eqn(id, "vm_t_advanced", 14))
+		return fixed_text(VM_I18N_TITLE_ADVANCED);
+	if (s_eqn(id, "vm_t_safe", 10))
+		return fixed_text(VM_I18N_ROW_SAFE);
+	if (s_eqn(id, "vm_h_safe", 10))
+		return safe_hint();
+	if (s_eqn(id, "vm_m_safe_ok", 13))
+		return fixed_text(VM_I18N_MSG_SAFE_OK);
+	if (s_eqn(id, "vm_m_safe_err", 14))
+		return fixed_text(VM_I18N_MSG_SAFE_ERR);
 	if (s_pfx(id, "vm_t_") && (k = key_index(id + 5)) >= 0 && k_row[k] >= 0)
 		return fixed_text(k_row[k]);
 	if (s_pfx(id, "vm_h_") && (k = key_index(id + 5)) >= 0 && k_hint[k] >= 0) {
@@ -186,14 +219,15 @@ static const vm_u16 *vm_text(const char *id)
 	}
 	if (s_pfx(id, "vm_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
-	if (s_pfx(id, "vm_i_pos") && id[8] >= '0' && id[8] <= '3' && !id[9])
-		return fixed_text(VM_I18N_ITEM_POS_TL + (id[8] - '0'));
+	if (s_pfx(id, "vm_i_style") && id[10] >= '0' && id[10] <= '1' && !id[11])
+		return fixed_text(VM_I18N_ITEM_STYLE_CLASSIC + (id[10] - '0'));
 	return 0;
 }
 
 /* ---- hooks ------------------------------------------------------------- */
-static SceUID g_h_load=-1, g_h_xml=-1, g_h_get=-1, g_h_set=-1, g_h_info=-1, g_h_text=-1;
-static tai_hook_ref_t r_load, r_xml, r_get, r_set, r_info, r_text;
+static SceUID g_h_load=-1, g_h_xml=-1, g_h_get=-1, g_h_set=-1, g_h_info=-1, g_h_text=-1,
+              g_h_init=-1;
+static tai_hook_ref_t r_load, r_xml, r_get, r_set, r_info, r_text, r_init;
 static int g_installed = 0;   /* install the UI hooks once */
 
 /* Exact category match (the NUL is compared too). */
@@ -314,6 +348,40 @@ static void *text_hook(void *arg, char **msg)
 	return TAI_CONTINUE(void *, r_text, arg, msg);
 }
 
+/* The Devices page plugin's button handler (slot 6 of its function table),
+ * wrapped so our button does something; every other button goes on to it. */
+typedef int (*button_fn)(const char *id, int a2, void *a3);
+static button_fn g_next_button;
+
+static int button_hook(const char *id, int a2, void *a3)
+{
+	static const char ID[] = SAFE_BUTTON_ID;
+
+	if (id && s_eqn(id, ID, (int)sizeof(ID))) {
+		int r = vmResetSafeMode();
+		if (r != VM_OK)
+			VM_LOGI("[SET] safe mode reset failed (%d)", r);
+		return r == VM_OK ? 0 : -1;      /* 0: success dialog, < 0: error dialog */
+	}
+	return g_next_button ? g_next_button(id, a2, a3) : 0;
+}
+
+/* scePafToplevelInitPluginFunctions(plugin, a2, funcs) as SceSettings calls it
+ * for each settings plugin; a1[1] is the plugin's name. */
+static int init_hook(void *a1, int a2, uint32_t *funcs)
+{
+	static const char PLUG[] = "peripherals_settings_plugin";
+	int ret = TAI_CONTINUE(int, r_init, a1, a2, funcs);
+	const char *plugin = a1 ? (const char *)((uint32_t *)a1)[1] : 0;
+
+	if (plugin && funcs && s_eqn(plugin, PLUG, (int)sizeof(PLUG)) &&
+	    funcs[6] != (uint32_t)button_hook) {
+		g_next_button = (button_fn)funcs[6];
+		funcs[6] = (uint32_t)button_hook;
+	}
+	return ret;
+}
+
 /* NID 0x2DCC4AFA as SceSettings imports it takes SIX args incl. int *status
  * (as in HENkaku's user.c). Wrong arity corrupts the shared hook chain. */
 static SceUID load_hook(const char *path, SceSize args, void *argp,
@@ -323,6 +391,8 @@ static SceUID load_hook(const char *path, SceSize args, void *argp,
 	int match = (path && mem_find(path, s_len(path), "system_settings_core", 20)) ? 1 : 0;
 	if (match && !g_installed) {
 		g_installed = 1;
+		g_h_init = taiHookFunctionImport(&r_init, "SceSettings",
+		              0x4D9A9DD0, 0xF5354FEF, init_hook);   /* ScePafToplevel */
 		g_h_xml  = taiHookFunctionImport(&r_xml, "SceSettings",
 		              0x3D643CE8, 0x19FE55A8, xml_hook);              /* ScePafMisc */
 		g_h_get  = taiHookFunctionImport(&r_get, "SceSystemSettingsCore",
@@ -333,10 +403,11 @@ static SceUID load_hook(const char *path, SceSize args, void *argp,
 		              0xC436F916, 0x58421DD1, info_hook);
 		g_h_text = taiHookFunctionImport(&r_text,"SceSystemSettingsCore",
 		              0x4D9A9DD0, 0x19CEFDA7, text_hook);   /* scePafToplevelGetText */
-		if (g_h_xml < 0 || g_h_get < 0 || g_h_set < 0 || g_h_info < 0 || g_h_text < 0)
+		if (g_h_xml < 0 || g_h_get < 0 || g_h_set < 0 || g_h_info < 0 || g_h_text < 0 ||
+		    g_h_init < 0)
 			VM_LOGI("[SET] UI hooks not all installed: xml=0x%08x get=0x%08x set=0x%08x "
-		        "info=0x%08x text=0x%08x", (unsigned)g_h_xml, (unsigned)g_h_get,
-		        (unsigned)g_h_set, (unsigned)g_h_info, (unsigned)g_h_text);
+		        "info=0x%08x text=0x%08x init=0x%08x", (unsigned)g_h_xml, (unsigned)g_h_get,
+		        (unsigned)g_h_set, (unsigned)g_h_info, (unsigned)g_h_text, (unsigned)g_h_init);
 	}
 	return ret;
 }
@@ -356,5 +427,6 @@ void vm_settings_hooks_release(void)
 	if (g_h_set>=0)  { taiHookRelease(g_h_set,  r_set);  g_h_set=-1;  }
 	if (g_h_get>=0)  { taiHookRelease(g_h_get,  r_get);  g_h_get=-1;  }
 	if (g_h_xml>=0)  { taiHookRelease(g_h_xml,  r_xml);  g_h_xml=-1;  }
+	if (g_h_init>=0) { taiHookRelease(g_h_init, r_init); g_h_init=-1; }
 	if (g_h_load>=0) { taiHookRelease(g_h_load, r_load); g_h_load=-1; }
 }

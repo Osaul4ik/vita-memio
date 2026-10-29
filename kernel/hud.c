@@ -3,16 +3,13 @@
  *
  * Technique (the standard taiHEN overlay idiom): hook
  * SceDisplay's set-framebuffer funnel. The caller hands us the framebuffer
- * base, pitch and size every frame; we let the original run, then blit our
+ * base, pitch and size every frame; we let the original run, then draw our
  * text into the same buffer before the display controller scans it out.
  *
  * Strictly read + overdraw: no storage state is touched here. The text comes
  * from the 1 Hz worker (main.c) through vm_hud_set_text(), double-buffered so
- * the frame hook never reads a half-written line.
- *
- * Position: one of the four corners, computed from the framebuffer's own width
- * and height each frame, so it lands correctly in titles that render at a
- * lower resolution. Below 720 px wide the font is drawn at 1x instead of 2x.
+ * the frame hook never reads a half-written line. The drawing itself is in
+ * hud_draw.h (top right corner, classic or PSVshell style).
  *
  * Drawing is guarded by a plausibility check on width, height, pitch and pixel
  * format and is simply skipped if the frame looks wrong, rather than risk a bad
@@ -24,90 +21,21 @@
 #include <taihen.h>
 
 #include "hud.h"
-#include "font8x8.h"
+#include "hud_draw.h"
 #include "klog.h"
 #include "../include/vitamemio.h"
 
-#define HUD_FG         0xFFFFFFFFu /* opaque white (ABGR8888)                 */
-#define HUD_SHADOW     0xFF000000u /* opaque black drop shadow                */
-
 static SceUID         g_hook = -1;
 static tai_hook_ref_t g_ref;
-
-typedef struct {
-	char lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
-	int  n;
-	int  pos;
-	int  maxlen;   /* longest line, for right/bottom alignment              */
-} HudText;
 
 /* Double-buffered: the worker fills the back copy, then flips g_front. */
 static HudText      g_text[2];
 static volatile int g_front = 0;
 
-/* ---- framebuffer text blitter ------------------------------------------ */
-
-static inline void put_px(uint32_t *fb, int pitch, int w, int h,
-                          int x, int y, uint32_t color)
-{
-	if (x < 0 || y < 0 || x >= w || y >= h)
-		return;
-	fb[y * pitch + x] = color;
-}
-
-static void draw_char(uint32_t *fb, int pitch, int w, int h, int scale,
-                      int ox, int oy, char ch, uint32_t color)
-{
-	if ((unsigned char)ch < VM_FONT_FIRST || (unsigned char)ch > VM_FONT_LAST)
-		return;
-	const unsigned char *g = vm_font8x8[(unsigned char)ch - VM_FONT_FIRST];
-	for (int row = 0; row < 8; row++) {
-		unsigned char bits = g[row];
-		for (int col = 0; col < 8; col++) {
-			if (!(bits & (1u << col)))
-				continue;
-			for (int sy = 0; sy < scale; sy++)
-				for (int sx = 0; sx < scale; sx++)
-					put_px(fb, pitch, w, h,
-					       ox + col * scale + sx,
-					       oy + row * scale + sy, color);
-		}
-	}
-}
-
-static void draw_text(uint32_t *fb, int pitch, int w, int h, int scale,
-                      int ox, int oy, const char *s)
-{
-	for (int x = ox; *s; s++, x += 8 * scale) {
-		/* 1px drop shadow for legibility over any background. */
-		draw_char(fb, pitch, w, h, scale, x + 1, oy + 1, *s, HUD_SHADOW);
-		draw_char(fb, pitch, w, h, scale, x, oy, *s, HUD_FG);
-	}
-}
-
-static void render(uint32_t *fb, int pitch, int w, int h)
-{
-	const HudText *t = &g_text[g_front];
-	if (t->n <= 0)
-		return;
-
-	int scale  = 2;   /* 16 px glyphs at any resolution */
-	int margin = 12 * scale;
-	int line_h = 8 * scale + 2 * scale;
-	int box_w  = t->maxlen * 8 * scale;
-	int box_h  = t->n * line_h;
-
-	int right  = t->pos == VM_POS_TOP_RIGHT || t->pos == VM_POS_BOTTOM_RIGHT;
-	int bottom = t->pos == VM_POS_BOTTOM_LEFT || t->pos == VM_POS_BOTTOM_RIGHT;
-	int x = right ? w - margin - box_w : margin;
-	/* The system status bar is ~30 px tall at 960x544; keep clear of it. */
-	int y = bottom ? h - margin - box_h : margin + (scale == 2 ? 24 : 12);
-	if (x < 0) x = 0;
-	if (y < 0) y = 0;
-
-	for (int i = 0; i < t->n; i++, y += line_h)
-		draw_text(fb, pitch, w, h, scale, x, y, t->lines[i]);
-}
+/* The PSVshell style composes one row at a time here (ordinary cached memory)
+ * and copies it out; `g_row_busy` keeps two drawing threads apart. */
+static uint32_t     g_row[HUD_ROW_MAX];
+static volatile int g_row_busy;
 
 /* ---- the set-framebuffer hook ------------------------------------------- */
 
@@ -136,13 +64,15 @@ static int hook_set_framebuf(int head, int index,
                              const SceDisplayFrameBuf *pParam, int sync)
 {
 	int ret = TAI_CONTINUE(int, g_ref, head, index, pParam, sync);
+	const HudText *t;
 
 	if (head != 0 || !pParam || !pParam->base)
 		return ret;
+	t = &g_text[g_front];
+	if (t->n <= 0)
+		return ret;
 	int w = (int)pParam->width, h = (int)pParam->height,
 	    pitch = (int)pParam->pitch;
-	if (g_text[g_front].n <= 0)
-		return ret;
 
 	/* Plausibility guard: only draw into a sane 32bpp linear buffer. */
 	if (w <= 0 || h <= 0 || pitch < w || pitch > 2048 || w > 1920 || h > 1088)
@@ -151,7 +81,14 @@ static int hook_set_framebuf(int head, int index,
 		return ret;
 
 	uint32_t prev_dacr = hud_dacr_open();
-	render((uint32_t *)pParam->base, pitch, w, h);
+	if (t->style == VM_HUD_STYLE_PSVSHELL) {
+		if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
+			hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
+			__sync_lock_release(&g_row_busy);
+		}
+	} else {
+		hud_draw_classic((uint32_t *)pParam->base, pitch, w, h, t);
+	}
 	hud_dacr_restore(prev_dacr);
 	return ret;
 }
@@ -190,7 +127,7 @@ int vm_hud_installed(void)
 	return g_hook >= 0;
 }
 
-void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int pos)
+void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 {
 	int back = g_front ^ 1;
 	HudText *t = &g_text[back];
@@ -204,10 +141,11 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int pos)
 			len++;
 		}
 		t->lines[i][len] = 0;
+		len = hud_visible_len(t->lines[i]);
 		if (len > t->maxlen)
 			t->maxlen = len;
 	}
-	t->pos = pos;
+	t->style = style;
 	t->n = n;
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;

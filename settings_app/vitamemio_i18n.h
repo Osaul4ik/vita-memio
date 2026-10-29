@@ -14,22 +14,28 @@ enum vm_i18n_id {
 	VM_I18N_ROW_SD2VITA,        /* row titles                                     */
 	VM_I18N_ROW_INTERNAL,
 	VM_I18N_ROW_HUD,
-	VM_I18N_ROW_HUD_POS,
 	VM_I18N_ROW_MEMCARD,
 	VM_I18N_ROW_VERIFY,
-	VM_I18N_HINT_SD2VITA,       /* help text, same order as the rows              */
+	VM_I18N_ROW_LOG,
+	VM_I18N_ROW_HUD_STYLE,
+	VM_I18N_ROW_SAFE,
+	VM_I18N_HINT_SD2VITA,       /* help text                                      */
 	VM_I18N_HINT_INTERNAL,
 	VM_I18N_HINT_HUD,
-	VM_I18N_HINT_HUD_POS,
 	VM_I18N_HINT_MEMCARD,
 	VM_I18N_HINT_VERIFY,
+	VM_I18N_HINT_LOG,
+	VM_I18N_HINT_HUD_STYLE,
+	VM_I18N_HINT_SAFE_ON,       /* the safe-mode row's help, by the state         */
+	VM_I18N_HINT_SAFE_OFF,
+	VM_I18N_TITLE_ADVANCED,     /* the "Advanced" sub-page                        */
+	VM_I18N_MSG_SAFE_OK,        /* after the reset button                         */
+	VM_I18N_MSG_SAFE_ERR,
 	VM_I18N_ITEM_HUD_OFF,       /* HUD list items, in VM_HUD_* order              */
 	VM_I18N_ITEM_HUD_COMPACT,
 	VM_I18N_ITEM_HUD_EXTENDED,
-	VM_I18N_ITEM_POS_TL,        /* position items, in VM_POS_* order              */
-	VM_I18N_ITEM_POS_TR,
-	VM_I18N_ITEM_POS_BL,
-	VM_I18N_ITEM_POS_BR,
+	VM_I18N_ITEM_STYLE_CLASSIC, /* HUD style items, in VM_HUD_STYLE_* order       */
+	VM_I18N_ITEM_STYLE_PSVSHELL,
 	VM_I18N_ST_FALLBACK,        /* added to a storage's help when it isn't working */
 	VM_I18N_ST_NO_BUFFER,
 	VM_I18N_ST_FIRMWARE,

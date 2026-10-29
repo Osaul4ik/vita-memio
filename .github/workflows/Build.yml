@@ -75,4 +75,5 @@ jobs:
             build/vitamemio.suprx
             build/vitamemio_tester.vpk
             build/SHA256SUMS
+            include/OFL-Terminus.txt
           if-no-files-found: error

@@ -12,3 +12,5 @@ tests/test_fastcopy_arm
 tests/sim_app
 tests/sim_main.o
 tests/sim_out/
+tests/test_hud
+tests/hud_*.ppm

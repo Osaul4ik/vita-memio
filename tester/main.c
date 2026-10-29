@@ -164,7 +164,7 @@ static void verify_line(const VmState *st, char *out, size_t cap, uint32_t *colo
 {
 	if (!st->settings.verify) {
 		*color = UI_DIM;
-		snprintf(out, cap, "verify: off  (Settings > Devices > vita-memio > Verify transfers)");
+		snprintf(out, cap, "verify: off  (Settings > Devices > vita-memio > Advanced > Verify transfers)");
 	} else if (!st->verify_ready) {
 		*color = UI_WARN;
 		snprintf(out, cap, "verify: ON, but no check buffer yet - nothing is checked");
@@ -406,8 +406,8 @@ static void menu(void)
 		}
 		ui_text(3, 21, UI_DIM, "Pick the device the folder is on (SD2Vita and the memory card are usually ux0:).");
 		ui_text(3, 22, UI_DIM, "If they do not match, the test says so.");
-		ui_text(3, 24, UI_DIM, "The tester never changes the plugin. Switch it, and verify mode, in");
-		ui_text(3, 25, UI_DIM, "Settings > Devices > vita-memio, then run the test again to compare.");
+		ui_text(3, 24, UI_DIM, "The tester never changes the plugin. Switch it in Settings > Devices > vita-memio");
+		ui_text(3, 25, UI_DIM, "(verify mode: Advanced), then run the test again to compare.");
 		ui_text(3, 26, UI_DIM, "Every run is appended to ur0:data/vita-memio/results.txt.");
 		ui_footer("\x03 choose   \x04 change   \x01 select");
 		ui_present();

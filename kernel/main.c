@@ -11,7 +11,8 @@
  *     load and apply the saved settings (settings.c);
  *   - run the 1 Hz worker: saves settings, allocates the verify buffer on
  *     demand, feeds the HUD (hud.c, installed only once the HUD is first
- *     switched on), logs status changes, re-arms the boot guard;
+ *     switched on), logs problems, follows the logging switch, and clears the
+ *     boot guard once the home screen (SceShell) is up;
  *   - publish the user-callable "SceVitaMemio" syscall library (see
  *     include/vitamemio_kernel_api.h and vitamemio_kernel.yml).
  *
@@ -24,6 +25,7 @@
 #include <psp2kern/kernel/sysmem.h>    /* ksceKernelMemcpy{User,Kernel} macros */
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/io/fcntl.h>
+#include <psp2kern/io/stat.h>          /* ksceIoMkdir                          */
 #include <psp2kern/kernel/threadmgr.h>
 #include <taihen.h>
 
@@ -36,7 +38,11 @@
 #include "hud_i18n.h"
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
-#define VM_GUARD_SECS  30
+/* The boot counts as finished once SceShell (the home screen) has been loaded
+ * for this many worker ticks (seconds). */
+#define VM_GUARD_SHELL_TICKS  2
+/* Only if SceShell cannot be looked up at all: clear the guard after this long. */
+#define VM_GUARD_FALLBACK_SECS  60
 
 /* Storage driver (SceSdif) module fingerprints of the firmwares this build
  * supports. Its code is identical across all of them; anything else stays
@@ -55,6 +61,9 @@ static const uint32_t k_known_fw[] = {
 	0x74b301ef,   /* 3.73 */
 	0xabd91b5b,   /* 3.74 */
 };
+
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
+                           uint32_t funcnid, uintptr_t *func);
 
 static int      g_disabled = VM_DIS_NONE;
 static uint32_t g_fingerprint;
@@ -79,17 +88,72 @@ static char guard_read(void)
 	return g_guard_txt[0];
 }
 
-static void guard_write(char c, const char *who)
+/* VM_OK, or VM_ERR_IO if the file could not be written. */
+static int guard_write(char c, const char *who)
 {
 	char buf[64];
-	int n = 0;
+	int n = 0, w = -1;
 	buf[n++] = c;
 	n += snprintf(buf + n, sizeof(buf) - n, " up=%u by=%s\n",
 	              (unsigned)ksceKernelGetSystemTimeLow(), who);
+	ksceIoMkdir("ur0:data", 0777);
+	ksceIoMkdir(VM_DATA_DIR, 0777);
 	SceUID fd = ksceIoOpen(VM_GUARD_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	if (fd >= 0) {
-		ksceIoWrite(fd, buf, n);
+		w = ksceIoWrite(fd, buf, n);
 		ksceIoClose(fd);
+	}
+	return w == n ? VM_OK : VM_ERR_IO;
+}
+
+/* ---- the home screen, for the boot guard ------------------------------------ */
+
+/* ksceKernelSysrootGetShellPid (SceSysrootForDriver), looked up at run time so
+ * a firmware without it only loses the early guard clear, not the module. */
+static SceUID (*g_shell_pid)(void);
+
+static void shell_lookup_init(void)
+{
+	uintptr_t f = 0;
+
+	if (module_get_export_func(KERNEL_PID, "SceSysmem", 0x2ED7F97A, 0x05093E7B, &f) >= 0)
+		g_shell_pid = (SceUID (*)(void))f;
+}
+
+/* 1: SceShell is loaded, 0: not yet, -1: cannot tell on this system. */
+static int shell_up(void)
+{
+	tai_module_info_t info;
+	SceUID pid;
+
+	if (!g_shell_pid)
+		return -1;
+	pid = g_shell_pid();
+	if (pid <= 0)
+		return 0;
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	return taiGetModuleInfoForKernel(pid, "SceShell", &info) >= 0;
+}
+
+/* Called once a second until the guard is cleared. */
+static void guard_tick(void)
+{
+	static int done, ticks;
+	int up;
+
+	if (done)
+		return;
+	up = shell_up();
+	ticks = up > 0 ? ticks + 1 : 0;
+	if (ticks >= VM_GUARD_SHELL_TICKS) {
+		guard_write('0', "shell");
+		done = 1;
+	} else if (up < 0 && g_uptime >= VM_GUARD_FALLBACK_SECS) {
+		guard_write('0', "timer");
+		VM_KLOGW("boot guard: the home screen cannot be detected here, cleared after %us",
+		         (unsigned)VM_GUARD_FALLBACK_SECS);
+		done = 1;
 	}
 }
 
@@ -114,9 +178,6 @@ static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "INT ", "MC  " };
 static const char *const k_dev_log[VM_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
 /* HUD order: the removable storages first. */
 static const int k_hud_order[VM_DEV_COUNT] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD, VM_DEV_INTERNAL };
-
-int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
-                           uint32_t funcnid, uintptr_t *func);
 
 /* System language for the HUD words, from the registry; English until known. */
 static int g_lang = 1;
@@ -144,6 +205,39 @@ static void mbps(char *o, int n, uint64_t bytes)
 	snprintf(o, n, "%u.%u", (unsigned)(t / 10), (unsigned)(t % 10));
 }
 
+/* `s` cut to `max` characters and padded to `width`, on the left (right = 1)
+ * or the right. The system snprintf is only relied on for plain %s/%u. */
+static void pad(char *o, int cap, const char *s, int width, int max, int right)
+{
+	int len = 0, n = 0;
+
+	while (s[len] && len < max)
+		len++;
+	if (width > cap - 1)
+		width = cap - 1;
+	if (len > cap - 1)
+		len = cap - 1;
+	if (right)
+		while (n < width - len)
+			o[n++] = ' ';
+	for (int i = 0; i < len; i++)
+		o[n++] = s[i];
+	while (n < width)
+		o[n++] = ' ';
+	o[n] = 0;
+}
+
+/* The colour of a storage's values: what its faster path is doing. */
+static const char *state_color(const VmDevState *d, int slow)
+{
+	switch (d->status) {
+	case VM_ST_ACTIVE:   return slow ? HUD_C_WARN : HUD_C_GOOD;
+	case VM_ST_FALLBACK: return HUD_C_BAD;
+	case VM_ST_OFF:      return HUD_C_TEXT;
+	default:             return HUD_C_WARN;
+	}
+}
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT];
@@ -163,14 +257,15 @@ static void hud_feed(const VmDevState *now)
 		s.hud = VM_HUD_OFF;
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
-	 * or not they took the faster path. Extended adds totals and state. */
+	 * or not they took the faster path, coloured by what the faster path is
+	 * doing. Extended adds totals and state. */
 	int slow = vm_stage_memcard_slow() == 1;
 
 	for (int o = 0; o < VM_DEV_COUNT; o++) {
 		static uint64_t seen[VM_DEV_COUNT];
 		int i = k_hud_order[o];
 		uint64_t rd, wr;
-		char r[12], w[12];
+		char r[12], w[12], rp[12], wp[12], np[16];
 
 		vm_stage_bytes(i, &rd, &wr);
 		mbps(r, sizeof(r), rd - last_rd[i]);
@@ -180,13 +275,19 @@ static void hud_feed(const VmDevState *now)
 		seen[i] |= rd | wr;
 		if (s.hud == VM_HUD_OFF || !seen[i])
 			continue;
+		int dev_slow = i == VM_DEV_MEMCARD && slow;
+		const char *c = state_color(&now[i], dev_slow);
 		const char *name = s.hud == VM_HUD_COMPACT ? k_dev_short[i]
 		                 : i == VM_DEV_INTERNAL ? hud_tr(g_lang, HTR_INTERNAL)
 		                 : i == VM_DEV_MEMCARD  ? hud_tr(g_lang, HTR_MEMCARD) : "SD2VITA";
 		const char *flag = now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR)
-		                 : i == VM_DEV_MEMCARD && slow     ? hud_tr(g_lang, HTR_SLOW) : "";
-		snprintf(L[n++], VM_HUD_LINE_MAX, "%.14s R %.6s W %.6s MB/s%s%.12s", name, r, w,
-		         flag[0] ? " " : "", flag);
+		                 : dev_slow ? hud_tr(g_lang, HTR_SLOW) : "";
+		pad(np, sizeof(np), name, s.hud == VM_HUD_COMPACT ? 4 : 8, 14, 0);
+		pad(rp, sizeof(rp), r, 5, 6, 1);
+		pad(wp, sizeof(wp), w, 5, 6, 1);
+		snprintf(L[n++], VM_HUD_LINE_MAX,
+		         HUD_C_TEXT "%s " HUD_C_DIM "R %s%s " HUD_C_DIM "W %s%s " HUD_C_DIM "MB/s%s%s%s",
+		         np, c, rp, c, wp, flag[0] ? " " : "", c, flag);
 		if (s.hud != VM_HUD_EXTENDED)
 			continue;
 		const char *state =
@@ -194,13 +295,15 @@ static void hud_feed(const VmDevState *now)
 			now[i].status == VM_ST_OFF      ? hud_tr(g_lang, HTR_OFF) :
 			now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
 			                                  hud_tr(g_lang, HTR_UNAVAILABLE);
-		snprintf(L[n++], VM_HUD_LINE_MAX, "  %u/%u MiB %.10s %.6s %u%s%.10s",
-		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), state,
-		         hud_tr(g_lang, HTR_ERR), (unsigned)now[i].errors,
-		         s.verify ? " " : "", s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
+		snprintf(L[n++], VM_HUD_LINE_MAX,
+		         HUD_C_DIM "  %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
+		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), c, state,
+		         hud_tr(g_lang, HTR_ERR), now[i].errors ? HUD_C_BAD : HUD_C_DIM,
+		         (unsigned)now[i].errors,
+		         s.verify ? " " : "", HUD_C_WARN, s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
 	}
 	if (vm_hud_installed())
-		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_pos);
+		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_style);
 }
 
 
@@ -228,9 +331,9 @@ static int worker(SceSize args, void *argp)
 		ksceKernelDelayThread(1000 * 1000);
 		g_uptime++;
 		vm_settings_flush();
+		vm_klog_set_enabled(g_vm_settings.log);   /* follows the switch */
 		vm_stage_worker_tick();
-		if (g_uptime == VM_GUARD_SECS)
-			guard_write('0', "worker");
+		guard_tick();
 		vm_stage_get(now, 1);
 		hud_feed(now);
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -292,6 +395,11 @@ int vmGetTiming(VmTiming *out)
 	return VM_OK;
 }
 
+int vmResetSafeMode(void)
+{
+	return guard_write('0', "settings");
+}
+
 int vmSelfTestPing(void)
 {
 	return (int)VM_SELFTEST_MAGIC;
@@ -307,7 +415,11 @@ int module_start(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 
-	vm_klog_init();   /* FIRST, so the whole bring-up is captured (makes the dir) */
+	vm_klog_init();   /* FIRST, so the whole bring-up is captured */
+	/* The settings next: they say whether anything is logged at all. Applying
+	 * them before the hooks exist only sets the per-device switches. */
+	vm_settings_init();
+	vm_klog_set_enabled(g_vm_settings.log);
 	if (!firmware_known()) {
 		g_disabled = VM_DIS_FIRMWARE;
 		VM_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
@@ -317,25 +429,25 @@ int module_start(SceSize argc, const void *args)
 	/* The one line every start writes: which build, on which storage driver. */
 	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_VERSION_STR, (unsigned)g_fingerprint);
 
-	/* Crash-loop guard: the file holds '1' from here until the worker has run
-	 * for VM_GUARD_SECS, then '0'. Finding '1' at start means the last start
-	 * brought the console down, so this boot installs nothing. It is only ever
-	 * overwritten, never deleted (a delete can be lost if the console is reset
-	 * before the storage flushes). */
+	/* Crash-loop guard: the file holds '1' from here until the home screen
+	 * (SceShell) is up, then '0'. Finding '1' at start means the last start
+	 * never got there, so this boot installs nothing; Settings > Advanced >
+	 * Reset safe mode (vmResetSafeMode) clears it. It is only ever overwritten,
+	 * never deleted (a delete can be lost if the console is reset before the
+	 * storage flushes). */
 	if (guard_read() == '1') {
 		g_disabled = VM_DIS_SAFE;
-		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (write 0 to "
-		         VM_GUARD_PATH " to retry)", g_guard_txt);
+		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (reset it in "
+		         "Settings > Devices > vita-memio > Advanced)", g_guard_txt);
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	guard_write('1', "start");
+	shell_lookup_init();
 
 	if (vm_stage_init() != VM_OK) {
 		g_disabled = VM_DIS_HOOKS;
 		VM_KLOGW("storage hooks NOT installed: storage stays stock");
 	}
-	vm_settings_init();   /* defaults, then the saved file; applies to stage.c */
-
 	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0, NULL);
 	if (g_worker >= 0)
 		ksceKernelStartThread(g_worker, 0, NULL);

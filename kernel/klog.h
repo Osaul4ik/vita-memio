@@ -10,6 +10,7 @@
  *
  * What is logged: one line per start (build and storage driver), and
  * otherwise only problems - warnings and errors. Routine events are not.
+ * Nothing at all is written unless logging is switched on in the settings.
  *
  * HOT-PATH RULE: the storage I/O hooks (kernel/stage.c) must NOT call
  * these. They only bump counters; the 1 Hz worker (kernel/main.c) does the
@@ -42,6 +43,9 @@
 
 void vm_klog_init(void);
 void vm_klog_fini(void);
+/* Logging on (1) or off (0), from the settings. Lines logged before the first
+ * call are kept and written by it if logging is on. */
+void vm_klog_set_enabled(int on);
 
 void vm_klog(int level, const char *fmt, ...);
 

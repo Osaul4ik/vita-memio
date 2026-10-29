@@ -9,12 +9,25 @@
 
 #include "vmlog.h"
 #include "../include/vm_fmt.h"
+#include "../include/vitamemio_kernel_api.h"
+
+/* Logging is switched on in the settings (Advanced > Enable log), which the
+ * kernel module holds. If it cannot be asked, nothing is written. */
+static int log_on(void)
+{
+	VmState st;
+
+	return vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC && st.settings.log;
+}
 
 /* ---- public API --------------------------------------------------------- */
 
 void vm_log(const char *fmt, ...)
 {
 	char line[192];
+
+	if (!log_on())
+		return;
 	int pos = 0;
 
 	uint64_t t = (uint64_t)sceKernelGetProcessTimeWide();   /* microseconds  */

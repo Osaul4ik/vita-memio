@@ -11,7 +11,7 @@
 #include <psp2/display.h>
 #include <psp2/kernel/sysmem.h>
 
-#include "font_terminus.h"
+#include "../../include/vm_font_terminus.h"
 #include "ui.h"
 
 #define FB_BYTES 0x200000          /* 960*544*4 = 2088960, rounded up to 2 MiB  */

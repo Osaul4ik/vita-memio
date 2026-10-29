@@ -39,7 +39,10 @@ The original author reported the following results on the upstream test console:
 ## What this fork changes
 
 - Renamed to vita-memio (files, Settings page, data folder `ur0:data/vita-memio/`); settings from the old folder are taken over once.
-- The Settings page is under **Settings > Devices** and has a **Verify transfers** switch.
+- The Settings page is under **Settings > Devices**, with an **Advanced** sub-page (verify, logging, HUD, HUD style, safe-mode reset).
+- The HUD sits in the top right corner and has a second look modelled on PSVshell's overlay (black panel, Terminus font, coloured values).
+- Safe mode (the crash-loop guard) ends as soon as the home screen has loaded, instead of after a fixed 30 s, and can be reset from Settings.
+- Logging is off unless **Enable log** is on.
 - Faster copy out of the staging buffer on reads (8-word burst loads).
 - The developer network mode (TCP command port) is removed; the user module now runs only in the Settings app.
 - Logging is reduced to one line per start plus problems.
@@ -59,12 +62,23 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Reboot. The switches are in **Settings > Devices > vita-memio**.
-4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers** (Settings > Devices > vita-memio): with it on, every faster transfer is read again the standard way and compared; it is slower and meant for checking.
+3. Reboot. The switches are in **Settings > Devices > vita-memio**:
 
-Settings, logs and test results live in `ur0:data/vita-memio/`. The log holds one line per start and otherwise only problems.
+   | Row | What it does |
+   |---|---|
+   | Faster SD2Vita / memory card / internal storage | the faster path per storage |
+   | **Advanced >** Verify transfers | re-reads every faster transfer the standard way and compares (slower; for checking) |
+   | **Advanced >** Enable log | writes `kernel.log` / `user.log` (the start line and problems only); off: nothing is written |
+   | **Advanced >** Storage HUD | off, compact or extended, in the top right corner |
+   | **Advanced >** HUD style | Classic (white text) or PSVshell (black panel, coloured values) |
+   | **Advanced >** Reset safe mode | ends safe mode; vita-memio starts normally after the next restart |
 
-**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing.
+   **Safe mode:** if a start never reaches the home screen, the next start installs nothing (safe mode) so a broken setup cannot loop. The guard is cleared once the home screen has loaded.
+4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers**.
+
+Settings, logs and test results live in `ur0:data/vita-memio/`. With logging on, the log holds one line per start and otherwise only problems.
+
+**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing. Settings saved by older builds are kept, except the old HUD corner (the HUD is now always top right, PSVshell style by default) and logging, which starts off. Install the `.skprx` and the `.suprx` together: the Settings page uses a kernel call that older kernel modules do not have.
 
 **Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both). Your settings are taken over from `ur0:data/turbostorage/` on the first start. The old tester (`TURBOTST0`) can be deleted in LiveArea.
 
@@ -82,11 +96,12 @@ All credit for the original project goes to **[Juan Garcia Alvite](https://githu
 
 - [IOStaging](https://github.com/bythos14) by bythos14: the staging-buffer idea the original project credits as its inspiration.
 - [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: where the Devices page's layout names (`peripherals_settings_plugin`, `peripherals_settings`) were learned, and the reason vita-memio also accepts YAMT's replacement Devices page. No YAMT code is used.
-- [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester (panels, title bar, status lines) follows its overlay menu. No PSVshell code is used.
+- [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester (panels, title bar, status lines) and of the PSVshell-style HUD (black panel with rounded corners, Terminus font picked by the framebuffer size, coloured values) follows its overlay. No PSVshell code is used.
+- [HENkaku's Settings plugin](https://github.com/henkaku/henkaku/blob/master/plugin/user.c): besides the page itself, the way a Settings button is handled (wrapping the page plugin's button function from `scePafToplevelInitPluginFunctions`), used for **Reset safe mode**.
 
 **Included**
 
-- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: the tester's text uses a subset of it (10x18 and 12x24 bold), under the SIL Open Font License 1.1 (`tester/vita/OFL-Terminus.txt`, also inside the VPK). The kernel HUD uses its own 8x8 font.
+- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: the tester and the PSVshell-style HUD use a subset of it (8x14, 10x18 and 12x24 bold), under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK). The classic HUD uses its own 8x8 font.
 
 **Tools**
 
@@ -96,4 +111,4 @@ All credit for the original project goes to **[Juan Garcia Alvite](https://githu
 
 ## License
 
-MIT, as the original project: see [LICENSE](LICENSE) and the [upstream license](https://github.com/juanjsebgarcia/vita-turbo-storage/blob/main/LICENSE). The Terminus Font subset in `tester/vita/font_terminus.h` stays under the SIL Open Font License 1.1.
+MIT, as the original project: see [LICENSE](LICENSE) and the [upstream license](https://github.com/juanjsebgarcia/vita-turbo-storage/blob/main/LICENSE). The Terminus Font subset in `include/vm_font_terminus.h` stays under the SIL Open Font License 1.1.

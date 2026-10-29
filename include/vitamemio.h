@@ -52,15 +52,16 @@ enum vm_dev {
 /* ------------------------------------------------------------------------- */
 
 /* Key ids for vmSetSetting(). The order is also the field order of VmSettings
- * and the registry key table in the Settings page. */
+ * and the registry key table in the Settings page. Slots 4 and 5 were the HUD
+ * corner and the developer mode in settings files of version 1; such a file
+ * loads with both at their defaults (kernel/settings.c). */
 enum vm_key {
 	VM_KEY_SD2VITA = 0,    /* 0/1: faster SD2Vita reads and writes           */
 	VM_KEY_INTERNAL,       /* 0/1: faster internal storage                   */
 	VM_KEY_VERIFY,         /* 0/1: check every faster transfer (diagnostic)  */
 	VM_KEY_HUD,            /* VM_HUD_*                                       */
-	VM_KEY_HUD_POS,        /* VM_POS_*                                       */
-	VM_KEY_RESERVED5,      /* unused, always 0 (was Developer mode). Kept so
-	                        * saved files and VmState keep their layout.    */
+	VM_KEY_HUD_STYLE,      /* VM_HUD_STYLE_*: how the HUD is drawn           */
+	VM_KEY_LOG,            /* 0/1: write kernel.log / user.log at all        */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_COUNT
 };
@@ -69,10 +70,9 @@ enum vm_key {
 #define VM_HUD_COMPACT    1
 #define VM_HUD_EXTENDED   2
 
-#define VM_POS_TOP_LEFT     0
-#define VM_POS_TOP_RIGHT    1
-#define VM_POS_BOTTOM_LEFT  2
-#define VM_POS_BOTTOM_RIGHT 3
+/* The HUD always sits in the top right corner. */
+#define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
+#define VM_HUD_STYLE_PSVSHELL  1   /* a black panel, Terminus font, colours     */
 
 /* Defaults: the SD2Vita, the case the plugin is for, starts on; internal
  * storage (which also holds the system's own data) starts off. */
@@ -80,8 +80,8 @@ enum vm_key {
 #define VM_DEF_INTERNAL  0
 #define VM_DEF_VERIFY    0
 #define VM_DEF_HUD       VM_HUD_OFF
-#define VM_DEF_HUD_POS   VM_POS_TOP_RIGHT
-#define VM_DEF_RESERVED5 0
+#define VM_DEF_HUD_STYLE VM_HUD_STYLE_PSVSHELL
+#define VM_DEF_LOG       0   /* logging is opt-in (Settings > Advanced)        */
 #define VM_DEF_MEMCARD   0
 
 /* One int per key, in enum vm_key order. */
@@ -90,8 +90,8 @@ typedef struct VmSettings {
 	int32_t internal;
 	int32_t verify;
 	int32_t hud;
-	int32_t hud_pos;
-	int32_t reserved5;   /* VM_KEY_RESERVED5 */
+	int32_t hud_style;
+	int32_t log;
 	int32_t memcard;
 } VmSettings;
 
@@ -104,13 +104,12 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_INTERNAL:
 	case VM_KEY_VERIFY:
 	case VM_KEY_MEMCARD:
+	case VM_KEY_LOG:
 		return v == 0 || v == 1;
-	case VM_KEY_RESERVED5:
-		return v == 0;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
-	case VM_KEY_HUD_POS:
-		return v >= VM_POS_TOP_LEFT && v <= VM_POS_BOTTOM_RIGHT;
+	case VM_KEY_HUD_STYLE:
+		return v == VM_HUD_STYLE_CLASSIC || v == VM_HUD_STYLE_PSVSHELL;
 	default:
 		return 0;
 	}

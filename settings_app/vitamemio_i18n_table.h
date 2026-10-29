@@ -88,28 +88,6 @@
 	"Storage HUD",   /* engb */
 	"Depolama HUD",   /* tr */
 },
-[VM_I18N_ROW_HUD_POS] = {
-	"HUDの位置",   /* ja */
-	"HUD position",   /* en */
-	"Position du HUD",   /* fr */
-	"Posición del HUD",   /* es */
-	"HUD-Position",   /* de */
-	"Posizione HUD",   /* it */
-	"HUD-positie",   /* nl */
-	"Posição do HUD",   /* pt */
-	"Положение HUD",   /* ru */
-	"HUD 위치",   /* ko */
-	"HUD 位置",   /* zht */
-	"HUD 位置",   /* zhs */
-	"HUD:n sijainti",   /* fi */
-	"HUD-position",   /* sv */
-	"HUD-placering",   /* da */
-	"HUD-plassering",   /* no */
-	"Położenie HUD",   /* pl */
-	"Posição do HUD",   /* ptbr */
-	"HUD position",   /* engb */
-	"HUD konumu",   /* tr */
-},
 [VM_I18N_ROW_MEMCARD] = {
 	"Vitaメモリーカードを高速化",   /* ja */
 	"Faster Vita memory card",   /* en */
@@ -220,28 +198,6 @@
 	"Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",   /* engb */
 	"Depolama hızını her uygulamanın üzerinde canlı gösterir. Kompakt: kullanılan her depolama için bir satır. Genişletilmiş: toplamları ve hataları ekler.",   /* tr */
 },
-[VM_I18N_HINT_HUD_POS] = {
-	"HUDを表示する画面の隅。",   /* ja */
-	"Which corner of the screen the HUD sits in.",   /* en */
-	"Le coin de l'écran où s'affiche le HUD.",   /* fr */
-	"En qué esquina de la pantalla aparece el HUD.",   /* es */
-	"In welcher Bildschirmecke das HUD erscheint.",   /* de */
-	"In quale angolo dello schermo appare l'HUD.",   /* it */
-	"In welke hoek van het scherm de HUD staat.",   /* nl */
-	"Em que canto do ecrã aparece o HUD.",   /* pt */
-	"В каком углу экрана отображается HUD.",   /* ru */
-	"HUD가 표시될 화면 모서리.",   /* ko */
-	"HUD 顯示在螢幕的哪個角落。",   /* zht */
-	"HUD 显示在屏幕的哪个角落。",   /* zhs */
-	"Missä näytön kulmassa HUD näkyy.",   /* fi */
-	"I vilket hörn av skärmen HUD:en visas.",   /* sv */
-	"Hvilket hjørne af skærmen HUD'en vises i.",   /* da */
-	"Hvilket hjørne av skjermen HUD-en vises i.",   /* no */
-	"W którym rogu ekranu pojawia się HUD.",   /* pl */
-	"Em qual canto da tela o HUD aparece.",   /* ptbr */
-	"Which corner of the screen the HUD sits in.",   /* engb */
-	"HUD'nin ekranın hangi köşesinde görüneceği.",   /* tr */
-},
 [VM_I18N_HINT_MEMCARD] = {
 	"PS Vita専用メモリーカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",   /* ja */
 	"Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",   /* en */
@@ -351,94 +307,6 @@
 	"Estendido",   /* ptbr */
 	"Extended",   /* engb */
 	"Genişletilmiş",   /* tr */
-},
-[VM_I18N_ITEM_POS_TL] = {
-	"左上",   /* ja */
-	"Top left",   /* en */
-	"En haut à gauche",   /* fr */
-	"Arriba a la izquierda",   /* es */
-	"Oben links",   /* de */
-	"In alto a sinistra",   /* it */
-	"Linksboven",   /* nl */
-	"Canto superior esquerdo",   /* pt */
-	"Слева сверху",   /* ru */
-	"왼쪽 위",   /* ko */
-	"左上",   /* zht */
-	"左上",   /* zhs */
-	"Ylävasen",   /* fi */
-	"Uppe till vänster",   /* sv */
-	"Øverst til venstre",   /* da */
-	"Øverst til venstre",   /* no */
-	"Lewy górny",   /* pl */
-	"Canto superior esquerdo",   /* ptbr */
-	"Top left",   /* engb */
-	"Sol üst",   /* tr */
-},
-[VM_I18N_ITEM_POS_TR] = {
-	"右上",   /* ja */
-	"Top right",   /* en */
-	"En haut à droite",   /* fr */
-	"Arriba a la derecha",   /* es */
-	"Oben rechts",   /* de */
-	"In alto a destra",   /* it */
-	"Rechtsboven",   /* nl */
-	"Canto superior direito",   /* pt */
-	"Справа сверху",   /* ru */
-	"오른쪽 위",   /* ko */
-	"右上",   /* zht */
-	"右上",   /* zhs */
-	"Yläoikea",   /* fi */
-	"Uppe till höger",   /* sv */
-	"Øverst til højre",   /* da */
-	"Øverst til høyre",   /* no */
-	"Prawy górny",   /* pl */
-	"Canto superior direito",   /* ptbr */
-	"Top right",   /* engb */
-	"Sağ üst",   /* tr */
-},
-[VM_I18N_ITEM_POS_BL] = {
-	"左下",   /* ja */
-	"Bottom left",   /* en */
-	"En bas à gauche",   /* fr */
-	"Abajo a la izquierda",   /* es */
-	"Unten links",   /* de */
-	"In basso a sinistra",   /* it */
-	"Linksonder",   /* nl */
-	"Canto inferior esquerdo",   /* pt */
-	"Слева снизу",   /* ru */
-	"왼쪽 아래",   /* ko */
-	"左下",   /* zht */
-	"左下",   /* zhs */
-	"Alavasen",   /* fi */
-	"Nere till vänster",   /* sv */
-	"Nederst til venstre",   /* da */
-	"Nederst til venstre",   /* no */
-	"Lewy dolny",   /* pl */
-	"Canto inferior esquerdo",   /* ptbr */
-	"Bottom left",   /* engb */
-	"Sol alt",   /* tr */
-},
-[VM_I18N_ITEM_POS_BR] = {
-	"右下",   /* ja */
-	"Bottom right",   /* en */
-	"En bas à droite",   /* fr */
-	"Abajo a la derecha",   /* es */
-	"Unten rechts",   /* de */
-	"In basso a destra",   /* it */
-	"Rechtsonder",   /* nl */
-	"Canto inferior direito",   /* pt */
-	"Справа снизу",   /* ru */
-	"오른쪽 아래",   /* ko */
-	"右下",   /* zht */
-	"右下",   /* zhs */
-	"Alaoikea",   /* fi */
-	"Nere till höger",   /* sv */
-	"Nederst til højre",   /* da */
-	"Nederst til høyre",   /* no */
-	"Prawy dolny",   /* pl */
-	"Canto inferior direito",   /* ptbr */
-	"Bottom right",   /* engb */
-	"Sağ alt",   /* tr */
 },
 [VM_I18N_ST_FALLBACK] = {
 	"エラーのため通常に戻りました。オフにしてからオンにすると再試行します。報告をお願いします。",   /* ja */
@@ -593,4 +461,268 @@
 	"Observação: o modo lento do cartão de memória do sistema está ligado e deixa cada transferência mais lenta de propósito.",   /* ptbr */
 	"Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",   /* engb */
 	"Not: sistemin hafıza kartı yavaş modu açık; her aktarımı bilerek yavaşlatır.",   /* tr */
+},
+[VM_I18N_TITLE_ADVANCED] = {
+	"詳細設定",   /* ja */
+	"Advanced",   /* en */
+	"Avancé",   /* fr */
+	"Avanzado",   /* es */
+	"Erweitert",   /* de */
+	"Avanzate",   /* it */
+	"Geavanceerd",   /* nl */
+	"Avançado",   /* pt */
+	"Дополнительно",   /* ru */
+	"고급",   /* ko */
+	"進階",   /* zht */
+	"高级",   /* zhs */
+	"Lisäasetukset",   /* fi */
+	"Avancerat",   /* sv */
+	"Avanceret",   /* da */
+	"Avansert",   /* no */
+	"Zaawansowane",   /* pl */
+	"Avançado",   /* ptbr */
+	"Advanced",   /* engb */
+	"Gelişmiş",   /* tr */
+},
+[VM_I18N_ROW_LOG] = {
+	"ログを有効にする",   /* ja */
+	"Enable log",   /* en */
+	"Activer le journal",   /* fr */
+	"Activar registro",   /* es */
+	"Protokoll aktivieren",   /* de */
+	"Attiva registro",   /* it */
+	"Logboek inschakelen",   /* nl */
+	"Ativar registo",   /* pt */
+	"Включить журнал",   /* ru */
+	"로그 사용",   /* ko */
+	"啟用記錄",   /* zht */
+	"启用日志",   /* zhs */
+	"Ota loki käyttöön",   /* fi */
+	"Aktivera logg",   /* sv */
+	"Aktivér log",   /* da */
+	"Aktiver logg",   /* no */
+	"Włącz dziennik",   /* pl */
+	"Ativar registro",   /* ptbr */
+	"Enable log",   /* engb */
+	"Günlüğü etkinleştir",   /* tr */
+},
+[VM_I18N_HINT_LOG] = {
+	"kernel.log と user.log を ur0:data/vita-memio/ に書き込みます（起動時の1行と問題のみ）。オフ：何も書き込みません。",   /* ja */
+	"Writes kernel.log and user.log to ur0:data/vita-memio/ (the start line and problems only). Off: nothing is written.",   /* en */
+	"Écrit kernel.log et user.log dans ur0:data/vita-memio/ (la ligne de démarrage et les problèmes seulement). Désactivé : rien n'est écrit.",   /* fr */
+	"Escribe kernel.log y user.log en ur0:data/vita-memio/ (solo la línea de inicio y los problemas). Desactivado: no se escribe nada.",   /* es */
+	"Schreibt kernel.log und user.log nach ur0:data/vita-memio/ (nur die Startzeile und Probleme). Aus: Es wird nichts geschrieben.",   /* de */
+	"Scrive kernel.log e user.log in ur0:data/vita-memio/ (solo la riga di avvio e i problemi). Disattivato: non viene scritto nulla.",   /* it */
+	"Schrijft kernel.log en user.log naar ur0:data/vita-memio/ (alleen de startregel en problemen). Uit: er wordt niets geschreven.",   /* nl */
+	"Escreve kernel.log e user.log em ur0:data/vita-memio/ (apenas a linha de arranque e os problemas). Desligado: nada é escrito.",   /* pt */
+	"Записывает kernel.log и user.log в ur0:data/vita-memio/ (только строка запуска и проблемы). Выключено: ничего не записывается.",   /* ru */
+	"kernel.log와 user.log를 ur0:data/vita-memio/에 기록합니다(시작 줄과 문제만). 끔: 아무것도 기록하지 않습니다.",   /* ko */
+	"將 kernel.log 與 user.log 寫入 ur0:data/vita-memio/（僅啟動訊息與問題）。關閉：不寫入任何內容。",   /* zht */
+	"将 kernel.log 和 user.log 写入 ur0:data/vita-memio/（仅启动信息和问题）。关闭：不写入任何内容。",   /* zhs */
+	"Kirjoittaa kernel.log- ja user.log-tiedostot kansioon ur0:data/vita-memio/ (vain käynnistysrivi ja ongelmat). Pois: mitään ei kirjoiteta.",   /* fi */
+	"Skriver kernel.log och user.log till ur0:data/vita-memio/ (bara startraden och problem). Av: inget skrivs.",   /* sv */
+	"Skriver kernel.log og user.log til ur0:data/vita-memio/ (kun startlinjen og problemer). Fra: intet skrives.",   /* da */
+	"Skriver kernel.log og user.log til ur0:data/vita-memio/ (bare oppstartslinjen og problemer). Av: ingenting skrives.",   /* no */
+	"Zapisuje kernel.log i user.log w ur0:data/vita-memio/ (tylko wiersz startowy i problemy). Wyłączone: nic nie jest zapisywane.",   /* pl */
+	"Grava kernel.log e user.log em ur0:data/vita-memio/ (apenas a linha de início e os problemas). Desligado: nada é gravado.",   /* ptbr */
+	"Writes kernel.log and user.log to ur0:data/vita-memio/ (the start line and problems only). Off: nothing is written.",   /* engb */
+	"kernel.log ve user.log dosyalarını ur0:data/vita-memio/ klasörüne yazar (yalnızca başlangıç satırı ve sorunlar). Kapalı: hiçbir şey yazılmaz.",   /* tr */
+},
+[VM_I18N_ROW_HUD_STYLE] = {
+	"HUDのスタイル",   /* ja */
+	"HUD style",   /* en */
+	"Style du HUD",   /* fr */
+	"Estilo del HUD",   /* es */
+	"HUD-Stil",   /* de */
+	"Stile HUD",   /* it */
+	"HUD-stijl",   /* nl */
+	"Estilo do HUD",   /* pt */
+	"Вид HUD",   /* ru */
+	"HUD 스타일",   /* ko */
+	"HUD 樣式",   /* zht */
+	"HUD 样式",   /* zhs */
+	"HUD:n tyyli",   /* fi */
+	"HUD-stil",   /* sv */
+	"HUD-stil",   /* da */
+	"HUD-stil",   /* no */
+	"Styl HUD",   /* pl */
+	"Estilo do HUD",   /* ptbr */
+	"HUD style",   /* engb */
+	"HUD stili",   /* tr */
+},
+[VM_I18N_HINT_HUD_STYLE] = {
+	"クラシック：白い文字。PSVshell：色付きの値を表示する黒いパネル。HUDは常に右上に表示されます。",   /* ja */
+	"Classic: white text. PSVshell: a black panel with coloured values. The HUD is always in the top right corner.",   /* en */
+	"Classique : texte blanc. PSVshell : un panneau noir avec des valeurs en couleur. Le HUD est toujours en haut à droite.",   /* fr */
+	"Clásico: texto blanco. PSVshell: un panel negro con valores en color. El HUD siempre está arriba a la derecha.",   /* es */
+	"Klassisch: weißer Text. PSVshell: ein schwarzes Feld mit farbigen Werten. Das HUD ist immer oben rechts.",   /* de */
+	"Classico: testo bianco. PSVshell: un pannello nero con valori colorati. L'HUD è sempre in alto a destra.",   /* it */
+	"Klassiek: witte tekst. PSVshell: een zwart paneel met gekleurde waarden. De HUD staat altijd rechtsboven.",   /* nl */
+	"Clássico: texto branco. PSVshell: um painel preto com valores a cores. O HUD está sempre no canto superior direito.",   /* pt */
+	"Классический: белый текст. PSVshell: чёрная панель с цветными значениями. HUD всегда в правом верхнем углу.",   /* ru */
+	"클래식: 흰색 글자. PSVshell: 값이 색으로 표시되는 검은 패널. HUD는 항상 오른쪽 위에 있습니다.",   /* ko */
+	"經典：白色文字。PSVshell：以彩色數值顯示的黑色面板。HUD 一律顯示在右上角。",   /* zht */
+	"经典：白色文字。PSVshell：以彩色数值显示的黑色面板。HUD 始终显示在右上角。",   /* zhs */
+	"Perinteinen: valkoinen teksti. PSVshell: musta paneeli ja värilliset arvot. HUD on aina oikeassa yläkulmassa.",   /* fi */
+	"Klassisk: vit text. PSVshell: en svart panel med färgade värden. HUD:en är alltid uppe till höger.",   /* sv */
+	"Klassisk: hvid tekst. PSVshell: et sort panel med farvede værdier. HUD'en er altid øverst til højre.",   /* da */
+	"Klassisk: hvit tekst. PSVshell: et svart panel med fargede verdier. HUD-en er alltid øverst til høyre.",   /* no */
+	"Klasyczny: biały tekst. PSVshell: czarny panel z kolorowymi wartościami. HUD jest zawsze w prawym górnym rogu.",   /* pl */
+	"Clássico: texto branco. PSVshell: um painel preto com valores coloridos. O HUD fica sempre no canto superior direito.",   /* ptbr */
+	"Classic: white text. PSVshell: a black panel with coloured values. The HUD is always in the top right corner.",   /* engb */
+	"Klasik: beyaz metin. PSVshell: renkli değerlerle siyah bir panel. HUD her zaman sağ üst köşededir.",   /* tr */
+},
+[VM_I18N_ITEM_STYLE_CLASSIC] = {
+	"クラシック",   /* ja */
+	"Classic",   /* en */
+	"Classique",   /* fr */
+	"Clásico",   /* es */
+	"Klassisch",   /* de */
+	"Classico",   /* it */
+	"Klassiek",   /* nl */
+	"Clássico",   /* pt */
+	"Классический",   /* ru */
+	"클래식",   /* ko */
+	"經典",   /* zht */
+	"经典",   /* zhs */
+	"Perinteinen",   /* fi */
+	"Klassisk",   /* sv */
+	"Klassisk",   /* da */
+	"Klassisk",   /* no */
+	"Klasyczny",   /* pl */
+	"Clássico",   /* ptbr */
+	"Classic",   /* engb */
+	"Klasik",   /* tr */
+},
+[VM_I18N_ITEM_STYLE_PSVSHELL] = {
+	"PSVshell",   /* ja */
+	"PSVshell",   /* en */
+	"PSVshell",   /* fr */
+	"PSVshell",   /* es */
+	"PSVshell",   /* de */
+	"PSVshell",   /* it */
+	"PSVshell",   /* nl */
+	"PSVshell",   /* pt */
+	"PSVshell",   /* ru */
+	"PSVshell",   /* ko */
+	"PSVshell",   /* zht */
+	"PSVshell",   /* zhs */
+	"PSVshell",   /* fi */
+	"PSVshell",   /* sv */
+	"PSVshell",   /* da */
+	"PSVshell",   /* no */
+	"PSVshell",   /* pl */
+	"PSVshell",   /* ptbr */
+	"PSVshell",   /* engb */
+	"PSVshell",   /* tr */
+},
+[VM_I18N_ROW_SAFE] = {
+	"セーフモードを解除",   /* ja */
+	"Reset safe mode",   /* en */
+	"Réinitialiser le mode sans échec",   /* fr */
+	"Restablecer el modo seguro",   /* es */
+	"Abgesicherten Modus zurücksetzen",   /* de */
+	"Reimposta la modalità provvisoria",   /* it */
+	"Veilige modus herstellen",   /* nl */
+	"Repor o modo de segurança",   /* pt */
+	"Сбросить безопасный режим",   /* ru */
+	"안전 모드 초기화",   /* ko */
+	"重設安全模式",   /* zht */
+	"重置安全模式",   /* zhs */
+	"Nollaa vikasietotila",   /* fi */
+	"Återställ felsäkert läge",   /* sv */
+	"Nulstil fejlsikret tilstand",   /* da */
+	"Tilbakestill sikker modus",   /* no */
+	"Zresetuj tryb awaryjny",   /* pl */
+	"Redefinir o modo de segurança",   /* ptbr */
+	"Reset safe mode",   /* engb */
+	"Güvenli modu sıfırla",   /* tr */
+},
+[VM_I18N_HINT_SAFE_ON] = {
+	"セーフモード中：前回の起動がホーム画面まで到達しなかったため、vita-memio は起動していません。解除してから本体を再起動してください。",   /* ja */
+	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Reset it, then restart the console.",   /* en */
+	"Le mode sans échec est ACTIVÉ : vita-memio n'a pas démarré, car le dernier démarrage n'a pas atteint l'écran d'accueil. Réinitialisez-le, puis redémarrez la console.",   /* fr */
+	"El modo seguro está ACTIVADO: vita-memio no se inició porque el último arranque no llegó a la pantalla de inicio. Restablécelo y reinicia la consola.",   /* es */
+	"Der abgesicherte Modus ist AN: vita-memio wurde nicht gestartet, weil der letzte Start den Startbildschirm nicht erreicht hat. Zurücksetzen und die Konsole neu starten.",   /* de */
+	"La modalità provvisoria è ATTIVA: vita-memio non è partito perché l'ultimo avvio non ha raggiunto la schermata iniziale. Reimpostala, poi riavvia la console.",   /* it */
+	"Veilige modus staat AAN: vita-memio is niet gestart, omdat de laatste start het startscherm niet bereikte. Herstel hem en start de console opnieuw.",   /* nl */
+	"O modo de segurança está LIGADO: o vita-memio não arrancou, porque o último arranque não chegou ao ecrã inicial. Reponha-o e reinicie a consola.",   /* pt */
+	"Безопасный режим ВКЛЮЧЁН: vita-memio не запущен, так как прошлый запуск не дошёл до главного экрана. Сбросьте его и перезагрузите консоль.",   /* ru */
+	"안전 모드 켜짐: 지난 시작이 홈 화면까지 가지 못해 vita-memio가 시작되지 않았습니다. 초기화한 뒤 본체를 다시 시작하세요.",   /* ko */
+	"安全模式已開啟：由於上次啟動未能進入主畫面，vita-memio 未啟動。請重設後重新啟動主機。",   /* zht */
+	"安全模式已开启：由于上次启动未能进入主屏幕，vita-memio 未启动。请重置后重新启动主机。",   /* zhs */
+	"Vikasietotila on PÄÄLLÄ: vita-memio ei käynnistynyt, koska edellinen käynnistys ei päässyt aloitusnäyttöön. Nollaa se ja käynnistä konsoli uudelleen.",   /* fi */
+	"Felsäkert läge är PÅ: vita-memio startade inte, eftersom den senaste starten inte nådde hemskärmen. Återställ det och starta om konsolen.",   /* sv */
+	"Fejlsikret tilstand er SLÅET TIL: vita-memio startede ikke, fordi den sidste opstart ikke nåede startskærmen. Nulstil den, og genstart konsollen.",   /* da */
+	"Sikker modus er PÅ: vita-memio startet ikke, fordi forrige oppstart ikke nådde startskjermen. Tilbakestill den og start konsollen på nytt.",   /* no */
+	"Tryb awaryjny jest WŁĄCZONY: vita-memio nie wystartował, bo ostatni start nie dotarł do ekranu głównego. Zresetuj go i uruchom konsolę ponownie.",   /* pl */
+	"O modo de segurança está LIGADO: o vita-memio não iniciou, porque a última inicialização não chegou à tela inicial. Redefina-o e reinicie o console.",   /* ptbr */
+	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Reset it, then restart the console.",   /* engb */
+	"Güvenli mod AÇIK: son başlatma ana ekrana ulaşmadığı için vita-memio başlamadı. Sıfırlayın, ardından konsolu yeniden başlatın.",   /* tr */
+},
+[VM_I18N_HINT_SAFE_OFF] = {
+	"セーフモードはオフです。起動がホーム画面まで到達しなかった場合、vita-memio は自動でセーフモードになります。",   /* ja */
+	"Safe mode is off. vita-memio switches to it by itself when a start does not reach the home screen.",   /* en */
+	"Le mode sans échec est désactivé. vita-memio s'y met de lui-même si un démarrage n'atteint pas l'écran d'accueil.",   /* fr */
+	"El modo seguro está desactivado. vita-memio lo activa por sí mismo si un arranque no llega a la pantalla de inicio.",   /* es */
+	"Der abgesicherte Modus ist aus. vita-memio schaltet ihn selbst ein, wenn ein Start den Startbildschirm nicht erreicht.",   /* de */
+	"La modalità provvisoria è disattivata. vita-memio la attiva da solo se un avvio non raggiunge la schermata iniziale.",   /* it */
+	"Veilige modus staat uit. vita-memio schakelt hem zelf in als een start het startscherm niet bereikt.",   /* nl */
+	"O modo de segurança está desligado. O vita-memio ativa-o sozinho se um arranque não chegar ao ecrã inicial.",   /* pt */
+	"Безопасный режим выключен. vita-memio включит его сам, если запуск не дойдёт до главного экрана.",   /* ru */
+	"안전 모드가 꺼져 있습니다. 시작이 홈 화면까지 가지 못하면 vita-memio가 스스로 안전 모드로 전환합니다.",   /* ko */
+	"安全模式已關閉。若啟動未能進入主畫面，vita-memio 會自動切換為安全模式。",   /* zht */
+	"安全模式已关闭。若启动未能进入主屏幕，vita-memio 会自动切换为安全模式。",   /* zhs */
+	"Vikasietotila on pois päältä. vita-memio siirtyy siihen itse, jos käynnistys ei pääse aloitusnäyttöön.",   /* fi */
+	"Felsäkert läge är av. vita-memio slår på det själv om en start inte når hemskärmen.",   /* sv */
+	"Fejlsikret tilstand er slået fra. vita-memio slår den selv til, hvis en opstart ikke når startskærmen.",   /* da */
+	"Sikker modus er av. vita-memio slår den på selv hvis en oppstart ikke når startskjermen.",   /* no */
+	"Tryb awaryjny jest wyłączony. vita-memio włącza go sam, gdy start nie dotrze do ekranu głównego.",   /* pl */
+	"O modo de segurança está desligado. O vita-memio o ativa sozinho se uma inicialização não chegar à tela inicial.",   /* ptbr */
+	"Safe mode is off. vita-memio switches to it by itself when a start does not reach the home screen.",   /* engb */
+	"Güvenli mod kapalı. Bir başlatma ana ekrana ulaşmazsa vita-memio kendiliğinden ona geçer.",   /* tr */
+},
+[VM_I18N_MSG_SAFE_OK] = {
+	"セーフモードを解除しました。次回の再起動後、vita-memio は通常どおり起動します。",   /* ja */
+	"Safe mode reset. vita-memio starts normally after the next restart.",   /* en */
+	"Mode sans échec réinitialisé. vita-memio démarrera normalement après le prochain redémarrage.",   /* fr */
+	"Modo seguro restablecido. vita-memio se iniciará con normalidad tras el próximo reinicio.",   /* es */
+	"Abgesicherter Modus zurückgesetzt. vita-memio startet nach dem nächsten Neustart normal.",   /* de */
+	"Modalità provvisoria reimpostata. vita-memio partirà normalmente dopo il prossimo riavvio.",   /* it */
+	"Veilige modus hersteld. vita-memio start normaal na de volgende herstart.",   /* nl */
+	"Modo de segurança reposto. O vita-memio arranca normalmente após o próximo reinício.",   /* pt */
+	"Безопасный режим сброшен. vita-memio запустится как обычно после следующей перезагрузки.",   /* ru */
+	"안전 모드를 초기화했습니다. 다음에 다시 시작하면 vita-memio가 정상적으로 시작됩니다.",   /* ko */
+	"已重設安全模式。下次重新啟動後 vita-memio 會正常啟動。",   /* zht */
+	"已重置安全模式。下次重新启动后 vita-memio 会正常启动。",   /* zhs */
+	"Vikasietotila nollattu. vita-memio käynnistyy normaalisti seuraavan uudelleenkäynnistyksen jälkeen.",   /* fi */
+	"Felsäkert läge återställt. vita-memio startar normalt efter nästa omstart.",   /* sv */
+	"Fejlsikret tilstand nulstillet. vita-memio starter normalt efter næste genstart.",   /* da */
+	"Sikker modus tilbakestilt. vita-memio starter normalt etter neste omstart.",   /* no */
+	"Tryb awaryjny zresetowany. vita-memio uruchomi się normalnie po następnym restarcie.",   /* pl */
+	"Modo de segurança redefinido. O vita-memio inicia normalmente após a próxima reinicialização.",   /* ptbr */
+	"Safe mode reset. vita-memio starts normally after the next restart.",   /* engb */
+	"Güvenli mod sıfırlandı. vita-memio bir sonraki yeniden başlatmadan sonra normal şekilde başlar.",   /* tr */
+},
+[VM_I18N_MSG_SAFE_ERR] = {
+	"セーフモードを解除できませんでした。",   /* ja */
+	"Could not reset safe mode.",   /* en */
+	"Impossible de réinitialiser le mode sans échec.",   /* fr */
+	"No se pudo restablecer el modo seguro.",   /* es */
+	"Der abgesicherte Modus konnte nicht zurückgesetzt werden.",   /* de */
+	"Impossibile reimpostare la modalità provvisoria.",   /* it */
+	"Veilige modus kon niet worden hersteld.",   /* nl */
+	"Não foi possível repor o modo de segurança.",   /* pt */
+	"Не удалось сбросить безопасный режим.",   /* ru */
+	"안전 모드를 초기화할 수 없습니다.",   /* ko */
+	"無法重設安全模式。",   /* zht */
+	"无法重置安全模式。",   /* zhs */
+	"Vikasietotilaa ei voitu nollata.",   /* fi */
+	"Det gick inte att återställa felsäkert läge.",   /* sv */
+	"Fejlsikret tilstand kunne ikke nulstilles.",   /* da */
+	"Kunne ikke tilbakestille sikker modus.",   /* no */
+	"Nie udało się zresetować trybu awaryjnego.",   /* pl */
+	"Não foi possível redefinir o modo de segurança.",   /* ptbr */
+	"Could not reset safe mode.",   /* engb */
+	"Güvenli mod sıfırlanamadı.",   /* tr */
 },

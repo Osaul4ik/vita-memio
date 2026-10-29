@@ -76,6 +76,8 @@ static void reset(void)
 	d->enabled = 1;
 	g_verify = 0;
 	g_min_sectors = MIN_SECTORS;
+	g_stats = 1;                              /* most tests look at the figures */
+	g_count_all = 1;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
 	g_shadow_busy = 0;
@@ -140,6 +142,38 @@ static void test_small_transfers_switch(void)
 	s.small = 0;
 	vm_stage_apply(&s);
 	CHECK(rd(u, 10, 8) == 0 && last_buf == u);
+	free(u);
+}
+
+/* Statistics off: the clock is never read and the timers and the data
+ * counters stay still; what safety needs (requests, errors) is still counted.
+ * The HUD alone turns the all-transfers counter back on. */
+static void test_statistics_switch(void)
+{
+	uint8_t *u = user_buf(600);
+	VmSettings s;
+
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	vm_stage_apply(&s);                       /* stats 0, hud off */
+	CHECK(rd(u, 0, 600) == 0 && wr(u, 0, 600, REF_RD) == 0);
+	CHECK(memcmp(u, disk, 600 * 512) == 0);
+	CHECK(fake_time_calls == 0);
+	CHECK(g_dev[M].tm.rd_sectors == 0 && g_dev[M].tm.wr_io_us == 0);
+	CHECK(g_dev[M].rd_bytes == 0 && g_dev[M].wr_bytes == 0);
+	CHECK(g_dev[M].all_rd == 0 && g_dev[M].all_wr == 0);
+	CHECK(g_dev[M].st.reads == 1 && g_dev[M].st.writes == 1);
+
+	s.hud = VM_HUD_COMPACT;                   /* the HUD needs its byte counts */
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 100) == 0);
+	CHECK(g_dev[M].all_rd == 100 * 512 && g_dev[M].tm.rd_sectors == 0 && fake_time_calls == 0);
+
+	s.stats = 1;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 100) == 0);
+	CHECK(g_dev[M].tm.rd_sectors == 100 && g_dev[M].rd_bytes == 100 * 512 && fake_time_calls > 0);
 	free(u);
 }
 
@@ -534,6 +568,7 @@ int main(void)
 
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
+	RUN(test_statistics_switch);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

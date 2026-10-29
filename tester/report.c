@@ -200,6 +200,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "faster path, time per 512-byte block (system call / CPU copy):\n");
 		if (!res->plugin0.timing_ok) {
 			put(&o, "  n/a (the kernel module is older than this tester)\n");
+		} else if (res->plugin0.stats == 0) {
+			put(&o, "  n/a (Statistics is off: Settings > Devices > vita-memio > Advanced)\n");
 		} else {
 			if (t.rd_ok) {
 				report_fmt1(a, sizeof(a), t.rd_io_us);
@@ -255,7 +257,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			put(&o, "    note: %s\n", r->note);
 	}
 
-	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok) {
+	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok && res->plugin0.stats != 0) {
 		put(&o, "\ncsvt: version,time,device,profile,run,rd_sectors,rd_io_us_per_blk,"
 		        "rd_copy_us_per_blk,wr_sectors,wr_io_us_per_blk,wr_copy_us_per_blk\n");
 		for (int i = 0; i < res->nruns; i++) {
@@ -335,7 +337,9 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
 			line(&s, "run %d: %s", i + 1, res->runs[i].note);
-	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok) {
+	if (res->plugin_mode == BPM_ON && res->plugin0.stats == 0)
+		line(&s, "timing: n/a, Statistics is off (Advanced)");
+	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok && res->plugin0.stats != 0) {
 		BenchTiming t;
 
 		bench_timing(res, &t);

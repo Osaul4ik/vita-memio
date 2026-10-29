@@ -66,6 +66,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
+| Statistics | Times every faster transfer (system call vs. copy) and counts the data moved, for the tester. Off saves that work on every transfer; the HUD counts its own speeds while it is on | Off |
 | Storage HUD | Live speed of each storage in use, in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
 | HUD style | Classic (white text) or PSVshell (a black panel with coloured values) | PSVshell |
 | Reset safe mode | Ends safe mode; vita-memio starts normally after the next restart | |
@@ -80,7 +81,7 @@ The tester (`vitamemio_tester.vpk`, "vita-memio Tester") runs reads and writes o
 
 Its main screen shows live, for each storage, what the plugin is doing (state, data moved, errors, verified transfers, mismatches). Each result also shows:
 
-- where the time goes per 512-byte block (the system call vs. the CPU copy);
+- where the time goes per 512-byte block (the system call vs. the CPU copy), with **Statistics** on;
 - the plugin's verify results;
 - how many large transfers went the standard way because the staging buffer was busy.
 

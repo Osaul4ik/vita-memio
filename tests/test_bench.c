@@ -40,6 +40,7 @@ typedef struct Fake {
 	uint32_t passthru;           /* faster path declined: buffer busy           */
 	int      busy_every;         /* every Nth large read finds the buffer busy  */
 	int      small;              /* the plugin's "small transfers too"          */
+	int      no_stats;           /* the plugin's Statistics is off              */
 	int      sf_corrupt;         /* small files read back wrong                 */
 	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
@@ -246,6 +247,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->mismatches = f->mismatches;
 	o->passthru = f->passthru;
 	o->small = f->small;
+	o->stats = f->no_stats ? 0 : 1;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -869,6 +871,25 @@ static void test_report_text(void)
 	CHECK(!strstr(text, "WARNING"));
 	CHECK(!strstr(text, "time per 512-byte block") && !strstr(text, "csvt"));   /* ON only */
 	CHECK(count(text, ",SD2Vita,tiny,OFF,") == 3 * BM_COUNT);
+
+	/* ON with Statistics off: timing is n/a and says why, no csvt lines */
+	fake_init(&f, 1);
+	f.no_stats = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && bench_plugin_ok(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "n/a (Statistics is off"));
+	CHECK(!strstr(text, "csvt"));
+	{
+		char sl[REPORT_LINES_MAX][REPORT_LINE_MAX];
+		int sn = report_screen_lines(r, sl, REPORT_LINES_MAX), found = 0;
+
+		for (int i = 0; i < sn; i++) {
+			found |= !strcmp(sl[i], "timing: n/a, Statistics is off (Advanced)");
+			CHECK(strncmp(sl[i], "read  us/block", 14) != 0);
+		}
+		CHECK(found);
+	}
 
 	/* ON with an older kernel module: timing is n/a, nothing else changes */
 	fake_init(&f, 1);

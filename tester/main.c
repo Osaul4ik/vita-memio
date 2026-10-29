@@ -159,22 +159,27 @@ static const char *dev_state(const VmState *st, int dev, uint32_t *color)
 	}
 }
 
-/* One line about the plugin's verify mode and "small transfers too". */
+/* One line about the Advanced switches the tester depends on: verify, small
+ * transfers, statistics (the timers and the data counts). */
 static void verify_line(const VmState *st, char *out, size_t cap, uint32_t *color)
 {
-	int sm = vmGetSetting(VM_KEY_SMALL);
+	int sm = vmGetSetting(VM_KEY_SMALL), sa = vmGetSetting(VM_KEY_STATS);
 	const char *small = sm == 1 ? "ON" : sm == 0 ? "off" : "?";
+	const char *stats = sa == 1 ? "ON" : sa == 0 ? "off" : "?";
+	const char *verify;
 
 	if (!st->settings.verify) {
 		*color = UI_DIM;
-		snprintf(out, cap, "verify: off   small transfers too: %s   (Settings > ... > Advanced)", small);
+		verify = "verify: off";
 	} else if (!st->verify_ready) {
 		*color = UI_WARN;
-		snprintf(out, cap, "verify: ON, no check buffer yet - nothing checked   small transfers: %s", small);
+		verify = "verify: ON, no check buffer yet";
 	} else {
 		*color = UI_ACCENT;
-		snprintf(out, cap, "verify: ON - faster transfers re-read and compared   small transfers: %s", small);
+		verify = "verify: ON (slower)";
 	}
+	snprintf(out, cap, "%s   small transfers too: %s   statistics: %s   (Advanced)",
+	         verify, small, stats);
 }
 
 /* The PLUGIN panel: one line per device, then verify mode. 7 rows from `row`. */
@@ -191,6 +196,7 @@ static void plugin_panel(int row, int hl_dev)
 		ui_text(4, row + 3, UI_DIM, "Tests still run and measure the storage.");
 		return;
 	}
+	const int stats_on = vmGetSetting(VM_KEY_STATS) != 0;   /* unknown: show the counts */
 	ui_text(4, row + 1, UI_DIM, "device");
 	ui_text(16, row + 1, UI_DIM, "state");
 	ui_text(28, row + 1, UI_DIM, "faster read");
@@ -207,8 +213,13 @@ static void plugin_panel(int row, int hl_dev)
 			ui_text(2, r, UI_ACCENT, ">");
 		ui_text(4, r, d == hl_dev ? UI_FG : UI_DIM, bench_device_name(d));
 		ui_text(16, r, c, w);
-		ui_textf(28, r, UI_FG, "%u MiB", (unsigned)ds->read_mib);
-		ui_textf(43, r, UI_FG, "%u MiB", (unsigned)ds->write_mib);
+		if (stats_on) {
+			ui_textf(28, r, UI_FG, "%u MiB", (unsigned)ds->read_mib);
+			ui_textf(43, r, UI_FG, "%u MiB", (unsigned)ds->write_mib);
+		} else {
+			ui_text(28, r, UI_DIM, "-");        /* not counted: Statistics is off */
+			ui_text(43, r, UI_DIM, "-");
+		}
 		ui_textf(58, r, ds->errors ? UI_BAD : UI_FG, "%u", (unsigned)ds->errors);
 		ui_textf(67, r, st.settings.verify ? UI_FG : UI_DIM, "%u", (unsigned)ds->verified);
 		ui_textf(79, r, ds->mismatches ? UI_BAD : UI_FG, "%u", (unsigned)ds->mismatches);

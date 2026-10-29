@@ -56,7 +56,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
  * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard", "small",
+	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard", "small", "stats",
 };
 
 #define ROW_LIST(k) \
@@ -82,6 +82,7 @@ static const char X_GROUP[] =
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
+		ROW_TOGGLE("stats")
 		ROW_LIST("hud")
 			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
 		"</list>"
@@ -225,12 +226,14 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
 	[VM_KEY_HUD_STYLE] = VM_I18N_ROW_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
+	[VM_KEY_STATS] = VM_I18N_ROW_STATS,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
 	[VM_KEY_HUD_STYLE] = VM_I18N_HINT_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
+	[VM_KEY_STATS] = VM_I18N_HINT_STATS,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */

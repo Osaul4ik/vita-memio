@@ -32,7 +32,8 @@ void vm_log(const char *fmt, ...) { (void)fmt; }
 
 /* ---- time / threads -------------------------------------------------------- */
 int ksceKernelDelayThread(unsigned us) { (void)us; return 0; }
-uint32_t ksceKernelGetSystemTimeLow(void) { return fake_now_us; }
+int fake_time_calls;
+uint32_t ksceKernelGetSystemTimeLow(void) { fake_time_calls++; return fake_now_us; }
 
 /* ---- memory blocks --------------------------------------------------------- */
 static void *g_blocks[64];
@@ -125,6 +126,7 @@ void fakes_tmpdir_remove(void)
 void fakes_reset(void)
 {
 	fake_now_us = 0;
+	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
 	fake_rename_fail = fake_write_short = 0;

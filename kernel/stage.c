@@ -112,6 +112,13 @@ static int g_live;
  * small transfers switched on. */
 static volatile uint32_t g_min_sectors = MIN_SECTORS;
 
+/* What is counted on every transfer beyond what safety needs (requests,
+ * errors, verify results, buffer busy - always):
+ *   g_stats      the io/copy timers and the faster-path bytes (the tester);
+ *   g_count_all  every transfer's bytes (the HUD's speeds), also with stats. */
+static volatile int g_stats;
+static volatile int g_count_all;
+
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
 static void        *g_shadow;
@@ -234,7 +241,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	uint32_t left = nsec;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
-	if (mine) {
+	if (mine && g_count_all) {
 		if (write)
 			d->all_wr += (uint64_t)nsec * 512;
 		else
@@ -249,31 +256,41 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		__sync_lock_release(&g_shadow_busy);
 		verify = 0;
 	}
+	const int stats = g_stats;
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
-		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
+		uint32_t t1 = 0, t2 = 0, t3 = 0;
 
-		/* Timing: system call vs CPU copy, per chunk that succeeded. */
+		/* Timing (statistics on): system call vs CPU copy, per chunk that
+		 * succeeded. Off, the clock is not read at all. */
+		if (stats)
+			t1 = ksceKernelGetSystemTimeLow();
 		if (write) {
 			vm_copy_to_stage(d->buf, p, bytes);
-			t2 = ksceKernelGetSystemTimeLow();
+			if (stats)
+				t2 = ksceKernelGetSystemTimeLow();
 			ret = io(ref, part, sector, d->buf, n);
 			if (ret < 0)
 				break;
-			t3 = ksceKernelGetSystemTimeLow();
-			d->tm.wr_sectors += n;
-			d->tm.wr_copy_us += t2 - t1;
-			d->tm.wr_io_us += t3 - t2;
+			if (stats) {
+				t3 = ksceKernelGetSystemTimeLow();
+				d->tm.wr_sectors += n;
+				d->tm.wr_copy_us += t2 - t1;
+				d->tm.wr_io_us += t3 - t2;
+			}
 		} else {
 			ret = io(ref, part, sector, d->buf, n);
 			if (ret < 0)
 				break;
-			t2 = ksceKernelGetSystemTimeLow();
+			if (stats)
+				t2 = ksceKernelGetSystemTimeLow();
 			vm_copy_from_stage(p, d->buf, bytes);
-			t3 = ksceKernelGetSystemTimeLow();
-			d->tm.rd_sectors += n;
-			d->tm.rd_io_us += t2 - t1;
-			d->tm.rd_copy_us += t3 - t2;
+			if (stats) {
+				t3 = ksceKernelGetSystemTimeLow();
+				d->tm.rd_sectors += n;
+				d->tm.rd_io_us += t2 - t1;
+				d->tm.rd_copy_us += t3 - t2;
+			}
 		}
 		if (verify && io(rd_ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
@@ -290,10 +307,12 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				}
 			}
 		}
-		if (write)
-			d->wr_bytes += bytes;
-		else
-			d->rd_bytes += bytes;
+		if (stats) {
+			if (write)
+				d->wr_bytes += bytes;
+			else
+				d->rd_bytes += bytes;
+		}
 		p += bytes;
 		sector += n;
 		left -= n;
@@ -450,6 +469,8 @@ void vm_stage_apply(const VmSettings *s)
 		d->enabled = want[i] ? 1 : 0;
 	}
 	g_min_sectors = s->small ? 1 : MIN_SECTORS;
+	g_stats = s->stats ? 1 : 0;
+	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */

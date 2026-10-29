@@ -109,6 +109,8 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 		int s = vmGetSetting(VM_KEY_SMALL);
 
 		out->small = s == 0 || s == 1 ? s : -1;
+		s = vmGetSetting(VM_KEY_STATS);
+		out->stats = s == 0 || s == 1 ? s : -1;
 	}
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;

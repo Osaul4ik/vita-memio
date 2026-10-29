@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 extern uint32_t fake_now_us;          /* ksceKernelGetSystemTimeLow()                */
+extern int fake_time_calls;           /* ... and how often it was called             */
 extern int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 extern int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 extern int fake_rename_fail;          /* ksceIoRename fails (power cut after remove) */

@@ -64,6 +64,7 @@ enum vm_key {
 	VM_KEY_LOG,            /* 0/1: write kernel.log / user.log at all        */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
+	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
 	VM_KEY_COUNT
 };
 
@@ -85,6 +86,7 @@ enum vm_key {
 #define VM_DEF_LOG       0   /* logging is opt-in (Settings > Advanced)        */
 #define VM_DEF_MEMCARD   0
 #define VM_DEF_SMALL     0   /* opt-in: small transfers are file-system bookkeeping */
+#define VM_DEF_STATS     0   /* only the tester needs them                     */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -96,6 +98,7 @@ typedef struct VmSettings {
 	int32_t log;
 	int32_t memcard;
 	int32_t small;
+	int32_t stats;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -121,6 +124,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_MEMCARD:
 	case VM_KEY_LOG:
 	case VM_KEY_SMALL:
+	case VM_KEY_STATS:
 		return v == 0 || v == 1;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;

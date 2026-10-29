@@ -649,6 +649,7 @@ static void test_report_text(void)
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "cached read path (experimental): unknown"));
+	CHECK(strstr(text, "[raw: setting "));
 	CHECK(count(text, ",SD2Vita,tiny,ON,") == 3 * BM_COUNT);
 
 	/* OFF tests do not mention it at all */

@@ -168,6 +168,6 @@ void ts_settings_flush(void)
 		return;
 	}
 	g_save_fails = 0;
-	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
+	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d cached_read=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode, s.cached_read);
 }

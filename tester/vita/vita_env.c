@@ -112,9 +112,12 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 		 * state worth reading. */
 		int set = tsGetSetting(TS_KEY_CACHED_READ);
 
+		out->cr_raw_setting = set;
+		out->cr_raw_state = 0x7FFFFFFF;          /* not asked */
 		if (set == 0 || set == 1) {
 			int c = tsGetCachedRead(v->dev);
 
+			out->cr_raw_state = c;
 			if (c >= TS_CR_UNAVAILABLE && c <= TS_CR_PENDING)
 				out->cached_read = c;
 		}

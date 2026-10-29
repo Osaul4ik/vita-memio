@@ -102,9 +102,23 @@
 #define NID_DCACHE_INV         0x02796361    /* ksceKernelDcacheInvalidateRange (L1+L2)      */
 #define NID_DCACHE_CLEAN_INV   0x364E68A4    /* ksceKernelDcacheCleanInvalidateRange (L1+L2) */
 #define CACHE_LINE             64            /* the functions want 0x40-aligned ranges */
+#define LIB_SYSMEM_DRV         0x6F25E18A
+#define NID_VA_TO_PA           0x8D160E65    /* ksceKernelVAtoPA (diagnostics only) */
 
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);
+
+/* Wait until earlier memory accesses have completed (a CPU store into the
+ * non-cacheable mapping must reach memory before it is read back through the
+ * other mapping). */
+static inline void ts_dsb(void)
+{
+#if defined(__arm__)
+	__asm__ volatile("dsb" ::: "memory");
+#else
+	__sync_synchronize();
+#endif
+}
 
 void *ksceSdifGetSdContextGlobal(int port);
 
@@ -136,7 +150,18 @@ static Dev g_dev[TS_DEV_COUNT] = {
 static volatile int g_cached;
 static void (*g_dc_inv)(void *start, unsigned int size);
 static void (*g_dc_clean_inv)(void *start, unsigned int size);
+static int (*g_va2pa)(const void *va, uintptr_t *pa);
 static int g_dc_tried;
+
+/* Physical address of va, or 0 when it cannot be read (log only). */
+static uint32_t pa_of(const void *va)
+{
+	uintptr_t pa = 0;
+
+	if (!g_va2pa || g_va2pa(va, &pa) < 0)
+		return 0;
+	return (uint32_t)pa;
+}
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -573,18 +598,39 @@ static int setup_alias(int i)
 	/* Write back and drop anything the new mapping holds (it may have been
 	 * zero-filled through the cache), while nothing else uses the buffer. */
 	g_dc_clean_inv(base, STAGE_BYTES);
-	/* Live check: the cached mapping must show the same physical memory. */
-	memcpy(d->buf, marker, sizeof(marker));         /* through the NC address */
-	g_dc_inv(base, CACHE_LINE);
-	ok = memcmp(base, marker, sizeof(marker)) == 0;
-	((uint32_t *)d->buf)[0] = ~marker[0];
-	g_dc_inv(base, CACHE_LINE);
-	ok = ok && ((const uint32_t *)base)[0] == ~marker[0];
-	g_dc_inv(base, CACHE_LINE);                       /* leave no line of it behind */
-	if (!ok) {
-		TS_KLOGW("stage: dev %d cached mapping does not show the buffer - normal reads", i);
-		ksceKernelFreeMemBlock(uid);
-		goto unavailable;
+	ts_dsb();
+	/* Live check: the cached mapping must show the same physical memory. The
+	 * stores go through the NC address and must have reached memory (dsb)
+	 * before the line is dropped from the cache and read back. */
+	{
+		uint32_t seen[4], seen2, pa_buf = pa_of(d->buf), pa_alias = pa_of(base);
+
+		memcpy(d->buf, marker, sizeof(marker));
+		ts_dsb();
+		g_dc_inv(base, CACHE_LINE);
+		ts_dsb();
+		memcpy(seen, base, sizeof(seen));
+		ok = memcmp(seen, marker, sizeof(marker)) == 0;
+		((uint32_t *)d->buf)[0] = ~marker[0];
+		ts_dsb();
+		g_dc_inv(base, CACHE_LINE);
+		ts_dsb();
+		seen2 = ((const uint32_t *)base)[0];
+		ok = ok && seen2 == ~marker[0];
+		g_dc_inv(base, CACHE_LINE);                   /* leave no line of it behind */
+		ts_dsb();
+		TS_KLOGI("stage: dev %d mapping nc=0x%08x (pa 0x%08x) cached=0x%08x (pa 0x%08x) check %s",
+		         i, (unsigned)(uintptr_t)d->buf, (unsigned)pa_buf, (unsigned)(uintptr_t)base,
+		         (unsigned)pa_alias, ok ? "ok" : "FAILED");
+		if (!ok) {
+			TS_KLOGW("stage: dev %d wrote %08x %08x %08x %08x then %08x, cached saw %08x %08x %08x %08x then %08x",
+			         i, (unsigned)marker[0], (unsigned)marker[1], (unsigned)marker[2],
+			         (unsigned)marker[3], (unsigned)~marker[0], (unsigned)seen[0],
+			         (unsigned)seen[1], (unsigned)seen[2], (unsigned)seen[3], (unsigned)seen2);
+			TS_KLOGW("stage: dev %d cached mapping does not show the buffer - normal reads", i);
+			ksceKernelFreeMemBlock(uid);
+			goto unavailable;
+		}
 	}
 	d->alias_uid = uid;
 	__sync_synchronize();
@@ -613,6 +659,12 @@ static void cached_tick(void)
 			g_dc_clean_inv = (void (*)(void *, unsigned int))cinv;
 		} else {
 			TS_KLOGW("stage: cache functions not found - cached read path unavailable");
+		}
+		{
+			uintptr_t f = 0;
+
+			if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_SYSMEM_DRV, NID_VA_TO_PA, &f) >= 0)
+				g_va2pa = (int (*)(const void *, uintptr_t *))f;
 		}
 	}
 	for (int i = 0; i < TS_DEV_COUNT; i++) {

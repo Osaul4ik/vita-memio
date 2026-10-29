@@ -165,7 +165,12 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	    (unsigned)res->plugin0.fingerprint);
 	put(&o, "plugin during the test: %s\n", pl);
 	if (res->plugin_mode == BPM_ON) {
-		put(&o, "cached read path (experimental): %s\n", cached_name(res->plugin0.cached_read));
+		put(&o, "cached read path (experimental): %s", cached_name(res->plugin0.cached_read));
+		if (res->plugin0.available && res->plugin0.cached_read == BENCH_CR_UNKNOWN)
+			put(&o, " [raw: setting %d (0x%08x), state %d (0x%08x)]",
+			    res->plugin0.cr_raw_setting, (unsigned)res->plugin0.cr_raw_setting,
+			    res->plugin0.cr_raw_state, (unsigned)res->plugin0.cr_raw_state);
+		put(&o, "\n");
 		if (!cached_steady(res))
 			put(&o, "WARNING: the cached read path changed during the test\n");
 	}

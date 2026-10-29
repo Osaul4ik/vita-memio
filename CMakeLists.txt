@@ -153,7 +153,11 @@ if(TS_BUILD_TESTER)
     SceDisplay_stub
     SceRtc_stub
   )
-  vita_create_self(storageturbo_tester.self storageturbo_tester UNSAFE)
+  # An explicit config: the entry point of an application is crt0's _start, not
+  # module_start (a missing config made vita-elf-create look for module_start).
+  vita_create_self(storageturbo_tester.self storageturbo_tester
+    CONFIG ${CMAKE_SOURCE_DIR}/storageturbo_tester.yml
+    UNSAFE)
 
   set(TESTER_VPK_FILES "")
   if(EXISTS "${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png")

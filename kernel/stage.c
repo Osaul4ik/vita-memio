@@ -42,11 +42,18 @@
 #include "stage.h"
 #include "klog.h"
 
-/* The CPU copy between the caller's buffer and the staging buffer
- * (fastcopy.h; the host tests replace it to give the copy a measurable time). */
+/* The CPU copies between the caller's buffer and the staging buffer (the host
+ * tests replace both to give the copy a measurable time).
+ *   out of staging (reads): 8-word LDM/STM bursts (fastcopy.h). Measured on
+ *     SD2Vita: 4.5 -> 4.2 us per 512-byte block.
+ *   into staging (writes): the system memcpy. The burst copy made it slower
+ *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
-#ifndef ts_copy
-#define ts_copy ts_fast_copy
+#ifndef ts_copy_from_stage
+#define ts_copy_from_stage ts_fast_copy
+#endif
+#ifndef ts_copy_to_stage
+#define ts_copy_to_stage memcpy
 #endif
 
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */
@@ -217,7 +224,7 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (ret < 0)
 			break;
 		t2 = ksceKernelGetSystemTimeLow();
-		ts_copy(dst, d->buf, bytes);
+		ts_copy_from_stage(dst, d->buf, bytes);
 		t3 = ksceKernelGetSystemTimeLow();
 		d->tm.rd_sectors += n;
 		d->tm.rd_io_us += t2 - t1;
@@ -271,7 +278,7 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 
 		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
 
-		ts_copy(d->buf, src, bytes);
+		ts_copy_to_stage(d->buf, src, bytes);
 		t2 = ksceKernelGetSystemTimeLow();
 		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)

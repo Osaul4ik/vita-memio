@@ -1,5 +1,6 @@
 /*
- * fastcopy.h - the CPU copy between a caller's buffer and a staging buffer.
+ * fastcopy.h - the CPU copy out of a staging buffer into a caller's buffer
+ * (reads only: for writes into staging the system memcpy measured faster).
  *
  * Why not plain memcpy: the staging buffer is non-cacheable, and on the
  * Cortex-A9 every load from non-cacheable memory goes out to the bus on its own.

@@ -20,7 +20,8 @@ static void *fake_copy(void *d, const void *s, size_t n)
 	fake_now_us += copy_cost_us;
 	return memcpy(d, s, n);
 }
-#define ts_copy fake_copy
+#define ts_copy_from_stage fake_copy
+#define ts_copy_to_stage fake_copy
 
 #include "../kernel/stage.c"
 

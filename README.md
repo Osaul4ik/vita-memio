@@ -1,59 +1,41 @@
 # vita-memio
 
-**A fork of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)**
+Faster SD2Vita, memory card and internal storage on the PS Vita, as a taiHEN plugin for HENkaku/Ensō on firmware **3.60–3.74**.
 
-[Original project and full documentation](https://github.com/juanjsebgarcia/vita-turbo-storage) · [Original author's profile](https://github.com/juanjsebgarcia)
+vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). The technique, the research behind it and the original implementation are his; see the original repository for the full documentation.
 
-> [!IMPORTANT]
-> This is not an independent implementation. The original project, including its design, research, implementation, benchmark results, and documentation, is the work of Juan Garcia Alvite, who deserves full credit. This fork is maintained for personal use on my own PS Vita.
->
+## How it works
 
-## About the original project
+Before and after every transfer, the system's storage driver cleans and invalidates the CPU cache over the whole caller buffer, and that work is not overlapped with the transfer. For large transfers vita-memio hands the system's own, unmodified read and write functions a non-cacheable staging buffer instead (the driver skips the cache work for it) and copies between the two with the CPU. The driver still issues every command, handles every error and runs the DMA.
 
-Vita Turbo Storage is a taiHEN plugin for PS Vita that reduces storage-transfer overhead by changing the buffer passed to the system's existing storage routines. It is designed to improve read performance, with smaller gains for writes, while leaving the storage drivers themselves in place.
-
-The upstream project supports HENkaku/Ensō on firmware **3.60–3.74** and includes a kernel module, a Settings page, an optional live read/write HUD, per-storage controls, diagnostics, and fallback handling.
-
-Supported storage types in the original project:
-
-- **SD2Vita** (microSD in the game-card slot)
-- **Official PS Vita memory card**
-- **Internal storage**
-
-Game cards and USB storage are not accelerated.
+- Writes are never cached or deferred: a write has reached the card before the call returns.
+- Small transfers (under 32 KiB, which includes the file system's own bookkeeping) take the standard path.
+- Any error switches that storage back to the standard path for the session and finishes the request the standard way.
+- On an unknown firmware nothing is installed.
+- Game cards, USB storage and Wi-Fi are not touched.
 
 ## Performance
 
-The original author reported the following results on the upstream test console: a PS Vita PCH-1000 running firmware 3.60, with a 128 GB microSD card in SD2Vita and an official 4 GB memory card.
-
-| Test | Stock | Turbo Storage | Reported change |
+| Test | Original: stock | Original: Turbo Storage | vita-memio (my console) |
 |---|---:|---:|---:|
-| SD2Vita reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | +26% |
-| SD2Vita reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | +27% |
-| SD2Vita writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | +17–36% |
-| Vita memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | +32% |
-| Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | +34–36% |
+| SD2Vita reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | **17.7 MiB/s** |
+| SD2Vita reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | **16.8 MiB/s** |
+| SD2Vita writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–16.9 MiB/s** |
+| Memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
+| Memory card writes, 1 MiB requests | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
+| Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
+| Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
 
-**These are the upstream author's measurements, not independent benchmarks from this fork.** Results depend on the console, firmware, storage device, and workload. See the [original README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures) for the full benchmark tables, methodology, and limitations.
+- **Original:** the figures published in the [original README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures). PCH-1000, firmware 3.60, a 128 GB microSD in an SD2Vita, an official 4 GB memory card; 64 MiB per run, stock and Turbo Storage alternated.
+- **vita-memio:** my console on firmware 3.65, with the plugin on, measured with the included tester. Quick profile: a 16 MiB file and three runs, every byte checked; a range means the averages of separate sessions. For comparison, the stock SD2Vita on the same console reads 1 MiB requests at 13.6 MiB/s.
 
-## What this fork changes
+Different cards write at very different speeds, so the write rows compare cards more than plugins. Results depend on the console, the card and the workload.
 
-- Renamed to vita-memio (files, Settings page, data folder `ur0:data/vita-memio/`).
-- A staging buffer (256 KiB of kernel memory) only for the storages that are switched on, allocated when one is first switched on.
-- The Settings page is under **Settings > Devices**, with an **Advanced** sub-page (verify, logging, HUD, HUD style, safe-mode reset).
-- The HUD sits in the top right corner and has a second look modelled on PSVshell's overlay (black panel, Terminus font, coloured values).
-- Safe mode (the crash-loop guard) ends as soon as the home screen has loaded, instead of after a fixed 30 s, and can be reset from Settings.
-- Logging is off unless **Enable log** is on.
-- Faster copy out of the staging buffer on reads (8-word burst loads).
-- The developer network mode (TCP command port) is removed; the user module now runs only in the Settings app.
-- Logging is reduced to one line per start plus problems.
-- A tester app (`vitamemio_tester.vpk`) that only measures, never changes the plugin, and shows the plugin's counters, verify results and where the time goes (system I/O vs. copy).
+## Install
 
-## Install (this fork)
+Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester `vitamemio_tester.vpk`.
 
-Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester app `vitamemio_tester.vpk`.
-
-1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`.
+1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`. Always install the two together.
 2. Add to `ur0:tai/config.txt` (`make config` prints these lines):
 
    ```
@@ -63,54 +45,82 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Reboot. The switches are in **Settings > Devices > vita-memio**:
+3. Restart the console. Everything is switched off until you switch it on in Settings.
+4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own storage.
 
-   | Row | What it does |
-   |---|---|
-   | Driver: … | the kernel module's state (active, not loaded, safe mode, firmware not supported, could not start); select it for the details |
-   | Faster SD2Vita / memory card / internal storage | the faster path per storage |
-   | **Advanced >** Verify transfers | re-reads every faster transfer the standard way and compares (slower; for checking) |
-   | **Advanced >** Enable log | writes `kernel.log` / `user.log` (the start line and problems only); off: nothing is written |
-   | **Advanced >** Storage HUD | off, compact or extended, in the top right corner |
-   | **Advanced >** HUD style | Classic (white text) or PSVshell (black panel, coloured values) |
-   | **Advanced >** Reset safe mode | ends safe mode; vita-memio starts normally after the next restart |
+## Settings
 
-   **Safe mode:** if a start never reaches the home screen, the next start installs nothing (safe mode) so a broken setup cannot loop. The guard is cleared once the home screen has loaded.
-4. Optional: install `vitamemio_tester.vpk` (bubble "vita-memio Tester") with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers**.
+**Settings > Devices > vita-memio**
 
-Settings, logs and test results live in `ur0:data/vita-memio/`. With logging on, the log holds one line per start and otherwise only problems.
+| Row | What it does | Default |
+|---|---|---|
+| Driver: … | Whether the kernel module runs: active, not loaded, safe mode, firmware not supported, or could not start. Select it for the details | |
+| Faster SD2Vita | The faster path for a microSD in an SD2Vita adapter | Off |
+| Faster memory card | The faster path for the official PS Vita memory card | Off |
+| Faster internal storage | The faster path for the console's own storage | Off |
 
-**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing. Settings saved by builds before the Advanced page (settings file version 1) are not read: everything starts at its default once, so switch your storages on again. Install the `.skprx` and the `.suprx` together: the Settings page uses a kernel call that older kernel modules do not have.
+**Advanced**
 
-**Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both); its settings are not taken over. The old tester (`TURBOTST0`) and `ur0:data/turbostorage/` can be deleted.
+| Row | What it does | Default |
+|---|---|---|
+| Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
+| Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
+| Storage HUD | Live speed of each storage in use, in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
+| HUD style | Classic (white text) or PSVshell (a black panel with coloured values) | PSVshell |
+| Reset safe mode | Ends safe mode; vita-memio starts normally after the next restart | |
+
+Settings apply at once, with no restart. They are kept in `ur0:data/vita-memio/`, together with the logs and the tester's results.
+
+**Safe mode.** If a start never reaches the home screen, the next start installs nothing, so a broken setup cannot loop. The Driver row then shows safe mode. Holding L while the console starts skips all plugins.
+
+## Tester
+
+The tester (`vitamemio_tester.vpk`, "vita-memio Tester") runs reads and writes of several sizes on one storage, checks every byte, and appends the result to `ur0:data/vita-memio/results.txt`. It never changes the plugin: switch a storage on or off in Settings, then run the test again to compare.
+
+Its main screen shows live, for each storage, what the plugin is doing (state, data moved, errors, verified transfers, mismatches). Each result also shows:
+
+- where the time goes per 512-byte block (the system call vs. the CPU copy);
+- the plugin's verify results;
+- how many large transfers went the standard way because the staging buffer was busy.
+
+Pick the storage that the test folder is on: on most setups both the SD2Vita and the memory card are `ux0:`. If the storage and folder don't match, the test says so.
+
+## Build
+
+```sh
+make build        # the modules and the tester, in the pinned VitaSDK Docker image
+make test         # host tests (no VitaSDK needed)
+make config       # the config.txt lines
+```
+
+`make deploy`, `make log` and `make results` talk to vitacompanion on the console (`VITA_IP=...`). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits and projects used
 
-All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage), including the original implementation, technical approach, testing and documentation. This fork is based on it.
+All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage): the technique, the research, the original implementation, testing and documentation.
 
 **Built on**
 
-- [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu: the hooking framework both modules use (kernel export hooks for the storage path, user import hooks for the Settings page).
-- [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW: the homebrew environment the plugin runs in. The way the Settings page is added (wait for `system_settings_core.suprx`, then hook the layout loader and the registry calls) follows HENkaku's own Settings plugin (`plugin/user.c`).
-- [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers): the toolchain; CI builds with a pinned VitaSDK Docker image.
+- [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu: the hooking framework both modules use.
+- [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW: the homebrew environment. How the Settings page is added and how its buttons are handled follows HENkaku's own Settings plugin ([`plugin/user.c`](https://github.com/henkaku/henkaku/blob/master/plugin/user.c)).
+- [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers): the toolchain.
 
 **References and ideas**
 
 - [IOStaging](https://github.com/bythos14) by bythos14: the staging-buffer idea the original project credits as its inspiration.
-- [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: where the Devices page's layout names (`peripherals_settings_plugin`, `peripherals_settings`) were learned, and the reason vita-memio also accepts YAMT's replacement Devices page. No YAMT code is used.
-- [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester (panels, title bar, status lines) and of the PSVshell-style HUD (black panel with rounded corners, Terminus font picked by the framebuffer size, coloured values) follows its overlay. No PSVshell code is used.
-- [HENkaku's Settings plugin](https://github.com/henkaku/henkaku/blob/master/plugin/user.c): besides the page itself, the way a Settings button is handled (wrapping the page plugin's button function from `scePafToplevelInitPluginFunctions`), used for **Reset safe mode**.
+- [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: the layout names of the Devices page in Settings. No YAMT code is used.
+- [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester and of the PSVshell-style HUD. No PSVshell code is used.
 
 **Included**
 
-- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: the tester and the PSVshell-style HUD use a subset of it (8x14, 10x18 and 12x24 bold), under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK). The classic HUD uses its own 8x8 font.
+- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: a subset is used by the tester and the PSVshell-style HUD, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
 
 **Tools**
 
-- [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120: FTP and commands for `make deploy`, `make log` and `make results`.
-- [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW: to install the tester VPK and copy the modules.
-- [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) (the ARM copy test) and GCC's AddressSanitizer/UBSan for the host tests, run on GitHub Actions.
+- [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120 for `make deploy` / `log` / `results`.
+- [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW to install the tester.
+- [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) and GCC's sanitizers for the tests on GitHub Actions.
 
 ## License
 
-MIT, as the original project: see [LICENSE](LICENSE) and the [upstream license](https://github.com/juanjsebgarcia/vita-turbo-storage/blob/main/LICENSE). The Terminus Font subset in `include/vm_font_terminus.h` stays under the SIL Open Font License 1.1.
+MIT, as the original project: see [LICENSE](LICENSE) and the [original license](https://github.com/juanjsebgarcia/vita-turbo-storage/blob/main/LICENSE). The Terminus Font subset in `include/vm_font_terminus.h` stays under the SIL Open Font License 1.1.

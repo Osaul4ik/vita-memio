@@ -79,6 +79,7 @@ static void reset(void)
 	g_stats = 1;                              /* most tests look at the figures */
 	g_gpu_safe = 0;
 	g_dcache_clean = NULL;
+	g_gpu_cleaned_kib = g_gpu_skipped_kib = 0;
 	g_count_all = 1;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
@@ -223,8 +224,33 @@ static void test_gpu_safe_reads(void)
 	CHECK(clean_calls == 1 && clean_lo <= (uintptr_t)odd &&
 	      clean_hi >= (uintptr_t)odd + 64 * 512 && (clean_lo & 31) == 0);
 
+	/* memory that is not cached (non-cacheable, CDRAM, device): nothing to
+	 * clean, the data is the same; one end cached or unknown: cleaned */
+	{
+		static const int nothing[] = { 0x8000, 0x0800 };
+		static const int clean_it[] = { 0xD000, 0x4000, -1 };
+
+		for (int i = 0; i < 2; i++) {
+			clean_calls = 0;
+			fake_memtype = nothing[i];
+			memset(u, 0, 1100 * 512);
+			CHECK(rd(u, 10, 1100) == 0 && clean_calls == 0);
+			CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+			CHECK(fake_memtype_calls >= 2);          /* both ends looked at */
+		}
+		for (int i = 0; i < 3; i++) {
+			clean_calls = 0;
+			fake_memtype = clean_it[i];
+			CHECK(rd(u, 10, 1100) == 0 && clean_calls == 3);
+		}
+		CHECK(g_gpu_skipped_kib == 2 * 550 && g_gpu_cleaned_kib >= 3 * 550);
+		fake_memtype = 0xD000;
+	}
+
 	clean_calls = 0;
+	fake_memtype_calls = 0;
 	CHECK(wr(u, 0, 100, REF_RD) == 0 && clean_calls == 0);   /* writes: nothing to do */
+	CHECK(fake_memtype_calls == 0);                          /* ... and nothing looked up */
 	CHECK(rd(u, 0, 8) == 0 && clean_calls == 0);             /* small, stock: not ours */
 
 	s.gpusafe = 0;

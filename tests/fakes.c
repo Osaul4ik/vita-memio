@@ -130,6 +130,17 @@ void fakes_reset(void)
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
 	fake_rename_fail = fake_write_short = 0;
+	fake_memtype = 0xD000;          /* ordinary cached memory */
+	fake_memtype_calls = 0;
+}
+
+int fake_memtype = 0xD000, fake_memtype_calls;
+
+int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
+{
+	(void)addr;
+	fake_memtype_calls++;
+	return fake_memtype;
 }
 
 static const char *map(const char *path, char *out, size_t n)

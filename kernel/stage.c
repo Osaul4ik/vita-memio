@@ -133,6 +133,30 @@ static volatile int g_count_all;
 static void (*g_dcache_clean)(void *start, unsigned int size);
 static volatile int g_gpu_safe;
 static int g_gpu_safe_logged;
+static volatile uint32_t g_gpu_cleaned_kib, g_gpu_skipped_kib;   /* for the log */
+
+/* SceSysmemForDriver: the memory type at an address of the current address
+ * space, masked with 0xFF00 (0xD000 cached, 0x4000 L1 write-back only,
+ * 0x8000 non-cacheable - also CDRAM -, 0x0800 device), or < 0. */
+int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);
+#define MEMTYPE_NC      0x8000
+#define MEMTYPE_DEVICE  0x0800
+
+/* Whether a read into [p, p + n) has to be cleaned out of the cache for
+ * GPU-safe reads: not when the caller's memory is not cacheable at all (the
+ * CPU's copy then goes straight to memory, as the DMA would). Both ends are
+ * looked at; anything unknown is cleaned. */
+static int is_uncached(const void *a)
+{
+	int m = ksceKernelGetMemBlockMemtypeByAddr(a);
+
+	return m == MEMTYPE_NC || m == MEMTYPE_DEVICE;
+}
+
+static int needs_clean(const uint8_t *p, uint32_t n)
+{
+	return !(is_uncached(p) && is_uncached(p + n - 1));
+}
 
 /* Write [p, p + n) out of the data cache to memory (whole 32-byte lines). */
 static inline void clean_out(void *p, uint32_t n)
@@ -280,7 +304,16 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		verify = 0;
 	}
 	const int stats = g_stats;
-	const int clean = !write && g_gpu_safe && g_dcache_clean;
+	int clean = !write && g_gpu_safe && g_dcache_clean;
+	int uncached = 0;               /* GPU-safe, but nothing to clean */
+
+	if (clean && !needs_clean(p, left * 512)) {
+		clean = 0;
+		uncached = 1;
+		g_gpu_skipped_kib += left / 2;
+	} else if (clean) {
+		g_gpu_cleaned_kib += left / 2;
+	}
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
@@ -344,6 +377,13 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		p += bytes;
 		sector += n;
 		left -= n;
+	}
+	if (uncached) {                 /* the copy has reached memory */
+#ifdef __arm__
+		__asm__ volatile("dsb" ::: "memory");
+#else
+		__sync_synchronize();
+#endif
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
@@ -514,9 +554,20 @@ void vm_stage_apply(const VmSettings *s)
 
 void vm_stage_worker_tick(void)
 {
+	static uint32_t ticks, last_cleaned, last_skipped;
+
 	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found");
+	}
+	/* Once a minute, if anything changed: how much of the GPU-safe reads had
+	 * to be cleaned and how much went into memory that is not cached. */
+	if (++ticks % 60 == 0 &&
+	    (g_gpu_cleaned_kib != last_cleaned || g_gpu_skipped_kib != last_skipped)) {
+		last_cleaned = g_gpu_cleaned_kib;
+		last_skipped = g_gpu_skipped_kib;
+		VM_KLOGI("stage: GPU-safe reads: cleaned %u KiB, not cached (no clean) %u KiB",
+		         (unsigned)last_cleaned, (unsigned)last_skipped);
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)

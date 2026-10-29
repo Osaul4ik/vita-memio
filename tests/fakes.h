@@ -9,6 +9,8 @@ extern int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 extern int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 extern int fake_rename_fail;          /* ksceIoRename fails (power cut after remove) */
 extern int fake_write_short;          /* ksceIoWrite writes only part of the data    */
+extern int fake_memtype;              /* ksceKernelGetMemBlockMemtypeByAddr()        */
+extern int fake_memtype_calls;
 
 /* Fresh temp directory, exported as the "ur0:data/vita-memio" root. */
 const char *fakes_tmpdir_new(void);

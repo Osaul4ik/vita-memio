@@ -36,7 +36,6 @@
 #include "stage.h"
 #include "hud.h"
 #include "hud_i18n.h"
-#include "gpumap.h"
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
 /* The boot counts as finished once SceShell (the home screen) has been loaded
@@ -341,7 +340,6 @@ static int worker(SceSize args, void *argp)
 		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE)
 			continue;
 		guard_tick();
-		vm_gpumap_tick(g_vm_settings.log && g_vm_settings.gpusafe, g_uptime);
 		vm_stage_worker_tick();
 		vm_stage_get(now, 1);
 		hud_feed(now);
@@ -497,7 +495,6 @@ int module_stop(SceSize argc, const void *args)
 	if (g_worker >= 0)
 		ksceKernelWaitThreadEnd(g_worker, NULL, NULL);
 	vm_hud_fini();
-	vm_gpumap_fini();
 	vm_stage_fini();
 	vm_settings_flush();
 	vm_klog_fini();

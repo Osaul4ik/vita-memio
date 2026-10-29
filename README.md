@@ -97,7 +97,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 
 | Row | What it does | Default |
 |---|---|---|
-| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed | Off |
+| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed; reads into memory that is not cached (such as the graphics memory) need nothing and cost nothing | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |

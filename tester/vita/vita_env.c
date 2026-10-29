@@ -92,6 +92,7 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	TsState st;
 
 	memset(out, 0, sizeof(*out));
+	out->cached_read = BENCH_CR_UNKNOWN;
 	memset(&st, 0, sizeof(st));
 	if (tsGetState(&st) != TS_OK || st.magic != TS_STATE_MAGIC)
 		return -1;
@@ -104,6 +105,20 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->mismatches = st.dev[v->dev].mismatches;
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
+	{
+		/* tsGetSetting and tsGetCachedRead came in the same kernel module
+		 * version. With an older one the weak imports are unresolved and may
+		 * answer anything, so only a valid setting value makes the per-device
+		 * state worth reading. */
+		int set = tsGetSetting(TS_KEY_CACHED_READ);
+
+		if (set == 0 || set == 1) {
+			int c = tsGetCachedRead(v->dev);
+
+			if (c >= TS_CR_UNAVAILABLE && c <= TS_CR_PENDING)
+				out->cached_read = c;
+		}
+	}
 	{
 		/* Optional: a kernel module older than this tester has no tsGetTiming
 		 * (the weak import then just returns), so check the result and magic. */

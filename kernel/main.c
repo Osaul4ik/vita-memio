@@ -294,7 +294,12 @@ int tsGetState(TsState *out)
 	memset(&k, 0, sizeof(k));
 	k.size = sizeof(k);
 	k.magic = TS_STATE_MAGIC;
-	ts_settings_copy(&k.settings);
+	{
+		TsSettings all;
+
+		ts_settings_copy(&all);
+		memcpy(&k.settings, &all, sizeof(k.settings));   /* keys 0..6 (TsSettingsV1) */
+	}
 	k.disabled = g_disabled;
 	k.fingerprint = g_fingerprint;
 	k.verify_ready = ts_stage_verify_ready();
@@ -313,6 +318,21 @@ int tsSetSetting(int key, int value)
 	if (!ts_setting_valid(key, value))
 		return TS_ERR_ARG;
 	return ts_settings_set(key, value);   /* applies now; worker saves + logs */
+}
+
+int tsGetSetting(int key)
+{
+	TsSettings s;
+	int32_t *f;
+
+	ts_settings_copy(&s);
+	f = ts_setting_field(&s, key);
+	return f ? (int)*f : TS_ERR_ARG;
+}
+
+int tsGetCachedRead(int dev)
+{
+	return ts_stage_cached_state(dev);
 }
 
 int tsGetTiming(TsTiming *out)

@@ -62,6 +62,8 @@ enum ts_key {
 	TS_KEY_HUD_POS,        /* TS_POS_*                                       */
 	TS_KEY_DEVMODE,        /* 0/1: developer command server on TCP :1340     */
 	TS_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
+	TS_KEY_CACHED_READ,    /* 0/1: experimental: read the staging buffer
+	                        * through a cached mapping (added in 0.3)       */
 	TS_KEY_COUNT
 };
 
@@ -91,6 +93,7 @@ enum ts_key {
 #define TS_DEF_HUD_POS   TS_POS_TOP_RIGHT
 #define TS_DEF_DEVMODE   0
 #define TS_DEF_MEMCARD   0
+#define TS_DEF_CACHED_READ 0   /* experimental: off until the user turns it on */
 
 /* One int per key, in enum ts_key order. */
 typedef struct TsSettings {
@@ -101,6 +104,7 @@ typedef struct TsSettings {
 	int32_t hud_pos;
 	int32_t devmode;
 	int32_t memcard;
+	int32_t cached_read;
 } TsSettings;
 
 /* 1 if `v` is a legal value for `key`, else 0. Shared so the kernel's
@@ -113,6 +117,7 @@ static inline int ts_setting_valid(int key, int v)
 	case TS_KEY_VERIFY:
 	case TS_KEY_DEVMODE:
 	case TS_KEY_MEMCARD:
+	case TS_KEY_CACHED_READ:
 		return v == 0 || v == 1;
 	case TS_KEY_HUD:
 		return v >= TS_HUD_OFF && v <= TS_HUD_EXTENDED;

@@ -36,7 +36,7 @@
 #define TS_DEFERRED_BRINGUP_DELAY_US  (3 * 1000 * 1000)
 
 static const char *const k_keys[TS_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
+	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard", "cached_read",
 };
 static const char *const k_status[] = { "off", "active", "fallback", "no-buffer", "unavailable" };
 static const char *const k_dev[TS_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
@@ -122,11 +122,11 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 	if (!strcmp(line, "help")) {
 #ifdef TS_DEV_ALLOW_RISKY
 		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
-		            "keys: sd2vita memcard internal verify devmode (0/1), hud (0-2), hud_pos (0-3)");
+		            "keys: sd2vita memcard internal verify cached_read devmode (0/1), hud (0-2), hud_pos (0-3)");
 #else
 		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
 		            "keys: sd2vita memcard devmode (0/1), hud (0-2), hud_pos (0-3)\n"
-		            "internal and verify: Settings only (diagnostics build to change them here)");
+		            "internal, verify and cached_read: Settings only (diagnostics build to change them here)");
 #endif
 	} else if (!strcmp(line, "version")) {
 		put(p, end, "turbo-storage %s", TS_VERSION_STR);
@@ -147,6 +147,24 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		         (int)st.settings.sd2vita, (int)st.settings.memcard, (int)st.settings.internal,
 		         (int)st.settings.verify, (int)st.settings.hud, (int)st.settings.hud_pos,
 		         (int)st.settings.devmode);
+		{
+			/* Keys after TsState's frozen set, and the cached read path. A
+			 * kernel module older than this has neither call: a negative or
+			 * unknown answer prints as "?". */
+			static const char *const cr[] = { "off", "active", "setting up" };
+			int v = tsGetSetting(TS_KEY_CACHED_READ);
+
+			p += put(p, end, "cached_read=%s:", v == 0 ? "0" : v == 1 ? "1" : "?");
+			/* Both calls came in the same kernel module version: without a
+			 * valid setting, the per-device answers mean nothing. */
+			for (int i = 0; i < TS_DEV_COUNT && (v == 0 || v == 1); i++) {
+				int c = tsGetCachedRead(i);
+
+				p += put(p, end, " %s=%s", k_dev[i], c == TS_CR_UNAVAILABLE ? "unavailable" :
+				         c >= TS_CR_OFF && c <= TS_CR_PENDING ? cr[c] : "?");
+			}
+			p += put(p, end, "\n");
+		}
 		p += put(p, end, "memcard slow mode: %s\n", st.memcard_slow == 1 ? "ON" :
 		         st.memcard_slow == 0 ? "off" : "unknown");
 		for (int i = 0; i < TS_DEV_COUNT; i++) {
@@ -180,8 +198,9 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		}
 #ifndef TS_DEV_ALLOW_RISKY
 		/* The port is open to the whole network with no password: it must not be
-		 * able to switch on the internal-storage path or the verify diagnostic. */
-		if (key == TS_KEY_INTERNAL || key == TS_KEY_VERIFY) {
+		 * able to switch on the internal-storage path, the verify diagnostic or
+		 * the experimental cached read path. */
+		if (key == TS_KEY_INTERNAL || key == TS_KEY_VERIFY || key == TS_KEY_CACHED_READ) {
 			put(p, end, "set %s: not allowed over the network (use Settings)", k_keys[key]);
 			TS_LOGI("[DEV] set %s refused", k_keys[key]);
 			return;

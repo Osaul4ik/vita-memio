@@ -37,7 +37,7 @@ static int          g_save_fails = 0;   /* retry a failed save a few times */
 
 static const int32_t g_defaults[TS_KEY_COUNT] = {
 	TS_DEF_SD2VITA, TS_DEF_INTERNAL, TS_DEF_VERIFY, TS_DEF_HUD, TS_DEF_HUD_POS,
-	TS_DEF_DEVMODE, TS_DEF_MEMCARD,
+	TS_DEF_DEVMODE, TS_DEF_MEMCARD, TS_DEF_CACHED_READ,
 };
 
 static uint32_t file_check(const TsSettingsFile *f)
@@ -96,8 +96,8 @@ void ts_settings_init(void)
 	if (!load_file(TS_SETTINGS_PATH, &s) && !load_file(TS_SETTINGS_TMP, &s))
 		TS_KLOGI("settings: no usable saved file, using defaults");
 	memcpy((void *)&g_ts_settings, &s, sizeof(s));
-	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
+	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d cached_read=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode, s.cached_read);
 	ts_stage_apply(&s);
 }
 

@@ -32,6 +32,25 @@
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
  *
+ * Experimental cached read path (setting "cached_read", off by default): the
+ * copy OUT of the non-cacheable buffer is the slow half of a staged read (the
+ * Cortex-A9 reads non-cacheable memory at ~120 MB/s). When it is on, the worker
+ * gives each device buffer a second, cacheable mapping of the same physical
+ * pages (a SceSysmem mirror block). The driver still gets the non-cacheable
+ * address, so nothing changes for it; after its read returns, the chunk is
+ * invalidated in the L1 and L2 data caches through the cached mapping and
+ * copied out through it. Rules that keep this safe:
+ *   - the mapping is created only while the device buffer is held (busy), then
+ *     cleaned and invalidated in full, so no dirty line of it can ever be
+ *     written back over data the card delivered;
+ *   - nothing ever writes through the cached mapping;
+ *   - every chunk is invalidated after the DMA and before it is read;
+ *   - the mapping must pass a live check (a marker written through the
+ *     non-cacheable address reads back through the cached one) or the device
+ *     keeps the normal path; same if the cache functions can't be resolved.
+ * Writes are unchanged (they go into the buffer through the non-cacheable
+ * address).
+ *
  * HOT PATH: no logging here, only counters (the 1 Hz worker logs).
  */
 #include <psp2kern/kernel/sysmem.h>
@@ -74,6 +93,18 @@
 /* Kernel non-cacheable RW memory, physically contiguous (attr below): the same
  * kind the system uses for its own USB storage I/O buffer. */
 #define MEMBLOCK_KERNEL_NC_RW  0x10208006
+/* Kernel cacheable RW: the type of the second (mirror) mapping. */
+#define MEMBLOCK_KERNEL_RW     0x1020D006
+
+/* SceCpuForDriver (in SceSysmem), resolved at run time so a missing export only
+ * makes the cached read path unavailable instead of stopping the module. */
+#define LIB_CPU_DRV            0x40ECDB0E
+#define NID_DCACHE_INV         0x02796361    /* ksceKernelDcacheInvalidateRange (L1+L2)      */
+#define NID_DCACHE_CLEAN_INV   0x364E68A4    /* ksceKernelDcacheCleanInvalidateRange (L1+L2) */
+#define CACHE_LINE             64            /* the functions want 0x40-aligned ranges */
+
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
+                           uint32_t funcnid, uintptr_t *func);
 
 void *ksceSdifGetSdContextGlobal(int port);
 
@@ -89,14 +120,23 @@ typedef struct Dev {
 	uint64_t      us_total;             /* time inside faster-path transfers, us */
 	uint32_t      us_max;               /* the slowest one, us                   */
 	TsTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
+	void * volatile alias;              /* cached mapping of buf, or NULL        */
+	SceUID        alias_uid;
+	volatile int  cr_state;             /* TS_CR_UNAVAILABLE once setup failed   */
 	TsDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
 static Dev g_dev[TS_DEV_COUNT] = {
-	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
-	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1 },
-	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
+	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1, .alias_uid = -1 },
+	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1, .alias_uid = -1 },
+	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1, .alias_uid = -1 },
 };
+
+/* Cached read path: the setting, and the two cache functions. */
+static volatile int g_cached;
+static void (*g_dc_inv)(void *start, unsigned int size);
+static void (*g_dc_clean_inv)(void *start, unsigned int size);
+static int g_dc_tried;
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -205,7 +245,7 @@ static void note_time(Dev *d, uint32_t t0)
 static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                       void *buf, uint32_t nsec)
 {
-	uint8_t *dst = buf;
+	uint8_t *dst = buf, *alias;
 	uint32_t left = nsec, t0;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
@@ -215,6 +255,9 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		return io(ref, part, sector, buf, nsec);
 	t0 = ksceKernelGetSystemTimeLow();
 	verify = take_shadow();
+	/* Read once per request: the worker publishes alias only while it holds
+	 * this buffer, and nothing frees it while the buffer is held. */
+	alias = g_cached ? (uint8_t *)d->alias : NULL;
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
@@ -224,7 +267,16 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (ret < 0)
 			break;
 		t2 = ksceKernelGetSystemTimeLow();
-		ts_copy_from_stage(dst, d->buf, bytes);
+		if (alias) {
+			/* Drop whatever the cache holds for these lines (stale data from
+			 * before the DMA, or lines fetched speculatively during it), then
+			 * read the card's data through the cache. bytes is a multiple of
+			 * 512 and alias is page-aligned: whole 64-byte lines. */
+			g_dc_inv(alias, bytes);
+			ts_copy_from_stage(dst, alias, bytes);
+		} else {
+			ts_copy_from_stage(dst, d->buf, bytes);
+		}
 		t3 = ksceKernelGetSystemTimeLow();
 		d->tm.rd_sectors += n;
 		d->tm.rd_io_us += t2 - t1;
@@ -450,6 +502,12 @@ void ts_stage_fini(void)
 			g_hook[i] = -1;
 		}
 	for (int i = 0; i < TS_DEV_COUNT; i++)
+		if (g_dev[i].alias_uid >= 0) {    /* the mirror goes before what it maps */
+			g_dev[i].alias = NULL;
+			ksceKernelFreeMemBlock(g_dev[i].alias_uid);
+			g_dev[i].alias_uid = -1;
+		}
+	for (int i = 0; i < TS_DEV_COUNT; i++)
 		if (g_dev[i].uid >= 0) {
 			ksceKernelFreeMemBlock(g_dev[i].uid);
 			g_dev[i].uid = -1;
@@ -474,10 +532,106 @@ void ts_stage_apply(const TsSettings *s)
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
+	g_cached = s->cached_read ? 1 : 0;
+	if (!g_cached)                /* turning it off and on again retries the setup */
+		for (int i = 0; i < TS_DEV_COUNT; i++)
+			if (g_dev[i].cr_state == TS_CR_UNAVAILABLE)
+				g_dev[i].cr_state = TS_CR_OFF;
+}
+
+/* Give device i a cached mapping of its staging buffer. Runs in the worker,
+ * holding the buffer, so no transfer uses it meanwhile. 1 = done (or for good
+ * unavailable), 0 = the buffer was busy: try again on the next tick. */
+static int setup_alias(int i)
+{
+	static const uint32_t marker[4] = { 0x54534341u, 0x5348454Fu, 0x0BADF00Du, 0xC0FFEE11u };
+	Dev *d = &g_dev[i];
+	SceKernelAllocMemBlockKernelOpt opt;
+	SceUID uid;
+	void *base = NULL;
+	int ok;
+
+	if (__sync_lock_test_and_set(&d->busy, 1))
+		return 0;
+	__sync_synchronize();
+
+	memset(&opt, 0, sizeof(opt));
+	opt.size = sizeof(opt);
+	opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_MIRROR_BLOCKID;
+	opt.mirror_blockid = d->uid;
+	uid = ksceKernelAllocMemBlock("SceStorageTurboCached", MEMBLOCK_KERNEL_RW, STAGE_BYTES, &opt);
+	if (uid < 0) {
+		TS_KLOGW("stage: dev %d cached mapping not created (0x%08x) - normal reads",
+		         i, (unsigned)uid);
+		goto unavailable;
+	}
+	if (ksceKernelGetMemBlockBase(uid, &base) < 0 || !base || base == d->buf) {
+		TS_KLOGW("stage: dev %d cached mapping has no usable address - normal reads", i);
+		ksceKernelFreeMemBlock(uid);
+		goto unavailable;
+	}
+	/* Write back and drop anything the new mapping holds (it may have been
+	 * zero-filled through the cache), while nothing else uses the buffer. */
+	g_dc_clean_inv(base, STAGE_BYTES);
+	/* Live check: the cached mapping must show the same physical memory. */
+	memcpy(d->buf, marker, sizeof(marker));         /* through the NC address */
+	g_dc_inv(base, CACHE_LINE);
+	ok = memcmp(base, marker, sizeof(marker)) == 0;
+	((uint32_t *)d->buf)[0] = ~marker[0];
+	g_dc_inv(base, CACHE_LINE);
+	ok = ok && ((const uint32_t *)base)[0] == ~marker[0];
+	g_dc_inv(base, CACHE_LINE);                       /* leave no line of it behind */
+	if (!ok) {
+		TS_KLOGW("stage: dev %d cached mapping does not show the buffer - normal reads", i);
+		ksceKernelFreeMemBlock(uid);
+		goto unavailable;
+	}
+	d->alias_uid = uid;
+	__sync_synchronize();
+	d->alias = base;
+	d->cr_state = TS_CR_ACTIVE;
+	__sync_lock_release(&d->busy);
+	TS_KLOGI("stage: dev %d cached read path ready", i);
+	return 1;
+
+unavailable:
+	d->cr_state = TS_CR_UNAVAILABLE;
+	__sync_lock_release(&d->busy);
+	return 1;
+}
+
+static void cached_tick(void)
+{
+	if (!g_dc_tried) {
+		uintptr_t inv = 0, cinv = 0;
+
+		g_dc_tried = 1;
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_INV, &inv) >= 0 &&
+		    module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_CLEAN_INV, &cinv) >= 0 &&
+		    inv && cinv) {
+			g_dc_inv = (void (*)(void *, unsigned int))inv;
+			g_dc_clean_inv = (void (*)(void *, unsigned int))cinv;
+		} else {
+			TS_KLOGW("stage: cache functions not found - cached read path unavailable");
+		}
+	}
+	for (int i = 0; i < TS_DEV_COUNT; i++) {
+		Dev *d = &g_dev[i];
+
+		if (!d->buf || d->alias || d->cr_state == TS_CR_UNAVAILABLE)
+			continue;
+		if (!g_dc_inv || !g_dc_clean_inv) {
+			d->cr_state = TS_CR_UNAVAILABLE;
+			continue;
+		}
+		setup_alias(i);
+	}
 }
 
 void ts_stage_worker_tick(void)
 {
+	if (g_cached)
+		cached_tick();
 	/* The verify buffer is only allocated once verify mode is first turned on. */
 	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
 		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, &g_shadow_uid, &g_shadow);
@@ -519,6 +673,20 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		                !d->buf        ? TS_ST_NO_BUFFER :
 		                d->fallback    ? TS_ST_FALLBACK : TS_ST_ACTIVE;
 	}
+}
+
+int ts_stage_cached_state(int dev)
+{
+	const Dev *d;
+
+	if (dev < 0 || dev >= TS_DEV_COUNT)
+		return TS_ERR_ARG;
+	d = &g_dev[dev];
+	if (!g_cached || !d->buf)
+		return TS_CR_OFF;
+	if (d->cr_state == TS_CR_UNAVAILABLE)
+		return TS_CR_UNAVAILABLE;
+	return d->alias ? TS_CR_ACTIVE : TS_CR_PENDING;
 }
 
 void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT])

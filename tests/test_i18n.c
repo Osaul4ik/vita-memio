@@ -167,6 +167,22 @@ static void test_device_hint_fits(void)
 			}
 }
 
+/* The experimental row shows "<help> <not available here>" the same way: it must
+ * fit both the page's UTF-8 line (1024 bytes) and its UTF-16 buffer. */
+static void test_cached_hint_fits(void)
+{
+	for (int lang = 0; lang < TS_LANG_COUNT; lang++) {
+		const char *h = ts_i18n_for(TS_I18N_HINT_CACHED, lang);
+		const char *w = ts_i18n_for(TS_I18N_ST_CACHED_UNAVAIL, lang);
+		int a, b;
+
+		CHECK(valid_utf8(h, &a) && valid_utf8(w, &b));
+		CHECK(a + 1 + b < PAGE_UNITS);
+		CHECK(strlen(h) + 1 + strlen(w) < 1024);
+		CHECK(ts_i18n_for(TS_I18N_ROW_CACHED, lang)[0] != 0);
+	}
+}
+
 static void test_language_lookup(void)
 {
 	fake_lang = 0;  CHECK(ts_i18n_lang() == 0);
@@ -182,6 +198,7 @@ int main(void)
 	RUN(test_conversion_limits);
 	RUN(test_table);
 	RUN(test_device_hint_fits);
+	RUN(test_cached_hint_fits);
 	RUN(test_language_lookup);
 
 	printf(ts_failures ? "test_i18n: %d FAILED\n" : "test_i18n: ok\n", ts_failures);

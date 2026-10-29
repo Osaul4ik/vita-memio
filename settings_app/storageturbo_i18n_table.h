@@ -594,3 +594,69 @@
 	"Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",   /* engb */
 	"Not: sistemin hafıza kartı yavaş modu açık; her aktarımı bilerek yavaşlatır.",   /* tr */
 },
+[TS_I18N_ROW_CACHED] = {
+	"読み込みを高速化（試験的）",   /* ja */
+	"Faster reads (experimental)",   /* en */
+	"Lectures plus rapides (expérimental)",   /* fr */
+	"Lecturas más rápidas (experimental)",   /* es */
+	"Schnelleres Lesen (experimentell)",   /* de */
+	"Letture più veloci (sperimentale)",   /* it */
+	"Sneller lezen (experimenteel)",   /* nl */
+	"Leituras mais rápidas (experimental)",   /* pt */
+	"Ускоренное чтение (экспериментально)",   /* ru */
+	"더 빠른 읽기 (실험적)",   /* ko */
+	"加快讀取（實驗性）",   /* zht */
+	"加快读取（实验性）",   /* zhs */
+	"Nopeampi lukeminen (kokeellinen)",   /* fi */
+	"Snabbare läsning (experimentell)",   /* sv */
+	"Hurtigere læsning (eksperimentel)",   /* da */
+	"Raskere lesing (eksperimentell)",   /* no */
+	"Szybszy odczyt (eksperymentalne)",   /* pl */
+	"Leituras mais rápidas (experimental)",   /* ptbr */
+	"Faster reads (experimental)",   /* engb */
+	"Daha hızlı okuma (deneysel)",   /* tr */
+},
+[TS_I18N_HINT_CACHED] = {
+	"試験的な機能です。プラグインの転送バッファーのデータをCPUキャッシュ経由で読み出し、読み込みを高速化します。上のストレージの設定と組み合わせて動作します。異常があればオフにしてください。1秒以内に反映され、再起動は不要です。",   /* ja */
+	"Experimental. Reads data out of the plugin's transfer buffer through the CPU cache, which makes reads faster. Works together with the storage switches above. If anything looks wrong, turn it off. Takes effect within a second; no reboot needed.",   /* en */
+	"Expérimental. Lit les données du tampon de transfert du plugin via le cache du processeur, ce qui accélère les lectures. Fonctionne avec les options de stockage ci-dessus. Si quelque chose semble anormal, désactivez-le. Prend effet en moins d'une seconde, sans redémarrage.",   /* fr */
+	"Experimental. Lee los datos del búfer de transferencia del plugin a través de la caché de la CPU, lo que acelera las lecturas. Funciona junto con las opciones de almacenamiento de arriba. Si algo parece ir mal, desactívalo. Se aplica en menos de un segundo; no hace falta reiniciar.",   /* es */
+	"Experimentell. Liest Daten aus dem Übertragungspuffer des Plugins über den CPU-Cache, was das Lesen beschleunigt. Wirkt zusammen mit den Speicher-Schaltern oben. Wenn etwas nicht stimmt, ausschalten. Wirkt innerhalb einer Sekunde, ohne Neustart.",   /* de */
+	"Sperimentale. Legge i dati dal buffer di trasferimento del plugin tramite la cache della CPU, rendendo le letture più veloci. Funziona insieme alle opzioni di memoria qui sopra. Se qualcosa non va, disattivalo. Ha effetto entro un secondo, senza riavviare.",   /* it */
+	"Experimenteel. Leest gegevens uit de overdrachtsbuffer van de plugin via de CPU-cache, waardoor lezen sneller gaat. Werkt samen met de opslagschakelaars hierboven. Zet het uit als er iets niet klopt. Werkt binnen een seconde; opnieuw opstarten is niet nodig.",   /* nl */
+	"Experimental. Lê os dados do buffer de transferência do plugin através da cache do CPU, o que torna as leituras mais rápidas. Funciona em conjunto com as opções de armazenamento acima. Se algo parecer errado, desligue. Tem efeito em menos de um segundo; não é preciso reiniciar.",   /* pt */
+	"Экспериментально. Читает данные из буфера передачи плагина через кэш процессора, что ускоряет чтение. Работает вместе с переключателями памяти выше. Если что-то не так, выключите. Действует в течение секунды, перезагрузка не нужна.",   /* ru */
+	"실험적 기능입니다. 플러그인 전송 버퍼의 데이터를 CPU 캐시를 통해 읽어 읽기 속도를 높입니다. 위의 저장소 설정과 함께 작동합니다. 이상이 있으면 끄세요. 1초 이내에 적용되며 재시작할 필요가 없습니다.",   /* ko */
+	"實驗性功能。透過 CPU 快取讀取外掛程式傳輸緩衝區中的資料，以加快讀取速度。與上方的儲存空間開關搭配使用。若有異常，請關閉。一秒內生效，無需重新啟動。",   /* zht */
+	"实验性功能。通过 CPU 缓存读取插件传输缓冲区中的数据，以加快读取速度。与上方的存储开关配合使用。若有异常，请关闭。一秒内生效，无需重启。",   /* zhs */
+	"Kokeellinen. Lukee tiedot liitännäisen siirtopuskurista suorittimen välimuistin kautta, mikä nopeuttaa lukemista. Toimii yhdessä yllä olevien tallennusvalintojen kanssa. Jos jokin näyttää väärältä, kytke pois. Tulee voimaan sekunnissa; uudelleenkäynnistystä ei tarvita.",   /* fi */
+	"Experimentell. Läser data ur pluginets överföringsbuffert via processorns cache, vilket gör läsningen snabbare. Fungerar tillsammans med lagringsreglagen ovan. Stäng av om något verkar fel. Gäller inom en sekund; ingen omstart behövs.",   /* sv */
+	"Eksperimentel. Læser data fra pluginets overførselsbuffer gennem processorens cache, hvilket gør læsning hurtigere. Virker sammen med lagerkontakterne ovenfor. Slå fra, hvis noget ser forkert ud. Træder i kraft inden for et sekund; ingen genstart nødvendig.",   /* da */
+	"Eksperimentell. Leser data fra pluginens overføringsbuffer gjennom prosessorens hurtigbuffer, noe som gjør lesing raskere. Virker sammen med lagringsbryterne ovenfor. Slå av hvis noe ser feil ut. Trer i kraft innen ett sekund; ingen omstart nødvendig.",   /* no */
+	"Eksperymentalne. Odczytuje dane z bufora transferu wtyczki przez pamięć podręczną procesora, co przyspiesza odczyt. Działa razem z przełącznikami pamięci powyżej. Jeśli coś wygląda źle, wyłącz. Działa w ciągu sekundy, bez ponownego uruchamiania.",   /* pl */
+	"Experimental. Lê os dados do buffer de transferência do plugin pelo cache da CPU, o que deixa as leituras mais rápidas. Funciona junto com as opções de armazenamento acima. Se algo parecer errado, desligue. Tem efeito em menos de um segundo; não precisa reiniciar.",   /* ptbr */
+	"Experimental. Reads data out of the plugin's transfer buffer through the CPU cache, which makes reads faster. Works together with the storage switches above. If anything looks wrong, turn it off. Takes effect within a second; no reboot needed.",   /* engb */
+	"Deneysel. Eklentinin aktarım arabelleğindeki verileri işlemci önbelleği üzerinden okuyarak okumayı hızlandırır. Yukarıdaki depolama anahtarlarıyla birlikte çalışır. Bir sorun görürseniz kapatın. Bir saniye içinde etkili olur; yeniden başlatma gerekmez.",   /* tr */
+},
+[TS_I18N_ST_CACHED_UNAVAIL] = {
+	"この本体では使用できません。読み込みは通常の高速化を使います。",   /* ja */
+	"Not available on this console: reads use the normal faster path.",   /* en */
+	"Indisponible sur cette console : les lectures utilisent l'accélération normale.",   /* fr */
+	"No disponible en esta consola: las lecturas usan la aceleración normal.",   /* es */
+	"Auf dieser Konsole nicht verfügbar: Lesen nutzt die normale Beschleunigung.",   /* de */
+	"Non disponibile su questa console: le letture usano l'accelerazione normale.",   /* it */
+	"Niet beschikbaar op deze console: lezen gebruikt de normale versnelling.",   /* nl */
+	"Indisponível nesta consola: as leituras usam a aceleração normal.",   /* pt */
+	"Недоступно на этой консоли: чтение использует обычное ускорение.",   /* ru */
+	"이 본체에서는 사용할 수 없습니다. 읽기는 일반 가속을 사용합니다.",   /* ko */
+	"此主機無法使用：讀取將使用一般加速。",   /* zht */
+	"此主机无法使用：读取将使用普通加速。",   /* zhs */
+	"Ei käytettävissä tässä konsolissa: lukeminen käyttää tavallista nopeutusta.",   /* fi */
+	"Inte tillgängligt på den här konsolen: läsning använder den vanliga snabbningen.",   /* sv */
+	"Ikke tilgængelig på denne konsol: læsning bruger den normale acceleration.",   /* da */
+	"Ikke tilgjengelig på denne konsollen: lesing bruker den vanlige akselerasjonen.",   /* no */
+	"Niedostępne na tej konsoli: odczyt korzysta ze zwykłego przyspieszenia.",   /* pl */
+	"Indisponível neste console: as leituras usam a aceleração normal.",   /* ptbr */
+	"Not available on this console: reads use the normal faster path.",   /* engb */
+	"Bu konsolda kullanılamıyor: okuma normal hızlandırmayı kullanır.",   /* tr */
+},

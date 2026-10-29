@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <psp2kern/io/fcntl.h>
@@ -25,6 +26,9 @@ uint32_t fake_now_us;
 int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 int fake_rename_fail, fake_write_short;
+int fake_mirror_fail, fake_mirror_calls, fake_mirror_wrong, fake_mirror_type;
+int fake_dcache_missing, fake_dc_inv_calls, fake_dc_clean_inv_calls, fake_dc_bad_range;
+uint32_t fake_dc_inv_bytes;
 
 /* ---- logging: swallowed ---------------------------------------------------- */
 void ts_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
@@ -35,17 +39,70 @@ int ksceKernelDelayThread(unsigned us) { (void)us; return 0; }
 uint32_t ksceKernelGetSystemTimeLow(void) { return fake_now_us; }
 
 /* ---- memory blocks --------------------------------------------------------- */
-static void *g_blocks[64];
+/* Every block is a memfd mapped into memory, so a mirror can be a real second
+ * mapping of the same memory at a different address, as on the console. */
+static void  *g_blocks[64];
+static size_t g_len[64];
+static int    g_fd[64] = { [0 ... 63] = -1 };
+static int    g_mirror_of[64];  /* a mirror block shows another block's memory */
+
+static void *map_new(size_t size, int *fd_out)
+{
+	size_t len = (size + 4095) & ~(size_t)4095;
+	int fd = memfd_create("fakeblock", 0);
+	void *p;
+
+	if (fd < 0 || ftruncate(fd, (off_t)len) != 0) {
+		perror("memfd");
+		exit(2);
+	}
+	p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (p == MAP_FAILED) {
+		perror("mmap");
+		exit(2);
+	}
+	*fd_out = fd;
+	return p;
+}
 
 SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, void *opt)
 {
-	(void)name; (void)type; (void)opt;
+	const SceKernelAllocMemBlockKernelOpt *o = opt;
+
+	(void)name;
+	if (o && (o->attr & SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_MIRROR_BLOCKID)) {
+		int target = (int)o->mirror_blockid;
+
+		fake_mirror_calls++;
+		fake_mirror_type = (int)type;
+		if (fake_mirror_fail || target <= 0 || target >= 64 || !g_blocks[target])
+			return -7;
+		for (int i = 1; i < 64; i++) {
+			if (!g_blocks[i]) {
+				size_t len = (size + 4095) & ~(size_t)4095;
+
+				if (fake_mirror_wrong) {         /* maps some other memory */
+					g_blocks[i] = map_new(size, &g_fd[i]);
+				} else {                         /* the same memory, a new address */
+					g_blocks[i] = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED,
+					                   g_fd[target], 0);
+					if (g_blocks[i] == MAP_FAILED)
+						abort();
+				}
+				g_len[i] = len;
+				g_mirror_of[i] = target;
+				return i;
+			}
+		}
+		return -6;
+	}
 	fake_alloc_calls++;
 	if (fake_alloc_fail)
 		return -6;
 	for (int i = 1; i < 64; i++) {
 		if (!g_blocks[i]) {
-			g_blocks[i] = calloc(1, size);
+			g_blocks[i] = map_new(size, &g_fd[i]);      /* zero-filled */
+			g_len[i] = (size + 4095) & ~(size_t)4095;
 			return i;
 		}
 	}
@@ -64,9 +121,22 @@ int ksceKernelFreeMemBlock(SceUID uid)
 {
 	if (uid <= 0 || uid >= 64 || !g_blocks[uid])
 		return -1;
-	free(g_blocks[uid]);
+	if (g_mirror_of[uid]) {
+		/* A mirror: the block it maps must still be there (mirror goes first). */
+		if (!g_blocks[g_mirror_of[uid]])
+			abort();
+	} else {
+		for (int i = 1; i < 64; i++)      /* never free memory a mirror still shows */
+			if (g_mirror_of[i] == uid)
+				abort();
+		fake_free_calls++;
+	}
+	munmap(g_blocks[uid], g_len[uid]);
+	if (g_fd[uid] >= 0)
+		close(g_fd[uid]);
 	g_blocks[uid] = NULL;
-	fake_free_calls++;
+	g_fd[uid] = -1;
+	g_mirror_of[uid] = 0;
 	return 0;
 }
 
@@ -89,10 +159,30 @@ int taiHookReleaseForKernel(int uid, tai_hook_ref_t ref)
 	return 0;
 }
 
+/* The cache functions (SceCpuForDriver): count the calls, check the ranges. */
+static void fake_dc_inv(void *start, unsigned int size)
+{
+	fake_dc_inv_calls++;
+	fake_dc_inv_bytes += size;
+	if (((uintptr_t)start | size) & 0x3F)
+		fake_dc_bad_range++;
+}
+
+static void fake_dc_clean_inv(void *start, unsigned int size)
+{
+	fake_dc_clean_inv_calls++;
+	if (((uintptr_t)start | size) & 0x3F)
+		fake_dc_bad_range++;
+}
+
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func)
 {
-	(void)pid; (void)modname; (void)libnid; (void)funcnid; (void)func;
+	(void)pid;
+	if (!fake_dcache_missing && !strcmp(modname, "SceSysmem") && libnid == 0x40ECDB0E) {
+		if (funcnid == 0x02796361) { *func = (uintptr_t)fake_dc_inv; return 0; }
+		if (funcnid == 0x364E68A4) { *func = (uintptr_t)fake_dc_clean_inv; return 0; }
+	}
 	return -1;
 }
 
@@ -128,6 +218,9 @@ void fakes_reset(void)
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
 	fake_rename_fail = fake_write_short = 0;
+	fake_mirror_fail = fake_mirror_calls = fake_mirror_wrong = fake_mirror_type = 0;
+	fake_dcache_missing = fake_dc_inv_calls = fake_dc_clean_inv_calls = fake_dc_bad_range = 0;
+	fake_dc_inv_bytes = 0;
 }
 
 static const char *map(const char *path, char *out, size_t n)

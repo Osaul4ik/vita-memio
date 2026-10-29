@@ -37,6 +37,9 @@ enum ts_i18n_id {
 	TS_I18N_ST_SAFE,
 	TS_I18N_ST_NO_KERNEL,
 	TS_I18N_ST_SLOW,
+	TS_I18N_ROW_CACHED,         /* the experimental cached read path (added later) */
+	TS_I18N_HINT_CACHED,
+	TS_I18N_ST_CACHED_UNAVAIL,  /* added to its help when it could not be set up   */
 	TS_I18N_COUNT
 };
 

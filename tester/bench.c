@@ -1,6 +1,6 @@
 /*
  * bench.c - the benchmark engine. See bench.h. No Vita calls: everything goes
- * through BenchEnv.
+ * through BenchEnv. It only reads the plugin's state, it never changes it.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,11 +34,11 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 };
 
 const BenchProfile bench_profile_quick = {
-	"quick", 16, 2, { 100, 80, 40, 10 }, { 20, 20, 10, 6 },
+	"quick", 16, 3, { 100, 80, 40, 10 }, { 20, 20, 10, 6 },
 };
 
 const BenchProfile bench_profile_standard = {
-	"standard", 64, 3, { 400, 300, 150, 24 }, { 40, 40, 20, 10 },
+	"standard", 64, 5, { 400, 300, 150, 24 }, { 40, 40, 20, 10 },
 };
 
 int bench_metric_is_iops(int metric)
@@ -46,16 +46,34 @@ int bench_metric_is_iops(int metric)
 	return k_def[metric].kind == K_RR || k_def[metric].kind == K_RW;
 }
 
-int bench_device_key(int dev)
-{
-	return dev == TS_DEV_INTERNAL ? TS_KEY_INTERNAL :
-	       dev == TS_DEV_MEMCARD  ? TS_KEY_MEMCARD : TS_KEY_SD2VITA;
-}
-
 const char *bench_device_name(int dev)
 {
 	return dev == TS_DEV_INTERNAL ? "Internal" :
 	       dev == TS_DEV_MEMCARD  ? "Memory card" : "SD2Vita";
+}
+
+int bench_plugin_mode(const BenchPluginState *st)
+{
+	if (!st->available)
+		return BPM_UNKNOWN;
+	if (st->disabled != TS_DIS_NONE)
+		return BPM_INACTIVE;
+	switch (st->status) {
+	case TS_ST_OFF:    return BPM_OFF;
+	case TS_ST_ACTIVE: return BPM_ON;
+	default:           return BPM_TROUBLE;
+	}
+}
+
+const char *bench_plugin_mode_name(int mode)
+{
+	switch (mode) {
+	case BPM_OFF:      return "OFF";
+	case BPM_ON:       return "ON";
+	case BPM_INACTIVE: return "INACTIVE";
+	case BPM_TROUBLE:  return "TROUBLE";
+	default:           return "UNKNOWN";
+	}
 }
 
 /* ---- engine state ------------------------------------------------------------ */
@@ -96,7 +114,7 @@ static void progress(Ctx *c, int phase, const BenchRun *r, int metric, uint32_t 
 	p.run_index = c->res->nruns > 0 ? c->res->nruns - 1 : 0;
 	p.run_total = c->run_total;
 	p.round = r ? r->round : 0;
-	p.mode_on = r ? r->mode_on : 0;
+	p.plugin_mode = c->res->plugin_mode;
 	p.metric = metric;
 	p.permille = permille > 1000 ? 1000 : permille;
 	p.run = r;
@@ -239,7 +257,7 @@ static int read_all(Ctx *c, BenchRun *r_for_progress, int phase, uint32_t *bad)
 		got = e->pread(e->ctx, h, c->buf, MIB, off);
 		if (got != (int)MIB) {
 			e->close(e->ctx, h);
-			fail(c, "read error while checking the previous file");
+			fail(c, "read error while checking the file");
 			return BR_FAIL;
 		}
 		*bad += tp_verify(c->buf, off, MIB, NULL);
@@ -249,63 +267,45 @@ static int read_all(Ctx *c, BenchRun *r_for_progress, int phase, uint32_t *bad)
 	return BR_OK;
 }
 
-/* ---- modes ------------------------------------------------------------------- */
+/* ---- the plugin (read only) --------------------------------------------------- */
 
-/* Switch the device under test and check that it took. */
-static int set_mode(Ctx *c, int on, char *note, size_t note_cap)
+static void get_state(Ctx *c, BenchPluginState *st)
 {
-	BenchPluginState st;
-	static const char *const names[] = { "off", "ACTIVE", "FALLBACK", "no buffer", "unavailable" };
-
-	if (c->env->plugin_set(c->env->ctx, on) != 0) {
-		fail(c, "the plugin refused the setting");
-		return BR_FAIL;
-	}
-	if (c->env->plugin_get(c->env->ctx, &st) != 0 || !st.available) {
-		fail(c, "the plugin stopped answering");
-		return BR_FAIL;
-	}
-	if (on && st.status != TS_ST_ACTIVE) {
-		snprintf(note, note_cap, "device status is '%s', not ACTIVE",
-		         st.status >= 0 && st.status <= TS_ST_UNAVAIL ? names[st.status] : "?");
-		fail(c, "the plugin did not become active for this device");
-		return BR_FAIL;
-	}
-	if (!on && st.status != TS_ST_OFF) {
-		snprintf(note, note_cap, "device status is '%s', not off",
-		         st.status >= 0 && st.status <= TS_ST_UNAVAIL ? names[st.status] : "?");
-		fail(c, "the plugin did not switch off for this device");
-		return BR_FAIL;
-	}
-	return BR_OK;
+	memset(st, 0, sizeof(*st));
+	if (!c->env->plugin_get || c->env->plugin_get(c->env->ctx, st) != 0)
+		memset(st, 0, sizeof(*st));        /* not available: state unknown */
 }
 
-static void check_active(BenchRun *r)
+/* Did the plugin behave as its state at the start of the test says? Only OFF and
+ * ON can be checked; for the other states there is nothing to compare. */
+static void check_plugin(const BenchResult *res, BenchRun *r)
 {
 	const BenchPluginState *b = &r->before, *a = &r->after;
+	const int mode = res->plugin_mode;
 	int grew = a->reads > b->reads && a->writes > b->writes;
+	int moved = a->reads != b->reads || a->writes != b->writes;
 	int clean = a->errors == b->errors && a->mismatches == b->mismatches;
 
-	r->active_ok = 1;
-	if (r->mode_on) {
-		if (a->status != TS_ST_ACTIVE) {
-			r->active_ok = 0;
-			snprintf(r->note, sizeof(r->note), "plugin left ACTIVE state during the run");
-		} else if (!grew) {
-			r->active_ok = 0;
-			snprintf(r->note, sizeof(r->note),
-			         "no transfer took the faster path (wrong device or folder?)");
-		} else if (!clean) {
-			r->active_ok = 0;
-			snprintf(r->note, sizeof(r->note), "the plugin counted errors or mismatches");
-		}
-	} else if (a->reads != b->reads || a->writes != b->writes) {
-		r->active_ok = 0;
-		snprintf(r->note, sizeof(r->note), "faster path was used during an OFF run");
+	r->plugin_ok = 1;
+	if (mode != BPM_OFF && mode != BPM_ON)
+		return;
+	if (bench_plugin_mode(b) != mode || bench_plugin_mode(a) != mode) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note), "the plugin state changed during the test");
+	} else if (mode == BPM_ON && !grew) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note),
+		         "no transfer took the faster path (wrong device or folder?)");
+	} else if (mode == BPM_ON && !clean) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note), "the plugin counted errors or mismatches");
+	} else if (mode == BPM_OFF && moved) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note), "faster path used although the plugin is OFF");
 	}
 }
 
-static int do_run(Ctx *c, int round, int on)
+static int do_run(Ctx *c, int round)
 {
 	BenchResult *res = c->res;
 	BenchRun *r = &res->runs[res->nruns];
@@ -313,23 +313,11 @@ static int do_run(Ctx *c, int round, int on)
 	int h, rc, m;
 
 	memset(r, 0, sizeof(*r));
-	r->mode_on = on;
 	r->round = round + 1;
 	res->nruns++;
 	progress(c, BP_SETUP, r, -1, 0);
 
-	rc = set_mode(c, on, r->note, sizeof(r->note));
-	if (rc)
-		return rc;
-	e->plugin_get(e->ctx, &r->before);
-
-	if (res->nruns > 1) {                       /* the file the previous run wrote */
-		r->cross_done = 1;
-		r->cross_from_on = res->runs[res->nruns - 2].mode_on;
-		rc = read_all(c, r, BP_CROSS, &r->cross_bad);
-		if (rc)
-			return rc;
-	}
+	get_state(c, &r->before);
 
 	h = e->open(e->ctx, c->file, 1);
 	if (h < 0) {
@@ -359,8 +347,14 @@ static int do_run(Ctx *c, int round, int on)
 	if (rc)
 		return rc;
 
-	e->plugin_get(e->ctx, &r->after);
-	check_active(r);
+	/* The random writes changed the file: read the whole of it once more. */
+	rc = read_all(c, r, BP_FINAL, &r->final_bad);
+	if (rc)
+		return rc;
+	r->final_done = 1;
+
+	get_state(c, &r->after);
+	check_plugin(res, r);
 	r->complete = 1;
 	return BR_OK;
 }
@@ -369,13 +363,13 @@ static int do_run(Ctx *c, int round, int on)
 
 static int profile_ok(const BenchProfile *p)
 {
-	return p && p->file_mib >= 1 && p->file_mib <= 1024 && p->rounds >= 1 && p->rounds <= BENCH_MAX_RUNS / 2;
+	return p && p->file_mib >= 1 && p->file_mib <= 1024 && p->rounds >= 1 && p->rounds <= BENCH_MAX_RUNS;
 }
 
 int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 {
 	Ctx c;
-	int rc = BR_OK, began = 0, round, k;
+	int rc = BR_OK, round, k, dir_ready = 0;
 	uint32_t maxops = 0;
 
 	memset(res, 0, sizeof(*res));
@@ -391,20 +385,11 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 	res->device = cfg->device;
 	snprintf(res->dir, sizeof(res->dir), "%s", cfg->dir);
 	snprintf(c.file, sizeof(c.file), "%sbench.bin", cfg->dir);
-	c.run_total = (int)cfg->profile->rounds * 2;
+	c.run_total = (int)cfg->profile->rounds;
 
-	if (env->plugin_get(env->ctx, &res->plugin0) != 0 || !res->plugin0.available) {
-		fail(&c, "the Turbo Storage kernel module does not answer");
-		return BR_FAIL;
-	}
-	if (res->plugin0.disabled != TS_DIS_NONE) {
-		fail(&c, "the plugin is inactive (safe mode, unknown firmware or no hooks)");
-		return BR_FAIL;
-	}
-	if (res->plugin0.status == TS_ST_NO_BUFFER) {
-		fail(&c, "the plugin has no staging buffer for this device");
-		return BR_FAIL;
-	}
+	/* Read only. A plugin that does not answer does not stop the test. */
+	get_state(&c, &res->plugin0);
+	res->plugin_mode = bench_plugin_mode(&res->plugin0);
 
 	for (k = 0; k < 4; k++) {
 		if (cfg->profile->rr_ops[k] > maxops) maxops = cfg->profile->rr_ops[k];
@@ -425,43 +410,15 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 		rc = BR_FAIL;
 		goto out;
 	}
-	if (env->plugin_begin(env->ctx) != 0) {
-		fail(&c, "cannot read the current plugin settings");
-		rc = BR_FAIL;
-		goto out;
-	}
-	began = 1;
+	dir_ready = 1;
 
-	/* OFF, ON | ON, OFF | OFF, ON ...: each round flips the order, so neither mode
-	 * always gets the card in the same state. */
-	for (round = 0; round < (int)cfg->profile->rounds && rc == BR_OK; round++) {
-		int first_on = round & 1;
-
-		rc = do_run(&c, round, first_on);
-		if (rc == BR_OK)
-			rc = do_run(&c, round, !first_on);
-	}
-
-	if (rc == BR_OK && res->nruns > 0) {
-		/* The last file, read in the opposite mode. */
-		int last_on = res->runs[res->nruns - 1].mode_on;
-		char note[BENCH_REASON_MAX] = "";
-
-		progress(&c, BP_FINAL, &res->runs[res->nruns - 1], -1, 0);
-		rc = set_mode(&c, !last_on, note, sizeof(note));
-		if (rc == BR_OK) {
-			res->final_cross_done = 1;
-			res->final_cross_from_on = last_on;
-			rc = read_all(&c, &res->runs[res->nruns - 1], BP_FINAL, &res->final_cross_bad);
-		}
-	}
+	for (round = 0; round < (int)cfg->profile->rounds && rc == BR_OK; round++)
+		rc = do_run(&c, round);
 
 out:
 	progress(&c, BP_CLEANUP, res->nruns ? &res->runs[res->nruns - 1] : NULL, -1, 0);
-	if (began) {
+	if (dir_ready)
 		env->remove(env->ctx, c.file);
-		env->plugin_end(env->ctx);
-	}
 	free(c.buf);
 	free(c.lat);
 	if (rc == BR_CANCEL)
@@ -476,50 +433,37 @@ void bench_aggregate(const BenchResult *res, BenchAgg *out)
 	memset(out, 0, sizeof(*out));
 	for (int i = 0; i < res->nruns; i++) {
 		const BenchRun *r = &res->runs[i];
-		double *v = r->mode_on ? out->on : out->off;
-		double *med = r->mode_on ? out->on_med_ms : out->off_med_ms;
-		double *p99 = r->mode_on ? out->on_p99_ms : out->off_p99_ms;
 
 		if (!r->complete)
 			continue;
-		if (r->mode_on)
-			out->n_on++;
-		else
-			out->n_off++;
+		out->n++;
 		for (int m = 0; m < BM_COUNT; m++) {
-			v[m] += r->value[m];
-			med[m] += r->med_us[m] / 1000.0;
-			p99[m] += r->p99_us[m] / 1000.0;
+			out->v[m] += r->value[m];
+			out->med_ms[m] += r->med_us[m] / 1000.0;
+			out->p99_ms[m] += r->p99_us[m] / 1000.0;
 		}
 	}
+	if (!out->n)
+		return;
 	for (int m = 0; m < BM_COUNT; m++) {
-		if (out->n_off) {
-			out->off[m] /= out->n_off;
-			out->off_med_ms[m] /= out->n_off;
-			out->off_p99_ms[m] /= out->n_off;
-		}
-		if (out->n_on) {
-			out->on[m] /= out->n_on;
-			out->on_med_ms[m] /= out->n_on;
-			out->on_p99_ms[m] /= out->n_on;
-		}
+		out->v[m] /= out->n;
+		out->med_ms[m] /= out->n;
+		out->p99_ms[m] /= out->n;
 	}
 }
 
 int bench_integrity_ok(const BenchResult *res)
 {
-	if (res->final_cross_bad)
-		return 0;
 	for (int i = 0; i < res->nruns; i++)
-		if (res->runs[i].verify_bad || res->runs[i].cross_bad || res->runs[i].io_errors)
+		if (res->runs[i].verify_bad || res->runs[i].final_bad || res->runs[i].io_errors)
 			return 0;
 	return 1;
 }
 
-int bench_active_ok(const BenchResult *res)
+int bench_plugin_ok(const BenchResult *res)
 {
 	for (int i = 0; i < res->nruns; i++)
-		if (res->runs[i].complete && !res->runs[i].active_ok)
+		if (res->runs[i].complete && !res->runs[i].plugin_ok)
 			return 0;
 	return 1;
 }

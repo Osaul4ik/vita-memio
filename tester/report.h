@@ -10,7 +10,7 @@
 
 #include "bench.h"
 
-#define TESTER_VERSION  "0.1.0"
+#define TESTER_VERSION  "0.2.0"
 
 typedef struct ReportMeta {
 	const char *timestamp;        /* "2026-10-28 12:30:11"                      */
@@ -23,8 +23,8 @@ void report_fmt1(char *out, size_t cap, double v);
 /* "+17%" for on versus off, "n/a" when off is zero. */
 void report_fmt_change(char *out, size_t cap, double off, double on);
 
-/* The text appended to results.txt: header, summary table, latency table, one
- * line per run, and CSV lines. Returns the length (always NUL-terminated, cut to
+/* The text appended to results.txt: header (with the plugin state the test ran
+ * in), result table, latency table, one line per run, and CSV lines. Returns the length (always NUL-terminated, cut to
  * cap). */
 size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, size_t cap);
 

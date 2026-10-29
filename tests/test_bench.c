@@ -5,8 +5,10 @@
  * The "console" is a fake: one file in memory, a clock that advances by a simple
  * speed model (reads and writes are faster with the plugin ON), a fake plugin
  * with the same states and counters as the real one, and switches that inject
- * trouble: corrupted data, a plugin that does not switch on, failing writes, a
- * cancel part-way. Built with AddressSanitizer + UBSan.
+ * trouble: corrupted data, a plugin that is not really used, a setting changed
+ * mid-test, failing writes, a cancel part-way. The engine can only read the
+ * plugin; every test also checks the setting is left exactly as it was.
+ * Built with AddressSanitizer + UBSan.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,20 +29,21 @@ typedef struct Fake {
 	int      exists, open_handles;
 	uint64_t now;
 
-	int      on;                 /* the device's setting right now             */
-	int      initial_on;         /* what the user had before the test          */
+	int      on;                 /* the device's setting (the tester must not change it) */
+	int      initial_on;
 	int      status_override;    /* -1: derive from `on`                       */
-	int      disabled, unavailable;
+	int      disabled, unavailable, verify;
 	uint32_t reads, writes, errors, mismatches;
 
 	int      corrupt_read_on, corrupt_write_on;
-	int      no_counters;
+	int      no_counters;        /* ON, but nothing takes the faster path      */
+	int      counts_when_off;    /* OFF, but the counters move anyway          */
+	int      flip_at_write;      /* the user flips the setting at this write   */
 	int      fail_write_at;      /* the Nth write call fails (0 = never)       */
 	int      write_calls;
 	int      cancel_after_polls, polls;
-	int      mkdirs_fail, refuse_set;
-
-	int      begin_calls, end_calls, remove_calls, set_calls;
+	int      mkdirs_fail;
+	int      get_calls, remove_calls;
 } Fake;
 
 static uint64_t f_now(void *c) { return ((Fake *)c)->now; }
@@ -80,6 +83,11 @@ static int f_close(void *c, int h)
 	return 0;
 }
 
+static int counts(const Fake *f, uint32_t n)
+{
+	return n >= 32768 && ((f->on && !f->no_counters) || (!f->on && f->counts_when_off));
+}
+
 static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 {
 	Fake *f = c;
@@ -89,7 +97,7 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 		return -1;
 	memcpy(buf, f->data + off, n);
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
-	if (f->on && n >= 32768 && !f->no_counters)
+	if (counts(f, n))
 		f->reads++;
 	if (f->on && f->corrupt_read_on && n >= 32768)
 		((uint8_t *)buf)[n / 2] ^= 0x10;
@@ -104,12 +112,14 @@ static int f_pwrite(void *c, int h, const void *buf, uint32_t n, uint64_t off)
 	f->write_calls++;
 	if (f->fail_write_at && f->write_calls == f->fail_write_at)
 		return -1;
+	if (f->flip_at_write && f->write_calls == f->flip_at_write)
+		f->on = !f->on;                            /* changed in Settings mid-test */
 	ensure(f, off + n);
 	memcpy(f->data + off, buf, n);
 	if (off + n > f->size)
 		f->size = off + n;
 	f->now += 400 + (uint64_t)(n * (f->on ? 0.15 : 0.17));
-	if (f->on && n >= 32768 && !f->no_counters)
+	if (counts(f, n))
 		f->writes++;
 	if (f->on && f->corrupt_write_on && n >= 32768)
 		f->data[off + n / 2] ^= 0x01;              /* lands on the "card" wrong */
@@ -136,8 +146,11 @@ static int f_get(void *c, BenchPluginState *o)
 {
 	Fake *f = c;
 
+	f->get_calls++;
 	memset(o, 0, sizeof(*o));
-	o->available = !f->unavailable;
+	if (f->unavailable)
+		return -1;
+	o->available = 1;
 	o->disabled = f->disabled;
 	o->status = f->disabled ? TS_ST_UNAVAIL
 	          : f->on ? (f->status_override >= 0 ? f->status_override : TS_ST_ACTIVE)
@@ -147,28 +160,8 @@ static int f_get(void *c, BenchPluginState *o)
 	o->errors = f->errors;
 	o->mismatches = f->mismatches;
 	o->fingerprint = 0x2e7c52f7;
-	return f->unavailable ? -1 : 0;
-}
-
-static int f_begin(void *c) { ((Fake *)c)->begin_calls++; return 0; }
-
-static int f_set(void *c, int on)
-{
-	Fake *f = c;
-
-	f->set_calls++;
-	if (f->refuse_set)
-		return -1;
-	f->on = on;
+	o->verify = f->verify;
 	return 0;
-}
-
-static void f_end(void *c)
-{
-	Fake *f = c;
-
-	f->end_calls++;
-	f->on = f->initial_on;                     /* put the user's setting back */
 }
 
 static int f_cancelled(void *c)
@@ -190,19 +183,22 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_begin, f_set, f_end, f_progress, f_cancelled };
+	               f_get, f_progress, f_cancelled };
 	return e;
 }
 
-static void fake_init(Fake *f)
+static void fake_init(Fake *f, int on)
 {
 	free(f->data);
 	memset(f, 0, sizeof(*f));
 	f->status_override = -1;
-	f->initial_on = 1;                          /* the user had it on */
-	f->on = 1;
+	f->initial_on = f->on = on;
 	g_progress_calls = g_progress_bad = 0;
 }
+
+/* the plugin setting is exactly what the user left, and nothing leaked */
+#define CHECK_UNTOUCHED(f) \
+	CHECK((f).on == (f).initial_on && !(f).exists && (f).open_handles == 0)
 
 /* a small profile so the tests stay quick under the sanitizers */
 static const BenchProfile tiny = { "tiny", 2, 3, { 20, 20, 10, 4 }, { 6, 6, 4, 2 } };
@@ -212,43 +208,54 @@ static BenchResult *new_result(void) { return calloc(1, sizeof(BenchResult)); }
 
 /* ---- the engine --------------------------------------------------------------- */
 
-static void test_full_run(void)
+static void test_full_run_on(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
 	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchAgg a;
 	BenchEnv e;
-	static const int order[6] = { 0, 1, 1, 0, 0, 1 };
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
-	CHECK(bench_valid(r) && r->nruns == 6);
-	for (int i = 0; i < 6; i++) {
-		CHECK(r->runs[i].mode_on == order[i]);        /* OFF ON | ON OFF | OFF ON */
-		CHECK(r->runs[i].complete && r->runs[i].active_ok);
-		CHECK(r->runs[i].round == i / 2 + 1);
-		CHECK(r->runs[i].cross_done == (i > 0));
-		if (i > 0)
-			CHECK(r->runs[i].cross_from_on == order[i - 1]);
+	CHECK(bench_valid(r) && r->nruns == 3 && r->plugin_mode == BPM_ON);
+	for (int i = 0; i < 3; i++) {
+		CHECK(r->runs[i].complete && r->runs[i].plugin_ok && r->runs[i].final_done);
+		CHECK(r->runs[i].round == i + 1);
+		CHECK(r->runs[i].after.reads > r->runs[i].before.reads);
 	}
-	CHECK(bench_integrity_ok(r) && bench_active_ok(r));
-	CHECK(r->final_cross_done && r->final_cross_from_on == 1 && r->final_cross_bad == 0);
-	CHECK(f.begin_calls == 1 && f.end_calls == 1);
-	CHECK(f.on == f.initial_on);                      /* the user's setting is back */
-	CHECK(!f.exists && f.open_handles == 0);          /* test file removed, nothing leaked */
+	CHECK(bench_integrity_ok(r) && bench_plugin_ok(r));
+	CHECK_UNTOUCHED(f);
+	CHECK(f.remove_calls == 1);
 	CHECK(g_progress_calls > 50 && g_progress_bad == 0);
 
 	bench_aggregate(r, &a);
-	CHECK(a.n_off == 3 && a.n_on == 3);
-	CHECK(a.on[BM_SEQ_R_1M] > a.off[BM_SEQ_R_1M] * 1.25 && a.on[BM_SEQ_R_1M] < a.off[BM_SEQ_R_1M] * 1.45);
-	CHECK(a.on[BM_SEQ_W_1M] > a.off[BM_SEQ_W_1M]);
-	CHECK(a.on_med_ms[BM_SEQ_R_1M] < a.off_med_ms[BM_SEQ_R_1M]);   /* faster = shorter */
-	/* 1 MiB at 0.08 us/byte + 200 us = ~84 ms */
-	CHECK(r->runs[0].med_us[BM_SEQ_R_1M] > 83000 && r->runs[0].med_us[BM_SEQ_R_1M] < 85000);
+	CHECK(a.n == 3);
+	/* 1 MiB at 0.06 us/byte + 200 us = ~63 ms */
+	CHECK(r->runs[0].med_us[BM_SEQ_R_1M] > 62000 && r->runs[0].med_us[BM_SEQ_R_1M] < 64000);
+	CHECK(a.med_ms[BM_SEQ_R_1M] > 62.0 && a.med_ms[BM_SEQ_R_1M] < 64.0);
 	CHECK(r->runs[0].ops[BM_SEQ_R_1M] == 2 && r->runs[0].ops[BM_SEQ_R_128K] == 16);
 	CHECK(r->runs[0].ops[BM_RR_4K] == 20 && r->runs[0].ops[BM_RW_1M] == 2);
+	free(r);
+	free(f.data);
+}
+
+static void test_full_run_off(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { TS_DEV_MEMCARD, &tiny, "ux0:data/t/" };
+	BenchEnv e;
+
+	fake_init(&f, 0);
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(bench_valid(r) && r->plugin_mode == BPM_OFF);
+	CHECK(bench_integrity_ok(r) && bench_plugin_ok(r));
+	CHECK(r->runs[0].med_us[BM_SEQ_R_1M] > 83000 && r->runs[0].med_us[BM_SEQ_R_1M] < 85000);
+	CHECK(f.reads == 0 && f.writes == 0);
+	CHECK_UNTOUCHED(f);
 	free(r);
 	free(f.data);
 }
@@ -260,14 +267,13 @@ static void test_write_corruption_is_caught(void)
 	BenchConfig cfg = { TS_DEV_MEMCARD, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	f.corrupt_write_on = 1;                           /* ON writes land wrong */
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);               /* it still runs to the end */
 	CHECK(!bench_integrity_ok(r));
-	CHECK(r->runs[1].verify_bad > 0);                 /* ON read-back sees it */
-	CHECK(r->final_cross_done && r->final_cross_bad > 0);   /* and so does the OFF read */
-	CHECK(r->runs[0].verify_bad == 0 && r->runs[0].cross_bad == 0);   /* OFF run is clean */
+	CHECK(r->runs[0].verify_bad > 0 && r->runs[0].final_bad > 0);
+	CHECK_UNTOUCHED(f);
 	free(r);
 	free(f.data);
 }
@@ -279,40 +285,17 @@ static void test_read_corruption_is_caught(void)
 	BenchConfig cfg = { TS_DEV_SD2VITA, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	f.corrupt_read_on = 1;                            /* ON reads come back wrong */
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	CHECK(!bench_integrity_ok(r));
-	CHECK(r->runs[1].verify_bad > 0);
-	CHECK(r->runs[1].cross_done && r->runs[1].cross_bad > 0);   /* OFF-written file read ON */
-	CHECK(r->runs[0].verify_bad == 0);
-	CHECK(r->final_cross_bad == 0);                   /* OFF reads are fine */
+	CHECK(r->runs[0].verify_bad > 0 && r->runs[0].final_bad > 0);
 	free(r);
 	free(f.data);
 }
 
-static void test_plugin_does_not_become_active(void)
-{
-	Fake f = { 0 };
-	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
-	BenchEnv e;
-
-	fake_init(&f);
-	f.status_override = TS_ST_FALLBACK;
-	e = env_for(&f);
-	CHECK(bench_run(&e, &cfg, r) == -1);
-	CHECK(r->failed && strstr(r->fail_reason, "did not become active"));
-	CHECK(r->nruns == 2 && r->runs[0].complete && !r->runs[1].complete);
-	CHECK(strstr(r->runs[1].note, "FALLBACK"));
-	CHECK(!bench_valid(r));
-	CHECK(f.end_calls == 1 && f.on == f.initial_on && !f.exists && f.open_handles == 0);
-	free(r);
-	free(f.data);
-}
-
-static void test_counters_must_grow(void)
+static void test_plugin_counters(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
@@ -321,47 +304,101 @@ static void test_counters_must_grow(void)
 	char *text = malloc(40000);
 	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
 
-	fake_init(&f);
-	f.no_counters = 1;                                /* ACTIVE but nothing took the path */
+	/* ON, but nothing took the faster path */
+	fake_init(&f, 1);
+	f.no_counters = 1;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
-	CHECK(bench_valid(r) && !bench_active_ok(r));
-	CHECK(r->runs[0].active_ok && !r->runs[1].active_ok);
-	CHECK(strstr(r->runs[1].note, "no transfer"));
+	CHECK(bench_valid(r) && !bench_plugin_ok(r) && !r->runs[0].plugin_ok);
+	CHECK(strstr(r->runs[0].note, "no transfer"));
 	report_format(r, &m, text, 40000);
-	CHECK(strstr(text, "plugin really used in ON runs: FAIL"));
+	CHECK(strstr(text, "plugin behaved as its state says: FAIL"));
 	CHECK(strstr(text, "NOT as expected"));
+
+	/* OFF, but the faster path was used */
+	fake_init(&f, 0);
+	f.counts_when_off = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(!bench_plugin_ok(r) && strstr(r->runs[0].note, "although the plugin is OFF"));
+	CHECK_UNTOUCHED(f);
 	free(text);
 	free(r);
 	free(f.data);
 }
 
-static void test_unusable_plugin_at_start(void)
+static void test_state_changed_mid_test(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
 	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
-	fake_init(&f);
+	fake_init(&f, 1);
+	f.flip_at_write = 3;                              /* the user switched it in Settings */
 	e = env_for(&f);
-	f.disabled = TS_DIS_SAFE;
-	CHECK(bench_run(&e, &cfg, r) == -1 && strstr(r->fail_reason, "inactive"));
-	CHECK(f.begin_calls == 0 && f.end_calls == 0 && f.set_calls == 0);   /* nothing touched */
-
-	fake_init(&f);
-	e = env_for(&f);
-	f.unavailable = 1;
-	CHECK(bench_run(&e, &cfg, r) == -1 && strstr(r->fail_reason, "does not answer"));
-	CHECK(f.begin_calls == 0);
-
-	fake_init(&f);
-	e = env_for(&f);
-	f.refuse_set = 1;
-	CHECK(bench_run(&e, &cfg, r) == -1 && strstr(r->fail_reason, "refused"));
-	CHECK(f.end_calls == 1 && f.on == f.initial_on);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(r->plugin_mode == BPM_ON && !bench_plugin_ok(r));
+	CHECK(strstr(r->runs[0].note, "state changed"));
+	CHECK(f.on == 0);                                 /* the tester did not switch it back */
 	free(r);
 	free(f.data);
+}
+
+static void test_other_plugin_states_still_run(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { TS_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchEnv e;
+
+	/* no kernel module */
+	fake_init(&f, 1);
+	f.unavailable = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
+	CHECK(r->plugin_mode == BPM_UNKNOWN && !r->plugin0.available && bench_plugin_ok(r));
+
+	/* safe mode */
+	fake_init(&f, 1);
+	f.disabled = TS_DIS_SAFE;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_INACTIVE && bench_plugin_ok(r));
+
+	/* fell back to stock / no buffer */
+	fake_init(&f, 1);
+	f.status_override = TS_ST_FALLBACK;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_TROUBLE);
+	fake_init(&f, 1);
+	f.status_override = TS_ST_NO_BUFFER;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_TROUBLE);
+	CHECK_UNTOUCHED(f);
+
+	/* an env without plugin_get at all */
+	fake_init(&f, 0);
+	e = env_for(&f);
+	e.plugin_get = NULL;
+	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_UNKNOWN);
+	free(r);
+	free(f.data);
+}
+
+static void test_plugin_mode_names(void)
+{
+	BenchPluginState st = { 0 };
+
+	CHECK(bench_plugin_mode(&st) == BPM_UNKNOWN);
+	st.available = 1;
+	st.status = TS_ST_OFF;      CHECK(bench_plugin_mode(&st) == BPM_OFF);
+	st.status = TS_ST_ACTIVE;   CHECK(bench_plugin_mode(&st) == BPM_ON);
+	st.status = TS_ST_FALLBACK; CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
+	st.status = TS_ST_UNAVAIL;  CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
+	st.disabled = TS_DIS_HOOKS; CHECK(bench_plugin_mode(&st) == BPM_INACTIVE);
+	CHECK(!strcmp(bench_plugin_mode_name(BPM_ON), "ON"));
+	CHECK(!strcmp(bench_plugin_mode_name(BPM_OFF), "OFF"));
+	CHECK(!strcmp(bench_plugin_mode_name(99), "UNKNOWN"));
 }
 
 static void test_cancel_cleans_up(void)
@@ -371,14 +408,23 @@ static void test_cancel_cleans_up(void)
 	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
-	for (int after = 1; after <= 200; after += 37) {
-		fake_init(&f);
+	int total;
+
+	/* how many times a full run asks "stop?", so every cancel point is inside it */
+	fake_init(&f, 1);
+	f.cancel_after_polls = 1 << 30;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	total = f.polls;
+	CHECK(total > 100);
+
+	for (int after = 1; after < total; after += total / 9) {
+		fake_init(&f, 1);
 		f.cancel_after_polls = after;
 		e = env_for(&f);
 		CHECK(bench_run(&e, &cfg, r) == 1);
 		CHECK(r->cancelled && !r->failed && !bench_valid(r));
-		CHECK(f.end_calls == 1 && f.on == f.initial_on);
-		CHECK(!f.exists && f.open_handles == 0);
+		CHECK_UNTOUCHED(f);
 	}
 	free(r);
 	free(f.data);
@@ -391,19 +437,19 @@ static void test_io_errors_clean_up(void)
 	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	f.fail_write_at = 3;                              /* the card fills up */
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == -1);
 	CHECK(r->failed && strstr(r->fail_reason, "write error"));
 	CHECK(r->runs[0].io_errors == 1 && !bench_integrity_ok(r));
-	CHECK(f.end_calls == 1 && f.on == f.initial_on && !f.exists && f.open_handles == 0);
+	CHECK_UNTOUCHED(f);
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	f.mkdirs_fail = 1;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == -1 && strstr(r->fail_reason, "folder"));
-	CHECK(f.begin_calls == 0 && f.end_calls == 0);
+	CHECK(f.remove_calls == 0 && f.write_calls == 0);
 	free(r);
 	free(f.data);
 }
@@ -415,7 +461,7 @@ static void test_bad_profiles(void)
 	BenchEnv e;
 	BenchProfile bad[] = {
 		{ "r0", 2, 0, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
-		{ "r9", 2, 9, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
+		{ "r17", 2, BENCH_MAX_RUNS + 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
 		{ "s0", 0, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
 		{ "big", 2000, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
 	};
@@ -423,13 +469,19 @@ static void test_bad_profiles(void)
 	for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
 		BenchConfig cfg = { TS_DEV_SD2VITA, &bad[i], "ux0:data/t/" };
 
-		fake_init(&f);
+		fake_init(&f, 1);
 		e = env_for(&f);
 		CHECK(bench_run(&e, &cfg, r) == -1 && strstr(r->fail_reason, "profile"));
-		CHECK(f.begin_calls == 0 && f.set_calls == 0);
+		CHECK(f.write_calls == 0 && f.get_calls == 0);
 	}
 	free(r);
 	free(f.data);
+}
+
+static void test_shipped_profiles(void)
+{
+	CHECK(bench_profile_quick.rounds >= 1 && bench_profile_quick.rounds <= BENCH_MAX_RUNS);
+	CHECK(bench_profile_standard.rounds >= 1 && bench_profile_standard.rounds <= BENCH_MAX_RUNS);
 }
 
 static void test_aggregate_skips_incomplete(void)
@@ -438,11 +490,14 @@ static void test_aggregate_skips_incomplete(void)
 	BenchAgg a;
 
 	r->nruns = 3;
-	r->runs[0].complete = 1; r->runs[0].mode_on = 0; r->runs[0].value[0] = 10;
-	r->runs[1].complete = 1; r->runs[1].mode_on = 1; r->runs[1].value[0] = 20;
-	r->runs[2].complete = 0; r->runs[2].mode_on = 1; r->runs[2].value[0] = 999;
+	r->runs[0].complete = 1; r->runs[0].value[0] = 10;
+	r->runs[1].complete = 1; r->runs[1].value[0] = 20;
+	r->runs[2].complete = 0; r->runs[2].value[0] = 999;
 	bench_aggregate(r, &a);
-	CHECK(a.n_off == 1 && a.n_on == 1 && a.off[0] == 10 && a.on[0] == 20);
+	CHECK(a.n == 2 && a.v[0] == 15);
+	r->nruns = 0;
+	bench_aggregate(r, &a);
+	CHECK(a.n == 0 && a.v[0] == 0);                  /* no division by zero */
 	free(r);
 }
 
@@ -466,24 +521,25 @@ static void test_report_text(void)
 	ReportMeta m = { "2026-10-28 12:30:11", "0.2.0-alpha", "uma0:data/t/" };
 	char *text = malloc(40000);
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	CHECK(report_format(r, &m, text, 40000) == strlen(text));
 	CHECK(strstr(text, "Turbo Storage tester " TESTER_VERSION "   2026-10-28 12:30:11"));
 	CHECK(strstr(text, "plugin 0.2.0-alpha   storage driver id 0x2e7c52f7"));
+	CHECK(strstr(text, "plugin during the test: ON for SD2Vita"));
 	CHECK(strstr(text, "device: SD2Vita   folder: uma0:data/t/"));
-	CHECK(strstr(text, "profile: tiny (2 MiB file, 3 rounds)"));
-	CHECK(strstr(text, "run order: OFF ON | ON OFF | OFF ON"));
+	CHECK(strstr(text, "profile: tiny (2 MiB file, 3 runs)"));
 	CHECK(strstr(text, "status: COMPLETE\n"));
 	CHECK(strstr(text, "integrity: PASS"));
-	CHECK(strstr(text, "plugin really used in ON runs: PASS"));
+	CHECK(strstr(text, "plugin behaved as its state says: PASS"));
 	CHECK(strstr(text, "seq read 1M"));
 	CHECK(strstr(text, "latency per call"));
-	CHECK(count(text, "\ncsv,") == 6 * BM_COUNT);
-	CHECK(count(text, " (written ") >= 6);
-	CHECK(strstr(text, "final: last file (written ON) read OFF: ok"));
-	CHECK(strstr(text, "+3") != NULL);                /* a ~+33% line */
+	CHECK(count(text, "\ncsv,") == 3 * BM_COUNT);
+	CHECK(count(text, ",SD2Vita,tiny,ON,") == 3 * BM_COUNT);
+	CHECK(count(text, "whole file: ok") == 3);
+	CHECK(!strstr(text, "WARNING"));
+	CHECK(!strstr(text, " OFF"));                     /* no OFF/ON pair any more */
 
 	/* every size: always terminated, never past the buffer */
 	for (size_t cap = 1; cap < 600; cap += 7) {
@@ -493,34 +549,43 @@ static void test_report_text(void)
 		CHECK(n < cap && small[n] == 0 && strlen(small) == n);
 		free(small);
 	}
-	free(text);
+
+	/* ON with verify mode on: said in the header */
+	fake_init(&f, 1);
+	f.verify = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "WARNING: the plugin's verify mode is on"));
+
+	/* OFF: verify mode does not matter then, so no warning */
+	fake_init(&f, 0);
+	f.verify = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin during the test: OFF for SD2Vita"));
+	CHECK(!strstr(text, "WARNING"));
+	CHECK(count(text, ",SD2Vita,tiny,OFF,") == 3 * BM_COUNT);
+
+	/* no kernel module: no plugin verdict line at all */
+	fake_init(&f, 1);
+	f.unavailable = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin during the test: UNKNOWN"));
+	CHECK(!strstr(text, "plugin behaved"));
 
 	/* a failed test says why */
-	{
-		BenchResult *bad = new_result();
-		char *t2 = malloc(8000);
-		Fake g = { 0 };
-
-		fake_init(&g);
-		g.status_override = TS_ST_NO_BUFFER;
-		g.on = g.initial_on = 0;           /* the user had it off; switching on finds no buffer */
-		e = env_for(&g);
-		CHECK(bench_run(&e, &cfg, bad) == -1);
-		report_format(bad, &m, t2, 8000);
-		CHECK(strstr(t2, "status: FAILED - the plugin did not become active"));
-		CHECK(strstr(t2, "no complete OFF and ON pair"));
-		CHECK(g.end_calls == 1 && g.on == g.initial_on);
-
-		/* device already on and without a buffer: refused before anything is touched */
-		fake_init(&g);
-		g.status_override = TS_ST_NO_BUFFER;
-		e = env_for(&g);
-		CHECK(bench_run(&e, &cfg, bad) == -1 && strstr(bad->fail_reason, "no staging buffer"));
-		CHECK(g.begin_calls == 0 && g.set_calls == 0);
-		free(t2);
-		free(bad);
-		free(g.data);
-	}
+	fake_init(&f, 1);
+	f.fail_write_at = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == -1);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "status: FAILED - write error"));
+	CHECK(strstr(text, "no complete run"));
+	free(text);
 	free(r);
 	free(f.data);
 }
@@ -534,12 +599,12 @@ static void test_screen_lines(void)
 	char (*lines)[REPORT_LINE_MAX] = malloc(REPORT_LINES_MAX * REPORT_LINE_MAX);
 	int n;
 
-	fake_init(&f);
+	fake_init(&f, 1);
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	CHECK(n > 25 && n <= REPORT_LINES_MAX);
-	CHECK(strcmp(lines[0], "device: Internal") == 0);
+	CHECK(strcmp(lines[0], "device: Internal    plugin: ON") == 0);
 	CHECK(strstr(lines[2], "data check: PASS"));
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
@@ -682,15 +747,18 @@ static void test_pattern(void)
 
 int main(void)
 {
-	RUN(test_full_run);
+	RUN(test_full_run_on);
+	RUN(test_full_run_off);
 	RUN(test_write_corruption_is_caught);
 	RUN(test_read_corruption_is_caught);
-	RUN(test_plugin_does_not_become_active);
-	RUN(test_counters_must_grow);
-	RUN(test_unusable_plugin_at_start);
+	RUN(test_plugin_counters);
+	RUN(test_state_changed_mid_test);
+	RUN(test_other_plugin_states_still_run);
+	RUN(test_plugin_mode_names);
 	RUN(test_cancel_cleans_up);
 	RUN(test_io_errors_clean_up);
 	RUN(test_bad_profiles);
+	RUN(test_shipped_profiles);
 	RUN(test_aggregate_skips_incomplete);
 	RUN(test_report_text);
 	RUN(test_screen_lines);

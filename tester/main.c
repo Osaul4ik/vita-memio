@@ -2,16 +2,17 @@
  * main.c - the Turbo Storage tester app (a normal Vita application, built into
  * storageturbo_tester.vpk together with the plugin).
  *
- * It runs the same storage tests with the plugin OFF and ON for one device on the
- * same card (bench.c), appends every run to ur0:data/turbostorage/results.txt,
- * shows the results, and can clear the file. The plugin settings are restored
- * after every test, also after a cancel or a failure, and after a crash at the
- * next start (restore.h).
+ * It ONLY tests. It never switches the plugin or changes any of its settings:
+ * the user turns the plugin on or off for a device in Settings > Turbo Storage,
+ * then runs the test here. A test runs the same storage tests several times in
+ * the plugin state found at the start (bench.c), checks every byte, appends the
+ * result together with that plugin state to ur0:data/turbostorage/results.txt,
+ * shows it, and the file can be cleared. Run it once with the plugin OFF and once
+ * ON to compare.
  *
- * The kernel module must be installed and loaded to run a test. The import of its
- * SceStorageTurbo library is weak, so without it the app still starts and the menu
- * says "the kernel module does not answer" (an unresolved weak stub only returns,
- * and tsGetState's result is always checked before anything else is done).
+ * The kernel module is not required: the import of its SceStorageTurbo library is
+ * weak, so without it the app still starts, the plugin state shows as unknown and
+ * the test still measures the storage (tsGetState's result is always checked).
  */
 #include <stdio.h>
 #include <string.h>
@@ -155,8 +156,7 @@ static int g_last_phase = -2, g_last_metric = -2, g_last_run = -2;
 static void on_progress(const BenchProgress *p)
 {
 	static const char *const phase[] = {
-		"preparing: writing the test file", "reading the previous run's file",
-		"measuring", "final cross-check", "cleaning up, restoring your settings",
+		"preparing", "measuring", "reading the whole file back", "cleaning up",
 	};
 	uint64_t now = sceKernelGetProcessTimeWide();
 	uint32_t overall;
@@ -171,24 +171,33 @@ static void on_progress(const BenchProgress *p)
 	g_last_metric = p->metric;
 	g_last_run = p->run_index;
 
-	overall = p->run_total > 0 ?
-	          (uint32_t)(((uint64_t)p->run_index * BM_COUNT + (uint64_t)(p->metric > 0 ? p->metric : 0)) *
-	                     1000 / ((uint64_t)p->run_total * BM_COUNT)) : 0;
+	/* Per run: BM_COUNT metrics, then the read-back of the whole file. */
+	{
+		uint64_t step = p->phase == BP_FINAL ? BM_COUNT :
+		                p->phase == BP_CLEANUP ? BM_COUNT + 1 :
+		                (uint64_t)(p->metric > 0 ? p->metric : 0);
+
+		overall = p->run_total > 0 ?
+		          (uint32_t)(((uint64_t)p->run_index * (BM_COUNT + 1) + step) * 1000 /
+		                     ((uint64_t)p->run_total * (BM_COUNT + 1))) : 0;
+		if (overall > 1000)
+			overall = 1000;
+	}
 
 	header("running");
 	ui_textf(2, 3, UI_FG, "device: %s    folder: %s", bench_device_name(g_cfg->device), g_cfg->dir);
-	ui_textf(2, 4, UI_FG, "profile: %s (%u MiB file, %u rounds)", g_cfg->profile->name,
+	ui_textf(2, 4, UI_FG, "profile: %s (%u MiB file, %u runs)", g_cfg->profile->name,
 	         (unsigned)g_cfg->profile->file_mib, (unsigned)g_cfg->profile->rounds);
 	ui_textf(2, 7, UI_ACCENT, "run %d of %d    plugin %s", p->run_index + 1, p->run_total,
-	         p->mode_on ? "ON" : "OFF");
+	         bench_plugin_mode_name(p->plugin_mode));
 	ui_textf(2, 9, UI_FG, "%s", phase[p->phase >= 0 && p->phase <= BP_CLEANUP ? p->phase : 0]);
 	if (p->phase == BP_METRIC && p->metric >= 0)
 		ui_textf(2, 10, UI_FG, "%s", bench_metric_name[p->metric]);
 	ui_bar(2, 12, 76, p->permille, UI_ACCENT);
 	ui_text(2, 14, UI_DIM, "everything:");
 	ui_bar(2, 15, 76, overall, UI_GOOD);
-	ui_text(2, 18, UI_DIM, "Hold circle to stop. The test file is removed and your plugin");
-	ui_text(2, 19, UI_DIM, "settings are put back, also when you stop.");
+	ui_text(2, 18, UI_DIM, "Hold circle to stop. The test file is removed, also when you stop.");
+	ui_text(2, 19, UI_DIM, "The plugin settings are not touched.");
 	ui_present();
 }
 
@@ -276,22 +285,36 @@ static void clear_results(void)
 		message(UI_BAD, "Could not delete results.txt.", NULL, NULL);
 }
 
+/* What the plugin does for the selected device right now (read only). */
 static void plugin_line(char *out, size_t cap)
 {
 	TsState st;
+	BenchPluginState ps;
+	const char *dev = bench_device_name(g_dev);
 
 	memset(&st, 0, sizeof(st));
 	if (tsGetState(&st) != TS_OK || st.magic != TS_STATE_MAGIC) {
-		snprintf(out, cap, "plugin: the kernel module does not answer");
+		snprintf(out, cap, "plugin: the kernel module does not answer (state unknown)");
 		return;
 	}
-	if (st.disabled != TS_DIS_NONE) {
+	memset(&ps, 0, sizeof(ps));
+	ps.available = 1;
+	ps.disabled = st.disabled;
+	ps.status = st.dev[g_dev].status;
+	switch (bench_plugin_mode(&ps)) {
+	case BPM_ON:
+		snprintf(out, cap, "plugin for %s: ON%s", dev, st.settings.verify ? " (verify mode is on)" : "");
+		break;
+	case BPM_OFF:
+		snprintf(out, cap, "plugin for %s: OFF", dev);
+		break;
+	case BPM_INACTIVE:
 		snprintf(out, cap, "plugin: inactive (safe mode, unknown firmware or no hooks)");
-		return;
+		break;
+	default:
+		snprintf(out, cap, "plugin for %s: fell back to stock or has no buffer", dev);
+		break;
 	}
-	snprintf(out, cap, "plugin settings now: SD2Vita %s, Internal %s, Memory card %s",
-	         st.settings.sd2vita ? "on" : "off", st.settings.internal ? "on" : "off",
-	         st.settings.memcard ? "on" : "off");
 }
 
 enum { M_DEVICE, M_FOLDER, M_PROFILE, M_RUN, M_VIEW, M_CLEAR, M_EXIT, M_COUNT };
@@ -309,9 +332,9 @@ static void menu(void)
 		plugin_line(pl, sizeof(pl));
 		snprintf(item[M_DEVICE], sizeof(item[0]), "Device         < %s >", bench_device_name(g_dev));
 		snprintf(item[M_FOLDER], sizeof(item[0]), "Test folder    < %s >", k_roots[g_root]);
-		snprintf(item[M_PROFILE], sizeof(item[0]), "Profile        < %s: %u MiB file, %u rounds >",
+		snprintf(item[M_PROFILE], sizeof(item[0]), "Profile        < %s: %u MiB file, %u runs >",
 		         pr->name, (unsigned)pr->file_mib, (unsigned)pr->rounds);
-		snprintf(item[M_RUN], sizeof(item[0]), "Run test (plugin OFF and ON, same card)");
+		snprintf(item[M_RUN], sizeof(item[0]), "Run test (plugin as set in Settings)");
 		if (sz < 0)
 			snprintf(item[M_VIEW], sizeof(item[0]), "View saved results (none yet)");
 		else
@@ -330,8 +353,8 @@ static void menu(void)
 		}
 		ui_text(2, 22, UI_DIM, "Pick the device that the folder is on (SD2Vita and the memory card");
 		ui_text(2, 23, UI_DIM, "are usually ux0:). If they do not match, the test says so.");
-		ui_text(2, 25, UI_DIM, "Each test switches the plugin OFF and ON for that device, writes and");
-		ui_text(2, 26, UI_DIM, "reads a test file, checks every byte, and puts your settings back.");
+		ui_text(2, 25, UI_DIM, "The test never changes the plugin. Turn it on or off for the device");
+		ui_text(2, 26, UI_DIM, "in Settings > Turbo Storage, then run the test again to compare.");
 		ui_text(2, 27, UI_DIM, "Every run is appended to ur0:data/turbostorage/results.txt.");
 		footer("up/down: choose   left/right: change   cross: select");
 		ui_present();
@@ -361,17 +384,8 @@ static void menu(void)
 
 int main(void)
 {
-	int rc;
-
 	if (ui_init() != 0)
 		return 1;
-	rc = vita_env_recover();
-	if (rc > 0)
-		message(UI_WARN, "The last test was interrupted.",
-		        "Your Turbo Storage settings have been put back.", NULL);
-	else if (rc < 0)
-		message(UI_BAD, "The last test was interrupted and the settings could not be",
-		        "restored. Check them in Settings > Turbo Storage.", NULL);
 	menu();
 	ui_shutdown();
 	sceKernelExitProcess(0);

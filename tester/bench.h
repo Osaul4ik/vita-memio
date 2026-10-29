@@ -1,11 +1,13 @@
 /*
  * bench.h - the Turbo Storage benchmark engine (tester/bench.c).
  *
- * Runs the same set of storage tests several times, alternating the plugin OFF
- * and ON for the device under test (a setting that takes effect at once, so both
- * modes run on the same card in the same session). Everything that touches the
- * console goes through BenchEnv, so this file and bench.c have no Vita
- * dependencies and run unchanged in the host tests (tests/test_bench.c).
+ * Runs one set of storage tests several times on one device, in whatever state the
+ * plugin is in. The tester NEVER changes a plugin setting: the user switches the
+ * plugin on or off in Settings > Turbo Storage and runs the test again; every run
+ * is saved with the plugin state it was made in, so the two can be compared.
+ * Everything that touches the console goes through BenchEnv, so this file and
+ * bench.c have no Vita dependencies and run unchanged in the host tests
+ * (tests/test_bench.c).
  *
  * What a run measures (MiB/s for sequential, IOPS for random, plus the median
  * and 99th percentile time of a single call):
@@ -16,12 +18,11 @@
  *
  * What it checks:
  *   - every byte read back is compared with the known pattern (pattern.h);
- *   - cross check: each run first reads, in its own mode, the file written by the
- *     previous run in the other mode, and after the last run the opposite mode
- *     reads the last file. So data written with the plugin ON is read with it OFF
- *     and the other way round;
- *   - in an ON run the plugin must be ACTIVE and its read/write counters must
- *     grow, otherwise the comparison is not valid and is flagged.
+ *   - after the last test of each run the whole file is read back and compared
+ *     once more, so the random writes are checked too;
+ *   - the plugin state (read only): with the plugin ON for the device, its
+ *     read/write counters must grow during a run and it must stay ACTIVE; with
+ *     it OFF the counters must not move. Otherwise the run is flagged.
  */
 #ifndef STORAGETURBO_TESTER_BENCH_H
 #define STORAGETURBO_TESTER_BENCH_H
@@ -47,8 +48,7 @@ extern const char *const bench_metric_name[BM_COUNT];
 /* 0: the value is MiB/s, 1: the value is operations per second. */
 int bench_metric_is_iops(int metric);
 
-/* Setting key of a device (enum ts_dev) and its display name. */
-int bench_device_key(int dev);
+/* Display name of a device (enum ts_dev). */
 const char *bench_device_name(int dev);
 
 /* ---- what the engine needs from the platform ------------------------------- */
@@ -60,7 +60,20 @@ typedef struct BenchPluginState {
 	uint32_t reads, writes;  /* that device's faster-path transfer counters     */
 	uint32_t errors, mismatches;
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
+	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 } BenchPluginState;
+
+/* What the plugin does for the device under test, read from its state. */
+enum bench_plugin_mode {
+	BPM_UNKNOWN = 0,         /* the kernel module does not answer               */
+	BPM_OFF,                 /* switched off for this device                    */
+	BPM_ON,                  /* ACTIVE                                          */
+	BPM_INACTIVE,            /* safe mode, unknown firmware or no hooks         */
+	BPM_TROUBLE              /* fell back to stock, or has no staging buffer    */
+};
+
+int bench_plugin_mode(const BenchPluginState *st);
+const char *bench_plugin_mode_name(int mode);
 
 struct BenchProgress;
 
@@ -78,12 +91,10 @@ typedef struct BenchEnv {
 	int (*remove)(void *ctx, const char *path);
 	int (*mkdirs)(void *ctx, const char *dir);
 
-	/* The plugin. begin remembers the current settings, end puts them back (the
-	 * engine calls end on every way out); set switches the device under test. */
+	/* The plugin, read only: nothing here can change a setting. Returns 0 when
+	 * the kernel module answered; on -1 (or when NULL) the test still runs and
+	 * the plugin state is "unknown". */
 	int (*plugin_get)(void *ctx, BenchPluginState *out);
-	int (*plugin_begin)(void *ctx);
-	int (*plugin_set)(void *ctx, int on);
-	void (*plugin_end)(void *ctx);
 
 	/* Optional. */
 	void (*progress)(void *ctx, const struct BenchProgress *p);
@@ -95,7 +106,7 @@ typedef struct BenchEnv {
 typedef struct BenchProfile {
 	const char *name;
 	uint32_t    file_mib;       /* size of the test file, MiB (>= 1)            */
-	uint32_t    rounds;         /* 1..8; each round runs OFF and ON, order flips */
+	uint32_t    rounds;         /* 1..BENCH_MAX_RUNS runs, one after another    */
 	uint32_t    rr_ops[4];      /* random reads for 4K, 32K, 128K, 1M           */
 	uint32_t    rw_ops[4];      /* random writes, same sizes                    */
 } BenchProfile;
@@ -110,19 +121,17 @@ typedef struct BenchConfig {
 } BenchConfig;
 
 typedef struct BenchRun {
-	int      mode_on;
-	int      round;
+	int      round;                 /* 1-based                                  */
 	int      complete;
 	double   value[BM_COUNT];       /* MiB/s or IOPS                            */
 	uint32_t med_us[BM_COUNT];      /* median time of one call                  */
 	uint32_t p99_us[BM_COUNT];
 	uint32_t ops[BM_COUNT];
 	uint32_t verify_bad;            /* words that differed when read back       */
-	uint32_t cross_bad;             /* ... in the file the previous run wrote   */
-	int      cross_done;
-	int      cross_from_on;
+	uint32_t final_bad;             /* ... in the read-back of the whole file   */
+	int      final_done;
 	uint32_t io_errors;
-	int      active_ok;             /* ON: ACTIVE and counters grew; OFF: idle  */
+	int      plugin_ok;             /* the plugin behaved as its state says     */
 	char     note[BENCH_REASON_MAX];
 	BenchPluginState before, after;
 } BenchRun;
@@ -137,41 +146,39 @@ typedef struct BenchResult {
 	int          failed;
 	char         fail_reason[BENCH_REASON_MAX];
 	BenchPluginState plugin0;       /* state when the test started              */
-	int          final_cross_done;  /* the last file read in the opposite mode  */
-	int          final_cross_from_on;
-	uint32_t     final_cross_bad;
+	int          plugin_mode;       /* enum bench_plugin_mode, from plugin0     */
 } BenchResult;
 
-enum { BP_SETUP = 0, BP_CROSS, BP_METRIC, BP_FINAL, BP_CLEANUP };
+enum { BP_SETUP = 0, BP_METRIC, BP_FINAL, BP_CLEANUP };
 
 typedef struct BenchProgress {
 	int phase;
 	int run_index, run_total;       /* run_index is 0-based                     */
 	int round;
-	int mode_on;
+	int plugin_mode;                /* enum bench_plugin_mode                   */
 	int metric;                     /* BM_*, or -1                              */
 	uint32_t permille;              /* progress of the current phase, 0..1000   */
 	const BenchRun *run;            /* the run so far                           */
 } BenchProgress;
 
 /* Runs the whole test. Returns 0 when it ran to the end, 1 when cancelled and
- * -1 on failure (res->fail_reason says why). The plugin settings are restored and
- * the test file removed on every path. */
+ * -1 on failure (res->fail_reason says why). The test file is removed on every
+ * path. No plugin setting is ever touched. */
 int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res);
 
-/* Mean over the completed runs of each mode. */
+/* Mean over the completed runs. */
 typedef struct BenchAgg {
-	int    n_off, n_on;
-	double off[BM_COUNT], on[BM_COUNT];
-	double off_med_ms[BM_COUNT], on_med_ms[BM_COUNT];
-	double off_p99_ms[BM_COUNT], on_p99_ms[BM_COUNT];
+	int    n;
+	double v[BM_COUNT];
+	double med_ms[BM_COUNT];
+	double p99_ms[BM_COUNT];
 } BenchAgg;
 
 void bench_aggregate(const BenchResult *res, BenchAgg *out);
 
 /* Verdicts. */
 int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O error */
-int bench_active_ok(const BenchResult *res);       /* every ON run really used the plugin */
+int bench_plugin_ok(const BenchResult *res);       /* the plugin did what its state says */
 int bench_valid(const BenchResult *res);           /* ran to the end */
 
 #endif /* STORAGETURBO_TESTER_BENCH_H */

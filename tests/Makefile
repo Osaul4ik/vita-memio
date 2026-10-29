@@ -11,7 +11,7 @@ CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer
 CFLAGS  += -Istubs
 
-TESTS := test_stage test_settings test_dispatch test_dispatch_risky test_util test_i18n test_bench test_restore
+TESTS := test_stage test_settings test_dispatch test_dispatch_risky test_util test_i18n test_bench
 
 .PHONY: all run clean
 all: run
@@ -42,9 +42,6 @@ TESTER := ../tester/bench.c ../tester/report.c ../tester/results.c
 test_bench: test_bench.c fakes.c fakes.h ts_test.h $(TESTER) ../tester/bench.h ../tester/pattern.h ../tester/report.h ../tester/results.h
 	$(CC) $(CFLAGS) -o $@ test_bench.c $(TESTER) fakes.c
 
-test_restore: test_restore.c ts_test.h ../tester/restore.c ../tester/restore.h
-	$(CC) $(CFLAGS) -o $@ test_restore.c
-
 clean:
 	rm -f $(TESTS) sim_app sim_main.o
 
@@ -64,10 +61,10 @@ syntax-tester: $(VITA_SRC) $(VITA_STUBS) ../tester/vita/ui.h ../tester/vita/vita
 # Run the real tester app on this PC against a fake console and write the screens
 # out as images: make -C tests sim  (see sim/sim.c for the controls).
 SIM_SRC := sim/sim.c ../tester/main.c ../tester/vita/ui.c ../tester/vita/vita_env.c \
-           $(TESTER) ../tester/restore.c
+           $(TESTER)
 
 sim_app: $(SIM_SRC) $(VITA_STUBS) fakes.c
 	$(CC) -std=gnu99 -g -O1 -Wall -Wno-unused-parameter -Istubs_vita -c -o sim_main.o sim/sim.c
 	$(CC) -std=gnu99 -g -O1 -Wall -Wno-unused-parameter -Dmain=tester_main -Istubs_vita \
 	  -o $@ sim_main.o ../tester/main.c ../tester/vita/ui.c ../tester/vita/vita_env.c \
-	  $(TESTER) ../tester/restore.c
+	  $(TESTER)

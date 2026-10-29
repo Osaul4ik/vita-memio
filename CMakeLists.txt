@@ -126,10 +126,11 @@ vita_create_self(storageturbo.suprx storageturbo
 # --------------------------------------------------------------------------
 # Tester app: storageturbo_tester.vpk (a normal application; install with VitaShell)
 # --------------------------------------------------------------------------
-# Runs storage tests with the plugin OFF and ON on the same card, appends the
-# results to ur0:data/turbostorage/results.txt and can clear them. It imports the
-# kernel module's SceStorageTurbo library, so the plugin must be installed for it
-# to be useful. Disable with -DTS_BUILD_TESTER=OFF.
+# Runs storage tests in the plugin state the user set in Settings (it never changes
+# a plugin setting itself), appends the results with that state to
+# ur0:data/turbostorage/results.txt and can clear them. It reads the plugin state
+# through the kernel module's SceStorageTurbo library (weak import: without the
+# module the state shows as unknown). Disable with -DTS_BUILD_TESTER=OFF.
 option(TS_BUILD_TESTER "Build the on-device tester app (VPK)" ON)
 if(TS_BUILD_TESTER)
   set(TESTER_TITLE_ID "TURBOTST0")
@@ -138,7 +139,6 @@ if(TS_BUILD_TESTER)
     tester/bench.c
     tester/report.c
     tester/results.c
-    tester/restore.c
     tester/vita/ui.c
     tester/vita/vita_env.c
   )

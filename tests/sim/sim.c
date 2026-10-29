@@ -2,13 +2,15 @@
  * sim.c - runs the real tester app (tester/main.c, ui.c, vita_env.c and the engine)
  * on a Linux PC against a fake console: sceIo* map to plain files in the current
  * directory, the plugin is a small fake (settings, status, counters that grow on
- * large transfers while a device is ON), the controller follows a script and every
- * screen can be written out as an image.
+ * large transfers while a device is ON; read only, as for the real tester), the
+ * controller follows a script and every screen can be written out as an image.
  *
  *   SIM_SCRIPT="30:cross 40:down*2"    frame:button[+button][*frames], 2 frames by default
  *   SIM_SNAP="12,80,200"               write snap_<frame>.ppm at those frames
  *   SIM_SNAP_CHANGE=1                  write a snapshot whenever the screen differs (max 80)
  *   SIM_EXIT_FRAME=n                   exit after n frames
+ *   SIM_SD2VITA=0|1                    the plugin's SD2Vita setting (default 1)
+ *   SIM_NOBUF=1                        a device that is on reports "no buffer"
  *
  * This is a test aid for the screens and the control flow, not a Vita emulator: it
  * says nothing about real speeds or about the console's drivers.
@@ -87,12 +89,8 @@ int tsGetState(TsState *o)
 	return TS_OK;
 }
 
-int tsSetSetting(int key, int v)
-{
-	if (!ts_setting_valid(key, v)) return TS_ERR_ARG;
-	*ts_setting_field(&g_set, key) = v;
-	return TS_OK;
-}
+/* No tsSetSetting here on purpose: the tester must never change a plugin
+ * setting, so if it ever calls it, building the simulator fails to link. */
 int tsSelfTestPing(void) { return TS_SELFTEST_MAGIC; }
 
 /* ---- time, memory ---------------------------------------------------------------- */
@@ -232,5 +230,6 @@ int main(int argc, char **argv)
 	if ((s = getenv("SIM_EXIT_FRAME"))) g_exit_frame = atoi(s);
 	if ((s = getenv("SIM_SNAP_MAX"))) g_snap_max = atoi(s);
 	g_sim_fail_nobuf = getenv("SIM_NOBUF") != NULL;
+	if ((s = getenv("SIM_SD2VITA"))) g_set.sd2vita = atoi(s);   /* "as set in Settings" */
 	return tester_main();
 }

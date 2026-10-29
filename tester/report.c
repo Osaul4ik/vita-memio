@@ -51,55 +51,69 @@ static void put(Out *o, const char *fmt, ...)
 	o->len += (size_t)n < o->cap - o->len ? (size_t)n : o->cap - o->len - 1;
 }
 
-static const char *mode_name(int on) { return on ? "ON" : "OFF"; }
-
 static const char *verdict(const BenchResult *r)
 {
 	return r->failed ? "FAILED" : r->cancelled ? "CANCELLED" : "COMPLETE";
 }
 
-static const char *order_text(const BenchResult *r, char *buf, size_t cap)
-{
-	size_t n = 0;
-
-	buf[0] = 0;
-	for (int i = 0; i < r->nruns && n + 8 < cap; i++)
-		n += (size_t)snprintf(buf + n, cap - n, "%s%s", i ? (i % 2 ? " " : " | ") : "",
-		                      mode_name(r->runs[i].mode_on));
-	return buf;
-}
-
 static int total_bad(const BenchResult *r)
 {
-	uint32_t bad = r->final_cross_bad;
+	uint32_t bad = 0;
 
 	for (int i = 0; i < r->nruns; i++)
-		bad += r->runs[i].verify_bad + r->runs[i].cross_bad;
+		bad += r->runs[i].verify_bad + r->runs[i].final_bad;
 	return (int)bad;
+}
+
+static int checkable(const BenchResult *r)
+{
+	return r->plugin_mode == BPM_ON || r->plugin_mode == BPM_OFF;
+}
+
+/* One line that says what the plugin was doing during the test. */
+static void plugin_text(const BenchResult *r, char *out, size_t cap)
+{
+	const char *dev = bench_device_name(r->device);
+
+	switch (r->plugin_mode) {
+	case BPM_ON:
+		snprintf(out, cap, "ON for %s (faster path)", dev);
+		break;
+	case BPM_OFF:
+		snprintf(out, cap, "OFF for %s (stock storage)", dev);
+		break;
+	case BPM_INACTIVE:
+		snprintf(out, cap, "INACTIVE (safe mode, unknown firmware or no hooks)");
+		break;
+	case BPM_TROUBLE:
+		snprintf(out, cap, "TROUBLE for %s (fell back to stock or no buffer)", dev);
+		break;
+	default:
+		snprintf(out, cap, "UNKNOWN (the kernel module does not answer)");
+		break;
+	}
 }
 
 /* ---- the file block ---------------------------------------------------------- */
 
 static void metric_table(Out *o, const BenchAgg *a, int latency)
 {
-	char x[16], y[16], c[16];
+	char x[16], y[16];
 
 	if (latency)
-		put(o, "%-16s %-9s %9s %9s %7s\n", "latency per call", "", "OFF ms", "ON ms", "change");
+		put(o, "%-16s %-9s %9s %9s\n", "latency per call", "", "median ms", "p99 ms");
 	else
-		put(o, "%-16s %-9s %9s %9s %7s\n", "metric", "unit", "OFF", "ON", "change");
+		put(o, "%-16s %-9s %9s\n", "metric", "unit", "average");
 	for (int m = 0; m < BM_COUNT; m++) {
-		double off = latency ? a->off_med_ms[m] : a->off[m];
-		double on = latency ? a->on_med_ms[m] : a->on[m];
-
-		report_fmt1(x, sizeof(x), off);
-		report_fmt1(y, sizeof(y), on);
-		report_fmt_change(c, sizeof(c), off, on);
-		if (latency)
-			put(o, "%-16s %-9s %9s %9s %7s\n", bench_metric_name[m], "median", x, y, c);
-		else
-			put(o, "%-16s %-9s %9s %9s %7s\n", bench_metric_name[m],
-			    bench_metric_is_iops(m) ? "IOPS" : "MiB/s", x, y, c);
+		if (latency) {
+			report_fmt1(x, sizeof(x), a->med_ms[m]);
+			report_fmt1(y, sizeof(y), a->p99_ms[m]);
+			put(o, "%-16s %-9s %9s %9s\n", bench_metric_name[m], "", x, y);
+		} else {
+			report_fmt1(x, sizeof(x), a->v[m]);
+			put(o, "%-16s %-9s %9s\n", bench_metric_name[m],
+			    bench_metric_is_iops(m) ? "IOPS" : "MiB/s", x);
+		}
 	}
 }
 
@@ -107,21 +121,24 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 {
 	Out o = { out, cap, 0 };
 	BenchAgg a;
-	char order[96], v[16];
+	char pl[96], v[16];
 
 	if (!cap)
 		return 0;
 	out[0] = 0;
 	bench_aggregate(res, &a);
+	plugin_text(res, pl, sizeof(pl));
 
 	put(&o, "================================================================\n");
 	put(&o, "Turbo Storage tester %s   %s\n", TESTER_VERSION, meta->timestamp);
 	put(&o, "plugin %s   storage driver id 0x%08x\n", meta->plugin_version,
 	    (unsigned)res->plugin0.fingerprint);
+	put(&o, "plugin during the test: %s\n", pl);
+	if (res->plugin_mode == BPM_ON && res->plugin0.verify)
+		put(&o, "WARNING: the plugin's verify mode is on, so the timings are slower\n");
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
-	put(&o, "profile: %s (%u MiB file, %u rounds)\n", res->profile.name,
+	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
 	    (unsigned)res->profile.file_mib, (unsigned)res->profile.rounds);
-	put(&o, "run order: %s\n", order_text(res, order, sizeof(order)));
 	put(&o, "status: %s", verdict(res));
 	if (res->failed)
 		put(&o, " - %s", res->fail_reason);
@@ -130,23 +147,23 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	if (!bench_integrity_ok(res))
 		put(&o, " (%d differing words, I/O errors possible; see the run lines)", total_bad(res));
 	put(&o, "\n");
-	put(&o, "plugin really used in ON runs: %s\n", bench_active_ok(res) ? "PASS" : "FAIL");
+	if (checkable(res))
+		put(&o, "plugin behaved as its state says: %s\n", bench_plugin_ok(res) ? "PASS" : "FAIL");
 	put(&o, "----------------------------------------------------------------\n");
-	if (a.n_off && a.n_on) {
+	if (a.n) {
 		metric_table(&o, &a, 0);
 		put(&o, "\n");
 		metric_table(&o, &a, 1);
 		put(&o, "\n");
 	} else {
-		put(&o, "(no complete OFF and ON pair, so no comparison table)\n\n");
+		put(&o, "(no complete run, so no result table)\n\n");
 	}
 
 	put(&o, "runs (value per metric, in the order of the table above):\n");
 	for (int i = 0; i < res->nruns; i++) {
 		const BenchRun *r = &res->runs[i];
 
-		put(&o, " #%d round %d %-3s %s", i + 1, r->round, mode_name(r->mode_on),
-		    r->complete ? "" : "(incomplete) ");
+		put(&o, " #%d %s", i + 1, r->complete ? "" : "(incomplete) ");
 		if (r->complete) {
 			for (int m = 0; m < BM_COUNT; m++) {
 				report_fmt1(v, sizeof(v), r->value[m]);
@@ -154,12 +171,12 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			}
 		}
 		put(&o, "\n");
-		put(&o, "    check: same-mode read-back %s", r->verify_bad ? "FAIL" : "ok");
-		if (r->cross_done)
-			put(&o, ", previous file (written %s) read %s: %s", mode_name(r->cross_from_on),
-			    mode_name(r->mode_on), r->cross_bad ? "FAIL" : "ok");
-		put(&o, ", plugin %s", r->active_ok ? "ok" : "NOT as expected");
-		if (r->mode_on && r->complete)
+		put(&o, "    check: read-back %s", r->verify_bad ? "FAIL" : "ok");
+		if (r->final_done)
+			put(&o, ", whole file: %s", r->final_bad ? "FAIL" : "ok");
+		if (checkable(res))
+			put(&o, ", plugin %s", r->plugin_ok ? "ok" : "NOT as expected");
+		if (res->plugin_mode == BPM_ON && r->complete)
 			put(&o, " (faster-path transfers: %u reads, %u writes)",
 			    (unsigned)(r->after.reads - r->before.reads),
 			    (unsigned)(r->after.writes - r->before.writes));
@@ -167,12 +184,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		if (r->note[0])
 			put(&o, "    note: %s\n", r->note);
 	}
-	if (res->final_cross_done)
-		put(&o, " final: last file (written %s) read %s: %s\n",
-		    mode_name(res->final_cross_from_on), mode_name(!res->final_cross_from_on),
-		    res->final_cross_bad ? "FAIL" : "ok");
 
-	put(&o, "\ncsv: version,time,device,profile,run,round,mode,metric,value,median_us,p99_us\n");
+	put(&o, "\ncsv: version,time,device,profile,plugin,run,metric,value,median_us,p99_us\n");
 	for (int i = 0; i < res->nruns; i++) {
 		const BenchRun *r = &res->runs[i];
 
@@ -180,10 +193,10 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			continue;
 		for (int m = 0; m < BM_COUNT; m++) {
 			report_fmt1(v, sizeof(v), r->value[m]);
-			put(&o, "csv,%s,%s,%s,%s,%d,%d,%s,%s,%s,%u,%u\n", TESTER_VERSION, meta->timestamp,
-			    bench_device_name(res->device), res->profile.name, i + 1, r->round,
-			    mode_name(r->mode_on), bench_metric_name[m], v,
-			    (unsigned)r->med_us[m], (unsigned)r->p99_us[m]);
+			put(&o, "csv,%s,%s,%s,%s,%s,%d,%s,%s,%u,%u\n", TESTER_VERSION, meta->timestamp,
+			    bench_device_name(res->device), res->profile.name,
+			    bench_plugin_mode_name(res->plugin_mode), i + 1,
+			    bench_metric_name[m], v, (unsigned)r->med_us[m], (unsigned)r->p99_us[m]);
 		}
 	}
 	put(&o, "\n");
@@ -210,37 +223,39 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 {
 	Lines s = { lines, max, 0 };
 	BenchAgg a;
-	char x[16], y[16], c[16];
+	char x[16], y[16];
 
 	bench_aggregate(res, &a);
-	line(&s, "device: %s", bench_device_name(res->device));
+	line(&s, "device: %s    plugin: %s", bench_device_name(res->device),
+	     bench_plugin_mode_name(res->plugin_mode));
 	line(&s, "status: %s%s%s", verdict(res), res->failed ? " - " : "",
 	     res->failed ? res->fail_reason : "");
-	line(&s, "data check: %s    plugin used in ON runs: %s",
-	     bench_integrity_ok(res) ? "PASS" : "FAIL", bench_active_ok(res) ? "PASS" : "FAIL");
+	if (checkable(res))
+		line(&s, "data check: %s    plugin as expected: %s",
+		     bench_integrity_ok(res) ? "PASS" : "FAIL", bench_plugin_ok(res) ? "PASS" : "FAIL");
+	else
+		line(&s, "data check: %s", bench_integrity_ok(res) ? "PASS" : "FAIL");
+	if (res->plugin_mode == BPM_ON && res->plugin0.verify)
+		line(&s, "WARNING: verify mode is on, timings are slower");
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
-			line(&s, "run %d (%s): %s", i + 1, mode_name(res->runs[i].mode_on),
-			     res->runs[i].note);
-	if (!(a.n_off && a.n_on)) {
-		line(&s, "(no complete OFF and ON pair to compare)");
+			line(&s, "run %d: %s", i + 1, res->runs[i].note);
+	if (!a.n) {
+		line(&s, "(no complete run)");
 		return s.n;
 	}
 	line(&s, "");
-	line(&s, "%-15s %8s %8s %7s", "MiB/s or IOPS", "OFF", "ON", "change");
+	line(&s, "%-15s %10s", "MiB/s or IOPS", "average");
 	for (int m = 0; m < BM_COUNT; m++) {
-		report_fmt1(x, sizeof(x), a.off[m]);
-		report_fmt1(y, sizeof(y), a.on[m]);
-		report_fmt_change(c, sizeof(c), a.off[m], a.on[m]);
-		line(&s, "%-15s %8s %8s %7s", bench_metric_name[m], x, y, c);
+		report_fmt1(x, sizeof(x), a.v[m]);
+		line(&s, "%-15s %10s", bench_metric_name[m], x);
 	}
 	line(&s, "");
-	line(&s, "%-15s %8s %8s %7s", "median ms/call", "OFF", "ON", "change");
+	line(&s, "%-15s %10s %10s", "ms per call", "median", "p99");
 	for (int m = 0; m < BM_COUNT; m++) {
-		report_fmt1(x, sizeof(x), a.off_med_ms[m]);
-		report_fmt1(y, sizeof(y), a.on_med_ms[m]);
-		report_fmt_change(c, sizeof(c), a.off_med_ms[m], a.on_med_ms[m]);
-		line(&s, "%-15s %8s %8s %7s", bench_metric_name[m], x, y, c);
+		report_fmt1(x, sizeof(x), a.med_ms[m]);
+		report_fmt1(y, sizeof(y), a.p99_ms[m]);
+		line(&s, "%-15s %10s %10s", bench_metric_name[m], x, y);
 	}
 	return s.n;
 }

@@ -22,33 +22,12 @@
 extern "C" {
 #endif
 
-/* The settings as TsState carries them: the first seven keys only, FROZEN.
- * tsGetState copies sizeof(TsState) into the caller's struct, so TsState must
- * never change size or a user module built against an older header gets
- * written past its end. Keys added later are read with tsGetSetting(). */
-typedef struct TsSettingsV1 {
-	int32_t sd2vita;
-	int32_t internal;
-	int32_t verify;
-	int32_t hud;
-	int32_t hud_pos;
-	int32_t devmode;
-	int32_t memcard;
-} TsSettingsV1;
-
-#define TS_STATE_SETTINGS_KEYS  7   /* keys 0..6 are in TsState.settings */
-
-_Static_assert(sizeof(TsSettingsV1) == TS_STATE_SETTINGS_KEYS * sizeof(int32_t),
-               "TsSettingsV1 is frozen");
-_Static_assert(TS_KEY_MEMCARD == TS_STATE_SETTINGS_KEYS - 1,
-               "TsSettingsV1 holds exactly the keys up to TS_KEY_MEMCARD");
-
 /* Snapshot of everything the kernel module knows, for the Settings page and
- * diagnostics. Its size is fixed (see TsSettingsV1). */
+ * diagnostics. */
 typedef struct TsState {
 	uint32_t   size;             /* sizeof(TsState), set by the kernel        */
 	uint32_t   magic;            /* TS_STATE_MAGIC                            */
-	TsSettingsV1 settings;       /* current settings, keys 0..6               */
+	TsSettings settings;         /* current (applied) settings                */
 	int32_t    disabled;         /* TS_DIS_*: why nothing is active           */
 	uint32_t   fingerprint;      /* storage driver module fingerprint         */
 	int32_t    verify_ready;     /* 1 once the verify buffer is allocated     */
@@ -73,10 +52,6 @@ int tsGetState(TsState *out);
  * for an unknown key or an out-of-range value (nothing changes then). */
 int tsSetSetting(int key, int value);
 
-/* The current value of one setting (enum ts_key, any key), or TS_ERR_ARG for an
- * unknown key. Every setting value is >= 0. */
-int tsGetSetting(int key);
-
 /* Where the time of faster-path transfers goes, per device: inside the system's
  * own sector read/write ("io") and in the CPU copy between the caller's buffer
  * and the staging buffer ("copy"). Counted per chunk that succeeded; verify-mode
@@ -99,23 +74,14 @@ typedef struct TsTiming {
 	uint32_t    magic;        /* TS_TIMING_MAGIC                               */
 	TsTimingDev dev[TS_DEV_COUNT];
 } TsTiming;
-/* FROZEN like TsState: tsGetTiming copies sizeof(TsTiming) to the caller. Add
- * new data through new calls, never by growing a struct that is copied out. */
-_Static_assert(sizeof(TsTiming) == 80, "TsTiming is frozen (its size since 0.3 tester)");
-_Static_assert(sizeof(TsState) == 188, "TsState is frozen (its size since 0.1.0)");
-
-/* The experimental cached read path of a device (TS_KEY_CACHED_READ): returns
- * one of TS_CR_*, or TS_ERR_ARG for a bad device. */
-int tsGetCachedRead(int dev);
-
-#define TS_CR_OFF          0   /* setting off (or the device has no buffer)     */
-#define TS_CR_ACTIVE       1   /* reads copy through the cached mapping         */
-#define TS_CR_PENDING      2   /* setting on, being set up (within a second)    */
-#define TS_CR_UNAVAILABLE  3   /* could not be set up: reads use the normal path */
-/* (Never negative: the syscall layer alters negative return values that are
- *  not error codes - a -1 arrived in user space as 0xBFFFFFFF.) */
 
 #define TS_TIMING_MAGIC  0x54535449u   /* 'TSTI' */
+
+/* FROZEN: tsGetState and tsGetTiming copy sizeof() of these into the caller's
+ * struct, so a user module built against another header must get exactly the
+ * size it expects. Never grow them: add new data through new calls. */
+_Static_assert(sizeof(TsState) == 188, "TsState is frozen (its size since 0.1.0)");
+_Static_assert(sizeof(TsTiming) == 80, "TsTiming is frozen (its size since tester 0.3)");
 
 /* Copy the timing counters to *out (user pointer). Returns TS_OK or TS_ERR_ARG. */
 int tsGetTiming(TsTiming *out);

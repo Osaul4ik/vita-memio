@@ -10,7 +10,7 @@
 
 #include "bench.h"
 
-#define TESTER_VERSION  "0.4.1"
+#define TESTER_VERSION  "0.3.0"
 
 typedef struct ReportMeta {
 	const char *timestamp;        /* "2026-10-28 12:30:11"                      */

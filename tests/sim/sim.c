@@ -11,7 +11,6 @@
  *   SIM_EXIT_FRAME=n                   exit after n frames
  *   SIM_SD2VITA=0|1                    the plugin's SD2Vita setting (default 1)
  *   SIM_NOBUF=1                        a device that is on reports "no buffer"
- *   SIM_CACHED=0|1                     the experimental cached read setting
  *
  * This is a test aid for the screens and the control flow, not a Vita emulator: it
  * says nothing about real speeds or about the console's drivers.
@@ -79,7 +78,7 @@ int tsGetState(TsState *o)
 	memset(o, 0, sizeof(*o));
 	o->size = sizeof(*o);
 	o->magic = TS_STATE_MAGIC;
-	memcpy(&o->settings, &g_set, sizeof(o->settings));   /* keys 0..6 */
+	o->settings = g_set;
 	o->fingerprint = 0xC0FFEE01;
 	for (int d = 0; d < TS_DEV_COUNT; d++) {
 		int on = d == TS_DEV_SD2VITA ? g_set.sd2vita : d == TS_DEV_INTERNAL ? g_set.internal : g_set.memcard;
@@ -93,24 +92,6 @@ int tsGetState(TsState *o)
 /* No tsSetSetting here on purpose: the tester must never change a plugin
  * setting, so if it ever calls it, building the simulator fails to link. */
 int tsSelfTestPing(void) { return TS_SELFTEST_MAGIC; }
-
-int tsGetSetting(int key)
-{
-	int32_t *f = ts_setting_field(&g_set, key);
-
-	return f ? (int)*f : TS_ERR_ARG;
-}
-
-/* The cached read path: active for a device that is on, while the setting is. */
-int tsGetCachedRead(int dev)
-{
-	int on = dev == TS_DEV_SD2VITA ? g_set.sd2vita : dev == TS_DEV_INTERNAL ? g_set.internal :
-	         dev == TS_DEV_MEMCARD ? g_set.memcard : -1;
-
-	if (on < 0)
-		return TS_ERR_ARG;
-	return g_set.cached_read && on ? TS_CR_ACTIVE : TS_CR_OFF;
-}
 
 /* Timing: 20 us io and 5 us copy per block for reads, 30 / 2 for writes. */
 int tsGetTiming(TsTiming *o)
@@ -267,6 +248,5 @@ int main(int argc, char **argv)
 	if ((s = getenv("SIM_SNAP_MAX"))) g_snap_max = atoi(s);
 	g_sim_fail_nobuf = getenv("SIM_NOBUF") != NULL;
 	if ((s = getenv("SIM_SD2VITA"))) g_set.sd2vita = atoi(s);   /* "as set in Settings" */
-	if ((s = getenv("SIM_CACHED"))) g_set.cached_read = atoi(s);
 	return tester_main();
 }

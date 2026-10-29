@@ -44,7 +44,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 
 /* Registry key names under /CONFIG/TURBOSTOR, in enum ts_key order. */
 static const char *const g_keys[TS_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard", "cached_read",
+	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
 };
 
 #define ROW_LIST(k) \
@@ -61,7 +61,6 @@ static const char X_GROUP[] =
 	ROW_TOGGLE("sd2vita")
 	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
-	ROW_TOGGLE("cached_read")
 	ROW_LIST("hud")
 		ITEM("ts_i_hud0", "0") ITEM("ts_i_hud1", "1") ITEM("ts_i_hud2", "2")
 	"</list>"
@@ -148,36 +147,14 @@ static const signed char k_row[TS_KEY_COUNT] = {
 	[TS_KEY_SD2VITA] = TS_I18N_ROW_SD2VITA, [TS_KEY_INTERNAL] = TS_I18N_ROW_INTERNAL,
 	[TS_KEY_VERIFY] = -1, [TS_KEY_HUD] = TS_I18N_ROW_HUD,
 	[TS_KEY_HUD_POS] = TS_I18N_ROW_HUD_POS, [TS_KEY_DEVMODE] = TS_I18N_ROW_DEVMODE,
-	[TS_KEY_MEMCARD] = TS_I18N_ROW_MEMCARD, [TS_KEY_CACHED_READ] = TS_I18N_ROW_CACHED,
+	[TS_KEY_MEMCARD] = TS_I18N_ROW_MEMCARD,
 };
 static const signed char k_hint[TS_KEY_COUNT] = {
 	[TS_KEY_SD2VITA] = TS_I18N_HINT_SD2VITA, [TS_KEY_INTERNAL] = TS_I18N_HINT_INTERNAL,
 	[TS_KEY_VERIFY] = -1, [TS_KEY_HUD] = TS_I18N_HINT_HUD,
 	[TS_KEY_HUD_POS] = TS_I18N_HINT_HUD_POS, [TS_KEY_DEVMODE] = TS_I18N_HINT_DEVMODE,
-	[TS_KEY_MEMCARD] = TS_I18N_HINT_MEMCARD, [TS_KEY_CACHED_READ] = TS_I18N_HINT_CACHED,
+	[TS_KEY_MEMCARD] = TS_I18N_HINT_MEMCARD,
 };
-
-/* The experimental row's help, plus a note when it is on but could not be set
- * up for any device that has it switched on (reads then use the normal path).
- * A kernel module older than this page has no tsGetCachedRead: no note. */
-static const ts_u16 *cached_hint(void)
-{
-	Line l = { {0}, 0 };
-	int unavailable = 0;
-
-	if (tsGetSetting(TS_KEY_CACHED_READ) == 1)
-		for (int dev = 0; dev < TS_DEV_COUNT; dev++)
-			if (tsGetCachedRead(dev) == TS_CR_UNAVAILABLE)
-				unavailable = 1;
-	l_put(&l, ts_i18n(TS_I18N_HINT_CACHED));
-	if (unavailable) {
-		l_put(&l, " ");
-		l_put(&l, ts_i18n(TS_I18N_ST_CACHED_UNAVAIL));
-	}
-	ts_u16 *o = next_buf();
-	ts_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
-	return o;
-}
 
 static int key_index(const char *name)
 {
@@ -204,8 +181,6 @@ static const ts_u16 *ts_text(const char *id)
 			return device_hint(TS_DEV_INTERNAL, k_hint[k]);
 		if (k == TS_KEY_MEMCARD)
 			return device_hint(TS_DEV_MEMCARD, k_hint[k]);
-		if (k == TS_KEY_CACHED_READ)
-			return cached_hint();
 		return fixed_text(k_hint[k]);
 	}
 	if (s_pfx(id, "ts_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])
@@ -306,16 +281,10 @@ static int get_hook(const char *cat, const char *name, int *val)
 	if (is_ts(cat) && val) {
 		TsState st;
 		int k = name ? key_index(name) : -1;
-
-		*val = 0;
-		if (k >= TS_STATE_SETTINGS_KEYS) {
-			/* Not in TsState's frozen settings: ask for it on its own. */
-			int v = tsGetSetting(k);
-			if (ts_setting_valid(k, v))   /* an older kernel module answers nonsense */
-				*val = v;
-		} else if (k >= 0 && tsGetState(&st) == TS_OK && st.magic == TS_STATE_MAGIC) {
-			*val = ((const int32_t *)&st.settings)[k];
-		}
+		if (k >= 0 && tsGetState(&st) == TS_OK && st.magic == TS_STATE_MAGIC)
+			*val = *ts_setting_field(&st.settings, k);
+		else
+			*val = 0;
 		return 0;
 	}
 	return TAI_CONTINUE(int, r_get, cat, name, val);

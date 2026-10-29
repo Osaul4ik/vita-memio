@@ -63,17 +63,10 @@ typedef struct BenchPluginState {
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 	/* Where the faster path's time goes (tsGetTiming; an older kernel module
 	 * does not have it: timing_ok = 0). Counters only grow and wrap. */
-	int      cached_read;    /* TS_CR_* of the device, or BENCH_CR_UNKNOWN       */
-	int      cr_raw_setting; /* what tsGetSetting / tsGetCachedRead answered,  */
-	int      cr_raw_state;   /* for the report when the state is unknown       */
 	int      timing_ok;
 	uint32_t rd_sectors, rd_io_us, rd_copy_us;
 	uint32_t wr_sectors, wr_io_us, wr_copy_us;
 } BenchPluginState;
-
-/* BenchPluginState.cached_read when the kernel module is older than the
- * experimental cached read path (or does not answer). */
-#define BENCH_CR_UNKNOWN  (-99)
 
 /* What the plugin does for the device under test, read from its state. */
 enum bench_plugin_mode {

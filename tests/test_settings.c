@@ -199,31 +199,35 @@ static void test_older_file_with_fewer_keys(void)
 	ts_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3);
 	CHECK(s.memcard == TS_DEF_MEMCARD);       /* the newer key takes its default */
-	CHECK(s.cached_read == TS_DEF_CACHED_READ);
 }
 
-/* The file every console has before cached_read existed (7 keys): everything
- * loads, the experimental path stays off, and the next save writes 8 keys. */
-static void test_file_from_before_cached_read(void)
+/* A file with more keys than this build knows (the experimental build wrote 8):
+ * the check covers all of them, the known ones load, the rest is ignored. */
+static void test_file_with_more_keys(void)
 {
-	uint8_t buf[64];
-	int32_t v[7] = { 1, 0, 0, 1, 2, 0, 1 };
+	uint8_t buf[256];
+	int32_t v[8] = { 1, 0, 0, 2, 3, 0, 1, 1 };
+	uint32_t hdr[3] = { TS_CFG_MAGIC, TS_CFG_VERSION, 8 }, check;
 	TsSettings s;
 	size_t n;
 
 	clean();
-	n = make_file(buf, 7, v);
+	check = check_of(hdr[0], hdr[1], 8, v);
+	memcpy(buf, hdr, 12);
+	memcpy(buf + 12, v, sizeof(v));
+	memcpy(buf + 12 + sizeof(v), &check, 4);
+	n = 12 + sizeof(v) + 4;
 	put_file("settings.bin", buf, n);
 	ts_settings_init();
 	ts_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 1 && s.hud_pos == 2 && s.memcard == 1);
-	CHECK(TS_DEF_CACHED_READ == 0 && s.cached_read == 0);
-	CHECK(ts_settings_set(TS_KEY_CACHED_READ, 1) == TS_OK);
-	CHECK(ts_settings_set(TS_KEY_CACHED_READ, 2) == TS_ERR_ARG);
-	ts_settings_flush();
-	ts_settings_init();                        /* reload what was saved */
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
+
+	/* the same file with a wrong check word is refused */
+	buf[n - 1] ^= 1;
+	put_file("settings.bin", buf, n);
+	ts_settings_init();
 	ts_settings_copy(&s);
-	CHECK(s.cached_read == 1 && s.sd2vita == 1 && s.memcard == 1);
+	CHECK(s.sd2vita == TS_DEF_SD2VITA && s.memcard == TS_DEF_MEMCARD);
 }
 
 static void test_one_bad_value_keeps_the_rest(void)
@@ -307,7 +311,7 @@ int main(void)
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
-	RUN(test_file_from_before_cached_read);
+	RUN(test_file_with_more_keys);
 	RUN(test_one_bad_value_keeps_the_rest);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);

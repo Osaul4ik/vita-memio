@@ -65,36 +65,6 @@ static int total_bad(const BenchResult *r)
 	return (int)bad;
 }
 
-static const char *cached_name(int c)
-{
-	switch (c) {
-	case TS_CR_ACTIVE:      return "active";
-	case TS_CR_OFF:         return "off";
-	case TS_CR_PENDING:     return "setting up";
-	case TS_CR_UNAVAILABLE: return "not available on this console";
-	default:                return "unknown (kernel module older than this tester)";
-	}
-}
-
-/* The cached read path was the same through the whole test. */
-static int cached_steady(const BenchResult *r)
-{
-	for (int i = 0; i < r->nruns; i++)
-		if (r->runs[i].complete && (r->runs[i].before.cached_read != r->plugin0.cached_read ||
-		                            r->runs[i].after.cached_read != r->plugin0.cached_read))
-			return 0;
-	return 1;
-}
-
-/* The plugin column of the CSV lines: ON tests with the cached read path active
- * are kept apart ("ON+cached"), so the two are never averaged together. */
-static const char *csv_mode(const BenchResult *r)
-{
-	if (r->plugin_mode == BPM_ON && r->plugin0.cached_read == TS_CR_ACTIVE)
-		return "ON+cached";
-	return bench_plugin_mode_name(r->plugin_mode);
-}
-
 static int checkable(const BenchResult *r)
 {
 	return r->plugin_mode == BPM_ON || r->plugin_mode == BPM_OFF;
@@ -164,16 +134,6 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	put(&o, "plugin %s   storage driver id 0x%08x\n", meta->plugin_version,
 	    (unsigned)res->plugin0.fingerprint);
 	put(&o, "plugin during the test: %s\n", pl);
-	if (res->plugin_mode == BPM_ON) {
-		put(&o, "cached read path (experimental): %s", cached_name(res->plugin0.cached_read));
-		if (res->plugin0.available && res->plugin0.cached_read == BENCH_CR_UNKNOWN)
-			put(&o, " [raw: setting %d (0x%08x), state %d (0x%08x)]",
-			    res->plugin0.cr_raw_setting, (unsigned)res->plugin0.cr_raw_setting,
-			    res->plugin0.cr_raw_state, (unsigned)res->plugin0.cr_raw_state);
-		put(&o, "\n");
-		if (!cached_steady(res))
-			put(&o, "WARNING: the cached read path changed during the test\n");
-	}
 	if (res->plugin_mode == BPM_ON && res->plugin0.verify)
 		put(&o, "WARNING: the plugin's verify mode is on, so the timings are slower\n");
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
@@ -283,7 +243,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		for (int m = 0; m < BM_COUNT; m++) {
 			report_fmt1(v, sizeof(v), r->value[m]);
 			put(&o, "csv,%s,%s,%s,%s,%s,%d,%s,%s,%u,%u\n", TESTER_VERSION, meta->timestamp,
-			    bench_device_name(res->device), res->profile.name, csv_mode(res), i + 1,
+			    bench_device_name(res->device), res->profile.name,
+			    bench_plugin_mode_name(res->plugin_mode), i + 1,
 			    bench_metric_name[m], v, (unsigned)r->med_us[m], (unsigned)r->p99_us[m]);
 		}
 	}
@@ -314,7 +275,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	char x[16], y[16];
 
 	bench_aggregate(res, &a);
-	line(&s, "device: %s    plugin: %s", bench_device_name(res->device), csv_mode(res));
+	line(&s, "device: %s    plugin: %s", bench_device_name(res->device),
+	     bench_plugin_mode_name(res->plugin_mode));
 	line(&s, "status: %s%s%s", verdict(res), res->failed ? " - " : "",
 	     res->failed ? res->fail_reason : "");
 	if (checkable(res))

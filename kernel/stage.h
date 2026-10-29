@@ -29,9 +29,6 @@ void ts_stage_bytes(int dev, uint64_t *rd, uint64_t *wr);
 /* Live per-device status and counters. */
 void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active);
 
-/* The experimental cached read path of a device: TS_CR_*, or TS_ERR_ARG. */
-int  ts_stage_cached_state(int dev);
-
 /* Where faster-path time goes: system read/write vs the CPU copy. */
 void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT]);
 

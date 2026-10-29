@@ -15,11 +15,9 @@
  * other tests' timings are io only). */
 extern uint32_t fake_now_us;
 static uint32_t copy_cost_us;
-static const void *last_copy_src;
 static void *fake_copy(void *d, const void *s, size_t n)
 {
 	fake_now_us += copy_cost_us;
-	last_copy_src = s;
 	return memcpy(d, s, n);
 }
 #define ts_copy_from_stage fake_copy
@@ -74,15 +72,8 @@ static void reset(void)
 	memset(d, 0, sizeof(*d));
 	d->port = -1;
 	d->uid = -1;
-	d->alias_uid = -1;
 	d->buf = staging;
 	d->enabled = 1;
-	g_cached = 0;
-	g_dc_tried = 0;
-	g_dc_inv = NULL;
-	g_dc_clean_inv = NULL;
-	g_va2pa = NULL;
-	last_copy_src = NULL;
 	g_verify = 0;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
@@ -369,179 +360,6 @@ static void test_timing_split(void)
 	free(u);
 }
 
-/* ---- the experimental cached read path ---------------------------------------- */
-
-/* The memory card device with a real (fake) memory block, as ts_stage_init
- * would leave it, so a mirror of it can be made. */
-static void reset_with_block(void)
-{
-	Dev *d = &g_dev[M];
-
-	reset();
-	d->uid = ksceKernelAllocMemBlock("t", MEMBLOCK_KERNEL_NC_RW, STAGE_BYTES, NULL);
-	CHECK(d->uid > 0 && ksceKernelGetMemBlockBase(d->uid, &d->buf) == 0);
-}
-
-static void cached_on(int on)
-{
-	TsSettings t;
-
-	memset(&t, 0, sizeof(t));
-	t.memcard = 1;                 /* the device under test stays enabled */
-	t.cached_read = on;
-	ts_stage_apply(&t);
-}
-
-/* Free the device block (and its mirror) the way ts_stage_fini does. */
-static void release_block(void)
-{
-	ts_stage_fini();
-	CHECK(g_dev[M].alias == NULL && g_dev[M].alias_uid == -1 && g_dev[M].uid == -1);
-}
-
-static void test_cached_read_path(void)
-{
-	Dev *d = &g_dev[M];
-	uint8_t *u = user_buf(1100);
-
-	reset_with_block();
-	CHECK(ts_stage_cached_state(M) == TS_CR_OFF);
-	cached_on(1);
-	CHECK(ts_stage_cached_state(M) == TS_CR_PENDING);     /* until the worker runs */
-	ts_stage_worker_tick();
-	CHECK(ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	CHECK(fake_mirror_calls == 1 && fake_mirror_type == MEMBLOCK_KERNEL_L1WBWA_RW);
-	{
-		uintptr_t pa_buf = 0, pa_alias = 0;            /* the same physical pages */
-
-		CHECK(g_va2pa && g_va2pa(d->buf, &pa_buf) == 0 && g_va2pa(d->alias, &pa_alias) == 0);
-		CHECK(pa_buf == pa_alias && pa_buf != 0);
-	}
-	CHECK(d->alias != NULL && d->alias != d->buf && d->busy == 0);
-	CHECK(fake_dc_clean_inv_calls == 1 && fake_dc_bad_range == 0);
-
-	/* a read: the driver still gets the NC address; each chunk is invalidated
-	 * after the DMA and copied out through the cached mapping */
-	fake_dc_inv_calls = 0;
-	fake_dc_inv_bytes = 0;
-	CHECK(rd(u, 7, 1100) == 0);                           /* 512 + 512 + 76 */
-	CHECK(memcmp(u, disk + 7 * 512, 1100 * 512) == 0);
-	CHECK(last_buf == d->buf);
-	CHECK(last_copy_src == d->alias);
-	CHECK(fake_dc_inv_calls == 3 && fake_dc_inv_bytes == 1100 * 512 && fake_dc_bad_range == 0);
-
-	/* writes are unchanged: no cache calls, copied into the NC address */
-	fake_dc_inv_calls = 0;
-	CHECK(wr(u, 40, 600, REF_RD) == 0);
-	CHECK(memcmp(disk + 40 * 512, u, 600 * 512) == 0);
-	CHECK(fake_dc_inv_calls == 0 && last_buf == d->buf);
-
-	/* switched off: reads go back to the NC copy at once, the mapping stays */
-	cached_on(0);
-	CHECK(ts_stage_cached_state(M) == TS_CR_OFF);
-	CHECK(rd(u, 3, 100) == 0 && last_copy_src == d->buf && fake_dc_inv_calls == 0);
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 1);                         /* not made twice */
-	CHECK(rd(u, 3, 100) == 0 && last_copy_src == d->alias);
-
-	release_block();                                       /* mirror freed first */
-	free(u);
-}
-
-static void test_cached_waits_for_a_busy_buffer(void)
-{
-	Dev *d = &g_dev[M];
-
-	reset_with_block();
-	cached_on(1);
-	d->busy = 1;                                           /* a transfer in flight */
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 0 && ts_stage_cached_state(M) == TS_CR_PENDING);
-	d->busy = 0;
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 1 && ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	release_block();
-}
-
-static void test_cached_unavailable_falls_back(void)
-{
-	Dev *d = &g_dev[M];
-	uint8_t *u = user_buf(100);
-
-	/* no second mapping can be made (both memory types refused) */
-	reset_with_block();
-	fake_mirror_fail = 1;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(ts_stage_cached_state(M) == TS_CR_UNAVAILABLE && d->alias == NULL && d->busy == 0);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 1);                         /* not retried every second */
-	CHECK(rd(u, 10, 100) == 0 && memcmp(u, disk + 10 * 512, 100 * 512) == 0);
-	CHECK(last_copy_src == d->buf);
-	fake_mirror_fail = 0;                                  /* off and on again retries */
-	cached_on(0);
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 2 && ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	release_block();
-
-	/* a block that lands on other memory (what the "mirror" attribute gave on
-	 * the console) is caught by its physical address and freed */
-	reset_with_block();
-	fake_mirror_wrong = 1;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(ts_stage_cached_state(M) == TS_CR_UNAVAILABLE && d->alias == NULL && d->alias_uid == -1);
-	CHECK(rd(u, 10, 100) == 0 && last_copy_src == d->buf);
-	release_block();
-
-	/* the L1-only type is refused: no other type is tried (a fully cacheable
-	 * mapping was measured slower than the normal path) */
-	reset_with_block();
-	fake_paddr_types_refused = 1;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 1 && ts_stage_cached_state(M) == TS_CR_UNAVAILABLE);
-	CHECK(rd(u, 10, 100) == 0 && memcmp(u, disk + 10 * 512, 100 * 512) == 0 && last_copy_src == d->buf);
-	release_block();
-
-	/* the mapping is freed at fini, before the buffer */
-	reset_with_block();
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	release_block();
-	CHECK(fake_mirror_frees == 1);
-
-	/* no ksceKernelVAtoPA: the buffer's address is unknown, nothing is mapped */
-	reset_with_block();
-	fake_va2pa_missing = 1;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 0 && ts_stage_cached_state(M) == TS_CR_UNAVAILABLE);
-	release_block();
-
-	/* no cache functions: never tries to map */
-	reset_with_block();
-	fake_dcache_missing = 1;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 0 && ts_stage_cached_state(M) == TS_CR_UNAVAILABLE);
-	release_block();
-
-	/* a device without a buffer just reports off */
-	reset();
-	g_dev[M].buf = NULL;
-	cached_on(1);
-	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 0 && ts_stage_cached_state(M) == TS_CR_OFF);
-	CHECK(ts_stage_cached_state(-1) == TS_ERR_ARG && ts_stage_cached_state(TS_DEV_COUNT) == TS_ERR_ARG);
-	/* every state a syscall hands out is >= 0 (negatives get altered) */
-	CHECK(TS_CR_OFF >= 0 && TS_CR_ACTIVE >= 0 && TS_CR_PENDING >= 0 && TS_CR_UNAVAILABLE >= 0);
-	free(u);
-}
-
 static void count_free_bufs(int *n)
 {
 	*n = 0;
@@ -608,9 +426,6 @@ int main(void)
 	RUN(test_shadow_alloc_not_retried);
 	RUN(test_get_reports_time);
 	RUN(test_timing_split);
-	RUN(test_cached_read_path);
-	RUN(test_cached_waits_for_a_busy_buffer);
-	RUN(test_cached_unavailable_falls_back);
 	RUN(test_init_all_hooks);
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);

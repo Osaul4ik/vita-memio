@@ -35,8 +35,6 @@ typedef struct Fake {
 	int      disabled, unavailable, verify;
 	uint32_t reads, writes, errors, mismatches;
 	int      no_timing;          /* kernel module without tsGetTiming          */
-	int      cached;             /* TS_CR_* reported for the device            */
-	int      cached_flip_at_write; /* becomes ACTIVE at this write (0 = never) */
 	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
 
 	int      corrupt_read_on, corrupt_write_on;
@@ -122,8 +120,6 @@ static int f_pwrite(void *c, int h, const void *buf, uint32_t n, uint64_t off)
 		return -1;
 	if (f->flip_at_write && f->write_calls == f->flip_at_write)
 		f->on = !f->on;                            /* changed in Settings mid-test */
-	if (f->cached_flip_at_write && f->write_calls == f->cached_flip_at_write)
-		f->cached = TS_CR_ACTIVE;
 	ensure(f, off + n);
 	memcpy(f->data + off, buf, n);
 	if (off + n > f->size)
@@ -175,7 +171,6 @@ static int f_get(void *c, BenchPluginState *o)
 	o->mismatches = f->mismatches;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
-	o->cached_read = f->cached;
 	if (!f->no_timing) {
 		o->timing_ok = 1;
 		o->rd_sectors = f->rs; o->rd_io_us = f->ri; o->rd_copy_us = f->rc;
@@ -590,8 +585,6 @@ static void test_report_text(void)
 	CHECK(strstr(text, "  reads:  io 20.0 us, copy 4.0 us"));
 	CHECK(strstr(text, "  writes: io 30.0 us, copy 2.0 us"));
 	CHECK(count(text, "\ncsvt,") == 3);
-	CHECK(strstr(text, "cached read path (experimental): off\n"));
-	CHECK(!strstr(text, "ON+cached"));
 	CHECK(strstr(text, ",1,") && strstr(text, ",20.0,4.0,"));
 
 	/* every size: always terminated, never past the buffer */
@@ -621,44 +614,6 @@ static void test_report_text(void)
 	CHECK(!strstr(text, "WARNING"));
 	CHECK(!strstr(text, "time per 512-byte block") && !strstr(text, "csvt"));   /* ON only */
 	CHECK(count(text, ",SD2Vita,tiny,OFF,") == 3 * BM_COUNT);
-
-	/* ON with the cached read path active: its own CSV mode, said in the header */
-	fake_init(&f, 1);
-	f.cached = TS_CR_ACTIVE;
-	e = env_for(&f);
-	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
-	report_format(r, &m, text, 40000);
-	CHECK(strstr(text, "cached read path (experimental): active\n"));
-	CHECK(count(text, ",SD2Vita,tiny,ON+cached,") == 3 * BM_COUNT);
-	CHECK(!strstr(text, "changed during the test"));
-
-	/* it came on in the middle of the test: flagged */
-	fake_init(&f, 1);
-	f.cached = TS_CR_PENDING;
-	f.cached_flip_at_write = 5;
-	e = env_for(&f);
-	CHECK(bench_run(&e, &cfg, r) == 0);
-	report_format(r, &m, text, 40000);
-	CHECK(strstr(text, "cached read path (experimental): setting up"));
-	CHECK(strstr(text, "WARNING: the cached read path changed during the test"));
-
-	/* an older kernel module: unknown, never shown as active */
-	fake_init(&f, 1);
-	f.cached = BENCH_CR_UNKNOWN;
-	e = env_for(&f);
-	CHECK(bench_run(&e, &cfg, r) == 0);
-	report_format(r, &m, text, 40000);
-	CHECK(strstr(text, "cached read path (experimental): unknown"));
-	CHECK(strstr(text, "[raw: setting "));
-	CHECK(count(text, ",SD2Vita,tiny,ON,") == 3 * BM_COUNT);
-
-	/* OFF tests do not mention it at all */
-	fake_init(&f, 0);
-	f.cached = TS_CR_ACTIVE;
-	e = env_for(&f);
-	CHECK(bench_run(&e, &cfg, r) == 0);
-	report_format(r, &m, text, 40000);
-	CHECK(!strstr(text, "cached read path") && count(text, ",SD2Vita,tiny,OFF,") == 3 * BM_COUNT);
 
 	/* ON with an older kernel module: timing is n/a, nothing else changes */
 	fake_init(&f, 1);

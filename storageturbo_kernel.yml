@@ -14,5 +14,3 @@ storageturbo_kernel:
         - tsSetSetting
         - tsSelfTestPing
         - tsGetTiming
-        - tsGetSetting
-        - tsGetCachedRead

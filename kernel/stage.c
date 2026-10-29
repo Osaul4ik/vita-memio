@@ -32,31 +32,6 @@
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
  *
- * Experimental cached read path (setting "cached_read", off by default): the
- * copy OUT of the non-cacheable buffer is the slow half of a staged read (the
- * Cortex-A9 reads non-cacheable memory at ~120 MB/s). When it is on, the worker
- * gives each device buffer a second, cacheable mapping of the same physical
- * pages (a memory block at the buffer's own physical address, HAS_PADDR),
- * cacheable in the L1 only. The driver still gets the non-cacheable
- * address, so nothing changes for it; after its read returns, the chunk is
- * invalidated in the L1 data cache through the cached mapping and copied out
- * through it (the mapping is outer non-cacheable, so the L2 never holds it). Rules that keep this safe:
- *   - the mapping is created only while the device buffer is held (busy), then
- *     cleaned and invalidated in full, so no dirty line of it can ever be
- *     written back over data the card delivered;
- *   - nothing ever writes through the cached mapping;
- *   - every chunk is invalidated after the DMA and before it is read;
- *   - the new block must sit on the buffer's physical address (checked with
- *     ksceKernelVAtoPA) and pass a live check (a marker written through the
- *     non-cacheable address reads back through the cached one), or the device
- *     keeps the normal path; same if the cache functions can't be resolved;
- *   - a block on the buffer's pages is never freed while the module runs
- *     (freeing might hand those pages back to the allocator).
- * Syscall answers are never negative non-error values: the syscall layer
- * changes them (it gave 0xBFFFFFFF for -1), so TS_CR_* are all >= 0.
- * Writes are unchanged (they go into the buffer through the non-cacheable
- * address).
- *
  * HOT PATH: no logging here, only counters (the 1 Hz worker logs).
  */
 #include <psp2kern/kernel/sysmem.h>
@@ -99,38 +74,6 @@
 /* Kernel non-cacheable RW memory, physically contiguous (attr below): the same
  * kind the system uses for its own USB storage I/O buffer. */
 #define MEMBLOCK_KERNEL_NC_RW  0x10208006
-/* Kernel cacheable RW: types for the second mapping of a buffer's pages. */
-/* Cacheable in L1 only (inner write-back, outer non-cacheable): the type of the
- * second mapping. Measured on the console with the fully cacheable type
- * (0x1020D006, L1 + L2): the L1+L2 invalidate of each chunk cost so much (the
- * L2 controller is maintained line by line) that the copy went from 4.2 to
- * 12.9 us per 512-byte block - slower than the plain non-cacheable path. With
- * L2 out of the picture only the L1 has to be invalidated, which is cheap. */
-#define MEMBLOCK_KERNEL_L1WBWA_RW  0x10204006
-
-/* SceCpuForDriver (in SceSysmem), resolved at run time so a missing export only
- * makes the cached read path unavailable instead of stopping the module. */
-#define LIB_CPU_DRV            0x40ECDB0E
-#define NID_DCACHE_INV_L1      0x8B4C26DF    /* ksceKernelDcacheInvalidateRangeForL1WBWA (L1) */
-#define NID_DCACHE_CLEAN_INV   0x364E68A4    /* ksceKernelDcacheCleanInvalidateRange (L1+L2)  */
-#define CACHE_LINE             64            /* the functions want 0x40-aligned ranges */
-#define LIB_SYSMEM_DRV         0x6F25E18A
-#define NID_VA_TO_PA           0x8D160E65    /* ksceKernelVAtoPA (diagnostics only) */
-
-int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
-                           uint32_t funcnid, uintptr_t *func);
-
-/* Wait until earlier memory accesses have completed (a CPU store into the
- * non-cacheable mapping must reach memory before it is read back through the
- * other mapping). */
-static inline void ts_dsb(void)
-{
-#if defined(__arm__)
-	__asm__ volatile("dsb" ::: "memory");
-#else
-	__sync_synchronize();
-#endif
-}
 
 void *ksceSdifGetSdContextGlobal(int port);
 
@@ -146,36 +89,14 @@ typedef struct Dev {
 	uint64_t      us_total;             /* time inside faster-path transfers, us */
 	uint32_t      us_max;               /* the slowest one, us                   */
 	TsTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
-	void * volatile alias;              /* cached mapping of buf, or NULL        */
-	SceUID        alias_uid;
-	volatile int  cr_state;             /* TS_CR_UNAVAILABLE once setup failed   */
-	int           cr_final;             /* failed with a block left on the pages:
-	                                     * never retried (no second leak)       */
 	TsDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
 static Dev g_dev[TS_DEV_COUNT] = {
-	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1, .alias_uid = -1 },
-	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1, .alias_uid = -1 },
-	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1, .alias_uid = -1 },
+	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
+	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1 },
+	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
 };
-
-/* Cached read path: the setting, and the two cache functions. */
-static volatile int g_cached;
-static void (*g_dc_inv)(void *start, unsigned int size);         /* L1 only, per chunk */
-static void (*g_dc_clean_inv)(void *start, unsigned int size);   /* L1+L2, once at setup */
-static int (*g_va2pa)(const void *va, uintptr_t *pa);
-static int g_dc_tried;
-
-/* Physical address of va, or 0 when it cannot be read (log only). */
-static uint32_t pa_of(const void *va)
-{
-	uintptr_t pa = 0;
-
-	if (!g_va2pa || g_va2pa(va, &pa) < 0)
-		return 0;
-	return (uint32_t)pa;
-}
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -284,7 +205,7 @@ static void note_time(Dev *d, uint32_t t0)
 static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                       void *buf, uint32_t nsec)
 {
-	uint8_t *dst = buf, *alias;
+	uint8_t *dst = buf;
 	uint32_t left = nsec, t0;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
@@ -294,9 +215,6 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		return io(ref, part, sector, buf, nsec);
 	t0 = ksceKernelGetSystemTimeLow();
 	verify = take_shadow();
-	/* Read once per request: the worker publishes alias only while it holds
-	 * this buffer, and nothing frees it while the buffer is held. */
-	alias = g_cached ? (uint8_t *)d->alias : NULL;
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
@@ -306,16 +224,7 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (ret < 0)
 			break;
 		t2 = ksceKernelGetSystemTimeLow();
-		if (alias) {
-			/* Drop whatever the cache holds for these lines (stale data from
-			 * before the DMA, or lines fetched speculatively during it), then
-			 * read the card's data through the cache. bytes is a multiple of
-			 * 512 and alias is page-aligned: whole 64-byte lines. */
-			g_dc_inv(alias, bytes);
-			ts_copy_from_stage(dst, alias, bytes);
-		} else {
-			ts_copy_from_stage(dst, d->buf, bytes);
-		}
+		ts_copy_from_stage(dst, d->buf, bytes);
 		t3 = ksceKernelGetSystemTimeLow();
 		d->tm.rd_sectors += n;
 		d->tm.rd_io_us += t2 - t1;
@@ -541,12 +450,6 @@ void ts_stage_fini(void)
 			g_hook[i] = -1;
 		}
 	for (int i = 0; i < TS_DEV_COUNT; i++)
-		if (g_dev[i].alias_uid >= 0) {    /* the mirror goes before what it maps */
-			g_dev[i].alias = NULL;
-			ksceKernelFreeMemBlock(g_dev[i].alias_uid);
-			g_dev[i].alias_uid = -1;
-		}
-	for (int i = 0; i < TS_DEV_COUNT; i++)
 		if (g_dev[i].uid >= 0) {
 			ksceKernelFreeMemBlock(g_dev[i].uid);
 			g_dev[i].uid = -1;
@@ -571,169 +474,10 @@ void ts_stage_apply(const TsSettings *s)
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
-	g_cached = s->cached_read ? 1 : 0;
-	if (!g_cached)                /* turning it off and on again retries the setup */
-		for (int i = 0; i < TS_DEV_COUNT; i++)
-			if (g_dev[i].cr_state == TS_CR_UNAVAILABLE && !g_dev[i].cr_final)
-				g_dev[i].cr_state = TS_CR_OFF;
-}
-
-/* Give device i a cached mapping of its staging buffer. Runs in the worker,
- * holding the buffer, so no transfer uses it meanwhile. 1 = done (or for good
- * unavailable), 0 = the buffer was busy: try again on the next tick. */
-static int setup_alias(int i)
-{
-	static const uint32_t marker[4] = { 0x54534341u, 0x5348454Fu, 0x0BADF00Du, 0xC0FFEE11u };
-	/* Cacheable kernel RW types to try for the second mapping. */
-	static const unsigned k_types[] = { MEMBLOCK_KERNEL_L1WBWA_RW };
-	Dev *d = &g_dev[i];
-	SceKernelAllocMemBlockKernelOpt opt;
-	SceUID uid = -1;
-	void *base = NULL;
-	uint32_t pa_buf;
-	int ok;
-
-	if (__sync_lock_test_and_set(&d->busy, 1))
-		return 0;
-	__sync_synchronize();
-
-	/* Map the buffer's own physical pages a second time, cacheable. Its
-	 * physical address must be known, and the new block must really sit on
-	 * it: a block somewhere else is just new memory (that is what the "mirror"
-	 * attribute gave on the console). */
-	pa_buf = pa_of(d->buf);
-	if (!pa_buf) {
-		TS_KLOGW("stage: dev %d physical address unknown - normal reads", i);
-		goto unavailable;
-	}
-	for (unsigned t = 0; t < sizeof(k_types) / sizeof(k_types[0]); t++) {
-		uint32_t pa_new;
-
-		memset(&opt, 0, sizeof(opt));
-		opt.size = sizeof(opt);
-		opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR;
-		opt.paddr = pa_buf;
-		uid = ksceKernelAllocMemBlock("SceStorageTurboCached", k_types[t], STAGE_BYTES, &opt);
-		if (uid < 0) {
-			TS_KLOGW("stage: dev %d mapping pa 0x%08x as type 0x%08x refused (0x%08x)",
-			         i, (unsigned)pa_buf, k_types[t], (unsigned)uid);
-			continue;
-		}
-		base = NULL;
-		if (ksceKernelGetMemBlockBase(uid, &base) < 0 || !base || base == d->buf) {
-			TS_KLOGW("stage: dev %d mapping type 0x%08x has no usable address", i, k_types[t]);
-			uid = -1;           /* not freed: it may sit on the buffer's pages */
-			d->cr_final = 1;
-			continue;
-		}
-		pa_new = pa_of(base);
-		if (pa_new != pa_buf) {
-			/* Separate memory: freeing it cannot touch the buffer. */
-			TS_KLOGW("stage: dev %d mapping type 0x%08x landed at pa 0x%08x, not 0x%08x",
-			         i, k_types[t], (unsigned)pa_new, (unsigned)pa_buf);
-			ksceKernelFreeMemBlock(uid);
-			uid = -1;
-			continue;
-		}
-		break;
-	}
-	if (uid < 0) {
-		TS_KLOGW("stage: dev %d no cached mapping of the buffer - normal reads", i);
-		goto unavailable;
-	}
-	/* Write back and drop anything the new mapping holds (it may have been
-	 * zero-filled through the cache), in L1 and L2, while nothing else uses
-	 * the buffer. After this only the L1 can ever hold lines of it. */
-	g_dc_clean_inv(base, STAGE_BYTES);
-	ts_dsb();
-	/* Live check: the cached mapping must show the same physical memory. The
-	 * stores go through the NC address and must have reached memory (dsb)
-	 * before the line is dropped from the cache and read back. */
-	{
-		uint32_t seen[4], seen2, pa_buf = pa_of(d->buf), pa_alias = pa_of(base);
-
-		memcpy(d->buf, marker, sizeof(marker));
-		ts_dsb();
-		g_dc_inv(base, CACHE_LINE);
-		ts_dsb();
-		memcpy(seen, base, sizeof(seen));
-		ok = memcmp(seen, marker, sizeof(marker)) == 0;
-		((uint32_t *)d->buf)[0] = ~marker[0];
-		ts_dsb();
-		g_dc_inv(base, CACHE_LINE);
-		ts_dsb();
-		seen2 = ((const uint32_t *)base)[0];
-		ok = ok && seen2 == ~marker[0];
-		g_dc_inv(base, CACHE_LINE);                   /* leave no line of it behind */
-		ts_dsb();
-		TS_KLOGI("stage: dev %d mapping nc=0x%08x (pa 0x%08x) cached=0x%08x (pa 0x%08x) check %s",
-		         i, (unsigned)(uintptr_t)d->buf, (unsigned)pa_buf, (unsigned)(uintptr_t)base,
-		         (unsigned)pa_alias, ok ? "ok" : "FAILED");
-		if (!ok) {
-			TS_KLOGW("stage: dev %d wrote %08x %08x %08x %08x then %08x, cached saw %08x %08x %08x %08x then %08x",
-			         i, (unsigned)marker[0], (unsigned)marker[1], (unsigned)marker[2],
-			         (unsigned)marker[3], (unsigned)~marker[0], (unsigned)seen[0],
-			         (unsigned)seen[1], (unsigned)seen[2], (unsigned)seen[3], (unsigned)seen2);
-			TS_KLOGW("stage: dev %d cached mapping does not show the buffer - normal reads", i);
-			/* Not freed: it sits on the buffer's physical pages, and freeing
-			 * could hand them back to the allocator while the buffer uses them.
-			 * It is simply never read, and never made again. */
-			d->cr_final = 1;
-			goto unavailable;
-		}
-	}
-	d->alias_uid = uid;
-	__sync_synchronize();
-	d->alias = base;
-	d->cr_state = TS_CR_ACTIVE;
-	__sync_lock_release(&d->busy);
-	TS_KLOGI("stage: dev %d cached read path ready", i);
-	return 1;
-
-unavailable:
-	d->cr_state = TS_CR_UNAVAILABLE;
-	__sync_lock_release(&d->busy);
-	return 1;
-}
-
-static void cached_tick(void)
-{
-	if (!g_dc_tried) {
-		uintptr_t inv = 0, cinv = 0;
-
-		g_dc_tried = 1;
-		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_INV_L1, &inv) >= 0 &&
-		    module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_CLEAN_INV, &cinv) >= 0 &&
-		    inv && cinv) {
-			g_dc_inv = (void (*)(void *, unsigned int))inv;
-			g_dc_clean_inv = (void (*)(void *, unsigned int))cinv;
-		} else {
-			TS_KLOGW("stage: cache functions not found - cached read path unavailable");
-		}
-		{
-			uintptr_t f = 0;
-
-			if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_SYSMEM_DRV, NID_VA_TO_PA, &f) >= 0)
-				g_va2pa = (int (*)(const void *, uintptr_t *))f;
-		}
-	}
-	for (int i = 0; i < TS_DEV_COUNT; i++) {
-		Dev *d = &g_dev[i];
-
-		if (!d->buf || d->alias || d->cr_state == TS_CR_UNAVAILABLE)
-			continue;
-		if (!g_dc_inv || !g_dc_clean_inv) {
-			d->cr_state = TS_CR_UNAVAILABLE;
-			continue;
-		}
-		setup_alias(i);
-	}
 }
 
 void ts_stage_worker_tick(void)
 {
-	if (g_cached)
-		cached_tick();
 	/* The verify buffer is only allocated once verify mode is first turned on. */
 	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
 		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, &g_shadow_uid, &g_shadow);
@@ -775,20 +519,6 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		                !d->buf        ? TS_ST_NO_BUFFER :
 		                d->fallback    ? TS_ST_FALLBACK : TS_ST_ACTIVE;
 	}
-}
-
-int ts_stage_cached_state(int dev)
-{
-	const Dev *d;
-
-	if (dev < 0 || dev >= TS_DEV_COUNT)
-		return TS_ERR_ARG;
-	d = &g_dev[dev];
-	if (!g_cached || !d->buf)
-		return TS_CR_OFF;
-	if (d->cr_state == TS_CR_UNAVAILABLE)
-		return TS_CR_UNAVAILABLE;
-	return d->alias ? TS_CR_ACTIVE : TS_CR_PENDING;
 }
 
 void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT])

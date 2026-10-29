@@ -23,7 +23,7 @@ int tsGetState(TsState *out)
 	memset(out, 0, sizeof(*out));
 	out->size = sizeof(*out);
 	out->magic = TS_STATE_MAGIC;
-	memcpy(&out->settings, &g_set, sizeof(out->settings));   /* keys 0..6 */
+	out->settings = g_set;
 	out->fingerprint = 0x2e7c52f7;
 	out->uptime_s = 42;
 	out->dev[TS_DEV_SD2VITA].status = TS_ST_ACTIVE;
@@ -32,21 +32,6 @@ int tsGetState(TsState *out)
 	out->dev[TS_DEV_SD2VITA].max_ms = 56;
 	out->dev[TS_DEV_MEMCARD].status = TS_ST_FALLBACK;
 	return TS_OK;
-}
-
-int tsGetSetting(int key)
-{
-	int32_t *f = ts_setting_field(&g_set, key);
-
-	return f ? (int)*f : TS_ERR_ARG;
-}
-
-int tsGetCachedRead(int dev)
-{
-	static const int st[TS_DEV_COUNT] = { TS_CR_ACTIVE, TS_CR_OFF, TS_CR_UNAVAILABLE };
-
-	return g_set.cached_read && dev >= 0 && dev < TS_DEV_COUNT ? st[dev] :
-	       dev >= 0 && dev < TS_DEV_COUNT ? TS_CR_OFF : TS_ERR_ARG;
 }
 
 int tsSetSetting(int key, int value)
@@ -117,16 +102,7 @@ static void test_status(void)
 	CHECK(has(r, "sd2vita: active reads=7"));
 	CHECK(has(r, "time=1234ms max=56ms"));
 	CHECK(has(r, "memcard: fallback"));
-	CHECK(has(r, "cached_read=0: sd2vita=off internal=off memcard=off"));
 	CHECK(r[strlen(r) - 1] != '\n');          /* the server adds the newline */
-	g_set.cached_read = 1;
-	r = run("status");
-	CHECK(has(r, "cached_read=1: sd2vita=active internal=off memcard=unavailable"));
-	g_set.cached_read = 7;              /* what an older kernel module may answer */
-	r = run("status");
-	CHECK(has(r, "cached_read=?:\n") || has(r, "cached_read=?:"));
-	CHECK(!has(r, "sd2vita=active internal"));
-	g_set.cached_read = 0;
 }
 
 static void test_set_ordinary_keys(void)
@@ -169,9 +145,7 @@ static void test_risky_keys(void)
 #ifdef TS_DEV_ALLOW_RISKY
 	CHECK(has(run("set internal 1"), "ok") && g_set.internal == 1);
 	CHECK(has(run("set verify 1"), "ok") && g_set.verify == 1);
-	CHECK(has(run("set cached_read 1"), "ok") && g_set.cached_read == 1);
 #else
-	CHECK(has(run("set cached_read 1"), "not allowed") && g_set.cached_read == 0);
 	CHECK(has(run("set internal 1"), "not allowed") && g_set.internal == 0);
 	CHECK(has(run("set verify 1"), "not allowed") && g_set.verify == 0);
 	CHECK(has(run("set internal 0"), "not allowed"));

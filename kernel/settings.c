@@ -37,50 +37,57 @@ static int          g_save_fails = 0;   /* retry a failed save a few times */
 
 static const int32_t g_defaults[TS_KEY_COUNT] = {
 	TS_DEF_SD2VITA, TS_DEF_INTERNAL, TS_DEF_VERIFY, TS_DEF_HUD, TS_DEF_HUD_POS,
-	TS_DEF_DEVMODE, TS_DEF_MEMCARD, TS_DEF_CACHED_READ,
+	TS_DEF_DEVMODE, TS_DEF_MEMCARD,
 };
+
+/* A file may hold more keys than this build knows (one written by a newer
+ * build, or by the experimental build that had an 8th key): those are read
+ * for the check word and then ignored. */
+#define TS_CFG_MAX_KEYS  32
+
+/* Check word over `count` stored values (all of them, known or not). */
+static uint32_t check_of(uint32_t magic, uint32_t version, uint32_t count, const int32_t *values)
+{
+	uint32_t c = magic ^ (version << 8) ^ (count << 16);
+	for (uint32_t i = 0; i < count; i++)
+		c = (c << 5 | c >> 27) ^ (uint32_t)values[i];
+	return c;
+}
 
 static uint32_t file_check(const TsSettingsFile *f)
 {
-	uint32_t c = f->magic ^ (f->version << 8) ^ (f->count << 16);
-	for (uint32_t i = 0; i < f->count && i < TS_KEY_COUNT; i++)
-		c = (c << 5 | c >> 27) ^ (uint32_t)f->values[i];
-	return c;
+	return check_of(f->magic, f->version, f->count, f->values);
 }
 
 /* Read and check one settings file into `s` (which already holds the defaults).
  * 1 = loaded, 0 = missing or unusable (`s` untouched). */
 static int load_file(const char *path, TsSettings *s)
 {
-	TsSettingsFile f;
-	memset(&f, 0, sizeof(f));
+	/* magic, version, count, up to TS_CFG_MAX_KEYS values, check */
+	uint32_t raw[3 + TS_CFG_MAX_KEYS + 1];
+	memset(raw, 0, sizeof(raw));
 	SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
-	if (fd < 0) {
-		TS_KLOGI("settings: %s not readable (0x%08x)", path, (unsigned)fd);
-		return 0;
-	}
-	int n = ksceIoRead(fd, &f, sizeof(f));
+	if (fd < 0)
+		return 0;                      /* no file: defaults, nothing to report */
+	int n = ksceIoRead(fd, raw, sizeof(raw));
 	ksceIoClose(fd);
-	/* A file with fewer keys is shorter: its check word sits where the
-	 * first missing value would be. */
-	uint32_t cnt = f.count;
-	int ok = f.magic == TS_CFG_MAGIC && f.version == TS_CFG_VERSION &&
-	         cnt >= 1 && cnt <= TS_KEY_COUNT &&
-	         n == (int)(3 * sizeof(uint32_t) + (cnt + 1) * sizeof(int32_t));
-	if (ok) {
-		uint32_t stored = cnt == TS_KEY_COUNT ? f.check : (uint32_t)f.values[cnt];
-		ok = stored == file_check(&f);
-	}
+	/* The check word follows the last stored value. */
+	uint32_t cnt = raw[2];
+	const int32_t *values = (const int32_t *)&raw[3];
+	int ok = raw[0] == TS_CFG_MAGIC && raw[1] == TS_CFG_VERSION &&
+	         cnt >= 1 && cnt <= TS_CFG_MAX_KEYS &&
+	         n == (int)((3 + cnt + 1) * sizeof(uint32_t)) &&
+	         raw[3 + cnt] == check_of(raw[0], raw[1], cnt, values);
 	if (!ok) {
 		TS_KLOGW("settings: %s unusable (n=%d)", path, n);
 		return 0;
 	}
-	for (int k = 0; k < (int)cnt; k++) {
-		if (ts_setting_valid(k, f.values[k]))
-			*ts_setting_field(s, k) = f.values[k];
+	for (int k = 0; k < (int)cnt && k < TS_KEY_COUNT; k++) {
+		if (ts_setting_valid(k, values[k]))
+			*ts_setting_field(s, k) = values[k];
 		else
 			TS_KLOGW("settings: key %d value %d out of range, default %d",
-			         k, f.values[k], g_defaults[k]);
+			         k, values[k], g_defaults[k]);
 	}
 	return 1;
 }
@@ -96,8 +103,8 @@ void ts_settings_init(void)
 	if (!load_file(TS_SETTINGS_PATH, &s) && !load_file(TS_SETTINGS_TMP, &s))
 		TS_KLOGI("settings: no usable saved file, using defaults");
 	memcpy((void *)&g_ts_settings, &s, sizeof(s));
-	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d cached_read=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode, s.cached_read);
+	TS_KLOGI("settings: sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 	ts_stage_apply(&s);
 }
 
@@ -168,6 +175,6 @@ void ts_settings_flush(void)
 		return;
 	}
 	g_save_fails = 0;
-	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d cached_read=%d",
-	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode, s.cached_read);
+	TS_KLOGI("settings: saved sd2vita=%d internal=%d memcard=%d verify=%d hud=%d pos=%d devmode=%d",
+	         s.sd2vita, s.internal, s.memcard, s.verify, s.hud, s.hud_pos, s.devmode);
 }

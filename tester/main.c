@@ -8,8 +8,10 @@
  * after every test, also after a cancel or a failure, and after a crash at the
  * next start (restore.h).
  *
- * The kernel module must be installed: this app imports its SceStorageTurbo
- * syscall library, so the console refuses to start the app without it.
+ * The kernel module must be installed and loaded to run a test. The import of its
+ * SceStorageTurbo library is weak, so without it the app still starts and the menu
+ * says "the kernel module does not answer" (an unresolved weak stub only returns,
+ * and tsGetState's result is always checked before anything else is done).
  */
 #include <stdio.h>
 #include <string.h>

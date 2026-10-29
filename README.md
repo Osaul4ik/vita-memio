@@ -398,8 +398,8 @@ diagnostics build described under [Remote control](#remote-control-port-1340).
 
 ## Tester app
 
-`storageturbo_tester.vpk` (install with VitaShell; the plugin must be installed too, the
-app imports its syscall library) measures what the plugin really does on your card,
+`storageturbo_tester.vpk` (install with VitaShell with extended permissions; the plugin must be installed and
+loaded to run a test, otherwise the menu says the kernel module does not answer) measures what the plugin really does on your card,
 instead of judging by eye. Pick the device and the folder on it, then **Run test**:
 
 - The same test file workload runs with the plugin **OFF and ON** for that device, on the

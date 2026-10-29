@@ -129,7 +129,7 @@ vita_create_self(storageturbo.suprx storageturbo
 # Runs storage tests with the plugin OFF and ON on the same card, appends the
 # results to ur0:data/turbostorage/results.txt and can clear them. It imports the
 # kernel module's SceStorageTurbo library, so the plugin must be installed for it
-# to start. Disable with -DTS_BUILD_TESTER=OFF.
+# to be useful. Disable with -DTS_BUILD_TESTER=OFF.
 option(TS_BUILD_TESTER "Build the on-device tester app (VPK)" ON)
 if(TS_BUILD_TESTER)
   set(TESTER_TITLE_ID "TURBOTST0")
@@ -143,8 +143,12 @@ if(TS_BUILD_TESTER)
     tester/vita/vita_env.c
   )
   add_dependencies(storageturbo_tester storageturbo-stubs)
+  # WEAK import of the plugin's syscall library: when the kernel module is not
+  # loaded (or not reachable from an application) the app still starts and says so
+  # on screen, instead of the console refusing to launch it. An unresolved weak
+  # stub just returns, and every use of the plugin is checked (tsGetState first).
   target_link_libraries(storageturbo_tester
-    ${CMAKE_BINARY_DIR}/libstorageturbo_kernel_stub.a
+    ${CMAKE_BINARY_DIR}/libstorageturbo_kernel_stub_weak.a
     SceLibKernel_stub
     SceIofilemgr_stub
     SceProcessmgr_stub

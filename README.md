@@ -9,7 +9,7 @@ vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia
 Before and after every transfer, the system's storage driver cleans and invalidates the CPU cache over the whole caller buffer, and that work is not overlapped with the transfer. For large transfers vita-memio hands the system's own, unmodified read and write functions a non-cacheable staging buffer instead (the driver skips the cache work for it) and copies between the two with the CPU. The driver still issues every command, handles every error and runs the DMA.
 
 - Writes are never cached or deferred: a write has reached the card before the call returns.
-- Small transfers (under 32 KiB, which includes the file system's own bookkeeping) take the standard path.
+- Small transfers (under 32 KiB, which includes the file system's own bookkeeping) take the standard path, unless **Small transfers too** is switched on.
 - Any error switches that storage back to the standard path for the session and finishes the request the standard way.
 - On an unknown firmware nothing is installed.
 - Game cards, USB storage and Wi-Fi are not touched.
@@ -63,6 +63,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 
 | Row | What it does | Default |
 |---|---|---|
+| Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
 | Storage HUD | Live speed of each storage in use, in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
@@ -75,13 +76,15 @@ Settings apply at once, with no restart. They are kept in `ur0:data/vita-memio/`
 
 ## Tester
 
-The tester (`vitamemio_tester.vpk`, "vita-memio Tester") runs reads and writes of several sizes on one storage, checks every byte, and appends the result to `ur0:data/vita-memio/results.txt`. It never changes the plugin: switch a storage on or off in Settings, then run the test again to compare.
+The tester (`vitamemio_tester.vpk`, "vita-memio Tester") runs reads and writes of several sizes on one storage, then creates, reads and deletes many small files (files per second: mostly the file system's own small transfers). It checks every byte and appends the result to `ur0:data/vita-memio/results.txt`. It never changes the plugin: switch a storage on or off in Settings, then run the test again to compare.
 
 Its main screen shows live, for each storage, what the plugin is doing (state, data moved, errors, verified transfers, mismatches). Each result also shows:
 
 - where the time goes per 512-byte block (the system call vs. the CPU copy);
 - the plugin's verify results;
 - how many large transfers went the standard way because the staging buffer was busy.
+
+To see what **Small transfers too** does, run the test with it off and with it on and compare the *files create / read / delete* rows.
 
 Pick the storage that the test folder is on: on most setups both the SD2Vita and the memory card are `ux0:`. If the storage and folder don't match, the test says so.
 

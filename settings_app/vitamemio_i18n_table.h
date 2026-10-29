@@ -880,3 +880,47 @@
 	"vitamemio_kernel.skprx is not running. Check that it is in ur0:tai/ and listed under *KERNEL in ur0:tai/config.txt, then restart the console.",   /* engb */
 	"vitamemio_kernel.skprx çalışmıyor. ur0:tai/ içinde ve ur0:tai/config.txt dosyasında *KERNEL altında olduğunu kontrol edip konsolu yeniden başlatın.",   /* tr */
 },
+[VM_I18N_ROW_SMALL] = {
+	"小さな転送も高速化",   /* ja */
+	"Small transfers too",   /* en */
+	"Petits transferts aussi",   /* fr */
+	"También transferencias pequeñas",   /* es */
+	"Auch kleine Übertragungen",   /* de */
+	"Anche i piccoli trasferimenti",   /* it */
+	"Ook kleine overdrachten",   /* nl */
+	"Também transferências pequenas",   /* pt */
+	"Ускорять и мелкие передачи",   /* ru */
+	"작은 전송도 가속",   /* ko */
+	"小型傳輸也加速",   /* zht */
+	"小型传输也加速",   /* zhs */
+	"Myös pienet siirrot",   /* fi */
+	"Även små överföringar",   /* sv */
+	"Også små overførsler",   /* da */
+	"Også små overføringer",   /* no */
+	"Także małe transfery",   /* pl */
+	"Também transferências pequenas",   /* ptbr */
+	"Small transfers too",   /* engb */
+	"Küçük aktarımlar da",   /* tr */
+},
+[VM_I18N_HINT_SMALL] = {
+	"32 KiB 未満の転送も高速化します：ファイルシステム自身の管理データ（フォルダー、ファイル情報、ファイルを開く・作成する処理）。試験的な機能です：「転送を検証」と一緒にテストしてください。",   /* ja */
+	"Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",   /* en */
+	"Accélère aussi les transferts de moins de 32 Kio : la gestion interne du système de fichiers (dossiers, entrées de fichiers, ouverture et création de fichiers). Expérimental : testez avec Vérifier les transferts.",   /* fr */
+	"También acelera las transferencias de menos de 32 KiB: la gestión interna del sistema de archivos (carpetas, entradas de archivos, abrir y crear archivos). Experimental: pruébalo con Verificar transferencias.",   /* es */
+	"Beschleunigt auch Übertragungen unter 32 KiB: die eigene Verwaltung des Dateisystems (Ordner, Dateieinträge, Öffnen und Anlegen von Dateien). Experimentell: mit Übertragungen prüfen testen.",   /* de */
+	"Accelera anche i trasferimenti sotto i 32 KiB: la gestione interna del file system (cartelle, voci dei file, apertura e creazione dei file). Sperimentale: provalo con Verifica trasferimenti.",   /* it */
+	"Versnelt ook overdrachten onder 32 KiB: de eigen administratie van het bestandssysteem (mappen, bestandsvermeldingen, bestanden openen en maken). Experimenteel: test met Overdrachten controleren.",   /* nl */
+	"Acelera também as transferências abaixo de 32 KiB: a gestão interna do sistema de ficheiros (pastas, entradas de ficheiros, abrir e criar ficheiros). Experimental: teste com Verificar transferências.",   /* pt */
+	"Ускоряет и передачи меньше 32 КиБ: служебные данные файловой системы (папки, записи файлов, открытие и создание файлов). Экспериментально: проверяйте вместе с «Проверять передачи».",   /* ru */
+	"32 KiB 미만의 전송도 가속합니다: 파일 시스템 자체의 관리 데이터(폴더, 파일 항목, 파일 열기와 만들기). 실험적 기능: 전송 검증과 함께 테스트하세요.",   /* ko */
+	"也加速小於 32 KiB 的傳輸：檔案系統本身的管理資料（資料夾、檔案項目、開啟與建立檔案）。實驗性功能：請搭配「驗證傳輸」測試。",   /* zht */
+	"也加速小于 32 KiB 的传输：文件系统自身的管理数据（文件夹、文件条目、打开和创建文件）。实验性功能：请配合「验证传输」测试。",   /* zhs */
+	"Nopeuttaa myös alle 32 KiB:n siirrot: tiedostojärjestelmän oman kirjanpidon (kansiot, tiedostomerkinnät, tiedostojen avaaminen ja luominen). Kokeellinen: testaa yhdessä Tarkista siirrot -asetuksen kanssa.",   /* fi */
+	"Snabbar även upp överföringar under 32 KiB: filsystemets egen bokföring (mappar, filposter, att öppna och skapa filer). Experimentellt: testa med Kontrollera överföringar.",   /* sv */
+	"Gør også overførsler under 32 KiB hurtigere: filsystemets egen bogføring (mapper, filposter, åbning og oprettelse af filer). Eksperimentelt: test med Kontrollér overførsler.",   /* da */
+	"Gjør også overføringer under 32 KiB raskere: filsystemets egen bokføring (mapper, filoppføringer, åpning og oppretting av filer). Eksperimentelt: test med Kontroller overføringer.",   /* no */
+	"Przyspiesza też transfery poniżej 32 KiB: wewnętrzne dane systemu plików (foldery, wpisy plików, otwieranie i tworzenie plików). Eksperymentalne: testuj razem ze Sprawdzaj transfery.",   /* pl */
+	"Acelera também as transferências abaixo de 32 KiB: a gestão interna do sistema de arquivos (pastas, entradas de arquivos, abrir e criar arquivos). Experimental: teste com Verificar transferências.",   /* ptbr */
+	"Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",   /* engb */
+	"32 KiB altındaki aktarımları da hızlandırır: dosya sisteminin kendi kayıtları (klasörler, dosya girdileri, dosya açma ve oluşturma). Deneysel: Aktarımları doğrula ile test edin.",   /* tr */
+},

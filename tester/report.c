@@ -94,6 +94,12 @@ static void plugin_text(const BenchResult *r, char *out, size_t cap)
 	}
 }
 
+/* "Small transfers too" when the test started. */
+static const char *small_text(const BenchResult *r)
+{
+	return r->plugin0.small == 1 ? "on" : r->plugin0.small == 0 ? "off" : "unknown";
+}
+
 /* The plugin's verify mode in one line; empty when it does not apply. */
 static void verify_text(const BenchResult *r, char *out, size_t cap)
 {
@@ -134,8 +140,7 @@ static void metric_table(Out *o, const BenchAgg *a, int latency)
 			put(o, "%-16s %-9s %9s %9s\n", bench_metric_name[m], "", x, y);
 		} else {
 			report_fmt1(x, sizeof(x), a->v[m]);
-			put(o, "%-16s %-9s %9s\n", bench_metric_name[m],
-			    bench_metric_is_iops(m) ? "IOPS" : "MiB/s", x);
+			put(o, "%-16s %-9s %9s\n", bench_metric_name[m], bench_metric_unit(m), x);
 		}
 	}
 }
@@ -162,6 +167,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	verify_text(res, vt, sizeof(vt));
 	if (vt[0])
 		put(&o, "%s\n", vt);
+	if (res->plugin_mode == BPM_ON)
+		put(&o, "plugin small transfers too: %s\n", small_text(res));
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
 	    (unsigned)res->profile.file_mib, (unsigned)res->profile.rounds);
@@ -321,8 +328,10 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	verify_text(res, vt, sizeof(vt));
 	if (vt[0])
 		line(&s, "%s", vt);
-	if (res->plugin_mode == BPM_ON)
+	if (res->plugin_mode == BPM_ON) {
+		line(&s, "small transfers too: %s", small_text(res));
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
+	}
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
 			line(&s, "run %d: %s", i + 1, res->runs[i].note);
@@ -346,10 +355,10 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		return s.n;
 	}
 	line(&s, "");
-	line(&s, "%-15s %10s", "MiB/s or IOPS", "average");
+	line(&s, "%-15s %10s", "metric", "average");
 	for (int m = 0; m < BM_COUNT; m++) {
 		report_fmt1(x, sizeof(x), a.v[m]);
-		line(&s, "%-15s %10s", bench_metric_name[m], x);
+		line(&s, "%-15s %10s %s", bench_metric_name[m], x, bench_metric_unit(m));
 	}
 	line(&s, "");
 	line(&s, "%-15s %10s %10s", "ms per call", "median", "p99");

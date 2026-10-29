@@ -81,7 +81,7 @@ static int all_defaults(const VmSettings *s)
 	return s->sd2vita == VM_DEF_SD2VITA && s->internal == VM_DEF_INTERNAL &&
 	       s->verify == VM_DEF_VERIFY && s->hud == VM_DEF_HUD &&
 	       s->hud_style == VM_DEF_HUD_STYLE && s->log == VM_DEF_LOG &&
-	       s->memcard == VM_DEF_MEMCARD;
+	       s->memcard == VM_DEF_MEMCARD && s->small == VM_DEF_SMALL;
 }
 
 /* Build a settings file by hand, with a correct check word. */
@@ -133,14 +133,15 @@ static void test_save_and_load_roundtrip(void)
 	CHECK(vm_settings_set(VM_KEY_HUD_STYLE, VM_HUD_STYLE_CLASSIC) == VM_OK);
 	CHECK(vm_settings_set(VM_KEY_LOG, 1) == VM_OK);
 	CHECK(vm_settings_set(VM_KEY_MEMCARD, 1) == VM_OK);
-	CHECK(last_applied.sd2vita == 1 && last_applied.memcard == 1);
+	CHECK(vm_settings_set(VM_KEY_SMALL, 1) == VM_OK);
+	CHECK(last_applied.sd2vita == 1 && last_applied.memcard == 1 && last_applied.small == 1);
 	vm_settings_flush();
 	CHECK(exists("settings.bin") && !exists("settings.tmp"));
 
 	vm_settings_init();                       /* "reboot" */
 	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_style == VM_HUD_STYLE_CLASSIC && s.memcard == 1);
-	CHECK(s.log == 1 && s.internal == 0 && s.verify == 0);
+	CHECK(s.log == 1 && s.small == 1 && s.internal == 0 && s.verify == 0);
 }
 
 static void test_invalid_set_is_rejected(void)

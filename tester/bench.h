@@ -9,10 +9,13 @@
  * bench.c have no Vita dependencies and run unchanged in the host tests
  * (tests/test_bench.c).
  *
- * What a run measures (MiB/s for sequential, IOPS for random, plus the median
- * and 99th percentile time of a single call):
+ * What a run measures (MiB/s for sequential, IOPS for random, files/s for the
+ * small files, plus the median and 99th percentile time of a single call):
  *   seq write 1M | seq read 1M | seq read 128K
  *   random read 4K/32K/128K/1M | random write 4K/32K/128K/1M
+ *   small files: create (open new, write 4K, close) | read (open, read 4K,
+ *   close) | delete - mostly the file system's own small transfers, which
+ *   the plugin only speeds up with "small transfers too" on
  * Only the time spent inside the read/write calls counts: filling and checking
  * the data happens outside the timer.
  *
@@ -41,12 +44,15 @@ enum bench_metric {
 	BM_SEQ_W_1M = 0, BM_SEQ_R_1M, BM_SEQ_R_128K,
 	BM_RR_4K, BM_RR_32K, BM_RR_128K, BM_RR_1M,
 	BM_RW_4K, BM_RW_32K, BM_RW_128K, BM_RW_1M,
+	BM_SF_CREATE, BM_SF_READ, BM_SF_DELETE,
 	BM_COUNT
 };
 
 extern const char *const bench_metric_name[BM_COUNT];
-/* 0: the value is MiB/s, 1: the value is operations per second. */
+/* 0: the value is MiB/s, 1: the value is operations (or files) per second. */
 int bench_metric_is_iops(int metric);
+/* "MiB/s", "IOPS" or "files/s". */
+const char *bench_metric_unit(int metric);
 
 /* Display name of a device (enum vm_dev). */
 const char *bench_device_name(int dev);
@@ -60,6 +66,7 @@ typedef struct BenchPluginState {
 	uint32_t reads, writes;  /* that device's faster-path transfer counters     */
 	uint32_t errors, mismatches;
 	uint32_t passthru;       /* large transfers left stock: the buffer was busy */
+	int      small;          /* "small transfers too": 1 on, 0 off, -1 unknown */
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 	int      verify_ready;   /* ... and its check buffer is allocated           */
@@ -117,6 +124,7 @@ typedef struct BenchProfile {
 	uint32_t    rounds;         /* 1..BENCH_MAX_RUNS runs, one after another    */
 	uint32_t    rr_ops[4];      /* random reads for 4K, 32K, 128K, 1M           */
 	uint32_t    rw_ops[4];      /* random writes, same sizes                    */
+	uint32_t    sf_files;       /* small files per run (0: not tested)          */
 } BenchProfile;
 
 extern const BenchProfile bench_profile_quick;

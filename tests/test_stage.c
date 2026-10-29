@@ -75,6 +75,7 @@ static void reset(void)
 	d->buf = staging;
 	d->enabled = 1;
 	g_verify = 0;
+	g_min_sectors = MIN_SECTORS;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
 	g_shadow_busy = 0;
@@ -111,6 +112,34 @@ static void test_small_goes_stock(void)
 	CHECK(memcmp(u, disk + 10 * 512, 8 * 512) == 0);
 	CHECK(g_dev[M].st.reads == 0);
 	CHECK(g_dev[M].all_rd == 8 * 512);        /* still counted for the HUD */
+	free(u);
+}
+
+/* "Small transfers too": every transfer takes the faster path, down to one
+ * sector; switching it off again restores the 32 KiB minimum. */
+static void test_small_transfers_switch(void)
+{
+	uint8_t *u = user_buf(8);
+	VmSettings s;
+
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.small = 1;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 10, 8) == 0);
+	CHECK(last_buf == staging && g_dev[M].st.reads == 1);
+	CHECK(memcmp(u, disk + 10 * 512, 8 * 512) == 0);
+	CHECK(rd(u, 3, 1) == 0 && last_buf == staging);          /* one sector */
+	CHECK(memcmp(u, disk + 3 * 512, 512) == 0);
+	memset(u, 0x5A, 8 * 512);
+	CHECK(wr(u, 20, 8, REF_RD) == 0 && last_buf == staging);
+	CHECK(memcmp(disk + 20 * 512, u, 8 * 512) == 0);
+	CHECK(rd(u, 0, 0) == 0 && last_buf == u);                /* nothing to move: stock */
+
+	s.small = 0;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 10, 8) == 0 && last_buf == u);
 	free(u);
 }
 
@@ -504,6 +533,7 @@ int main(void)
 	staging = calloc(1, STAGE_BYTES);
 
 	RUN(test_small_goes_stock);
+	RUN(test_small_transfers_switch);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

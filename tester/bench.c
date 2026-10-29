@@ -15,9 +15,12 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"seq write 1M", "seq read 1M", "seq read 128K",
 	"rnd read 4K", "rnd read 32K", "rnd read 128K", "rnd read 1M",
 	"rnd write 4K", "rnd write 32K", "rnd write 128K", "rnd write 1M",
+	"files create", "files read", "files delete",
 };
 
-typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW } Kind;
+typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF } Kind;
+
+#define SF_BYTES 4096u          /* one small file */
 
 static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_SEQ_W_1M]  = { K_SEQ_W, MIB },
@@ -31,19 +34,27 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_RW_32K]    = { K_RW, 32 * 1024 },
 	[BM_RW_128K]   = { K_RW, 128 * 1024 },
 	[BM_RW_1M]     = { K_RW, MIB },
+	[BM_SF_CREATE] = { K_SF, SF_BYTES },
+	[BM_SF_READ]   = { K_SF, SF_BYTES },
+	[BM_SF_DELETE] = { K_SF, 0 },
 };
 
 const BenchProfile bench_profile_quick = {
-	"quick", 16, 3, { 100, 80, 40, 10 }, { 20, 20, 10, 6 },
+	"quick", 16, 3, { 100, 80, 40, 10 }, { 20, 20, 10, 6 }, 64,
 };
 
 const BenchProfile bench_profile_standard = {
-	"standard", 64, 5, { 400, 300, 150, 24 }, { 40, 40, 20, 10 },
+	"standard", 64, 5, { 400, 300, 150, 24 }, { 40, 40, 20, 10 }, 200,
 };
 
 int bench_metric_is_iops(int metric)
 {
-	return k_def[metric].kind == K_RR || k_def[metric].kind == K_RW;
+	return k_def[metric].kind == K_RR || k_def[metric].kind == K_RW || k_def[metric].kind == K_SF;
+}
+
+const char *bench_metric_unit(int metric)
+{
+	return k_def[metric].kind == K_SF ? "files/s" : bench_metric_is_iops(metric) ? "IOPS" : "MiB/s";
 }
 
 const char *bench_device_name(int dev)
@@ -89,6 +100,7 @@ typedef struct Ctx {
 	uint32_t           lat_cap;
 	char               file[BENCH_PATH_MAX + 16];
 	int                run_total;
+	uint32_t           sf_made;   /* small files that may exist (to clean up)  */
 } Ctx;
 
 static void fail(Ctx *c, const char *why)
@@ -235,6 +247,67 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 	return BR_OK;
 }
 
+static void sf_path(const Ctx *c, uint32_t i, char *out, size_t cap)
+{
+	snprintf(out, cap, "%svmsf%03u.bin", c->cfg->dir, (unsigned)i);
+}
+
+/* Small files: create n, read them back (each opened anew), delete them. Each
+ * call is open + one 4 KiB transfer + close, so it is mostly the file
+ * system's own bookkeeping: directory entries, allocation, the file's data. */
+static int run_small_files(Ctx *c, BenchRun *r)
+{
+	const BenchEnv *e = c->env;
+	const uint32_t n = c->cfg->profile->sf_files;
+	char path[BENCH_PATH_MAX + 32];
+	uint64_t total;
+
+	if (!n)
+		return BR_OK;
+	for (int m = BM_SF_CREATE; m <= BM_SF_DELETE; m++) {
+		total = 0;
+		for (uint32_t i = 0; i < n; i++) {
+			uint64_t off = 0x40000000ull + (uint64_t)i * SF_BYTES, t0, t1;
+			int h = 0, got = 0, ok;
+
+			if (is_cancelled(c))
+				return BR_CANCEL;
+			sf_path(c, i, path, sizeof(path));
+			if (m == BM_SF_CREATE)
+				tp_fill(c->buf, off, SF_BYTES);
+			t0 = e->now_us(e->ctx);
+			if (m == BM_SF_DELETE) {
+				ok = e->remove(e->ctx, path) == 0;
+			} else {
+				h = e->open(e->ctx, path, m == BM_SF_CREATE);
+				if (h >= 0) {
+					got = m == BM_SF_CREATE ? e->pwrite(e->ctx, h, c->buf, SF_BYTES, 0)
+					                        : e->pread(e->ctx, h, c->buf, SF_BYTES, 0);
+					e->close(e->ctx, h);
+				}
+				ok = h >= 0 && got == (int)SF_BYTES;
+			}
+			t1 = e->now_us(e->ctx);
+			if (m == BM_SF_CREATE)
+				c->sf_made = i + 1;
+			if (!ok) {
+				r->io_errors++;
+				fail(c, m == BM_SF_CREATE ? "cannot create a small file (card full?)" :
+				        m == BM_SF_READ ? "cannot read a small file" : "cannot delete a small file");
+				return BR_FAIL;
+			}
+			if (m == BM_SF_READ)
+				r->verify_bad += tp_verify(c->buf, off, SF_BYTES, NULL);
+			c->lat[i] = (uint32_t)(t1 - t0);
+			total += t1 - t0;
+			progress(c, BP_METRIC, r, m, (uint32_t)((uint64_t)(i + 1) * 1000 / n));
+		}
+		finish_metric(c, r, m, n, total, 0);
+	}
+	c->sf_made = 0;
+	return BR_OK;
+}
+
 /* Read the whole file in the current mode and count words that differ. */
 static int read_all(Ctx *c, BenchRun *r_for_progress, int phase, uint32_t *bad)
 {
@@ -364,6 +437,10 @@ static int do_run(Ctx *c, int round)
 		return rc;
 	r->final_done = 1;
 
+	rc = run_small_files(c, r);
+	if (rc)
+		return rc;
+
 	get_state(c, &r->after);
 	check_plugin(res, r);
 	r->complete = 1;
@@ -374,7 +451,8 @@ static int do_run(Ctx *c, int round)
 
 static int profile_ok(const BenchProfile *p)
 {
-	return p && p->file_mib >= 1 && p->file_mib <= 1024 && p->rounds >= 1 && p->rounds <= BENCH_MAX_RUNS;
+	return p && p->file_mib >= 1 && p->file_mib <= 1024 && p->rounds >= 1 &&
+	       p->rounds <= BENCH_MAX_RUNS && p->sf_files <= 999;   /* vmsf000..999 */
 }
 
 int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
@@ -407,6 +485,8 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 		if (cfg->profile->rw_ops[k] > maxops) maxops = cfg->profile->rw_ops[k];
 	}
 	c.lat_cap = cfg->profile->file_mib * 8;          /* the 128K sequential read    */
+	if (cfg->profile->sf_files > maxops)
+		maxops = cfg->profile->sf_files;
 	if (maxops > c.lat_cap)
 		c.lat_cap = maxops;
 	c.buf = malloc(MIB);
@@ -428,8 +508,15 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 
 out:
 	progress(&c, BP_CLEANUP, res->nruns ? &res->runs[res->nruns - 1] : NULL, -1, 0);
-	if (dir_ready)
+	if (dir_ready) {
+		char path[BENCH_PATH_MAX + 32];
+
 		env->remove(env->ctx, c.file);
+		for (uint32_t i = 0; i < c.sf_made; i++) {   /* stopped half way */
+			sf_path(&c, i, path, sizeof(path));
+			env->remove(env->ctx, path);
+		}
+	}
 	free(c.buf);
 	free(c.lat);
 	if (rc == BR_CANCEL)

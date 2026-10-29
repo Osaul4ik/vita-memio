@@ -12,6 +12,7 @@
  *   SIM_SD2VITA=0|1                    the plugin's SD2Vita setting (default 1)
  *   SIM_NOBUF=1                        a device that is on reports "no buffer"
  *   SIM_VERIFY=0|1                     the plugin's verify mode (default 1)
+ *   SIM_SMALL=0|1                      the plugin's "small transfers too" (default 0)
  *   SIM_MISMATCH=n                     the nth checked transfer differs (falls back)
  *
  * This is a test aid for the screens and the control flow, not a Vita emulator: it
@@ -90,7 +91,7 @@ int vmGetState(VmState *o)
 	memset(o, 0, sizeof(*o));
 	o->size = sizeof(*o);
 	o->magic = VM_STATE_MAGIC;
-	o->settings = g_set;
+	memcpy(&o->settings, &g_set, sizeof(o->settings));   /* the first seven keys */
 	o->fingerprint = 0xC0FFEE01;
 	o->verify_ready = g_set.verify;
 	for (int d = 0; d < VM_DEV_COUNT; d++) {
@@ -106,6 +107,12 @@ int vmGetState(VmState *o)
 /* No vmSetSetting here on purpose: the tester must never change a plugin
  * setting, so if it ever calls it, building the simulator fails to link. */
 int vmSelfTestPing(void) { return VM_SELFTEST_MAGIC; }
+int vmGetSetting(int key)
+{
+	int32_t *f = vm_setting_field(&g_set, key);
+
+	return f ? *f : VM_ERR_ARG;
+}
 
 /* Timing: 20 us io and 5 us copy per block for reads, 30 / 2 for writes. */
 int vmGetTiming(VmTiming *o)
@@ -263,6 +270,7 @@ int main(int argc, char **argv)
 	g_sim_fail_nobuf = getenv("SIM_NOBUF") != NULL;
 	if ((s = getenv("SIM_SD2VITA"))) g_set.sd2vita = atoi(s);   /* "as set in Settings" */
 	if ((s = getenv("SIM_VERIFY"))) g_set.verify = atoi(s);
+	if ((s = getenv("SIM_SMALL"))) g_set.small = atoi(s);
 	if ((s = getenv("SIM_MISMATCH"))) g_sim_mismatch_at = atoi(s);
 	return tester_main();
 }

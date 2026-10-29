@@ -56,7 +56,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
  * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard",
+	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard", "small",
 };
 
 #define ROW_LIST(k) \
@@ -79,6 +79,7 @@ static const char X_GROUP[] =
 	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">"
+		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
 		ROW_LIST("hud")
@@ -223,13 +224,13 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
 	[VM_KEY_HUD_STYLE] = VM_I18N_ROW_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_ROW_LOG,
-	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD,
+	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
 	[VM_KEY_HUD_STYLE] = VM_I18N_HINT_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_HINT_LOG,
-	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD,
+	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */
@@ -376,10 +377,8 @@ static int get_hook(const char *cat, const char *name, int *val)
 	if (is_ts(cat) && val) {
 		VmState st;
 		int k = name ? key_index(name) : -1;
-		if (k >= 0 && get_state(&st))
-			*val = *vm_setting_field(&st.settings, k);
-		else
-			*val = 0;
+		int v = k >= 0 && get_state(&st) ? vmGetSetting(k) : 0;
+		*val = vm_setting_valid(k, v) ? v : 0;   /* not answered: shown as off */
 		return 0;
 	}
 	return TAI_CONTINUE(int, r_get, cat, name, val);

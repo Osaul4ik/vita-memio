@@ -359,7 +359,12 @@ int vmGetState(VmState *out)
 	memset(&k, 0, sizeof(k));
 	k.size = sizeof(k);
 	k.magic = VM_STATE_MAGIC;
-	vm_settings_copy(&k.settings);
+	{
+		VmSettings cur;
+
+		vm_settings_copy(&cur);
+		memcpy(&k.settings, &cur, sizeof(k.settings));   /* the first seven keys */
+	}
 	k.disabled = g_disabled;
 	k.fingerprint = g_fingerprint;
 	k.verify_ready = vm_stage_verify_ready();
@@ -393,6 +398,16 @@ int vmGetTiming(VmTiming *out)
 	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
 		return VM_ERR_ARG;
 	return VM_OK;
+}
+
+int vmGetSetting(int key)
+{
+	VmSettings cur;
+	int32_t *f;
+
+	vm_settings_copy(&cur);
+	f = vm_setting_field(&cur, key);
+	return f ? *f : VM_ERR_ARG;
 }
 
 int vmResetSafeMode(void)

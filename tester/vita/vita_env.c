@@ -103,6 +103,13 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->errors = st.dev[v->dev].errors;
 	out->mismatches = st.dev[v->dev].mismatches;
 	out->passthru = st.dev[v->dev].passthru;
+	{
+		/* vmGetSetting is newer than VmState: an older kernel module does not
+		 * have it (the weak import then returns without an answer). */
+		int s = vmGetSetting(VM_KEY_SMALL);
+
+		out->small = s == 0 || s == 1 ? s : -1;
+	}
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
 	out->verify_ready = st.verify_ready;

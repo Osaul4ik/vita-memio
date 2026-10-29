@@ -19,7 +19,8 @@
  *                                                      game cards stay stock)
  * and (SceMsifForDriver):
  *   ksceMsifReadSector / ksceMsifWriteSector        -> the memory card (one slot)
- * Never touched: small transfers (< 32 KiB: file-system metadata), other ports
+ * Never touched: small transfers (< 32 KiB: file-system metadata; unless
+ * "small transfers" is switched on, then every transfer qualifies), other ports
  * (the Wi-Fi chip is on its own port and never calls these), USB storage.
  *
  * Safety rules:
@@ -106,6 +107,10 @@ static Dev g_dev[VM_DEV_COUNT] = {
  * Before it (settings applied at boot, safe mode, unknown firmware) nothing is
  * allocated. */
 static int g_live;
+
+/* Smallest transfer the faster path takes (sectors): MIN_SECTORS, or 1 with
+ * small transfers switched on. */
+static volatile uint32_t g_min_sectors = MIN_SECTORS;
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -198,7 +203,7 @@ static void ensure_buf(Dev *d)
 /* Take the device buffer for one request, or 0 if the request stays stock. */
 static int take(Dev *d, int mine, uint32_t nsec)
 {
-	if (!mine || !d->enabled || d->fallback || !d->buf || nsec < MIN_SECTORS)
+	if (!mine || !d->enabled || d->fallback || !d->buf || nsec < g_min_sectors || !nsec)
 		return 0;
 	if (__sync_lock_test_and_set(&d->busy, 1)) {
 		d->st.passthru++;
@@ -444,6 +449,7 @@ void vm_stage_apply(const VmSettings *s)
 			ensure_buf(d);
 		d->enabled = want[i] ? 1 : 0;
 	}
+	g_min_sectors = s->small ? 1 : MIN_SECTORS;
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */

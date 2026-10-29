@@ -453,10 +453,37 @@ s("VM_I18N_HINT_STATUS_NO_KERNEL",
   no="vitamemio_kernel.skprx kjører ikke. Sjekk at den ligger i ur0:tai/ og står under *KERNEL i ur0:tai/config.txt, og start konsollen på nytt.",
   pl="vitamemio_kernel.skprx nie działa. Sprawdź, czy jest w ur0:tai/ i pod *KERNEL w ur0:tai/config.txt, a potem uruchom konsolę ponownie.",
   tr="vitamemio_kernel.skprx çalışmıyor. ur0:tai/ içinde ve ur0:tai/config.txt dosyasında *KERNEL altında olduğunu kontrol edip konsolu yeniden başlatın.")
+s("VM_I18N_ROW_SMALL", en="Small transfers too", engb="Small transfers too", ja="小さな転送も高速化",
+  fr="Petits transferts aussi", es="También transferencias pequeñas", de="Auch kleine Übertragungen",
+  it="Anche i piccoli trasferimenti", nl="Ook kleine overdrachten", pt="Também transferências pequenas",
+  ptbr="Também transferências pequenas", ru="Ускорять и мелкие передачи", ko="작은 전송도 가속",
+  zht="小型傳輸也加速", zhs="小型传输也加速", fi="Myös pienet siirrot", sv="Även små överföringar",
+  da="Også små overførsler", no="Også små overføringer", pl="Także małe transfery", tr="Küçük aktarımlar da")
+s("VM_I18N_HINT_SMALL",
+  en="Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",
+  engb="Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",
+  ja="32 KiB 未満の転送も高速化します：ファイルシステム自身の管理データ（フォルダー、ファイル情報、ファイルを開く・作成する処理）。試験的な機能です：「転送を検証」と一緒にテストしてください。",
+  fr="Accélère aussi les transferts de moins de 32 Kio : la gestion interne du système de fichiers (dossiers, entrées de fichiers, ouverture et création de fichiers). Expérimental : testez avec Vérifier les transferts.",
+  es="También acelera las transferencias de menos de 32 KiB: la gestión interna del sistema de archivos (carpetas, entradas de archivos, abrir y crear archivos). Experimental: pruébalo con Verificar transferencias.",
+  de="Beschleunigt auch Übertragungen unter 32 KiB: die eigene Verwaltung des Dateisystems (Ordner, Dateieinträge, Öffnen und Anlegen von Dateien). Experimentell: mit Übertragungen prüfen testen.",
+  it="Accelera anche i trasferimenti sotto i 32 KiB: la gestione interna del file system (cartelle, voci dei file, apertura e creazione dei file). Sperimentale: provalo con Verifica trasferimenti.",
+  nl="Versnelt ook overdrachten onder 32 KiB: de eigen administratie van het bestandssysteem (mappen, bestandsvermeldingen, bestanden openen en maken). Experimenteel: test met Overdrachten controleren.",
+  pt="Acelera também as transferências abaixo de 32 KiB: a gestão interna do sistema de ficheiros (pastas, entradas de ficheiros, abrir e criar ficheiros). Experimental: teste com Verificar transferências.",
+  ptbr="Acelera também as transferências abaixo de 32 KiB: a gestão interna do sistema de arquivos (pastas, entradas de arquivos, abrir e criar arquivos). Experimental: teste com Verificar transferências.",
+  ru="Ускоряет и передачи меньше 32 КиБ: служебные данные файловой системы (папки, записи файлов, открытие и создание файлов). Экспериментально: проверяйте вместе с «Проверять передачи».",
+  ko="32 KiB 미만의 전송도 가속합니다: 파일 시스템 자체의 관리 데이터(폴더, 파일 항목, 파일 열기와 만들기). 실험적 기능: 전송 검증과 함께 테스트하세요.",
+  zht="也加速小於 32 KiB 的傳輸：檔案系統本身的管理資料（資料夾、檔案項目、開啟與建立檔案）。實驗性功能：請搭配「驗證傳輸」測試。",
+  zhs="也加速小于 32 KiB 的传输：文件系统自身的管理数据（文件夹、文件条目、打开和创建文件）。实验性功能：请配合「验证传输」测试。",
+  fi="Nopeuttaa myös alle 32 KiB:n siirrot: tiedostojärjestelmän oman kirjanpidon (kansiot, tiedostomerkinnät, tiedostojen avaaminen ja luominen). Kokeellinen: testaa yhdessä Tarkista siirrot -asetuksen kanssa.",
+  sv="Snabbar även upp överföringar under 32 KiB: filsystemets egen bokföring (mappar, filposter, att öppna och skapa filer). Experimentellt: testa med Kontrollera överföringar.",
+  da="Gør også overførsler under 32 KiB hurtigere: filsystemets egen bogføring (mapper, filposter, åbning og oprettelse af filer). Eksperimentelt: test med Kontrollér overførsler.",
+  no="Gjør også overføringer under 32 KiB raskere: filsystemets egen bokføring (mapper, filoppføringer, åpning og oppretting av filer). Eksperimentelt: test med Kontroller overføringer.",
+  pl="Przyspiesza też transfery poniżej 32 KiB: wewnętrzne dane systemu plików (foldery, wpisy plików, otwieranie i tworzenie plików). Eksperymentalne: testuj razem ze Sprawdzaj transfery.",
+  tr="32 KiB altındaki aktarımları da hızlandırır: dosya sisteminin kendi kayıtları (klasörler, dosya girdileri, dosya açma ve oluşturma). Deneysel: Aktarımları doğrula ile test edin.")
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

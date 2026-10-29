@@ -39,6 +39,9 @@ typedef struct Fake {
 	uint32_t reads, writes, errors, mismatches, verified;
 	uint32_t passthru;           /* faster path declined: buffer busy           */
 	int      busy_every;         /* every Nth large read finds the buffer busy  */
+	int      small;              /* the plugin's "small transfers too"          */
+	int      sf_corrupt;         /* small files read back wrong                 */
+	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
 	int      no_timing;          /* kernel module without vmGetTiming          */
 	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
@@ -65,11 +68,41 @@ static void ensure(Fake *f, size_t n)
 	}
 }
 
+/* The small files (vmsfNNN.bin) live apart from the one big test file. */
+#define SF_MAX 1000
+static int     g_sf_exists[SF_MAX];
+static uint8_t g_sf_data[SF_MAX][4096];
+
+static int sf_index(const char *path)
+{
+	const char *p = strstr(path, "vmsf");
+
+	return p ? atoi(p + 4) : -1;
+}
+
+static int sf_left(void)
+{
+	int n = 0;
+
+	for (int i = 0; i < SF_MAX; i++)
+		n += g_sf_exists[i];
+	return n;
+}
+
 static int f_open(void *c, const char *path, int trunc)
 {
 	Fake *f = c;
+	int sf = sf_index(path);
 
-	(void)path;
+	if (sf >= 0) {
+		if (trunc)
+			g_sf_exists[sf] = 1;
+		else if (!g_sf_exists[sf])
+			return -1;
+		f->open_handles++;
+		f->now += 300;
+		return 1000 + sf;
+	}
 	if (trunc) {
 		f->exists = 1;
 		f->size = 0;
@@ -100,7 +133,17 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 {
 	Fake *f = c;
 
-	(void)h;
+	if (h >= 1000) {
+		if (off + n > 4096)
+			return -1;
+		memcpy(buf, g_sf_data[h - 1000] + off, n);
+		if (f->sf_corrupt)
+			((uint8_t *)buf)[7] ^= 1;
+		if (f->on && f->small)
+			f->reads++;                            /* a small transfer, faster path */
+		f->now += 200;
+		return (int)n;
+	}
 	if (off + n > f->size)
 		return -1;
 	memcpy(buf, f->data + off, n);
@@ -128,7 +171,15 @@ static int f_pwrite(void *c, int h, const void *buf, uint32_t n, uint64_t off)
 {
 	Fake *f = c;
 
-	(void)h;
+	if (h >= 1000) {
+		if (off + n > 4096)
+			return -1;
+		memcpy(g_sf_data[h - 1000] + off, buf, n);
+		if (f->on && f->small)
+			f->writes++;
+		f->now += 400;
+		return (int)n;
+	}
 	f->write_calls++;
 	if (f->fail_write_at && f->write_calls == f->fail_write_at)
 		return -1;
@@ -156,7 +207,15 @@ static int f_remove(void *c, const char *path)
 {
 	Fake *f = c;
 
-	(void)path;
+	int sf = sf_index(path);
+
+	if (sf >= 0) {
+		if (f->sf_fail_remove || !g_sf_exists[sf])
+			return -1;
+		g_sf_exists[sf] = 0;
+		f->now += 250;
+		return 0;
+	}
 	f->remove_calls++;
 	f->exists = 0;
 	return 0;
@@ -186,6 +245,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->errors = f->errors;
 	o->mismatches = f->mismatches;
 	o->passthru = f->passthru;
+	o->small = f->small;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -228,15 +288,16 @@ static void fake_init(Fake *f, int on)
 	f->status_override = -1;
 	f->initial_on = f->on = on;
 	g_progress_calls = g_progress_bad = 0;
+	memset(g_sf_exists, 0, sizeof(g_sf_exists));
 }
 
 /* the plugin setting is exactly what the user left, and nothing leaked */
 #define CHECK_UNTOUCHED(f) \
-	CHECK((f).on == (f).initial_on && !(f).exists && (f).open_handles == 0)
+	CHECK((f).on == (f).initial_on && !(f).exists && (f).open_handles == 0 && sf_left() == 0)
 
 /* a small profile so the tests stay quick under the sanitizers */
-static const BenchProfile tiny = { "tiny", 2, 3, { 20, 20, 10, 4 }, { 6, 6, 4, 2 } };
-static const BenchProfile one_round = { "one", 2, 1, { 8, 8, 4, 2 }, { 4, 4, 2, 2 } };
+static const BenchProfile tiny = { "tiny", 2, 3, { 20, 20, 10, 4 }, { 6, 6, 4, 2 }, 0 };
+static const BenchProfile one_round = { "one", 2, 1, { 8, 8, 4, 2 }, { 4, 4, 2, 2 }, 0 };
 
 static BenchResult *new_result(void) { return calloc(1, sizeof(BenchResult)); }
 
@@ -458,6 +519,84 @@ static void test_passthru_counted(void)
 	free(f.data);
 }
 
+static const BenchProfile with_files = { "files", 2, 2, { 4, 4, 2, 1 }, { 2, 2, 2, 1 }, 12 };
+
+static void test_small_files(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &with_files, "ux0:data/t/" };
+	BenchEnv e;
+	char *text = malloc(40000);
+	char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	int n, found = 0;
+
+	/* all three measured, checked, and nothing left behind */
+	fake_init(&f, 1);
+	f.small = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && bench_integrity_ok(r));
+	for (int k = 0; k < r->nruns; k++)
+		for (int mm = BM_SF_CREATE; mm <= BM_SF_DELETE; mm++)
+			CHECK(r->runs[k].ops[mm] == 12 && r->runs[k].value[mm] > 0);
+	CHECK(r->runs[0].value[BM_SF_CREATE] < r->runs[0].value[BM_SF_DELETE]);   /* 700 vs 250 us */
+	CHECK(r->plugin0.small == 1);
+	CHECK_UNTOUCHED(f);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "files create     files/s"));
+	CHECK(strstr(text, "plugin small transfers too: on"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	for (int i = 0; i < n; i++)
+		found |= !strcmp(lines[i], "small transfers too: on");
+	CHECK(found);
+	CHECK(strstr(lines[n - 1], "files delete"));
+
+	/* a small file that reads back wrong fails the data check */
+	fake_init(&f, 1);
+	f.sf_corrupt = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && !bench_integrity_ok(r));
+	CHECK_UNTOUCHED(f);
+
+	/* a delete that fails stops the test, and the files are still cleaned up
+	 * as far as possible (here the fake refuses every delete) */
+	fake_init(&f, 1);
+	f.sf_fail_remove = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) < 0 && strstr(r->fail_reason, "delete a small file"));
+	f.sf_fail_remove = 0;
+	memset(g_sf_exists, 0, sizeof(g_sf_exists));
+
+	/* stopped during the small files: the ones made so far are removed */
+	fake_init(&f, 1);
+	f.cancel_after_polls = 1000000;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	{
+		int polls = f.polls;
+
+		fake_init(&f, 1);
+		f.cancel_after_polls = polls - 30;        /* inside the last run's small files */
+		e = env_for(&f);
+		CHECK(bench_run(&e, &cfg, r) == 1 && r->cancelled);
+		CHECK_UNTOUCHED(f);
+	}
+
+	/* the shipped profiles test small files; an absurd count is refused */
+	CHECK(bench_profile_quick.sf_files > 0 && bench_profile_standard.sf_files > 0);
+	{
+		BenchProfile bad = with_files;
+
+		bad.sf_files = 1000;
+		cfg.profile = &bad;
+		CHECK(bench_run(&e, &cfg, r) < 0);
+	}
+	free(text);
+	free(r);
+	free(f.data);
+}
+
 static void test_state_changed_mid_test(void)
 {
 	Fake f = { 0 };
@@ -591,10 +730,10 @@ static void test_bad_profiles(void)
 	BenchResult *r = new_result();
 	BenchEnv e;
 	BenchProfile bad[] = {
-		{ "r0", 2, 0, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
-		{ "r17", 2, BENCH_MAX_RUNS + 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
-		{ "s0", 0, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
-		{ "big", 2000, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 } },
+		{ "r0", 2, 0, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, 0 },
+		{ "r17", 2, BENCH_MAX_RUNS + 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, 0 },
+		{ "s0", 0, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, 0 },
+		{ "big", 2000, 1, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, 0 },
 	};
 
 	for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -780,9 +919,10 @@ static void test_screen_lines(void)
 	CHECK(strcmp(lines[2], "data check: PASS") == 0);
 	CHECK(strcmp(lines[3], "plugin as expected: PASS") == 0);
 	CHECK(strcmp(lines[4], "plugin verify: off") == 0);
-	CHECK(strcmp(lines[5], "buffer busy: 0 large transfers went stock") == 0);
-	CHECK(strcmp(lines[6], "read  us/block: io 20.0  copy 4.0") == 0);
-	CHECK(strcmp(lines[7], "write us/block: io 30.0  copy 2.0") == 0);
+	CHECK(strcmp(lines[5], "small transfers too: off") == 0);
+	CHECK(strcmp(lines[6], "buffer busy: 0 large transfers went stock") == 0);
+	CHECK(strcmp(lines[7], "read  us/block: io 20.0  copy 4.0") == 0);
+	CHECK(strcmp(lines[8], "write us/block: io 30.0  copy 2.0") == 0);
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
 	for (int max = 0; max < 6; max++) {              /* a short array is never overrun */
@@ -931,6 +1071,7 @@ int main(void)
 	RUN(test_plugin_counters);
 	RUN(test_plugin_verify);
 	RUN(test_passthru_counted);
+	RUN(test_small_files);
 	RUN(test_state_changed_mid_test);
 	RUN(test_other_plugin_states_still_run);
 	RUN(test_plugin_mode_names);

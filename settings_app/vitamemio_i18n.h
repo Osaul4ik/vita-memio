@@ -50,6 +50,8 @@ enum vm_i18n_id {
 	VM_I18N_STATUS_HOOKS,
 	VM_I18N_HINT_STATUS_ACTIVE, /* ... and its help                              */
 	VM_I18N_HINT_STATUS_NO_KERNEL,
+	VM_I18N_ROW_SMALL,          /* Advanced > small transfers too                 */
+	VM_I18N_HINT_SMALL,
 	VM_I18N_COUNT
 };
 

@@ -159,18 +159,21 @@ static const char *dev_state(const VmState *st, int dev, uint32_t *color)
 	}
 }
 
-/* One line about the plugin's verify mode. */
+/* One line about the plugin's verify mode and "small transfers too". */
 static void verify_line(const VmState *st, char *out, size_t cap, uint32_t *color)
 {
+	int sm = vmGetSetting(VM_KEY_SMALL);
+	const char *small = sm == 1 ? "ON" : sm == 0 ? "off" : "?";
+
 	if (!st->settings.verify) {
 		*color = UI_DIM;
-		snprintf(out, cap, "verify: off  (Settings > Devices > vita-memio > Advanced > Verify transfers)");
+		snprintf(out, cap, "verify: off   small transfers too: %s   (Settings > ... > Advanced)", small);
 	} else if (!st->verify_ready) {
 		*color = UI_WARN;
-		snprintf(out, cap, "verify: ON, but no check buffer yet - nothing is checked");
+		snprintf(out, cap, "verify: ON, no check buffer yet - nothing checked   small transfers: %s", small);
 	} else {
 		*color = UI_ACCENT;
-		snprintf(out, cap, "verify: ON - every faster transfer is read again and compared (slower)");
+		snprintf(out, cap, "verify: ON - faster transfers re-read and compared   small transfers: %s", small);
 	}
 }
 

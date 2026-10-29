@@ -27,7 +27,7 @@ extern "C" {
 typedef struct VmState {
 	uint32_t   size;             /* sizeof(VmState), set by the kernel        */
 	uint32_t   magic;            /* VM_STATE_MAGIC                            */
-	VmSettings settings;         /* current (applied) settings                */
+	VmStateSettings settings;    /* current settings, the first seven keys    */
 	int32_t    disabled;         /* VM_DIS_*: why nothing is active           */
 	uint32_t   fingerprint;      /* storage driver module fingerprint         */
 	int32_t    verify_ready;     /* 1 once the verify buffer is allocated     */
@@ -85,6 +85,10 @@ _Static_assert(sizeof(VmTiming) == 80, "VmTiming is frozen (its size since teste
 
 /* Copy the timing counters to *out (user pointer). Returns VM_OK or VM_ERR_ARG. */
 int vmGetTiming(VmTiming *out);
+
+/* The current value of one setting (enum vm_key), or VM_ERR_ARG for an
+ * unknown key. Every key, including those VmState does not carry. */
+int vmGetSetting(int key);
 
 /* Clear the crash-loop guard (safe mode). The plugin starts normally again at
  * the next boot; a boot already in safe mode stays inactive until then.

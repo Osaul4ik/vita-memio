@@ -61,6 +61,11 @@ typedef struct BenchPluginState {
 	uint32_t errors, mismatches;
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
+	/* Where the faster path's time goes (tsGetTiming; an older kernel module
+	 * does not have it: timing_ok = 0). Counters only grow and wrap. */
+	int      timing_ok;
+	uint32_t rd_sectors, rd_io_us, rd_copy_us;
+	uint32_t wr_sectors, wr_io_us, wr_copy_us;
 } BenchPluginState;
 
 /* What the plugin does for the device under test, read from its state. */
@@ -175,6 +180,19 @@ typedef struct BenchAgg {
 } BenchAgg;
 
 void bench_aggregate(const BenchResult *res, BenchAgg *out);
+
+/* The faster path's time per 512-byte block, over the complete runs: inside the
+ * system read/write ("io") and in the CPU copy. ok = 0 when there is nothing to
+ * show (no timing from the kernel module, or no faster-path transfer). */
+typedef struct BenchTiming {
+	int      rd_ok, wr_ok;
+	uint64_t rd_sectors, wr_sectors;
+	double   rd_io_us, rd_copy_us;     /* per block */
+	double   wr_io_us, wr_copy_us;
+} BenchTiming;
+
+void bench_timing_run(const BenchRun *r, BenchTiming *out);
+void bench_timing(const BenchResult *res, BenchTiming *out);
 
 /* Verdicts. */
 int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O error */

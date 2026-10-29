@@ -42,6 +42,12 @@
 #include "stage.h"
 #include "klog.h"
 
+/* The CPU copy between the caller's buffer and the staging buffer (the host
+ * tests replace it to give the copy a measurable time). */
+#ifndef ts_copy
+#define ts_copy memcpy
+#endif
+
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */
 #define NID_READ_SD    0xB9593652    /* ksceSdifReadSectorSd                   */
 #define NID_WRITE_SD   0xE0781171    /* ksceSdifWriteSectorSd                  */
@@ -74,6 +80,7 @@ typedef struct Dev {
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
 	uint64_t      us_total;             /* time inside faster-path transfers, us */
 	uint32_t      us_max;               /* the slowest one, us                   */
+	TsTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
 	TsDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
@@ -203,10 +210,17 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
+		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
+
 		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)
 			break;
-		memcpy(dst, d->buf, bytes);
+		t2 = ksceKernelGetSystemTimeLow();
+		ts_copy(dst, d->buf, bytes);
+		t3 = ksceKernelGetSystemTimeLow();
+		d->tm.rd_sectors += n;
+		d->tm.rd_io_us += t2 - t1;
+		d->tm.rd_copy_us += t3 - t2;
 		if (verify && io(ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
 			if (memcmp(dst, g_shadow, bytes) != 0) {
@@ -254,10 +268,17 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 
-		memcpy(d->buf, src, bytes);
+		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
+
+		ts_copy(d->buf, src, bytes);
+		t2 = ksceKernelGetSystemTimeLow();
 		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)
 			break;
+		t3 = ksceKernelGetSystemTimeLow();
+		d->tm.wr_sectors += n;
+		d->tm.wr_copy_us += t2 - t1;
+		d->tm.wr_io_us += t3 - t2;
 		if (verify && io(rd_ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
 			if (memcmp(g_shadow, src, bytes) != 0) {
@@ -490,6 +511,12 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		                !d->buf        ? TS_ST_NO_BUFFER :
 		                d->fallback    ? TS_ST_FALLBACK : TS_ST_ACTIVE;
 	}
+}
+
+void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT])
+{
+	for (int i = 0; i < TS_DEV_COUNT; i++)
+		out[i] = g_dev[i].tm;
 }
 
 /* Memory card slow mode (Sony's own throttle: it sleeps after every memory

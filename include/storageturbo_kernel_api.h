@@ -52,6 +52,34 @@ int tsGetState(TsState *out);
  * for an unknown key or an out-of-range value (nothing changes then). */
 int tsSetSetting(int key, int value);
 
+/* Where the time of faster-path transfers goes, per device: inside the system's
+ * own sector read/write ("io") and in the CPU copy between the caller's buffer
+ * and the staging buffer ("copy"). Counted per chunk that succeeded; verify-mode
+ * re-reads are not included. The values only grow and wrap at 2^32: use the
+ * difference of two readings (unsigned subtraction is wrap-safe).
+ *
+ * A separate call with its own struct, so TsState keeps its size: a user module
+ * built before this was added still gets exactly the TsState it expects. */
+typedef struct TsTimingDev {
+	uint32_t rd_sectors;      /* sectors read on the faster path               */
+	uint32_t rd_io_us;        /* time inside the system read, us               */
+	uint32_t rd_copy_us;      /* staging -> caller copy, us                    */
+	uint32_t wr_sectors;
+	uint32_t wr_io_us;        /* time inside the system write, us              */
+	uint32_t wr_copy_us;      /* caller -> staging copy, us                    */
+} TsTimingDev;
+
+typedef struct TsTiming {
+	uint32_t    size;         /* sizeof(TsTiming), set by the kernel           */
+	uint32_t    magic;        /* TS_TIMING_MAGIC                               */
+	TsTimingDev dev[TS_DEV_COUNT];
+} TsTiming;
+
+#define TS_TIMING_MAGIC  0x54535449u   /* 'TSTI' */
+
+/* Copy the timing counters to *out (user pointer). Returns TS_OK or TS_ERR_ARG. */
+int tsGetTiming(TsTiming *out);
+
 /* Round-trip cookie: proves the syscall path reaches the kernel module.
  * Always returns TS_SELFTEST_MAGIC; changes nothing. 'TST1'. */
 #define TS_SELFTEST_MAGIC  0x54535431u

@@ -34,6 +34,8 @@ typedef struct Fake {
 	int      status_override;    /* -1: derive from `on`                       */
 	int      disabled, unavailable, verify;
 	uint32_t reads, writes, errors, mismatches;
+	int      no_timing;          /* kernel module without tsGetTiming          */
+	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
 
 	int      corrupt_read_on, corrupt_write_on;
 	int      no_counters;        /* ON, but nothing takes the faster path      */
@@ -97,8 +99,12 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 		return -1;
 	memcpy(buf, f->data + off, n);
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
-	if (counts(f, n))
+	if (counts(f, n)) {
 		f->reads++;
+		f->rs += n / 512;                          /* 20 us io + 4 us copy per block */
+		f->ri += (n / 512) * 20;
+		f->rc += (n / 512) * 4;
+	}
 	if (f->on && f->corrupt_read_on && n >= 32768)
 		((uint8_t *)buf)[n / 2] ^= 0x10;
 	return (int)n;
@@ -119,8 +125,12 @@ static int f_pwrite(void *c, int h, const void *buf, uint32_t n, uint64_t off)
 	if (off + n > f->size)
 		f->size = off + n;
 	f->now += 400 + (uint64_t)(n * (f->on ? 0.15 : 0.17));
-	if (counts(f, n))
+	if (counts(f, n)) {
 		f->writes++;
+		f->ws += n / 512;                          /* 30 us io + 2 us copy per block */
+		f->wi += (n / 512) * 30;
+		f->wc += (n / 512) * 2;
+	}
 	if (f->on && f->corrupt_write_on && n >= 32768)
 		f->data[off + n / 2] ^= 0x01;              /* lands on the "card" wrong */
 	return (int)n;
@@ -161,6 +171,11 @@ static int f_get(void *c, BenchPluginState *o)
 	o->mismatches = f->mismatches;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
+	if (!f->no_timing) {
+		o->timing_ok = 1;
+		o->rd_sectors = f->rs; o->rd_io_us = f->ri; o->rd_copy_us = f->rc;
+		o->wr_sectors = f->ws; o->wr_io_us = f->wi; o->wr_copy_us = f->wc;
+	}
 	return 0;
 }
 
@@ -484,6 +499,33 @@ static void test_shipped_profiles(void)
 	CHECK(bench_profile_standard.rounds >= 1 && bench_profile_standard.rounds <= BENCH_MAX_RUNS);
 }
 
+static void test_timing_math(void)
+{
+	BenchResult *r = new_result();
+	BenchTiming t;
+
+	r->nruns = 3;
+	for (int i = 0; i < 3; i++) {
+		BenchRun *x = &r->runs[i];
+
+		x->complete = i != 2;                    /* the third run does not count */
+		x->before.timing_ok = x->after.timing_ok = 1;
+		x->before.rd_sectors = 0xFFFFFFF0u;      /* wraps during the run */
+		x->after.rd_sectors = 0xFFFFFFF0u + 1000;
+		x->before.rd_io_us = 5;
+		x->after.rd_io_us = 5 + 21000;
+		x->after.rd_copy_us = 6500;
+	}
+	bench_timing(r, &t);
+	CHECK(t.rd_ok && !t.wr_ok && t.rd_sectors == 2000);
+	CHECK(t.rd_io_us > 20.99 && t.rd_io_us < 21.01);
+	CHECK(t.rd_copy_us > 6.49 && t.rd_copy_us < 6.51);
+	r->runs[0].before.timing_ok = 0;             /* a reading without timing is skipped */
+	bench_timing(r, &t);
+	CHECK(t.rd_sectors == 1000);
+	free(r);
+}
+
 static void test_aggregate_skips_incomplete(void)
 {
 	BenchResult *r = new_result();
@@ -540,6 +582,10 @@ static void test_report_text(void)
 	CHECK(count(text, "whole file: ok") == 3);
 	CHECK(!strstr(text, "WARNING"));
 	CHECK(!strstr(text, " OFF"));                     /* no OFF/ON pair any more */
+	CHECK(strstr(text, "  reads:  io 20.0 us, copy 4.0 us"));
+	CHECK(strstr(text, "  writes: io 30.0 us, copy 2.0 us"));
+	CHECK(count(text, "\ncsvt,") == 3);
+	CHECK(strstr(text, ",1,") && strstr(text, ",20.0,4.0,"));
 
 	/* every size: always terminated, never past the buffer */
 	for (size_t cap = 1; cap < 600; cap += 7) {
@@ -566,7 +612,17 @@ static void test_report_text(void)
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "plugin during the test: OFF for SD2Vita"));
 	CHECK(!strstr(text, "WARNING"));
+	CHECK(!strstr(text, "time per 512-byte block") && !strstr(text, "csvt"));   /* ON only */
 	CHECK(count(text, ",SD2Vita,tiny,OFF,") == 3 * BM_COUNT);
+
+	/* ON with an older kernel module: timing is n/a, nothing else changes */
+	fake_init(&f, 1);
+	f.no_timing = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "n/a (the kernel module is older than this tester)"));
+	CHECK(!strstr(text, "csvt"));
 
 	/* no kernel module: no plugin verdict line at all */
 	fake_init(&f, 1);
@@ -606,6 +662,8 @@ static void test_screen_lines(void)
 	CHECK(n > 25 && n <= REPORT_LINES_MAX);
 	CHECK(strcmp(lines[0], "device: Internal    plugin: ON") == 0);
 	CHECK(strstr(lines[2], "data check: PASS"));
+	CHECK(strcmp(lines[3], "read  us/block: io 20.0  copy 4.0") == 0);
+	CHECK(strcmp(lines[4], "write us/block: io 30.0  copy 2.0") == 0);
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
 	for (int max = 0; max < 6; max++) {              /* a short array is never overrun */
@@ -759,6 +817,7 @@ int main(void)
 	RUN(test_io_errors_clean_up);
 	RUN(test_bad_profiles);
 	RUN(test_shipped_profiles);
+	RUN(test_timing_math);
 	RUN(test_aggregate_skips_incomplete);
 	RUN(test_report_text);
 	RUN(test_screen_lines);

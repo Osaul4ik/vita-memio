@@ -104,6 +104,25 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->mismatches = st.dev[v->dev].mismatches;
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
+	{
+		/* Optional: a kernel module older than this tester has no tsGetTiming
+		 * (the weak import then just returns), so check the result and magic. */
+		TsTiming tm;
+
+		memset(&tm, 0, sizeof(tm));
+		if (tsGetTiming(&tm) == TS_OK && tm.magic == TS_TIMING_MAGIC &&
+		    tm.size == sizeof(tm)) {
+			const TsTimingDev *t = &tm.dev[v->dev];
+
+			out->timing_ok = 1;
+			out->rd_sectors = t->rd_sectors;
+			out->rd_io_us = t->rd_io_us;
+			out->rd_copy_us = t->rd_copy_us;
+			out->wr_sectors = t->wr_sectors;
+			out->wr_io_us = t->wr_io_us;
+			out->wr_copy_us = t->wr_copy_us;
+		}
+	}
 	return 0;
 }
 

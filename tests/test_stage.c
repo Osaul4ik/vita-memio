@@ -7,6 +7,21 @@
  * (TS_DEV_MEMCARD, port -1) is used because it needs no card context. Built with
  * AddressSanitizer + UBSan, so an out-of-range copy fails the run.
  */
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+/* The staging copy, with a time cost the tests can set (0 by default, so the
+ * other tests' timings are io only). */
+extern uint32_t fake_now_us;
+static uint32_t copy_cost_us;
+static void *fake_copy(void *d, const void *s, size_t n)
+{
+	fake_now_us += copy_cost_us;
+	return memcpy(d, s, n);
+}
+#define ts_copy fake_copy
+
 #include "../kernel/stage.c"
 
 #include <stdlib.h>
@@ -65,6 +80,7 @@ static void reset(void)
 	g_shadow_failed = 0;
 	io_calls = fail_at_call = corrupt_staged = 0;
 	last_buf = NULL;
+	copy_cost_us = 0;
 }
 
 static uint8_t *user_buf(size_t sectors)
@@ -294,6 +310,55 @@ static void test_get_reports_time(void)
 	free(u);
 }
 
+/* io and copy time are counted apart, per chunk that succeeded, and the
+ * verify-mode re-read is in neither. */
+static void test_timing_split(void)
+{
+	TsTimingDev t[TS_DEV_COUNT];
+	uint8_t *u = user_buf(1100);
+
+	reset();
+	copy_cost_us = 300;
+	CHECK(rd(u, 0, 1100) == 0);                    /* 512 + 512 + 76: 3 chunks */
+	CHECK(wr(u, 0, 600, REF_RD) == 0);             /* 512 + 88: 2 chunks */
+	ts_stage_timing(t);
+	CHECK(t[M].rd_sectors == 1100 && t[M].rd_io_us == 3 * 2500 && t[M].rd_copy_us == 3 * 300);
+	CHECK(t[M].wr_sectors == 600 && t[M].wr_io_us == 2 * 2500 && t[M].wr_copy_us == 2 * 300);
+	CHECK(t[TS_DEV_SD2VITA].rd_sectors == 0 && t[TS_DEV_INTERNAL].wr_io_us == 0);
+
+	/* small transfers stay stock and are not counted */
+	CHECK(rd(u, 0, 8) == 0);
+	ts_stage_timing(t);
+	CHECK(t[M].rd_sectors == 1100);
+
+	/* a failing chunk is not counted (the rest is finished stock) */
+	reset();
+	copy_cost_us = 300;
+	fail_at_call = 2;
+	CHECK(rd(u, 0, 1100) == 0);
+	ts_stage_timing(t);
+	CHECK(t[M].rd_sectors == 512 && t[M].rd_io_us == 2500 && t[M].rd_copy_us == 300);
+
+	/* verify mode: the stock re-read is not in io time */
+	reset();
+	g_verify = 1;
+	g_shadow = calloc(1, STAGE_BYTES);
+	CHECK(rd(u, 0, 100) == 0);
+	CHECK(io_calls == 2);
+	ts_stage_timing(t);
+	CHECK(t[M].rd_sectors == 100 && t[M].rd_io_us == 2500 && t[M].rd_copy_us == 0);
+	free(g_shadow);
+	g_shadow = NULL;
+
+	/* wrap at 2^32: a difference of two readings stays right */
+	reset();
+	g_dev[M].tm.rd_io_us = 0xFFFFFF00u;
+	CHECK(rd(u, 0, 100) == 0);
+	ts_stage_timing(t);
+	CHECK((uint32_t)(t[M].rd_io_us - 0xFFFFFF00u) == 2500);
+	free(u);
+}
+
 static void count_free_bufs(int *n)
 {
 	*n = 0;
@@ -359,6 +424,7 @@ int main(void)
 	RUN(test_busy_and_disabled_go_stock);
 	RUN(test_shadow_alloc_not_retried);
 	RUN(test_get_reports_time);
+	RUN(test_timing_split);
 	RUN(test_init_all_hooks);
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);

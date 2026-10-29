@@ -93,6 +93,23 @@ int tsGetState(TsState *o)
  * setting, so if it ever calls it, building the simulator fails to link. */
 int tsSelfTestPing(void) { return TS_SELFTEST_MAGIC; }
 
+/* Timing: 20 us io and 5 us copy per block for reads, 30 / 2 for writes. */
+int tsGetTiming(TsTiming *o)
+{
+	memset(o, 0, sizeof(*o));
+	o->size = sizeof(*o);
+	o->magic = TS_TIMING_MAGIC;
+	for (int d = 0; d < TS_DEV_COUNT; d++) {
+		o->dev[d].rd_sectors = g_dev[d].reads * 64;
+		o->dev[d].rd_io_us = g_dev[d].reads * 64 * 20;
+		o->dev[d].rd_copy_us = g_dev[d].reads * 64 * 5;
+		o->dev[d].wr_sectors = g_dev[d].writes * 64;
+		o->dev[d].wr_io_us = g_dev[d].writes * 64 * 30;
+		o->dev[d].wr_copy_us = g_dev[d].writes * 64 * 2;
+	}
+	return TS_OK;
+}
+
 /* ---- time, memory ---------------------------------------------------------------- */
 
 uint64_t sceKernelGetProcessTimeWide(void)

@@ -452,6 +452,57 @@ void bench_aggregate(const BenchResult *res, BenchAgg *out)
 	}
 }
 
+/* Sums of the counter differences, then per block. */
+typedef struct { uint64_t rs, ri, rc, ws, wi, wc; } TimingSum;
+
+static void timing_add(TimingSum *t, const BenchRun *r)
+{
+	const BenchPluginState *b = &r->before, *a = &r->after;
+
+	if (!r->complete || !b->timing_ok || !a->timing_ok)
+		return;
+	t->rs += (uint32_t)(a->rd_sectors - b->rd_sectors);
+	t->ri += (uint32_t)(a->rd_io_us - b->rd_io_us);
+	t->rc += (uint32_t)(a->rd_copy_us - b->rd_copy_us);
+	t->ws += (uint32_t)(a->wr_sectors - b->wr_sectors);
+	t->wi += (uint32_t)(a->wr_io_us - b->wr_io_us);
+	t->wc += (uint32_t)(a->wr_copy_us - b->wr_copy_us);
+}
+
+static void timing_finish(const TimingSum *t, BenchTiming *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->rd_sectors = t->rs;
+	out->wr_sectors = t->ws;
+	if (t->rs) {
+		out->rd_ok = 1;
+		out->rd_io_us = (double)t->ri / (double)t->rs;
+		out->rd_copy_us = (double)t->rc / (double)t->rs;
+	}
+	if (t->ws) {
+		out->wr_ok = 1;
+		out->wr_io_us = (double)t->wi / (double)t->ws;
+		out->wr_copy_us = (double)t->wc / (double)t->ws;
+	}
+}
+
+void bench_timing_run(const BenchRun *r, BenchTiming *out)
+{
+	TimingSum t = { 0 };
+
+	timing_add(&t, r);
+	timing_finish(&t, out);
+}
+
+void bench_timing(const BenchResult *res, BenchTiming *out)
+{
+	TimingSum t = { 0 };
+
+	for (int i = 0; i < res->nruns; i++)
+		timing_add(&t, &res->runs[i]);
+	timing_finish(&t, out);
+}
+
 int bench_integrity_ok(const BenchResult *res)
 {
 	for (int i = 0; i < res->nruns; i++)

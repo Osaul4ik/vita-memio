@@ -5,6 +5,7 @@
 #define STORAGETURBO_STAGE_H
 
 #include "../include/storageturbo.h"
+#include "../include/storageturbo_kernel_api.h"   /* TsTimingDev */
 
 /* Allocate the per-device staging buffers and install the I/O hooks. All hooks
  * or none: on failure everything is released and storage stays stock. */
@@ -27,5 +28,8 @@ void ts_stage_bytes(int dev, uint64_t *rd, uint64_t *wr);
 
 /* Live per-device status and counters. */
 void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active);
+
+/* Where faster-path time goes: system read/write vs the CPU copy. */
+void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT]);
 
 #endif /* STORAGETURBO_STAGE_H */

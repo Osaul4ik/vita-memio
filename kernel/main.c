@@ -315,6 +315,21 @@ int tsSetSetting(int key, int value)
 	return ts_settings_set(key, value);   /* applies now; worker saves + logs */
 }
 
+int tsGetTiming(TsTiming *out)
+{
+	TsTiming k;
+
+	if (!out)
+		return TS_ERR_ARG;
+	memset(&k, 0, sizeof(k));
+	k.size = sizeof(k);
+	k.magic = TS_TIMING_MAGIC;
+	ts_stage_timing(k.dev);
+	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
+		return TS_ERR_ARG;
+	return TS_OK;
+}
+
 int tsSelfTestPing(void)
 {
 	return (int)TS_SELFTEST_MAGIC;

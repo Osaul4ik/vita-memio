@@ -159,6 +159,35 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "(no complete run, so no result table)\n\n");
 	}
 
+	if (res->plugin_mode == BPM_ON) {
+		BenchTiming t;
+		char a[16], b[16];
+
+		bench_timing(res, &t);
+		put(&o, "faster path, time per 512-byte block (system call / CPU copy):\n");
+		if (!res->plugin0.timing_ok) {
+			put(&o, "  n/a (the kernel module is older than this tester)\n");
+		} else {
+			if (t.rd_ok) {
+				report_fmt1(a, sizeof(a), t.rd_io_us);
+				report_fmt1(b, sizeof(b), t.rd_copy_us);
+				put(&o, "  reads:  io %s us, copy %s us   (%u MiB)\n", a, b,
+				    (unsigned)(t.rd_sectors / 2048));
+			} else {
+				put(&o, "  reads:  no faster-path transfer\n");
+			}
+			if (t.wr_ok) {
+				report_fmt1(a, sizeof(a), t.wr_io_us);
+				report_fmt1(b, sizeof(b), t.wr_copy_us);
+				put(&o, "  writes: io %s us, copy %s us   (%u MiB)\n", a, b,
+				    (unsigned)(t.wr_sectors / 2048));
+			} else {
+				put(&o, "  writes: no faster-path transfer\n");
+			}
+		}
+		put(&o, "\n");
+	}
+
 	put(&o, "runs (value per metric, in the order of the table above):\n");
 	for (int i = 0; i < res->nruns; i++) {
 		const BenchRun *r = &res->runs[i];
@@ -183,6 +212,26 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "\n");
 		if (r->note[0])
 			put(&o, "    note: %s\n", r->note);
+	}
+
+	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok) {
+		put(&o, "\ncsvt: version,time,device,profile,run,rd_sectors,rd_io_us_per_blk,"
+		        "rd_copy_us_per_blk,wr_sectors,wr_io_us_per_blk,wr_copy_us_per_blk\n");
+		for (int i = 0; i < res->nruns; i++) {
+			BenchTiming t;
+			char ri[16], rc[16], wi[16], wc[16];
+
+			if (!res->runs[i].complete)
+				continue;
+			bench_timing_run(&res->runs[i], &t);
+			report_fmt1(ri, sizeof(ri), t.rd_io_us);
+			report_fmt1(rc, sizeof(rc), t.rd_copy_us);
+			report_fmt1(wi, sizeof(wi), t.wr_io_us);
+			report_fmt1(wc, sizeof(wc), t.wr_copy_us);
+			put(&o, "csvt,%s,%s,%s,%s,%d,%u,%s,%s,%u,%s,%s\n", TESTER_VERSION, meta->timestamp,
+			    bench_device_name(res->device), res->profile.name, i + 1,
+			    (unsigned)t.rd_sectors, ri, rc, (unsigned)t.wr_sectors, wi, wc);
+		}
 	}
 
 	put(&o, "\ncsv: version,time,device,profile,plugin,run,metric,value,median_us,p99_us\n");
@@ -240,6 +289,21 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
 			line(&s, "run %d: %s", i + 1, res->runs[i].note);
+	if (res->plugin_mode == BPM_ON && res->plugin0.timing_ok) {
+		BenchTiming t;
+
+		bench_timing(res, &t);
+		if (t.rd_ok) {
+			report_fmt1(x, sizeof(x), t.rd_io_us);
+			report_fmt1(y, sizeof(y), t.rd_copy_us);
+			line(&s, "read  us/block: io %s  copy %s", x, y);
+		}
+		if (t.wr_ok) {
+			report_fmt1(x, sizeof(x), t.wr_io_us);
+			report_fmt1(y, sizeof(y), t.wr_copy_us);
+			line(&s, "write us/block: io %s  copy %s", x, y);
+		}
+	}
 	if (!a.n) {
 		line(&s, "(no complete run)");
 		return s.n;

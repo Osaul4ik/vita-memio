@@ -19,6 +19,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Host tests: the staging path, settings load/save, the command-port parser and
+  # the translation table, run with AddressSanitizer + UBSan. No VitaSDK needed.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tests
+        run: make test
+
+  # Static analysis of the sources (warnings, performance, portability).
+  cppcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cppcheck
+      - name: cppcheck
+        run: make cppcheck
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -30,14 +53,14 @@ jobs:
 
       - name: Check both modules exist and are not empty
         run: |
-          for f in build/storageturbo_kernel.skprx build/storageturbo.suprx; do
+          for f in build/storageturbo_kernel.skprx build/storageturbo.suprx build/storageturbo_tester.vpk; do
             test -s "$f" || { echo "missing or empty: $f"; exit 1; }
           done
 
       - name: SHA-256 sums
         run: |
           cd build
-          sha256sum storageturbo_kernel.skprx storageturbo.suprx | tee SHA256SUMS
+          sha256sum storageturbo_kernel.skprx storageturbo.suprx storageturbo_tester.vpk | tee SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -45,6 +68,7 @@ jobs:
           path: |
             build/storageturbo_kernel.skprx
             build/storageturbo.suprx
+            build/storageturbo_tester.vpk
             build/SHA256SUMS
           if-no-files-found: error
 

@@ -122,3 +122,48 @@ set_source_files_properties(settings_app/storageturbo_settings.c
 vita_create_self(storageturbo.suprx storageturbo
   CONFIG ${CMAKE_SOURCE_DIR}/storageturbo.yml
   UNSAFE)
+
+# --------------------------------------------------------------------------
+# Tester app: storageturbo_tester.vpk (a normal application; install with VitaShell)
+# --------------------------------------------------------------------------
+# Runs storage tests with the plugin OFF and ON on the same card, appends the
+# results to ur0:data/turbostorage/results.txt and can clear them. It imports the
+# kernel module's SceStorageTurbo library, so the plugin must be installed for it
+# to start. Disable with -DTS_BUILD_TESTER=OFF.
+option(TS_BUILD_TESTER "Build the on-device tester app (VPK)" ON)
+if(TS_BUILD_TESTER)
+  set(TESTER_TITLE_ID "TURBOTST0")
+  add_executable(storageturbo_tester
+    tester/main.c
+    tester/bench.c
+    tester/report.c
+    tester/results.c
+    tester/restore.c
+    tester/vita/ui.c
+    tester/vita/vita_env.c
+  )
+  add_dependencies(storageturbo_tester storageturbo-stubs)
+  target_link_libraries(storageturbo_tester
+    ${CMAKE_BINARY_DIR}/libstorageturbo_kernel_stub.a
+    SceLibKernel_stub
+    SceIofilemgr_stub
+    SceProcessmgr_stub
+    SceSysmem_stub
+    SceCtrl_stub
+    SceDisplay_stub
+    SceRtc_stub
+  )
+  vita_create_self(storageturbo_tester.self storageturbo_tester UNSAFE)
+
+  set(TESTER_VPK_FILES "")
+  if(EXISTS "${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png")
+    list(APPEND TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png sce_sys/icon0.png)
+  endif()
+  vita_create_vpk(storageturbo_tester.vpk ${TESTER_TITLE_ID} storageturbo_tester.self
+    VERSION 01.00
+    NAME "Turbo Storage Tester"
+    ${TESTER_VPK_FILES}
+  )
+  # `cmake --build` builds the VPK together with the modules.
+  add_custom_target(tester_vpk ALL DEPENDS storageturbo_tester.vpk)
+endif()

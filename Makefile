@@ -6,6 +6,9 @@
 #   make deploy  VITA_IP=...  install, then reboot the Vita so they load
 #   make log     VITA_IP=...  fetch the plugin logs into ./logs/
 #   make config               print the lines to add to ur0:tai/config.txt
+#   make test                 host tests (gcc + sanitizers, no VitaSDK)
+#   make results VITA_IP=...  fetch results.txt written by the tester app into ./logs/
+#   make cppcheck             static analysis
 #   make clean
 #
 # install/deploy/log talk to vitacompanion (FTP on :1337, commands on :1338)
@@ -19,9 +22,10 @@ CMAKE_ARGS ?=
 VITASDK_IMAGE ?= vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
 
 MODULES := $(BUILD)/storageturbo_kernel.skprx $(BUILD)/storageturbo.suprx
+TESTER_VPK := $(BUILD)/storageturbo_tester.vpk
 FTP      = ftp://$(VITA_IP):1337
 
-.PHONY: all build install deploy log config clean check-ip
+.PHONY: all build install deploy log results config clean check-ip test cppcheck sim
 
 all: build
 
@@ -55,9 +59,32 @@ log: check-ip
 	curl -sS "$(FTP)/ur0:/data/turbostorage/user.log" -o logs/user.log
 	@echo "Saved logs/kernel.log and logs/user.log"
 
+results: check-ip
+	@mkdir -p logs
+	curl -sS "$(FTP)/ur0:/data/turbostorage/results.txt" -o logs/results.txt
+	@echo "Saved logs/results.txt"
+
 config:
 	@printf '%s\n' '*KERNEL' 'ur0:tai/storageturbo_kernel.skprx' '' '*main' 'ur0:tai/storageturbo.suprx' '' \
 	  '*NPXS10015' 'ur0:tai/storageturbo.suprx'
 
+# Host tests (no VitaSDK needed): see tests/Makefile.
+test:
+	$(MAKE) -C tests
+	$(MAKE) -C tests syntax-tester
+
+# Run the tester app on this PC against a fake console; writes screens as .ppm
+# files into tests/sim_out/ (a quick look at the UI, not a Vita emulator).
+sim:
+	$(MAKE) -C tests sim_app
+	mkdir -p tests/sim_out && cd tests/sim_out && SIM_SNAP_CHANGE=1 SIM_SCRIPT="10:cross" SIM_EXIT_FRAME=400 ../sim_app
+
+cppcheck:
+	cppcheck --enable=warning,performance,portability --inline-suppr --error-exitcode=1 --quiet \
+	  -I include -I kernel -I user -I settings_app \
+	  --suppress=missingIncludeSystem --suppress=unknownMacro \
+	  kernel user tester settings_app/storageturbo_settings.c settings_app/tslog.c settings_app/storageturbo_i18n.c
+
 clean:
 	rm -rf $(BUILD) logs
+	$(MAKE) -C tests clean

@@ -72,6 +72,8 @@ typedef struct Dev {
 	volatile int  fallback;      /* error/mismatch seen: stock for the session */
 	uint64_t      rd_bytes, wr_bytes;   /* moved on the faster path            */
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
+	uint64_t      us_total;             /* time inside faster-path transfers, us */
+	uint32_t      us_max;               /* the slowest one, us                   */
 	TsDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
@@ -173,17 +175,30 @@ static int take_shadow(void)
 	return g_verify && g_shadow && !__sync_lock_test_and_set(&g_shadow_busy, 1);
 }
 
+/* Time one faster-path request (called while the device buffer is held, so only
+ * one thread updates a device's figures). Two clock reads and a few adds: cheap
+ * enough for the hot path, which must not log. */
+static void note_time(Dev *d, uint32_t t0)
+{
+	uint32_t dt = ksceKernelGetSystemTimeLow() - t0;
+
+	d->us_total += dt;
+	if (dt > d->us_max)
+		d->us_max = dt;
+}
+
 static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                       void *buf, uint32_t nsec)
 {
 	uint8_t *dst = buf;
-	uint32_t left = nsec;
+	uint32_t left = nsec, t0;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
 	if (mine)
 		d->all_rd += (uint64_t)nsec * 512;
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
+	t0 = ksceKernelGetSystemTimeLow();
 	verify = take_shadow();
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
@@ -207,6 +222,7 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
+	note_time(d, t0);
 	__sync_lock_release(&d->busy);
 	if (ret < 0) {
 		d->st.errors++;
@@ -222,13 +238,14 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
                        void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
 	const uint8_t *src = buf;
-	uint32_t left = nsec;
+	uint32_t left = nsec, t0;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
 	if (mine)
 		d->all_wr += (uint64_t)nsec * 512;
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
+	t0 = ksceKernelGetSystemTimeLow();
 	verify = take_shadow();
 	if (verify && !rd_ref) {            /* no read hook yet: cannot verify this one */
 		__sync_lock_release(&g_shadow_busy);
@@ -259,6 +276,7 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
+	note_time(d, t0);
 	__sync_lock_release(&d->busy);
 	if (ret < 0) {
 		d->st.errors++;
@@ -465,6 +483,8 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		out[i] = d->st;
 		out[i].read_mib = (uint32_t)(d->rd_bytes >> 20);
 		out[i].write_mib = (uint32_t)(d->wr_bytes >> 20);
+		out[i].time_ms = (uint32_t)(d->us_total / 1000u);
+		out[i].max_ms = d->us_max / 1000u;
 		out[i].status = !plugin_active ? TS_ST_UNAVAIL :
 		                !d->enabled    ? TS_ST_OFF :
 		                !d->buf        ? TS_ST_NO_BUFFER :

@@ -103,7 +103,11 @@ static int parse_int(const char *s, int *v)
 	while (*s == ' ')
 		s++;
 	while (*s >= '0' && *s <= '9') {
-		n = n * 10 + (*s++ - '0');
+		/* Saturate instead of overflowing: any value this large is out of range
+		 * for every key and is rejected by tsSetSetting(). */
+		if (n < 100000)
+			n = n * 10 + (*s - '0');
+		s++;
 		any = 1;
 	}
 	*v = n;
@@ -150,10 +154,11 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 			int s = d->status >= 0 && d->status <= TS_ST_UNAVAIL ? d->status : TS_ST_UNAVAIL;
 
 			p += put(p, end, "%s: %s reads=%u (%u MiB) writes=%u (%u MiB) busy=%u errors=%u "
-			         "verified=%u mismatches=%u\n", k_dev[i], k_status[s], (unsigned)d->reads,
-			         (unsigned)d->read_mib, (unsigned)d->writes, (unsigned)d->write_mib,
-			         (unsigned)d->passthru, (unsigned)d->errors, (unsigned)d->verified,
-			         (unsigned)d->mismatches);
+			         "verified=%u mismatches=%u time=%ums max=%ums\n", k_dev[i], k_status[s],
+			         (unsigned)d->reads, (unsigned)d->read_mib, (unsigned)d->writes,
+			         (unsigned)d->write_mib, (unsigned)d->passthru, (unsigned)d->errors,
+			         (unsigned)d->verified, (unsigned)d->mismatches, (unsigned)d->time_ms,
+			         (unsigned)d->max_ms);
 		}
 		if (p > out && p[-1] == '\n')
 			p[-1] = 0;

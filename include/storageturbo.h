@@ -151,6 +151,8 @@ typedef struct TsDevState {
 	uint32_t errors;          /* transfers that failed on the faster path      */
 	uint32_t verified;        /* transfers checked in verify mode              */
 	uint32_t mismatches;      /* checks that failed (caller got stock data)    */
+	uint32_t time_ms;         /* total time inside faster-path transfers, ms   */
+	uint32_t max_ms;          /* the slowest single faster-path transfer, ms   */
 } TsDevState;
 
 #endif /* STORAGETURBO_H */

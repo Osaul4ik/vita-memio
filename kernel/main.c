@@ -29,6 +29,7 @@
 
 #include "../include/storageturbo.h"
 #include "../include/storageturbo_kernel_api.h"
+#include "../include/ts_devmode.h"
 #include "klog.h"
 #include "settings.h"
 #include "stage.h"
@@ -218,10 +219,11 @@ static const char *status_name(int st)
 static void log_status(const TsDevState *d, int i)
 {
 	TS_KLOGI("dev %s: %s reads=%u (%u MiB) writes=%u (%u MiB) busy=%u errors=%u "
-	         "verified=%u mismatches=%u", k_dev_log[i],
+	         "verified=%u mismatches=%u time=%ums max=%ums", k_dev_log[i],
 	         status_name(d->status), (unsigned)d->reads, (unsigned)d->read_mib,
 	         (unsigned)d->writes, (unsigned)d->write_mib, (unsigned)d->passthru,
-	         (unsigned)d->errors, (unsigned)d->verified, (unsigned)d->mismatches);
+	         (unsigned)d->errors, (unsigned)d->verified, (unsigned)d->mismatches,
+	         (unsigned)d->time_ms, (unsigned)d->max_ms);
 }
 
 static int worker(SceSize args, void *argp)
@@ -253,13 +255,8 @@ static int worker(SceSize args, void *argp)
 			TsSettings cur;
 
 			ts_settings_copy(&cur);
-			if (!cur.devmode) {
-				dev_on_since = 0;
-			} else if (!dev_on_since) {
-				dev_on_since = g_uptime;        /* g_uptime is >= 1 here */
-			} else if (g_uptime - dev_on_since >= TS_DEVMODE_MINUTES * 60u) {
+			if (ts_devmode_tick(g_uptime, cur.devmode, &dev_on_since)) {   /* g_uptime >= 1 */
 				ts_settings_set(TS_KEY_DEVMODE, 0);
-				dev_on_since = 0;
 				TS_KLOGI("developer mode switched off after %u minutes",
 				         (unsigned)TS_DEVMODE_MINUTES);
 			}

@@ -36,10 +36,11 @@
  * copy OUT of the non-cacheable buffer is the slow half of a staged read (the
  * Cortex-A9 reads non-cacheable memory at ~120 MB/s). When it is on, the worker
  * gives each device buffer a second, cacheable mapping of the same physical
- * pages (a memory block at the buffer's own physical address, HAS_PADDR). The driver still gets the non-cacheable
+ * pages (a memory block at the buffer's own physical address, HAS_PADDR),
+ * cacheable in the L1 only. The driver still gets the non-cacheable
  * address, so nothing changes for it; after its read returns, the chunk is
- * invalidated in the L1 and L2 data caches through the cached mapping and
- * copied out through it. Rules that keep this safe:
+ * invalidated in the L1 data cache through the cached mapping and copied out
+ * through it (the mapping is outer non-cacheable, so the L2 never holds it). Rules that keep this safe:
  *   - the mapping is created only while the device buffer is held (busy), then
  *     cleaned and invalidated in full, so no dirty line of it can ever be
  *     written back over data the card delivered;
@@ -99,14 +100,19 @@
  * kind the system uses for its own USB storage I/O buffer. */
 #define MEMBLOCK_KERNEL_NC_RW  0x10208006
 /* Kernel cacheable RW: types for the second mapping of a buffer's pages. */
-#define MEMBLOCK_KERNEL_RW         0x1020D006
-#define MEMBLOCK_KERNEL_PHYCONT_RW 0x1080D006
+/* Cacheable in L1 only (inner write-back, outer non-cacheable): the type of the
+ * second mapping. Measured on the console with the fully cacheable type
+ * (0x1020D006, L1 + L2): the L1+L2 invalidate of each chunk cost so much (the
+ * L2 controller is maintained line by line) that the copy went from 4.2 to
+ * 12.9 us per 512-byte block - slower than the plain non-cacheable path. With
+ * L2 out of the picture only the L1 has to be invalidated, which is cheap. */
+#define MEMBLOCK_KERNEL_L1WBWA_RW  0x10204006
 
 /* SceCpuForDriver (in SceSysmem), resolved at run time so a missing export only
  * makes the cached read path unavailable instead of stopping the module. */
 #define LIB_CPU_DRV            0x40ECDB0E
-#define NID_DCACHE_INV         0x02796361    /* ksceKernelDcacheInvalidateRange (L1+L2)      */
-#define NID_DCACHE_CLEAN_INV   0x364E68A4    /* ksceKernelDcacheCleanInvalidateRange (L1+L2) */
+#define NID_DCACHE_INV_L1      0x8B4C26DF    /* ksceKernelDcacheInvalidateRangeForL1WBWA (L1) */
+#define NID_DCACHE_CLEAN_INV   0x364E68A4    /* ksceKernelDcacheCleanInvalidateRange (L1+L2)  */
 #define CACHE_LINE             64            /* the functions want 0x40-aligned ranges */
 #define LIB_SYSMEM_DRV         0x6F25E18A
 #define NID_VA_TO_PA           0x8D160E65    /* ksceKernelVAtoPA (diagnostics only) */
@@ -156,8 +162,8 @@ static Dev g_dev[TS_DEV_COUNT] = {
 
 /* Cached read path: the setting, and the two cache functions. */
 static volatile int g_cached;
-static void (*g_dc_inv)(void *start, unsigned int size);
-static void (*g_dc_clean_inv)(void *start, unsigned int size);
+static void (*g_dc_inv)(void *start, unsigned int size);         /* L1 only, per chunk */
+static void (*g_dc_clean_inv)(void *start, unsigned int size);   /* L1+L2, once at setup */
 static int (*g_va2pa)(const void *va, uintptr_t *pa);
 static int g_dc_tried;
 
@@ -579,7 +585,7 @@ static int setup_alias(int i)
 {
 	static const uint32_t marker[4] = { 0x54534341u, 0x5348454Fu, 0x0BADF00Du, 0xC0FFEE11u };
 	/* Cacheable kernel RW types to try for the second mapping. */
-	static const unsigned k_types[] = { MEMBLOCK_KERNEL_RW, MEMBLOCK_KERNEL_PHYCONT_RW };
+	static const unsigned k_types[] = { MEMBLOCK_KERNEL_L1WBWA_RW };
 	Dev *d = &g_dev[i];
 	SceKernelAllocMemBlockKernelOpt opt;
 	SceUID uid = -1;
@@ -636,7 +642,8 @@ static int setup_alias(int i)
 		goto unavailable;
 	}
 	/* Write back and drop anything the new mapping holds (it may have been
-	 * zero-filled through the cache), while nothing else uses the buffer. */
+	 * zero-filled through the cache), in L1 and L2, while nothing else uses
+	 * the buffer. After this only the L1 can ever hold lines of it. */
 	g_dc_clean_inv(base, STAGE_BYTES);
 	ts_dsb();
 	/* Live check: the cached mapping must show the same physical memory. The
@@ -695,7 +702,7 @@ static void cached_tick(void)
 		uintptr_t inv = 0, cinv = 0;
 
 		g_dc_tried = 1;
-		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_INV, &inv) >= 0 &&
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_INV_L1, &inv) >= 0 &&
 		    module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRV, NID_DCACHE_CLEAN_INV, &cinv) >= 0 &&
 		    inv && cinv) {
 			g_dc_inv = (void (*)(void *, unsigned int))inv;

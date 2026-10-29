@@ -410,7 +410,7 @@ static void test_cached_read_path(void)
 	CHECK(ts_stage_cached_state(M) == TS_CR_PENDING);     /* until the worker runs */
 	ts_stage_worker_tick();
 	CHECK(ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	CHECK(fake_mirror_calls == 1 && fake_mirror_type == MEMBLOCK_KERNEL_RW);
+	CHECK(fake_mirror_calls == 1 && fake_mirror_type == MEMBLOCK_KERNEL_L1WBWA_RW);
 	{
 		uintptr_t pa_buf = 0, pa_alias = 0;            /* the same physical pages */
 
@@ -476,14 +476,14 @@ static void test_cached_unavailable_falls_back(void)
 	ts_stage_worker_tick();
 	CHECK(ts_stage_cached_state(M) == TS_CR_UNAVAILABLE && d->alias == NULL && d->busy == 0);
 	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 2);                         /* not retried every second */
+	CHECK(fake_mirror_calls == 1);                         /* not retried every second */
 	CHECK(rd(u, 10, 100) == 0 && memcmp(u, disk + 10 * 512, 100 * 512) == 0);
 	CHECK(last_copy_src == d->buf);
 	fake_mirror_fail = 0;                                  /* off and on again retries */
 	cached_on(0);
 	cached_on(1);
 	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 3 && ts_stage_cached_state(M) == TS_CR_ACTIVE);
+	CHECK(fake_mirror_calls == 2 && ts_stage_cached_state(M) == TS_CR_ACTIVE);
 	release_block();
 
 	/* a block that lands on other memory (what the "mirror" attribute gave on
@@ -496,24 +496,23 @@ static void test_cached_unavailable_falls_back(void)
 	CHECK(rd(u, 10, 100) == 0 && last_copy_src == d->buf);
 	release_block();
 
-	/* the first memory type is refused: the second one is used */
+	/* the L1-only type is refused: no other type is tried (a fully cacheable
+	 * mapping was measured slower than the normal path) */
 	reset_with_block();
 	fake_paddr_types_refused = 1;
 	cached_on(1);
 	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 2 && fake_mirror_type == MEMBLOCK_KERNEL_PHYCONT_RW);
-	CHECK(ts_stage_cached_state(M) == TS_CR_ACTIVE);
-	CHECK(rd(u, 10, 100) == 0 && memcmp(u, disk + 10 * 512, 100 * 512) == 0 && last_copy_src == d->alias);
+	CHECK(fake_mirror_calls == 1 && ts_stage_cached_state(M) == TS_CR_UNAVAILABLE);
+	CHECK(rd(u, 10, 100) == 0 && memcmp(u, disk + 10 * 512, 100 * 512) == 0 && last_copy_src == d->buf);
 	release_block();
-	CHECK(fake_mirror_frees == 1);                         /* freed at fini, first */
 
-	/* both refused */
+	/* the mapping is freed at fini, before the buffer */
 	reset_with_block();
-	fake_paddr_types_refused = 2;
 	cached_on(1);
 	ts_stage_worker_tick();
-	CHECK(fake_mirror_calls == 2 && ts_stage_cached_state(M) == TS_CR_UNAVAILABLE);
+	CHECK(ts_stage_cached_state(M) == TS_CR_ACTIVE);
 	release_block();
+	CHECK(fake_mirror_frees == 1);
 
 	/* no ksceKernelVAtoPA: the buffer's address is unknown, nothing is mapped */
 	reset_with_block();

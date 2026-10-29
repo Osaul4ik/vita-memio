@@ -215,7 +215,7 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
 		return 0;
 	}
 	if (!fake_dcache_missing && !strcmp(modname, "SceSysmem") && libnid == 0x40ECDB0E) {
-		if (funcnid == 0x02796361) { *func = (uintptr_t)fake_dc_inv; return 0; }
+		if (funcnid == 0x8B4C26DF) { *func = (uintptr_t)fake_dc_inv; return 0; }   /* L1 */
 		if (funcnid == 0x364E68A4) { *func = (uintptr_t)fake_dc_clean_inv; return 0; }
 	}
 	return -1;

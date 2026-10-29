@@ -42,10 +42,11 @@
 #include "stage.h"
 #include "klog.h"
 
-/* The CPU copy between the caller's buffer and the staging buffer (the host
- * tests replace it to give the copy a measurable time). */
+/* The CPU copy between the caller's buffer and the staging buffer
+ * (fastcopy.h; the host tests replace it to give the copy a measurable time). */
+#include "fastcopy.h"
 #ifndef ts_copy
-#define ts_copy memcpy
+#define ts_copy ts_fast_copy
 #endif
 
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */

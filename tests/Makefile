@@ -11,7 +11,7 @@ CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer
 CFLAGS  += -Istubs
 
-TESTS := test_stage test_settings test_dispatch test_dispatch_risky test_util test_i18n test_bench
+TESTS := test_stage test_settings test_dispatch test_dispatch_risky test_util test_i18n test_bench test_fastcopy
 
 .PHONY: all run clean
 all: run
@@ -42,8 +42,22 @@ TESTER := ../tester/bench.c ../tester/report.c ../tester/results.c
 test_bench: test_bench.c fakes.c fakes.h ts_test.h $(TESTER) ../tester/bench.h ../tester/pattern.h ../tester/report.h ../tester/results.h
 	$(CC) $(CFLAGS) -o $@ test_bench.c $(TESTER) fakes.c
 
+test_fastcopy: test_fastcopy.c ts_test.h ../kernel/fastcopy.h
+	$(CC) $(CFLAGS) -o $@ test_fastcopy.c
+
+# The fast copy's ARM (LDM/STM) path, run under qemu-user: needs
+# gcc-arm-linux-gnueabihf and qemu-user. Thumb-2 (as VitaSDK builds) and ARM.
+ARM_CC ?= arm-linux-gnueabihf-gcc
+.PHONY: arm
+arm: test_fastcopy.c ts_test.h ../kernel/fastcopy.h
+	@set -e; for m in -mthumb -marm; do for o in -O1 -O2 -Os; do \
+	  $(ARM_CC) -std=gnu99 $$m $$o -mcpu=cortex-a9 -Wall -Wextra -Werror -static \
+	    -o test_fastcopy_arm test_fastcopy.c; \
+	  printf '%s %s: ' $$m $$o; qemu-arm ./test_fastcopy_arm; \
+	done; done
+
 clean:
-	rm -f $(TESTS) sim_app sim_main.o
+	rm -f test_fastcopy_arm $(TESTS) sim_app sim_main.o
 
 # Syntax-only check of the console-only tester code against stub psp2 headers
 # (the real build needs VitaSDK). Catches typos and wrong signatures; it cannot

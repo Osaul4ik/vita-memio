@@ -1,4 +1,16 @@
 build/
 logs/
 .DS_Store
-build-dev/
+build-dev/# host test binaries and the simulator (make -C tests / make sim)
+tests/test_stage
+tests/test_settings
+tests/test_dispatch
+tests/test_dispatch_risky
+tests/test_util
+tests/test_i18n
+tests/test_bench
+tests/test_fastcopy
+tests/test_fastcopy_arm
+tests/sim_app
+tests/sim_main.o
+tests/sim_out/

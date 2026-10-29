@@ -46,6 +46,7 @@ add_executable(vitamemio_kernel
   kernel/settings.c
   kernel/stage.c
   kernel/hud.c
+  kernel/gpumap.c                       # watching GPU memory mappings (diagnostic)
   kernel/hud_i18n.c
 )
 

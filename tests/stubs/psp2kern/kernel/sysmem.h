@@ -11,3 +11,6 @@ typedef struct { SceSize size; uint32_t attr; } SceKernelAllocMemBlockKernelOpt;
 SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, void *opt);
 int ksceKernelGetMemBlockBase(SceUID uid, void **base);
 int ksceKernelFreeMemBlock(SceUID uid);
+int ksceKernelVAtoPA(const void *va, uintptr_t *pa);
+SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size);
+int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type);

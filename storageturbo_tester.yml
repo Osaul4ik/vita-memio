@@ -1,9 +1,0 @@
-# Module info of the tester app. An application starts in crt0's _start (which
-# calls main), unlike the plugin modules, which start in module_start.
-storageturbo_tester:
-  attributes: 0
-  version:
-    major: 1
-    minor: 0
-  main:
-    start: _start

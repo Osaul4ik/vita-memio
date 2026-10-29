@@ -157,11 +157,19 @@ if(TS_BUILD_TESTER)
     SceDisplay_stub
     SceRtc_stub
   )
-  # An explicit config: the entry point of an application is crt0's _start, not
-  # module_start (a missing config made vita-elf-create look for module_start).
-  vita_create_self(storageturbo_tester.self storageturbo_tester
-    CONFIG ${CMAKE_SOURCE_DIR}/storageturbo_tester.yml
-    UNSAFE)
+  # NO custom CONFIG here: an application needs the default module info that
+  # vita-elf-create makes for it, which includes sceProcessParam (the process
+  # parameters). A hand-written .yml with only `main: start` drops it, and the
+  # console then refuses to start the app (error C1-15232-3 on the bubble).
+  #
+  # vita_create_self is a macro that APPENDS each module's "-e <config>" to
+  # VITA_ELF_CREATE_FLAGS in this scope, so without a reset the tester would be
+  # built with the kernel module's and the plugin's .yml files ("Could not find
+  # symbol 'module_start'"). Clear it for the tester only, then put it back.
+  set(TS_SAVED_ELF_CREATE_FLAGS "${VITA_ELF_CREATE_FLAGS}")
+  set(VITA_ELF_CREATE_FLAGS "")
+  vita_create_self(storageturbo_tester.self storageturbo_tester UNSAFE)
+  set(VITA_ELF_CREATE_FLAGS "${TS_SAVED_ELF_CREATE_FLAGS}")
 
   set(TESTER_VPK_FILES "")
   if(EXISTS "${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png")

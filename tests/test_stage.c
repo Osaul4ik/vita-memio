@@ -77,6 +77,8 @@ static void reset(void)
 	g_verify = 0;
 	g_min_sectors = MIN_SECTORS;
 	g_stats = 1;                              /* most tests look at the figures */
+	g_gpu_safe = 0;
+	g_dcache_clean = NULL;
 	g_count_all = 1;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
@@ -174,6 +176,65 @@ static void test_statistics_switch(void)
 	vm_stage_apply(&s);
 	CHECK(rd(u, 0, 100) == 0);
 	CHECK(g_dev[M].tm.rd_sectors == 100 && g_dev[M].rd_bytes == 100 * 512 && fake_time_calls > 0);
+	free(u);
+}
+
+/* The fake cache clean: records what it was asked to write out. */
+static int clean_calls;
+static uintptr_t clean_lo, clean_hi;
+static uint32_t clean_copy_seen;          /* the copy had run before the clean */
+static uint8_t *clean_user;
+static void fake_clean(void *start, unsigned int size)
+{
+	uintptr_t a = (uintptr_t)start;
+
+	clean_calls++;
+	if (!clean_lo || a < clean_lo) clean_lo = a;
+	if (a + size > clean_hi) clean_hi = a + size;
+	if (clean_user && clean_user[0] == disk[10 * 512])
+		clean_copy_seen++;
+}
+
+/* GPU-safe reads: every faster read's copy is cleaned out of the cache, the
+ * whole destination in 32-byte lines; writes are not; off (or no clean
+ * function on this firmware) changes nothing. */
+static void test_gpu_safe_reads(void)
+{
+	uint8_t *u = user_buf(1100);
+	uint8_t *odd = u + 3;                     /* a caller buffer off a line */
+	VmSettings s;
+
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.gpusafe = 1;
+	s.stats = 1;
+	vm_stage_apply(&s);
+	g_dcache_clean = fake_clean;
+	clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = u;
+	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76: three chunks */
+	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+	CHECK(clean_calls == 3 && clean_copy_seen == 3);
+	CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + 1100 * 512);
+	CHECK((clean_lo & 31) == 0 && (clean_hi & 31) == 0);
+
+	clean_calls = 0; clean_lo = clean_hi = 0; clean_user = NULL;
+	CHECK(rd(odd, 0, 64) == 0);
+	CHECK(clean_calls == 1 && clean_lo <= (uintptr_t)odd &&
+	      clean_hi >= (uintptr_t)odd + 64 * 512 && (clean_lo & 31) == 0);
+
+	clean_calls = 0;
+	CHECK(wr(u, 0, 100, REF_RD) == 0 && clean_calls == 0);   /* writes: nothing to do */
+	CHECK(rd(u, 0, 8) == 0 && clean_calls == 0);             /* small, stock: not ours */
+
+	s.gpusafe = 0;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 100) == 0 && clean_calls == 0);
+
+	s.gpusafe = 1;                                  /* on, but no clean function */
+	vm_stage_apply(&s);
+	g_dcache_clean = NULL;
+	CHECK(rd(u, 0, 100) == 0 && memcmp(u, disk, 100 * 512) == 0);
 	free(u);
 }
 
@@ -569,6 +630,7 @@ int main(void)
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);
+	RUN(test_gpu_safe_reads);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

@@ -31,6 +31,11 @@
  *     call returns, exactly as stock;
  *   - any error on the faster path switches that device back to stock for the
  *     session and finishes the same request the stock way;
+ *   - "GPU-safe reads": the stock driver's DMA leaves read data in memory,
+ *     while the CPU copy can leave it in the data cache for a while; with the
+ *     setting on, each read's copy is cleaned out of the cache to memory
+ *     before the call returns, so the graphics chip (which reads memory, not
+ *     the CPU cache) sees exactly what the stock path gives it;
  *   - verify mode re-reads every faster transfer the stock way and compares;
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
@@ -79,6 +84,8 @@
 #define MEMBLOCK_KERNEL_NC_RW  0x10208006
 
 void *ksceSdifGetSdContextGlobal(int port);
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
+                           uint32_t funcnid, uintptr_t *func);   /* taiHEN */
 
 typedef struct Dev {
 	int           port;          /* SDIF port, or -1: the memory card          */
@@ -118,6 +125,22 @@ static volatile uint32_t g_min_sectors = MIN_SECTORS;
  *   g_count_all  every transfer's bytes (the HUD's speeds), also with stats. */
 static volatile int g_stats;
 static volatile int g_count_all;
+
+/* GPU-safe reads: ksceKernelDcacheCleanRange (SceCpuForDriver: L1 and L2),
+ * looked up at run time by vm_stage_init. */
+#define LIB_CPU_DRIVER     0x40ECDB0E
+#define NID_DCACHE_CLEAN   0x103872A5
+static void (*g_dcache_clean)(void *start, unsigned int size);
+static volatile int g_gpu_safe;
+static int g_gpu_safe_logged;
+
+/* Write [p, p + n) out of the data cache to memory (whole 32-byte lines). */
+static inline void clean_out(void *p, uint32_t n)
+{
+	uintptr_t a = (uintptr_t)p & ~(uintptr_t)31, e = ((uintptr_t)p + n + 31) & ~(uintptr_t)31;
+
+	g_dcache_clean((void *)a, (unsigned int)(e - a));
+}
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -257,6 +280,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		verify = 0;
 	}
 	const int stats = g_stats;
+	const int clean = !write && g_gpu_safe && g_dcache_clean;
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
@@ -285,6 +309,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			if (stats)
 				t2 = ksceKernelGetSystemTimeLow();
 			vm_copy_from_stage(p, d->buf, bytes);
+			if (clean)
+				clean_out(p, bytes);   /* counted as copy time */
 			if (stats) {
 				t3 = ksceKernelGetSystemTimeLow();
 				d->tm.rd_sectors += n;
@@ -304,6 +330,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 						break;
 				} else {
 					memcpy(p, g_shadow, bytes);   /* the caller gets stock data */
+					if (clean)
+						clean_out(p, bytes);
 				}
 			}
 		}
@@ -380,6 +408,13 @@ int vm_stage_init(void)
 		{ H_WR_MS,  NID_WRITE_MS,  h_wr_ms  },
 	};
 
+	{
+		uintptr_t f = 0;
+
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CLEAN,
+		                           &f) >= 0)
+			g_dcache_clean = (void (*)(void *, unsigned int))f;
+	}
 	/* Buffers for the devices already switched on, now at boot while
 	 * contiguous memory is easy to find; the others get theirs when they are
 	 * switched on (vm_stage_apply). */
@@ -470,6 +505,7 @@ void vm_stage_apply(const VmSettings *s)
 	}
 	g_min_sectors = s->small ? 1 : MIN_SECTORS;
 	g_stats = s->stats ? 1 : 0;
+	g_gpu_safe = s->gpusafe ? 1 : 0;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
@@ -478,6 +514,10 @@ void vm_stage_apply(const VmSettings *s)
 
 void vm_stage_worker_tick(void)
 {
+	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
+		g_gpu_safe_logged = 1;
+		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found");
+	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].alloc_err && !g_dev[i].alloc_logged) {
@@ -535,8 +575,6 @@ void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
 /* Memory card slow mode (Sony's own throttle: it sleeps after every memory
  * card transfer). Read only; vita-memio never changes it. 1 on, 0 off,
  * -1 if the driver's getter isn't available. */
-int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
-                           uint32_t funcnid, uintptr_t *func);
 
 int vm_stage_memcard_slow(void)
 {

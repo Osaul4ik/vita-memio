@@ -65,6 +65,7 @@ enum vm_key {
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
 	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
+	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_COUNT
 };
 
@@ -87,6 +88,7 @@ enum vm_key {
 #define VM_DEF_MEMCARD   0
 #define VM_DEF_SMALL     0   /* opt-in: small transfers are file-system bookkeeping */
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
+#define VM_DEF_GPUSAFE   0   /* off until its cost is measured                 */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -99,6 +101,7 @@ typedef struct VmSettings {
 	int32_t memcard;
 	int32_t small;
 	int32_t stats;
+	int32_t gpusafe;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -125,6 +128,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_LOG:
 	case VM_KEY_SMALL:
 	case VM_KEY_STATS:
+	case VM_KEY_GPUSAFE:
 		return v == 0 || v == 1;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;

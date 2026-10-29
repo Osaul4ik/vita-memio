@@ -14,6 +14,8 @@ Before and after every transfer, the system's storage driver cleans and invalida
 - On an unknown firmware nothing is installed.
 - Game cards, USB storage and Wi-Fi are not touched.
 
+**The one difference from the standard path.** What the CPU reads is always identical, but after a faster read the data can stay in the CPU cache for a while before it reaches memory (the standard driver's DMA writes memory directly). A game that loads a file straight into memory the graphics chip reads, without flushing the cache itself, could in principle draw stale data. **GPU-safe reads** removes the difference: each read's copy is written out to memory before the call returns. Check what it costs with the tester (the *copy* time per block) and switch it on while playing.
+
 ## Performance
 
 | Test | Original: stock | Original: Turbo Storage | vita-memio (my console) |
@@ -63,6 +65,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 
 | Row | What it does | Default |
 |---|---|---|
+| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |

@@ -968,3 +968,47 @@
 	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on.",   /* engb */
 	"Test uygulaması için hızlandırılmış her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş tasarrufu sağlar. HUD açıkken kendi hızlarını kendisi sayar.",   /* tr */
 },
+[VM_I18N_ROW_GPUSAFE] = {
+	"GPU対応の読み込み",   /* ja */
+	"GPU-safe reads",   /* en */
+	"Lectures sûres pour le GPU",   /* fr */
+	"Lecturas seguras para la GPU",   /* es */
+	"GPU-sichere Lesevorgänge",   /* de */
+	"Letture sicure per la GPU",   /* it */
+	"GPU-veilig lezen",   /* nl */
+	"Leituras seguras para a GPU",   /* pt */
+	"Безопасное чтение для GPU",   /* ru */
+	"GPU 안전 읽기",   /* ko */
+	"GPU 安全讀取",   /* zht */
+	"GPU 安全读取",   /* zhs */
+	"GPU-turvalliset luvut",   /* fi */
+	"GPU-säkra läsningar",   /* sv */
+	"GPU-sikre læsninger",   /* da */
+	"GPU-sikre lesinger",   /* no */
+	"Bezpieczne odczyty dla GPU",   /* pl */
+	"Leituras seguras para a GPU",   /* ptbr */
+	"GPU-safe reads",   /* engb */
+	"GPU için güvenli okuma",   /* tr */
+},
+[VM_I18N_HINT_GPUSAFE] = {
+	"高速化された読み込みのたびに、データをCPUキャッシュからメモリーへ書き出し、標準の方法と同じ状態にします。グラフィックスチップが常に正しいデータを読めます。読み込み速度が少し下がります。テスターアプリで比較してください。ゲーム中におすすめです。",   /* ja */
+	"After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it, so the graphics chip always reads it correctly. Costs some read speed; compare with the tester app. Recommended while playing games.",   /* en */
+	"Après chaque lecture accélérée, écrit les données du cache du processeur vers la mémoire, comme le chemin standard, pour que la puce graphique les lise toujours correctement. Coûte un peu de vitesse de lecture ; comparez avec l'application de test. Recommandé pendant les jeux.",   /* fr */
+	"Tras cada lectura acelerada, escribe los datos de la caché de la CPU a la memoria, como hace el camino estándar, para que el chip gráfico siempre los lea bien. Cuesta algo de velocidad de lectura; compáralo con la aplicación de prueba. Recomendado mientras juegas.",   /* es */
+	"Schreibt nach jedem beschleunigten Lesen die Daten aus dem CPU-Cache in den Speicher, wie es der normale Weg hinterlässt, damit der Grafikchip sie immer richtig liest. Kostet etwas Lesegeschwindigkeit; mit der Tester-App vergleichen. Beim Spielen empfohlen.",   /* de */
+	"Dopo ogni lettura accelerata scrive i dati dalla cache della CPU alla memoria, come fa il percorso standard, così il chip grafico li legge sempre correttamente. Costa un po' di velocità in lettura; confronta con l'app di test. Consigliato durante il gioco.",   /* it */
+	"Schrijft na elke versnelde leesactie de gegevens uit de CPU-cache naar het geheugen, zoals de standaardweg ze achterlaat, zodat de grafische chip ze altijd goed leest. Kost wat leessnelheid; vergelijk met de test-app. Aanbevolen tijdens het spelen.",   /* nl */
+	"Após cada leitura acelerada, escreve os dados da cache do processador para a memória, como o caminho padrão os deixa, para que o chip gráfico os leia sempre corretamente. Custa alguma velocidade de leitura; compare com a aplicação de teste. Recomendado ao jogar.",   /* pt */
+	"После каждого ускоренного чтения выгружает данные из кэша процессора в память — так же, как оставляет их обычный путь, — чтобы графический чип всегда читал их правильно. Немного снижает скорость чтения; сравните в тестере. Рекомендуется во время игр.",   /* ru */
+	"가속된 읽기마다 데이터를 CPU 캐시에서 메모리로 내보내 표준 경로와 같은 상태로 만듭니다. 그래서 그래픽 칩이 항상 올바르게 읽습니다. 읽기 속도가 조금 떨어집니다. 테스터 앱으로 비교하세요. 게임 중에 권장합니다.",   /* ko */
+	"每次加速讀取後，將資料從 CPU 快取寫回記憶體，與標準方式相同，讓圖形晶片一律讀到正確資料。會降低一些讀取速度；請用測試程式比較。建議在遊戲時開啟。",   /* zht */
+	"每次加速读取后，将数据从 CPU 缓存写回内存，与标准方式相同，让图形芯片始终读到正确数据。会降低一些读取速度；请用测试程序比较。建议在游戏时开启。",   /* zhs */
+	"Kirjoittaa jokaisen nopeutetun luvun jälkeen datan suorittimen välimuistista muistiin, kuten tavallinen tapa sen jättää, jotta grafiikkapiiri lukee sen aina oikein. Hidastaa lukemista hieman; vertaa testisovelluksella. Suositellaan pelatessa.",   /* fi */
+	"Skriver efter varje snabbare läsning ut data från processorns cache till minnet, som den vanliga vägen lämnar det, så att grafikkretsen alltid läser rätt. Kostar lite läshastighet; jämför med testappen. Rekommenderas när du spelar.",   /* sv */
+	"Skriver efter hver hurtigere læsning data ud af processorens cache til hukommelsen, som den normale vej efterlader dem, så grafikchippen altid læser dem korrekt. Koster lidt læsehastighed; sammenlign med testappen. Anbefales, mens du spiller.",   /* da */
+	"Skriver etter hver raskere lesing dataene ut av prosessorens hurtigbuffer til minnet, slik den vanlige veien etterlater dem, så grafikkbrikken alltid leser dem riktig. Koster litt lesehastighet; sammenlign med testappen. Anbefales mens du spiller.",   /* no */
+	"Po każdym przyspieszonym odczycie zapisuje dane z pamięci podręcznej procesora do pamięci, tak jak zostawia je zwykła ścieżka, aby układ graficzny zawsze czytał je poprawnie. Kosztuje trochę prędkości odczytu; porównaj w aplikacji testowej. Zalecane podczas gry.",   /* pl */
+	"Após cada leitura acelerada, grava os dados do cache da CPU na memória, como o caminho padrão os deixa, para que o chip gráfico sempre os leia corretamente. Custa um pouco de velocidade de leitura; compare com o app de teste. Recomendado ao jogar.",   /* ptbr */
+	"After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it, so the graphics chip always reads it correctly. Costs some read speed; compare with the tester app. Recommended while playing games.",   /* engb */
+	"Her hızlandırılmış okumadan sonra veriyi işlemci önbelleğinden belleğe, standart yolun bıraktığı gibi yazar; böylece grafik çipi onu her zaman doğru okur. Okuma hızından biraz götürür; test uygulamasıyla karşılaştırın. Oyun oynarken önerilir.",   /* tr */
+},

@@ -36,7 +36,7 @@
  * copy OUT of the non-cacheable buffer is the slow half of a staged read (the
  * Cortex-A9 reads non-cacheable memory at ~120 MB/s). When it is on, the worker
  * gives each device buffer a second, cacheable mapping of the same physical
- * pages (a SceSysmem mirror block). The driver still gets the non-cacheable
+ * pages (a memory block at the buffer's own physical address, HAS_PADDR). The driver still gets the non-cacheable
  * address, so nothing changes for it; after its read returns, the chunk is
  * invalidated in the L1 and L2 data caches through the cached mapping and
  * copied out through it. Rules that keep this safe:
@@ -45,9 +45,14 @@
  *     written back over data the card delivered;
  *   - nothing ever writes through the cached mapping;
  *   - every chunk is invalidated after the DMA and before it is read;
- *   - the mapping must pass a live check (a marker written through the
- *     non-cacheable address reads back through the cached one) or the device
- *     keeps the normal path; same if the cache functions can't be resolved.
+ *   - the new block must sit on the buffer's physical address (checked with
+ *     ksceKernelVAtoPA) and pass a live check (a marker written through the
+ *     non-cacheable address reads back through the cached one), or the device
+ *     keeps the normal path; same if the cache functions can't be resolved;
+ *   - a block on the buffer's pages is never freed while the module runs
+ *     (freeing might hand those pages back to the allocator).
+ * Syscall answers are never negative non-error values: the syscall layer
+ * changes them (it gave 0xBFFFFFFF for -1), so TS_CR_* are all >= 0.
  * Writes are unchanged (they go into the buffer through the non-cacheable
  * address).
  *
@@ -93,8 +98,9 @@
 /* Kernel non-cacheable RW memory, physically contiguous (attr below): the same
  * kind the system uses for its own USB storage I/O buffer. */
 #define MEMBLOCK_KERNEL_NC_RW  0x10208006
-/* Kernel cacheable RW: the type of the second (mirror) mapping. */
-#define MEMBLOCK_KERNEL_RW     0x1020D006
+/* Kernel cacheable RW: types for the second mapping of a buffer's pages. */
+#define MEMBLOCK_KERNEL_RW         0x1020D006
+#define MEMBLOCK_KERNEL_PHYCONT_RW 0x1080D006
 
 /* SceCpuForDriver (in SceSysmem), resolved at run time so a missing export only
  * makes the cached read path unavailable instead of stopping the module. */
@@ -137,6 +143,8 @@ typedef struct Dev {
 	void * volatile alias;              /* cached mapping of buf, or NULL        */
 	SceUID        alias_uid;
 	volatile int  cr_state;             /* TS_CR_UNAVAILABLE once setup failed   */
+	int           cr_final;             /* failed with a block left on the pages:
+	                                     * never retried (no second leak)       */
 	TsDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
@@ -560,7 +568,7 @@ void ts_stage_apply(const TsSettings *s)
 	g_cached = s->cached_read ? 1 : 0;
 	if (!g_cached)                /* turning it off and on again retries the setup */
 		for (int i = 0; i < TS_DEV_COUNT; i++)
-			if (g_dev[i].cr_state == TS_CR_UNAVAILABLE)
+			if (g_dev[i].cr_state == TS_CR_UNAVAILABLE && !g_dev[i].cr_final)
 				g_dev[i].cr_state = TS_CR_OFF;
 }
 
@@ -570,29 +578,61 @@ void ts_stage_apply(const TsSettings *s)
 static int setup_alias(int i)
 {
 	static const uint32_t marker[4] = { 0x54534341u, 0x5348454Fu, 0x0BADF00Du, 0xC0FFEE11u };
+	/* Cacheable kernel RW types to try for the second mapping. */
+	static const unsigned k_types[] = { MEMBLOCK_KERNEL_RW, MEMBLOCK_KERNEL_PHYCONT_RW };
 	Dev *d = &g_dev[i];
 	SceKernelAllocMemBlockKernelOpt opt;
-	SceUID uid;
+	SceUID uid = -1;
 	void *base = NULL;
+	uint32_t pa_buf;
 	int ok;
 
 	if (__sync_lock_test_and_set(&d->busy, 1))
 		return 0;
 	__sync_synchronize();
 
-	memset(&opt, 0, sizeof(opt));
-	opt.size = sizeof(opt);
-	opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_MIRROR_BLOCKID;
-	opt.mirror_blockid = d->uid;
-	uid = ksceKernelAllocMemBlock("SceStorageTurboCached", MEMBLOCK_KERNEL_RW, STAGE_BYTES, &opt);
-	if (uid < 0) {
-		TS_KLOGW("stage: dev %d cached mapping not created (0x%08x) - normal reads",
-		         i, (unsigned)uid);
+	/* Map the buffer's own physical pages a second time, cacheable. Its
+	 * physical address must be known, and the new block must really sit on
+	 * it: a block somewhere else is just new memory (that is what the "mirror"
+	 * attribute gave on the console). */
+	pa_buf = pa_of(d->buf);
+	if (!pa_buf) {
+		TS_KLOGW("stage: dev %d physical address unknown - normal reads", i);
 		goto unavailable;
 	}
-	if (ksceKernelGetMemBlockBase(uid, &base) < 0 || !base || base == d->buf) {
-		TS_KLOGW("stage: dev %d cached mapping has no usable address - normal reads", i);
-		ksceKernelFreeMemBlock(uid);
+	for (unsigned t = 0; t < sizeof(k_types) / sizeof(k_types[0]); t++) {
+		uint32_t pa_new;
+
+		memset(&opt, 0, sizeof(opt));
+		opt.size = sizeof(opt);
+		opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR;
+		opt.paddr = pa_buf;
+		uid = ksceKernelAllocMemBlock("SceStorageTurboCached", k_types[t], STAGE_BYTES, &opt);
+		if (uid < 0) {
+			TS_KLOGW("stage: dev %d mapping pa 0x%08x as type 0x%08x refused (0x%08x)",
+			         i, (unsigned)pa_buf, k_types[t], (unsigned)uid);
+			continue;
+		}
+		base = NULL;
+		if (ksceKernelGetMemBlockBase(uid, &base) < 0 || !base || base == d->buf) {
+			TS_KLOGW("stage: dev %d mapping type 0x%08x has no usable address", i, k_types[t]);
+			uid = -1;           /* not freed: it may sit on the buffer's pages */
+			d->cr_final = 1;
+			continue;
+		}
+		pa_new = pa_of(base);
+		if (pa_new != pa_buf) {
+			/* Separate memory: freeing it cannot touch the buffer. */
+			TS_KLOGW("stage: dev %d mapping type 0x%08x landed at pa 0x%08x, not 0x%08x",
+			         i, k_types[t], (unsigned)pa_new, (unsigned)pa_buf);
+			ksceKernelFreeMemBlock(uid);
+			uid = -1;
+			continue;
+		}
+		break;
+	}
+	if (uid < 0) {
+		TS_KLOGW("stage: dev %d no cached mapping of the buffer - normal reads", i);
 		goto unavailable;
 	}
 	/* Write back and drop anything the new mapping holds (it may have been
@@ -628,7 +668,10 @@ static int setup_alias(int i)
 			         (unsigned)marker[3], (unsigned)~marker[0], (unsigned)seen[0],
 			         (unsigned)seen[1], (unsigned)seen[2], (unsigned)seen[3], (unsigned)seen2);
 			TS_KLOGW("stage: dev %d cached mapping does not show the buffer - normal reads", i);
-			ksceKernelFreeMemBlock(uid);
+			/* Not freed: it sits on the buffer's physical pages, and freeing
+			 * could hand them back to the allocator while the buffer uses them.
+			 * It is simply never read, and never made again. */
+			d->cr_final = 1;
 			goto unavailable;
 		}
 	}

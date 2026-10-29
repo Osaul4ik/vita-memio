@@ -111,7 +111,9 @@ int tsGetCachedRead(int dev);
 #define TS_CR_OFF          0   /* setting off (or the device has no buffer)     */
 #define TS_CR_ACTIVE       1   /* reads copy through the cached mapping         */
 #define TS_CR_PENDING      2   /* setting on, being set up (within a second)    */
-#define TS_CR_UNAVAILABLE -1   /* could not be set up: reads use the normal path */
+#define TS_CR_UNAVAILABLE  3   /* could not be set up: reads use the normal path */
+/* (Never negative: the syscall layer alters negative return values that are
+ *  not error codes - a -1 arrived in user space as 0xBFFFFFFF.) */
 
 #define TS_TIMING_MAGIC  0x54535449u   /* 'TSTI' */
 

@@ -5,7 +5,8 @@
 typedef int SceUID;
 typedef uint32_t SceSize;
 typedef int64_t SceOff;
-typedef struct { SceSize size; uint32_t attr; uint32_t mirror_blockid; } SceKernelAllocMemBlockKernelOpt;
+typedef struct { SceSize size; uint32_t attr; uint32_t paddr; uint32_t mirror_blockid; } SceKernelAllocMemBlockKernelOpt;
+#define SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR 0x2
 #define SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_PHYCONT 1
 #define SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_MIRROR_BLOCKID 0x40
 #define SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW 0x1020D006

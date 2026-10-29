@@ -118,7 +118,7 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 			int c = tsGetCachedRead(v->dev);
 
 			out->cr_raw_state = c;
-			if (c >= TS_CR_UNAVAILABLE && c <= TS_CR_PENDING)
+			if (c >= TS_CR_OFF && c <= TS_CR_UNAVAILABLE)
 				out->cached_read = c;
 		}
 	}

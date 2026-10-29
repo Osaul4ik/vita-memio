@@ -38,7 +38,8 @@ The original author reported the following results on the upstream test console:
 
 ## What this fork changes
 
-- Renamed to vita-memio (files, Settings page, data folder `ur0:data/vita-memio/`); settings from the old folder are taken over once.
+- Renamed to vita-memio (files, Settings page, data folder `ur0:data/vita-memio/`).
+- A staging buffer (256 KiB of kernel memory) only for the storages that are switched on, allocated when one is first switched on.
 - The Settings page is under **Settings > Devices**, with an **Advanced** sub-page (verify, logging, HUD, HUD style, safe-mode reset).
 - The HUD sits in the top right corner and has a second look modelled on PSVshell's overlay (black panel, Terminus font, coloured values).
 - Safe mode (the crash-loop guard) ends as soon as the home screen has loaded, instead of after a fixed 30 s, and can be reset from Settings.
@@ -78,9 +79,9 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
 
 Settings, logs and test results live in `ur0:data/vita-memio/`. With logging on, the log holds one line per start and otherwise only problems.
 
-**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing. Settings saved by older builds are kept, except the old HUD corner (the HUD is now always top right, PSVshell style by default) and logging, which starts off. Install the `.skprx` and the `.suprx` together: the Settings page uses a kernel call that older kernel modules do not have.
+**Upgrading from an earlier vita-memio build:** the `*main` / `ur0:tai/vitamemio.suprx` lines are no longer needed (the developer network mode is gone); remove them. Left in, they do nothing. Settings saved by builds before the Advanced page (settings file version 1) are not read: everything starts at its default once, so switch your storages on again. Install the `.skprx` and the `.suprx` together: the Settings page uses a kernel call that older kernel modules do not have.
 
-**Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both). Your settings are taken over from `ur0:data/turbostorage/` on the first start. The old tester (`TURBOTST0`) can be deleted in LiveArea.
+**Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both); its settings are not taken over. The old tester (`TURBOTST0`) and `ur0:data/turbostorage/` can be deleted.
 
 ## Credits and projects used
 

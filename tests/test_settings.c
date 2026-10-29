@@ -64,9 +64,9 @@ static size_t get_file(const char *name, void *out, size_t cap)
 static void clean(void)
 {
 	char p[300];
-	const char *names[] = { "settings.bin", "settings.tmp", "old-settings.bin" };
+	const char *names[] = { "settings.bin", "settings.tmp" };
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 2; i++) {
 		path_of(names[i], p, sizeof(p));
 		unlink(p);
 	}
@@ -195,17 +195,17 @@ static void test_corrupt_file_gives_defaults(void)
 static void test_older_file_with_fewer_keys(void)
 {
 	uint8_t buf[64];
-	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 0.1.0 had 6 keys: no memcard */
+	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 6 keys: no memcard yet */
 	VmSettings s;
 	size_t n;
 
 	clean();
-	n = make_file_v(buf, 6, v, VM_CFG_VERSION_OLD);
+	n = make_file(buf, 6, v);
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2);
-	CHECK(s.hud_style == VM_DEF_HUD_STYLE && s.log == VM_DEF_LOG);   /* old slots 4, 5 */
+	CHECK(s.hud_style == VM_DEF_HUD_STYLE);   /* 3: out of range, the default */
 	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
 }
 
@@ -238,39 +238,6 @@ static void test_file_with_more_keys(void)
 	CHECK(s.sd2vita == VM_DEF_SD2VITA && s.memcard == VM_DEF_MEMCARD);
 }
 
-/* After the rename: the settings in the old folder are read once when the new
- * folder has none, and saved to the new place; the new file wins when both
- * exist. */
-static void test_settings_from_the_old_folder(void)
-{
-	uint8_t buf[64], back[64];
-	int32_t old_v[7] = { 1, 0, 0, 2, 3, 0, 1 };
-	int32_t new_v[7] = { 0, 0, 0, 1, 1, 0, 0 };
-	VmSettings s;
-	size_t n;
-
-	clean();
-	n = make_file_v(buf, 7, old_v, VM_CFG_VERSION_OLD);   /* builds of that time wrote 1 */
-	put_file("old-settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1);
-	CHECK(s.hud_style == VM_DEF_HUD_STYLE);
-	vm_settings_flush();                       /* the worker saves it */
-	CHECK(get_file("settings.bin", back, sizeof(back)) > 0);
-	vm_settings_init();                        /* now from the new place */
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.memcard == 1 && s.hud == 2);
-
-	clean();
-	put_file("old-settings.bin", buf, n);
-	n = make_file(buf, 7, new_v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 0 && s.hud == 1 && s.memcard == 0);   /* the new file wins */
-}
-
 static void test_one_bad_value_keeps_the_rest(void)
 {
 	uint8_t buf[64];
@@ -287,31 +254,21 @@ static void test_one_bad_value_keeps_the_rest(void)
 	CHECK(s.sd2vita == 1 && s.hud_style == 0 && s.memcard == 1);
 }
 
-/* A version 1 file (HUD corner in slot 4, developer mode on in slot 5): both
- * slots load as defaults, the rest is kept, and the file is saved again in
- * the new format. */
-static void test_version1_file_is_converted(void)
+/* A file of another version (1, before slots 4 and 5 changed meaning) is
+ * not used. */
+static void test_other_version_gives_defaults(void)
 {
-	uint8_t buf[256];
-	const int32_t v[7] = { 1, 0, 0, 2, 0 /* top left */, 1 /* devmode on */, 1 };
+	uint8_t buf[64];
+	const int32_t v[7] = { 1, 0, 0, 2, 0, 1, 1 };
 	VmSettings s;
-	uint32_t hdr[2];
 	size_t n;
 
 	clean();
-	n = make_file_v(buf, 7, v, VM_CFG_VERSION_OLD);
+	n = make_file_v(buf, 7, v, 1);
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.hud_style == VM_DEF_HUD_STYLE && s.log == VM_DEF_LOG);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1);
-	CHECK(g_dirty);                            /* to be written as version 2 */
-	vm_settings_flush();
-	CHECK(get_file("settings.bin", (uint8_t *)hdr, sizeof(hdr)) == sizeof(hdr));
-	CHECK(hdr[0] == VM_CFG_MAGIC && hdr[1] == VM_CFG_VERSION);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.memcard == 1 && !g_dirty);
+	CHECK(all_defaults(&s));
 }
 
 static void test_cut_save_after_remove_loads_tmp(void)
@@ -380,9 +337,8 @@ int main(void)
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
 	RUN(test_file_with_more_keys);
-	RUN(test_settings_from_the_old_folder);
 	RUN(test_one_bad_value_keeps_the_rest);
-	RUN(test_version1_file_is_converted);
+	RUN(test_other_version_gives_defaults);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);

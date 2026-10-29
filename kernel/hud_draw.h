@@ -17,10 +17,11 @@
 #include "../include/vm_font_terminus.h"
 
 typedef struct {
-	char lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
-	int  n;
-	int  style;    /* VM_HUD_STYLE_*                                        */
-	int  maxlen;   /* longest line in characters, colour codes not counted  */
+	char     lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
+	int      n;
+	int      style;    /* VM_HUD_STYLE_*                                    */
+	int      maxlen;   /* longest line in characters, codes not counted     */
+	uint32_t gen;      /* changes whenever the text does (for the cache)    */
 } HudText;
 
 /* Widest panel the row buffer is for: VM_HUD_LINE_MAX characters of 12 px
@@ -146,49 +147,124 @@ static inline int hud_corner_inset(int r, int radius)
 	return i;
 }
 
+/* Where the panel goes on a w x h framebuffer, and its size. */
+typedef struct {
+	HudFont f;
+	int pad_x, pad_y, radius, box_w, box_h, x0, y0;
+} HudGeom;
+
+/* 0 if the panel cannot be drawn on this framebuffer (or there is no text). */
+static inline int hud_panel_geom(int w, int h, const HudText *t, HudGeom *g)
+{
+	const int margin = w / 96 > 4 ? w / 96 : 4;
+
+	g->f = hud_font_for(w);
+	g->pad_x = g->f.w;
+	g->pad_y = g->f.h / 3;
+	g->radius = g->f.h / 3;
+	g->box_w = t->maxlen * g->f.w + 2 * g->pad_x;
+	g->box_h = t->n * g->f.h + 2 * g->pad_y;
+	g->x0 = w - margin - g->box_w;
+	g->y0 = h * 36 / 544;
+	return t->n > 0 && g->box_w <= HUD_ROW_MAX && g->x0 >= 0 && g->y0 + g->box_h <= h;
+}
+
+/* Words a cached panel needs at the largest font (the most any framebuffer
+ * can ask for). */
+static inline int hud_cache_words(const HudText *t)
+{
+	return (t->maxlen * TER24_W + 2 * TER24_W) * (t->n * TER24_H + 2 * (TER24_H / 3));
+}
+
+/* How far row `r` of the box is cut in by the rounded corners. */
+static inline int hud_row_inset(const HudGeom *g, int r)
+{
+	int top = r < g->radius ? r : g->box_h - 1 - r < g->radius ? g->box_h - 1 - r : g->radius;
+
+	return hud_corner_inset(top, g->radius);
+}
+
+/* Row `r` of the panel into row[in .. box_w - in). */
+static inline void hud_compose_row(const HudText *t, const HudGeom *g, int r, uint32_t *row)
+{
+	const int in = hud_row_inset(g, r);
+	const int li = (r - g->pad_y) / g->f.h, gy = (r - g->pad_y) % g->f.h;
+
+	for (int i = in; i < g->box_w - in; i++)
+		row[i] = HUD_PANEL_BG;
+	if (r < g->pad_y || li >= t->n)
+		return;
+	uint32_t color = hud_color(1);
+	int cx = g->pad_x;
+
+	for (const char *s = t->lines[li]; *s; s++) {
+		unsigned char c = (unsigned char)*s;
+		uint16_t bits;
+
+		if (hud_is_code((char)c)) {
+			color = hud_color(c);
+			continue;
+		}
+		if (c >= TER_FIRST && c <= TER_LAST &&
+		    (bits = g->f.glyphs[(c - TER_FIRST) * g->f.h + gy]) != 0)
+			for (int dx = 0; dx < g->f.w; dx++)
+				if (bits & (0x8000u >> dx))
+					row[cx + dx] = color;
+		cx += g->f.w;
+	}
+}
+
 /* Draws the panel row by row: each row is composed in `row` (at least
  * HUD_ROW_MAX words of ordinary memory) and copied into the framebuffer in one
  * go, so the framebuffer is only ever written in straight runs. */
 static inline void hud_draw_panel(uint32_t *fb, int pitch, int w, int h, const HudText *t,
                                   uint32_t *row)
 {
-	const HudFont f = hud_font_for(w);
-	const int pad_x = f.w, pad_y = f.h / 3, radius = f.h / 3;
-	const int box_w = t->maxlen * f.w + 2 * pad_x, box_h = t->n * f.h + 2 * pad_y;
-	const int margin = w / 96 > 4 ? w / 96 : 4;
-	const int x0 = w - margin - box_w, y0 = h * 36 / 544;
+	HudGeom g;
 
-	if (t->n <= 0 || box_w > HUD_ROW_MAX || x0 < 0 || y0 + box_h > h)
+	if (!hud_panel_geom(w, h, t, &g))
 		return;
-	for (int r = 0; r < box_h; r++) {
-		int top = r < radius ? r : box_h - 1 - r < radius ? box_h - 1 - r : radius;
-		int in = hud_corner_inset(top, radius);
-		int li = (r - pad_y) / f.h, gy = (r - pad_y) % f.h;
+	for (int r = 0; r < g.box_h; r++) {
+		int in = hud_row_inset(&g, r);
 
-		for (int i = in; i < box_w - in; i++)
-			row[i] = HUD_PANEL_BG;
-		if (r >= pad_y && li < t->n) {
-			uint32_t color = hud_color(1);
-			int cx = pad_x;
-
-			for (const char *s = t->lines[li]; *s; s++) {
-				unsigned char c = (unsigned char)*s;
-				uint16_t bits;
-
-				if (hud_is_code((char)c)) {
-					color = hud_color(c);
-					continue;
-				}
-				if (c >= TER_FIRST && c <= TER_LAST &&
-				    (bits = f.glyphs[(c - TER_FIRST) * f.h + gy]) != 0)
-					for (int dx = 0; dx < f.w; dx++)
-						if (bits & (0x8000u >> dx))
-							row[cx + dx] = color;
-				cx += f.w;
-			}
-		}
-		memcpy(fb + (y0 + r) * pitch + x0 + in, row + in, (size_t)(box_w - 2 * in) * 4);
+		hud_compose_row(t, &g, r, row);
+		memcpy(fb + (g.y0 + r) * pitch + g.x0 + in, row + in, (size_t)(g.box_w - 2 * in) * 4);
 	}
+}
+
+/* The panel kept composed between frames: built again only when the text or
+ * the framebuffer size changes, otherwise each frame is just the copy. */
+typedef struct {
+	uint32_t *px;
+	int       words;          /* size of px                                 */
+	uint32_t  gen;            /* what is in it: text generation ...         */
+	int       w, h;           /* ... for this framebuffer size (w = 0: none) */
+} HudCache;
+
+/* 0 if the cache is too small for this panel (then draw it uncached). */
+static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, const HudText *t,
+                                        HudCache *c)
+{
+	HudGeom g;
+
+	if (!hud_panel_geom(w, h, t, &g))
+		return 1;                       /* nothing to draw is not a failure */
+	if (!c->px || g.box_w * g.box_h > c->words)
+		return 0;
+	if (c->gen != t->gen || c->w != w || c->h != h) {
+		for (int r = 0; r < g.box_h; r++)
+			hud_compose_row(t, &g, r, c->px + r * g.box_w);
+		c->gen = t->gen;
+		c->w = w;
+		c->h = h;
+	}
+	for (int r = 0; r < g.box_h; r++) {
+		int in = hud_row_inset(&g, r);
+
+		memcpy(fb + (g.y0 + r) * pitch + g.x0 + in, c->px + r * g.box_w + in,
+		       (size_t)(g.box_w - 2 * in) * 4);
+	}
+	return 1;
 }
 
 #endif /* VITAMEMIO_HUD_DRAW_H */

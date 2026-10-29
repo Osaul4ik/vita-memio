@@ -331,26 +331,26 @@
 	"Bir hatadan sonra standarda dönüldü. Yeniden denemek için kapatıp açın; lütfen bildirin.",   /* tr */
 },
 [VM_I18N_ST_NO_BUFFER] = {
-	"利用不可：起動時のメモリ不足。通常の速度。",   /* ja */
-	"Unavailable: not enough memory at boot. Standard speed.",   /* en */
-	"Indisponible : mémoire insuffisante au démarrage. Vitesse standard.",   /* fr */
-	"No disponible: memoria insuficiente al arrancar. Velocidad estándar.",   /* es */
-	"Nicht verfügbar: zu wenig Speicher beim Start. Normale Geschwindigkeit.",   /* de */
-	"Non disponibile: memoria insufficiente all'avvio. Velocità standard.",   /* it */
-	"Niet beschikbaar: te weinig geheugen bij het opstarten. Standaardsnelheid.",   /* nl */
-	"Indisponível: memória insuficiente no arranque. Velocidade padrão.",   /* pt */
-	"Недоступно: не хватило памяти при запуске. Обычная скорость.",   /* ru */
-	"사용 불가: 부팅 시 메모리 부족. 일반 속도.",   /* ko */
-	"無法使用：開機時記憶體不足。標準速度。",   /* zht */
-	"不可用：启动时内存不足。标准速度。",   /* zhs */
-	"Ei käytettävissä: muisti ei riittänyt käynnistyksessä. Tavallinen nopeus.",   /* fi */
-	"Ej tillgängligt: för lite minne vid start. Normal hastighet.",   /* sv */
-	"Utilgængelig: for lidt hukommelse ved opstart. Normal hastighed.",   /* da */
-	"Utilgjengelig: for lite minne ved oppstart. Normal hastighet.",   /* no */
-	"Niedostępne: za mało pamięci przy uruchomieniu. Standardowa prędkość.",   /* pl */
-	"Indisponível: memória insuficiente na inicialização. Velocidade padrão.",   /* ptbr */
-	"Unavailable: not enough memory at boot. Standard speed.",   /* engb */
-	"Kullanılamıyor: açılışta bellek yetersiz. Standart hız.",   /* tr */
+	"利用不可：バッファー用のメモリが不足しています。通常の速度。オフにしてからオンにすると再試行します。",   /* ja */
+	"Unavailable: not enough memory for its buffer. Standard speed; switch it off and on to try again.",   /* en */
+	"Indisponible : mémoire insuffisante pour son tampon. Vitesse standard ; désactivez puis réactivez pour réessayer.",   /* fr */
+	"No disponible: memoria insuficiente para su búfer. Velocidad estándar; desactívalo y actívalo para reintentar.",   /* es */
+	"Nicht verfügbar: zu wenig Speicher für den Puffer. Normale Geschwindigkeit; aus- und wieder einschalten, um es erneut zu versuchen.",   /* de */
+	"Non disponibile: memoria insufficiente per il buffer. Velocità standard; disattiva e riattiva per riprovare.",   /* it */
+	"Niet beschikbaar: te weinig geheugen voor de buffer. Standaardsnelheid; zet uit en weer aan om het opnieuw te proberen.",   /* nl */
+	"Indisponível: memória insuficiente para o buffer. Velocidade padrão; desligue e volte a ligar para tentar de novo.",   /* pt */
+	"Недоступно: не хватает памяти для буфера. Обычная скорость; выключите и включите снова, чтобы повторить.",   /* ru */
+	"사용 불가: 버퍼용 메모리가 부족합니다. 일반 속도. 껐다 켜면 다시 시도합니다.",   /* ko */
+	"無法使用：緩衝區記憶體不足。標準速度；關閉後再開啟即可重試。",   /* zht */
+	"不可用：缓冲区内存不足。标准速度；关闭后再开启即可重试。",   /* zhs */
+	"Ei käytettävissä: puskurille ei ole tarpeeksi muistia. Tavallinen nopeus; kytke pois ja takaisin yrittääksesi uudelleen.",   /* fi */
+	"Ej tillgängligt: för lite minne för bufferten. Normal hastighet; slå av och på för att försöka igen.",   /* sv */
+	"Utilgængelig: for lidt hukommelse til bufferen. Normal hastighed; slå fra og til for at prøve igen.",   /* da */
+	"Utilgjengelig: for lite minne til bufferen. Normal hastighet; slå av og på for å prøve igjen.",   /* no */
+	"Niedostępne: za mało pamięci na bufor. Standardowa prędkość; wyłącz i włącz, aby spróbować ponownie.",   /* pl */
+	"Indisponível: memória insuficiente para o buffer. Velocidade padrão; desligue e ligue de novo para tentar outra vez.",   /* ptbr */
+	"Unavailable: not enough memory for its buffer. Standard speed; switch it off and on to try again.",   /* engb */
+	"Kullanılamıyor: arabellek için bellek yetersiz. Standart hız; yeniden denemek için kapatıp açın.",   /* tr */
 },
 [VM_I18N_ST_FIRMWARE] = {
 	"無効：このファームウェアには対応していません。通常の速度。",   /* ja */

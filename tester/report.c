@@ -232,9 +232,10 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		if (checkable(res))
 			put(&o, ", plugin %s", r->plugin_ok ? "ok" : "NOT as expected");
 		if (res->plugin_mode == BPM_ON && r->complete)
-			put(&o, " (faster-path transfers: %u reads, %u writes)",
+			put(&o, " (faster-path transfers: %u reads, %u writes; %u stock, buffer busy)",
 			    (unsigned)(r->after.reads - r->before.reads),
-			    (unsigned)(r->after.writes - r->before.writes));
+			    (unsigned)(r->after.writes - r->before.writes),
+			    (unsigned)(r->after.passthru - r->before.passthru));
 		if (res->plugin_mode == BPM_ON && r->complete && r->before.verify) {
 			BenchVerify rv;
 
@@ -320,6 +321,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	verify_text(res, vt, sizeof(vt));
 	if (vt[0])
 		line(&s, "%s", vt);
+	if (res->plugin_mode == BPM_ON)
+		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
 			line(&s, "run %d: %s", i + 1, res->runs[i].note);

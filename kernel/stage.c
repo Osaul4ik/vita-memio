@@ -23,7 +23,9 @@
  * (the Wi-Fi chip is on its own port and never calls these), USB storage.
  *
  * Safety rules:
- *   - one staging buffer per device; if it is busy the transfer goes stock;
+ *   - one staging buffer per device, allocated when the device is first
+ *     switched on (at boot for those already on) and then kept; if it is busy
+ *     or could not be allocated, the transfer goes stock;
  *   - nothing is cached or deferred: a write has reached the card before the
  *     call returns, exactly as stock;
  *   - any error on the faster path switches that device back to stock for the
@@ -80,14 +82,16 @@ void *ksceSdifGetSdContextGlobal(int port);
 typedef struct Dev {
 	int           port;          /* SDIF port, or -1: the memory card          */
 	SceUID        uid;
-	void         *buf;           /* NC staging buffer                          */
+	void         *buf;           /* NC staging buffer, NULL until allocated    */
 	volatile int  busy;
 	volatile int  enabled;       /* from settings                              */
 	volatile int  fallback;      /* error/mismatch seen: stock for the session */
+	int           unusable;      /* its hooks are not installed: no buffer     */
+	int           alloc_err;     /* last failed allocation (0: none); not
+	                              * retried until the device is switched again */
+	int           alloc_logged;
 	uint64_t      rd_bytes, wr_bytes;   /* moved on the faster path            */
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
-	uint64_t      us_total;             /* time inside faster-path transfers, us */
-	uint32_t      us_max;               /* the slowest one, us                   */
 	VmTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
 	VmDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
@@ -97,6 +101,11 @@ static Dev g_dev[VM_DEV_COUNT] = {
 	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1 },
 	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
 };
+
+/* Set by vm_stage_init: from then on a device switched on gets its buffer.
+ * Before it (settings applied at boot, safe mode, unknown firmware) nothing is
+ * allocated. */
+static int g_live;
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
@@ -165,6 +174,27 @@ static int alloc_buf(unsigned type, int phycont, SceUID *uid, void **base)
 	return VM_OK;
 }
 
+/* Give device `d` its staging buffer if it has none. The pointer is published
+ * last, so a transfer sees either no buffer or a complete one. */
+static void ensure_buf(Dev *d)
+{
+	SceUID uid;
+	void *base = NULL;
+	int r;
+
+	if (!g_live || d->buf || d->unusable || d->alloc_err)
+		return;
+	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, &uid, &base);
+	if (r < 0) {
+		d->alloc_err = r;
+		d->alloc_logged = 0;            /* the worker logs it */
+		return;
+	}
+	d->uid = uid;
+	__sync_synchronize();
+	d->buf = base;
+}
+
 /* Take the device buffer for one request, or 0 if the request stays stock. */
 static int take(Dev *d, int mine, uint32_t nsec)
 {
@@ -190,84 +220,25 @@ static int take_shadow(void)
 	return g_verify && g_shadow && !__sync_lock_test_and_set(&g_shadow_busy, 1);
 }
 
-/* Time one faster-path request (called while the device buffer is held, so only
- * one thread updates a device's figures). Two clock reads and a few adds: cheap
- * enough for the hot path, which must not log. */
-static void note_time(Dev *d, uint32_t t0)
+/* One request, either way. `rd_ref` is the read function, used by a write's
+ * verify re-read (a read verifies with `ref` itself). */
+static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                      void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	uint32_t dt = ksceKernelGetSystemTimeLow() - t0;
-
-	d->us_total += dt;
-	if (dt > d->us_max)
-		d->us_max = dt;
-}
-
-static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                      void *buf, uint32_t nsec)
-{
-	uint8_t *dst = buf;
-	uint32_t left = nsec, t0;
+	uint8_t *p = buf;
+	uint32_t left = nsec;
 	int verify, ret = 0, mine = on_port(part, d->port);
 
-	if (mine)
-		d->all_rd += (uint64_t)nsec * 512;
+	if (mine) {
+		if (write)
+			d->all_wr += (uint64_t)nsec * 512;
+		else
+			d->all_rd += (uint64_t)nsec * 512;
+	}
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
-	t0 = ksceKernelGetSystemTimeLow();
-	verify = take_shadow();
-	while (left && !d->fallback) {
-		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
-
-		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
-
-		ret = io(ref, part, sector, d->buf, n);
-		if (ret < 0)
-			break;
-		t2 = ksceKernelGetSystemTimeLow();
-		vm_copy_from_stage(dst, d->buf, bytes);
-		t3 = ksceKernelGetSystemTimeLow();
-		d->tm.rd_sectors += n;
-		d->tm.rd_io_us += t2 - t1;
-		d->tm.rd_copy_us += t3 - t2;
-		if (verify && io(ref, part, sector, g_shadow, n) >= 0) {
-			d->st.verified++;
-			if (memcmp(dst, g_shadow, bytes) != 0) {
-				d->st.mismatches++;
-				d->fallback = 1;
-				memcpy(dst, g_shadow, bytes);   /* the caller gets stock data */
-			}
-		}
-		d->rd_bytes += bytes;
-		dst += bytes;
-		sector += n;
-		left -= n;
-	}
-	if (verify)
-		__sync_lock_release(&g_shadow_busy);
-	note_time(d, t0);
-	__sync_lock_release(&d->busy);
-	if (ret < 0) {
-		d->st.errors++;
-		d->fallback = 1;
-	} else {
-		d->st.reads++;
-	}
-	/* Anything not done on the faster path (error, mismatch) is done stock. */
-	return left ? io(ref, part, sector, dst, left) : ret;
-}
-
-static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                       void *part, uint32_t sector, void *buf, uint32_t nsec)
-{
-	const uint8_t *src = buf;
-	uint32_t left = nsec, t0;
-	int verify, ret = 0, mine = on_port(part, d->port);
-
-	if (mine)
-		d->all_wr += (uint64_t)nsec * 512;
-	if (!take(d, mine, nsec))
-		return io(ref, part, sector, buf, nsec);
-	t0 = ksceKernelGetSystemTimeLow();
+	if (!write)
+		rd_ref = ref;
 	verify = take_shadow();
 	if (verify && !rd_ref) {            /* no read hook yet: cannot verify this one */
 		__sync_lock_release(&g_shadow_busy);
@@ -275,102 +246,103 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 	}
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
-
 		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
 
-		vm_copy_to_stage(d->buf, src, bytes);
-		t2 = ksceKernelGetSystemTimeLow();
-		ret = io(ref, part, sector, d->buf, n);
-		if (ret < 0)
-			break;
-		t3 = ksceKernelGetSystemTimeLow();
-		d->tm.wr_sectors += n;
-		d->tm.wr_copy_us += t2 - t1;
-		d->tm.wr_io_us += t3 - t2;
+		/* Timing: system call vs CPU copy, per chunk that succeeded. */
+		if (write) {
+			vm_copy_to_stage(d->buf, p, bytes);
+			t2 = ksceKernelGetSystemTimeLow();
+			ret = io(ref, part, sector, d->buf, n);
+			if (ret < 0)
+				break;
+			t3 = ksceKernelGetSystemTimeLow();
+			d->tm.wr_sectors += n;
+			d->tm.wr_copy_us += t2 - t1;
+			d->tm.wr_io_us += t3 - t2;
+		} else {
+			ret = io(ref, part, sector, d->buf, n);
+			if (ret < 0)
+				break;
+			t2 = ksceKernelGetSystemTimeLow();
+			vm_copy_from_stage(p, d->buf, bytes);
+			t3 = ksceKernelGetSystemTimeLow();
+			d->tm.rd_sectors += n;
+			d->tm.rd_io_us += t2 - t1;
+			d->tm.rd_copy_us += t3 - t2;
+		}
 		if (verify && io(rd_ref, part, sector, g_shadow, n) >= 0) {
 			d->st.verified++;
-			if (memcmp(g_shadow, src, bytes) != 0) {
+			if (memcmp(p, g_shadow, bytes) != 0) {
 				d->st.mismatches++;
 				d->fallback = 1;
-				/* rewrite this chunk the stock way, from the caller's data */
-				ret = io(ref, part, sector, (void *)src, n);
-				if (ret < 0)
-					break;
+				if (write) {
+					/* rewrite this chunk the stock way, from the caller's data */
+					ret = io(ref, part, sector, p, n);
+					if (ret < 0)
+						break;
+				} else {
+					memcpy(p, g_shadow, bytes);   /* the caller gets stock data */
+				}
 			}
 		}
-		d->wr_bytes += bytes;
-		src += bytes;
+		if (write)
+			d->wr_bytes += bytes;
+		else
+			d->rd_bytes += bytes;
+		p += bytes;
 		sector += n;
 		left -= n;
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
-	note_time(d, t0);
 	__sync_lock_release(&d->busy);
 	if (ret < 0) {
 		d->st.errors++;
 		d->fallback = 1;
-	} else {
+	} else if (write) {
 		d->st.writes++;
+	} else {
+		d->st.reads++;
 	}
-	return left ? io(ref, part, sector, (void *)src, left) : ret;
+	/* Anything not done on the faster path (error, mismatch) is done stock. */
+	return left ? io(ref, part, sector, p, left) : ret;
 }
 
-static int h_rd_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
-{
-	tai_hook_ref_t r = ref_of(H_RD_SD);
+/* The six hooks: a read and a write per device, SceSdif with a card context,
+ * SceMsif without. */
+#define SDIF_HOOKS(name, dev, h_rd, h_wr)                                                  \
+	static int h_rd_##name(void *part, uint32_t sector, void *buf, uint32_t nsec)      \
+	{                                                                                  \
+		tai_hook_ref_t r = ref_of(h_rd);                                           \
+		return r ? stage_xfer(&g_dev[dev], 0, io_sdif, r, 0, part, sector, buf, nsec) \
+		         : VM_IO_ERROR;                                                    \
+	}                                                                                  \
+	static int h_wr_##name(void *part, uint32_t sector, void *buf, uint32_t nsec)      \
+	{                                                                                  \
+		tai_hook_ref_t r = ref_of(h_wr);                                           \
+		return r ? stage_xfer(&g_dev[dev], 1, io_sdif, r, g_ref[h_rd], part, sector,  \
+		                      buf, nsec)                                           \
+		         : VM_IO_ERROR;                                                    \
+	}
 
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_read(&g_dev[VM_DEV_SD2VITA], io_sdif, r, part, sector, buf, nsec);
-}
-
-static int h_wr_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
-{
-	tai_hook_ref_t r = ref_of(H_WR_SD);
-
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_write(&g_dev[VM_DEV_SD2VITA], io_sdif, r, g_ref[H_RD_SD], part,
-	                   sector, buf, nsec);
-}
-
-static int h_rd_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
-{
-	tai_hook_ref_t r = ref_of(H_RD_MMC);
-
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_read(&g_dev[VM_DEV_INTERNAL], io_sdif, r, part, sector, buf, nsec);
-}
-
-static int h_wr_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
-{
-	tai_hook_ref_t r = ref_of(H_WR_MMC);
-
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_write(&g_dev[VM_DEV_INTERNAL], io_sdif, r, g_ref[H_RD_MMC], part,
-	                   sector, buf, nsec);
-}
+SDIF_HOOKS(sd,  VM_DEV_SD2VITA,  H_RD_SD,  H_WR_SD)
+SDIF_HOOKS(mmc, VM_DEV_INTERNAL, H_RD_MMC, H_WR_MMC)
 
 static int h_rd_ms(uint32_t sector, void *buf, uint32_t nsec)
 {
 	tai_hook_ref_t r = ref_of(H_RD_MS);
 
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_read(&g_dev[VM_DEV_MEMCARD], io_msif, r, NULL, sector, buf, nsec);
+	return r ? stage_xfer(&g_dev[VM_DEV_MEMCARD], 0, io_msif, r, 0, NULL, sector, buf, nsec)
+	         : VM_IO_ERROR;
 }
 
 static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 {
 	tai_hook_ref_t r = ref_of(H_WR_MS);
 
-	if (!r)
-		return VM_IO_ERROR;
-	return stage_write(&g_dev[VM_DEV_MEMCARD], io_msif, r, g_ref[H_RD_MS], NULL,
-	                   sector, buf, nsec);
+	return r ? stage_xfer(&g_dev[VM_DEV_MEMCARD], 1, io_msif, r, g_ref[H_RD_MS], NULL,
+	                      sector, buf, nsec)
+	         : VM_IO_ERROR;
 }
 
 int vm_stage_init(void)
@@ -384,17 +356,13 @@ int vm_stage_init(void)
 		{ H_WR_MS,  NID_WRITE_MS,  h_wr_ms  },
 	};
 
-	/* Buffers first, at boot while contiguous memory is easy to find. A device
-	 * without one simply stays stock. */
-	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		int r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, &g_dev[i].uid, &g_dev[i].buf);
-
-		if (r < 0) {
-			g_dev[i].buf = NULL;
-			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
-			         (unsigned)r);
-		}
-	}
+	/* Buffers for the devices already switched on, now at boot while
+	 * contiguous memory is easy to find; the others get theirs when they are
+	 * switched on (vm_stage_apply). */
+	g_live = 1;
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		if (g_dev[i].enabled)
+			ensure_buf(&g_dev[i]);
 	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceSdif", LIB_SDIF, k_hooks[i].nid,
@@ -407,7 +375,7 @@ int vm_stage_init(void)
 		}
 	}
 	/* The memory card is optional: if its hooks can't be installed, only the
-	 * memory card stays stock (its buffer is released). */
+	 * memory card stays stock (its buffer is released and never allocated). */
 	for (int i = H_SDIF_COUNT; i < H_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceMsif", LIB_MSIF, k_hooks[i].nid,
@@ -421,11 +389,12 @@ int vm_stage_init(void)
 					g_hook[j] = -1;
 				}
 			Dev *m = &g_dev[VM_DEV_MEMCARD];
+			m->unusable = 1;
+			m->buf = NULL;
 			if (m->uid >= 0) {
 				ksceKernelFreeMemBlock(m->uid);
 				m->uid = -1;
 			}
-			m->buf = NULL;
 			break;
 		}
 	}
@@ -435,8 +404,10 @@ int vm_stage_init(void)
 void vm_stage_fini(void)
 {
 	/* Stop taking the faster path, then wait for any transfer in flight. */
-	for (int i = 0; i < VM_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		g_dev[i].enabled = 0;
+		g_dev[i].unusable = 1;          /* and never allocate again */
+	}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		while (g_dev[i].busy)
 			ksceKernelDelayThread(1000);
@@ -447,9 +418,9 @@ void vm_stage_fini(void)
 		}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].uid >= 0) {
+			g_dev[i].buf = NULL;
 			ksceKernelFreeMemBlock(g_dev[i].uid);
 			g_dev[i].uid = -1;
-			g_dev[i].buf = NULL;
 		}
 	if (g_shadow_uid >= 0) {
 		ksceKernelFreeMemBlock(g_shadow_uid);
@@ -463,9 +434,15 @@ void vm_stage_apply(const VmSettings *s)
 	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		if (want[i] && !g_dev[i].enabled)
-			g_dev[i].fallback = 0;   /* switching it back on is a fresh start */
-		g_dev[i].enabled = want[i] ? 1 : 0;
+		Dev *d = &g_dev[i];
+
+		if (want[i] && !d->enabled) {
+			d->fallback = 0;      /* switching it back on is a fresh start */
+			d->alloc_err = 0;     /* ... and a fresh try for its buffer    */
+		}
+		if (want[i])
+			ensure_buf(d);
+		d->enabled = want[i] ? 1 : 0;
 	}
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
@@ -474,6 +451,13 @@ void vm_stage_apply(const VmSettings *s)
 
 void vm_stage_worker_tick(void)
 {
+	/* Logged here, not where it happens (that can be a syscall). */
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		if (g_dev[i].alloc_err && !g_dev[i].alloc_logged) {
+			g_dev[i].alloc_logged = 1;
+			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
+			         (unsigned)g_dev[i].alloc_err);
+		}
 	/* The verify buffer is only allocated once verify mode is first turned on. */
 	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
 		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, &g_shadow_uid, &g_shadow);
@@ -506,8 +490,8 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 		out[i] = d->st;
 		out[i].read_mib = (uint32_t)(d->rd_bytes >> 20);
 		out[i].write_mib = (uint32_t)(d->wr_bytes >> 20);
-		out[i].time_ms = (uint32_t)(d->us_total / 1000u);
-		out[i].max_ms = d->us_max / 1000u;
+		out[i].time_ms = 0;           /* no longer measured (VmDevState is frozen) */
+		out[i].max_ms = 0;
 		out[i].status = !plugin_active ? VM_ST_UNAVAIL :
 		                !d->enabled    ? VM_ST_OFF :
 		                !d->buf        ? VM_ST_NO_BUFFER :

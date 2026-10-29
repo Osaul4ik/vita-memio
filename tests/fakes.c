@@ -133,16 +133,11 @@ void fakes_reset(void)
 static const char *map(const char *path, char *out, size_t n)
 {
 	static const char pre[] = "ur0:data/vita-memio/";
-	static const char old[] = "ur0:data/turbostorage/";   /* before the rename */
 
 	if (!g_tmp[0])
 		return NULL;
 	if (!strncmp(path, pre, sizeof(pre) - 1)) {
 		snprintf(out, n, "%s/%s", g_tmp, path + sizeof(pre) - 1);
-		return out;
-	}
-	if (!strncmp(path, old, sizeof(old) - 1)) {
-		snprintf(out, n, "%s/old-%s", g_tmp, path + sizeof(old) - 1);
 		return out;
 	}
 	return NULL;

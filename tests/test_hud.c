@@ -144,6 +144,68 @@ static void test_panel_limits(void)
 	free(fb);
 }
 
+/* The cached panel: the same picture as composing it every frame, rebuilt only
+ * when the text or the framebuffer size changes, and a cache that is too small
+ * says so (the caller then draws it uncached). */
+static void test_panel_cache(void)
+{
+	static uint32_t row[HUD_ROW_MAX];
+	uint32_t *a = malloc(960 * 544 * 4), *b = malloc(960 * 544 * 4);
+	HudText t;
+	HudCache c = { 0 };
+	int x0, y0, x1, y1;
+
+	set_text(&t, VM_HUD_STYLE_PSVSHELL, k_lines, 4);
+	t.gen = 1;
+	c.words = hud_cache_words(&t);
+	c.px = malloc((size_t)c.words * 4);
+	for (int i = 0; i < 960 * 544; i++) a[i] = b[i] = BG;
+	hud_draw_panel(a, 960, 960, 544, &t, row);
+	CHECK(hud_draw_panel_cached(b, 960, 960, 544, &t, &c) == 1);
+	CHECK(memcmp(a, b, 960 * 544 * 4) == 0);
+	CHECK(c.gen == 1 && c.w == 960 && c.h == 544);
+
+	/* same text, same size: the cache is copied as it is, not composed again */
+	{
+		HudGeom g;
+
+		CHECK(hud_panel_geom(960, 544, &t, &g));
+		c.px[(g.box_h / 2) * g.box_w + g.box_w / 2] ^= 0x00FFFFFFu;   /* mark its middle */
+	}
+	hud_draw_panel_cached(b, 960, 960, 544, &t, &c);
+	changed_box(a, 960, 960, 544, &x0, &y0, &x1, &y1);
+	CHECK(memcmp(a, b, 960 * 544 * 4) != 0);
+
+	/* new text: composed again, the mark is gone */
+	t.gen = 2;
+	hud_draw_panel_cached(b, 960, 960, 544, &t, &c);
+	CHECK(memcmp(a, b, 960 * 544 * 4) == 0);
+
+	/* another framebuffer size (a smaller font): composed again, still fits */
+	{
+		uint32_t *s1 = malloc(640 * 368 * 4), *s2 = malloc(640 * 368 * 4);
+
+		for (int i = 0; i < 640 * 368; i++) s1[i] = s2[i] = BG;
+		hud_draw_panel(s1, 640, 640, 368, &t, row);
+		CHECK(hud_draw_panel_cached(s2, 640, 640, 368, &t, &c) == 1 && c.w == 640);
+		CHECK(memcmp(s1, s2, 640 * 368 * 4) == 0);
+		free(s1);
+		free(s2);
+	}
+
+	/* too small, or none: 0, nothing written */
+	c.words = 16;
+	for (int i = 0; i < 960 * 544; i++) b[i] = BG;
+	CHECK(hud_draw_panel_cached(b, 960, 960, 544, &t, &c) == 0);
+	changed_box(b, 960, 960, 544, &x0, &y0, &x1, &y1);
+	CHECK(x1 < 0);
+	free(c.px);
+	c.px = NULL;
+	CHECK(hud_draw_panel_cached(b, 960, 960, 544, &t, &c) == 0);
+	free(a);
+	free(b);
+}
+
 static void test_classic(void)
 {
 	uint32_t *fb = malloc(960 * 544 * 4);
@@ -174,6 +236,7 @@ int main(void)
 {
 	RUN(test_panel_sizes);
 	RUN(test_panel_limits);
+	RUN(test_panel_cache);
 	RUN(test_classic);
 	RUN(test_corner);
 	printf(vm_failures ? "test_hud: %d FAILED\n" : "test_hud: ok\n", vm_failures);

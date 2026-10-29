@@ -102,6 +102,7 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->writes = st.dev[v->dev].writes;
 	out->errors = st.dev[v->dev].errors;
 	out->mismatches = st.dev[v->dev].mismatches;
+	out->passthru = st.dev[v->dev].passthru;
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
 	out->verify_ready = st.verify_ready;

@@ -37,6 +37,9 @@ typedef struct Fake {
 	int      verify_dead;        /* verify on and ready, but nothing is checked */
 	int      mismatch_at_read;   /* the Nth faster read fails the plugin check */
 	uint32_t reads, writes, errors, mismatches, verified;
+	uint32_t passthru;           /* faster path declined: buffer busy           */
+	int      busy_every;         /* every Nth large read finds the buffer busy  */
+	int      busy_seen;
 	int      no_timing;          /* kernel module without vmGetTiming          */
 	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
 
@@ -102,7 +105,9 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 		return -1;
 	memcpy(buf, f->data + off, n);
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
-	if (counts(f, n)) {
+	if (counts(f, n) && f->busy_every && ++f->busy_seen % f->busy_every == 0) {
+		f->passthru++;                             /* this one found the buffer busy */
+	} else if (counts(f, n)) {
 		f->reads++;
 		if (f->verify && f->verify_ready && !f->verify_dead)
 			f->verified++;
@@ -180,6 +185,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->writes = f->writes;
 	o->errors = f->errors;
 	o->mismatches = f->mismatches;
+	o->passthru = f->passthru;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -417,6 +423,36 @@ static void test_plugin_verify(void)
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "plugin verify: off"));
 	CHECK_UNTOUCHED(f);
+	free(text);
+	free(r);
+	free(f.data);
+}
+
+static void test_passthru_counted(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchEnv e;
+	char *text = malloc(40000);
+	char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	char want[64];
+	int n, found = 0;
+
+	fake_init(&f, 1);
+	f.busy_every = 4;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_plugin_ok(r));
+	CHECK(bench_passthru(r) > 0 && bench_passthru(r) == f.passthru);
+	report_format(r, &m, text, 40000);
+	snprintf(want, sizeof(want), "; %u stock, buffer busy)", (unsigned)f.passthru);
+	CHECK(strstr(text, want));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	snprintf(want, sizeof(want), "buffer busy: %u large transfers went stock", (unsigned)f.passthru);
+	for (int i = 0; i < n; i++)
+		found |= !strcmp(lines[i], want);
+	CHECK(found);
 	free(text);
 	free(r);
 	free(f.data);
@@ -744,8 +780,9 @@ static void test_screen_lines(void)
 	CHECK(strcmp(lines[2], "data check: PASS") == 0);
 	CHECK(strcmp(lines[3], "plugin as expected: PASS") == 0);
 	CHECK(strcmp(lines[4], "plugin verify: off") == 0);
-	CHECK(strcmp(lines[5], "read  us/block: io 20.0  copy 4.0") == 0);
-	CHECK(strcmp(lines[6], "write us/block: io 30.0  copy 2.0") == 0);
+	CHECK(strcmp(lines[5], "buffer busy: 0 large transfers went stock") == 0);
+	CHECK(strcmp(lines[6], "read  us/block: io 20.0  copy 4.0") == 0);
+	CHECK(strcmp(lines[7], "write us/block: io 30.0  copy 2.0") == 0);
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
 	for (int max = 0; max < 6; max++) {              /* a short array is never overrun */
@@ -893,6 +930,7 @@ int main(void)
 	RUN(test_read_corruption_is_caught);
 	RUN(test_plugin_counters);
 	RUN(test_plugin_verify);
+	RUN(test_passthru_counted);
 	RUN(test_state_changed_mid_test);
 	RUN(test_other_plugin_states_still_run);
 	RUN(test_plugin_mode_names);

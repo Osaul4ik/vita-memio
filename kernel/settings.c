@@ -5,8 +5,8 @@
  *   magic 'TSCF' | version | count | count x int32 (enum vm_key order) | check
  * Keys are only ever appended, so a file from an older version (fewer keys)
  * still loads: its keys are read and the newer ones take their defaults.
- * Version 2 gave slots 4 and 5 a new meaning (HUD corner -> HUD style,
- * developer mode -> logging): in a version 1 file those two are skipped.
+ * A file of another version (1: before slots 4 and 5 became HUD style and
+ * logging) is not used: defaults.
  * A missing, short or corrupt file means defaults. Each value is validated on
  * its own, so one bad field falls back to its default without losing the rest.
  *
@@ -24,7 +24,6 @@
 
 #define VM_CFG_MAGIC    0x46435354u   /* 'TSCF'                                */
 #define VM_CFG_VERSION  2u
-#define VM_CFG_VERSION_OLD 1u   /* slots 4 and 5 meant something else */
 
 typedef struct VmSettingsFile {
 	uint32_t magic;
@@ -63,8 +62,7 @@ static uint32_t file_check(const VmSettingsFile *f)
 }
 
 /* Read and check one settings file into `s` (which already holds the defaults).
- * 1 = loaded, 2 = loaded from a version 1 file (to be saved again in the new
- * format), 0 = missing or unusable (`s` untouched). */
+ * 1 = loaded, 0 = missing or unusable (`s` untouched). */
 static int load_file(const char *path, VmSettings *s)
 {
 	/* magic, version, count, up to VM_CFG_MAX_KEYS values, check */
@@ -78,8 +76,7 @@ static int load_file(const char *path, VmSettings *s)
 	/* The check word follows the last stored value. */
 	uint32_t cnt = raw[2];
 	const int32_t *values = (const int32_t *)&raw[3];
-	int ok = raw[0] == VM_CFG_MAGIC &&
-	         (raw[1] == VM_CFG_VERSION || raw[1] == VM_CFG_VERSION_OLD) &&
+	int ok = raw[0] == VM_CFG_MAGIC && raw[1] == VM_CFG_VERSION &&
 	         cnt >= 1 && cnt <= VM_CFG_MAX_KEYS &&
 	         n == (int)((3 + cnt + 1) * sizeof(uint32_t)) &&
 	         raw[3 + cnt] == check_of(raw[0], raw[1], cnt, values);
@@ -88,15 +85,13 @@ static int load_file(const char *path, VmSettings *s)
 		return 0;
 	}
 	for (int k = 0; k < (int)cnt && k < VM_KEY_COUNT; k++) {
-		if (raw[1] == VM_CFG_VERSION_OLD && (k == VM_KEY_HUD_STYLE || k == VM_KEY_LOG))
-			continue;                          /* the old meaning: keep the default */
 		if (vm_setting_valid(k, values[k]))
 			*vm_setting_field(s, k) = values[k];
 		else
 			VM_KLOGW("settings: key %d value %d out of range, default %d",
 			         k, values[k], g_defaults[k]);
 	}
-	return raw[1] == VM_CFG_VERSION_OLD ? 2 : 1;
+	return 1;
 }
 
 void vm_settings_init(void)
@@ -107,13 +102,8 @@ void vm_settings_init(void)
 
 	/* The main file first; if a save was cut short between removing the old file
 	 * and renaming the new one, the finished copy is still in the .tmp file. */
-	int r = load_file(VM_SETTINGS_PATH, &s);
-	if (!r)
-		r = load_file(VM_SETTINGS_TMP, &s);
-	if (!r && load_file(VM_SETTINGS_OLD, &s))
-		r = 2;                                /* moved: saved to the new place */
-	if (r == 2)
-		g_dirty = 1;                          /* the worker saves it in the new format */
+	if (!load_file(VM_SETTINGS_PATH, &s))
+		load_file(VM_SETTINGS_TMP, &s);
 	memcpy((void *)&g_vm_settings, &s, sizeof(s));
 	vm_stage_apply(&s);
 }

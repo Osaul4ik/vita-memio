@@ -555,6 +555,16 @@ void bench_verify(const BenchResult *res, BenchVerify *out)
 	}
 }
 
+uint32_t bench_passthru(const BenchResult *res)
+{
+	uint32_t n = 0;
+
+	for (int i = 0; i < res->nruns; i++)
+		if (res->runs[i].complete)
+			n += res->runs[i].after.passthru - res->runs[i].before.passthru;
+	return n;
+}
+
 int bench_valid(const BenchResult *res)
 {
 	return !res->failed && !res->cancelled && res->nruns > 0;

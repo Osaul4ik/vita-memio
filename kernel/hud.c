@@ -16,7 +16,9 @@
  * write. (The framebuffer descriptor carries no buffer length, so the real
  * buffer size cannot be checked; the limits below are what can be.)
  */
-#include <psp2kern/kernel/sysclib.h>   /* memcpy/memset                        */
+#include <psp2kern/kernel/sysclib.h>   /* memcpy/memset/memcmp                 */
+#include <psp2kern/kernel/sysmem.h>    /* the panel cache's memory block       */
+#include <psp2kern/kernel/threadmgr.h> /* ksceKernelDelayThread                */
 #include <psp2kern/display.h>
 #include <taihen.h>
 
@@ -32,10 +34,16 @@ static tai_hook_ref_t g_ref;
 static HudText      g_text[2];
 static volatile int g_front = 0;
 
-/* The PSVshell style composes one row at a time here (ordinary cached memory)
- * and copies it out; `g_row_busy` keeps two drawing threads apart. */
+/* The PSVshell style keeps the composed panel in g_cache (ordinary cached
+ * memory, allocated by the worker while the HUD is on), so a frame only copies
+ * it; built again when the text or the framebuffer size changes. Without the
+ * cache it composes one row at a time in g_row. `g_row_busy` keeps the drawing
+ * threads and the worker's cache swap apart. */
 static uint32_t     g_row[HUD_ROW_MAX];
 static volatile int g_row_busy;
+static HudCache     g_cache;
+static SceUID       g_cache_uid = -1;
+static uint32_t     g_gen;
 
 /* ---- the set-framebuffer hook ------------------------------------------- */
 
@@ -83,7 +91,8 @@ static int hook_set_framebuf(int head, int index,
 	uint32_t prev_dacr = hud_dacr_open();
 	if (t->style == VM_HUD_STYLE_PSVSHELL) {
 		if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
-			hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
+			if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache))
+				hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
 			__sync_lock_release(&g_row_busy);
 		}
 	} else {
@@ -113,6 +122,58 @@ int vm_hud_init(void)
 	return VM_OK;
 }
 
+/* Put `uid`/`px`/`words` in as the cache (uid -1: no cache) and free the old
+ * one, with the drawing threads kept out meanwhile. Worker thread only. */
+static void cache_swap(SceUID uid, uint32_t *px, int words)
+{
+	SceUID old;
+
+	for (int i = 0; i < 1000 && __sync_lock_test_and_set(&g_row_busy, 1); i++)
+		ksceKernelDelayThread(100);    /* a frame being drawn: a few us at most */
+	old = g_cache_uid;
+	g_cache_uid = uid;
+	g_cache.px = px;
+	g_cache.words = words;
+	g_cache.w = 0;                     /* nothing composed in it yet */
+	__sync_lock_release(&g_row_busy);
+	if (old >= 0)
+		ksceKernelFreeMemBlock(old);
+}
+
+/* A cache big enough for `t` (at the largest font), or none if the HUD is off
+ * or not in the PSVshell style. If the memory is not there, the panel is just
+ * composed every frame. */
+static void cache_fit(const HudText *t)
+{
+	static int failed_words;           /* the size that could not be had */
+	SceKernelAllocMemBlockKernelOpt opt;
+	SceUID uid;
+	void *base = NULL;
+	int words, size;
+
+	if (t->n <= 0 || t->style != VM_HUD_STYLE_PSVSHELL) {
+		if (g_cache_uid >= 0)
+			cache_swap(-1, NULL, 0);
+		failed_words = 0;
+		return;
+	}
+	words = hud_cache_words(t);
+	if (words <= g_cache.words || words == failed_words)
+		return;
+	size = (words * 4 + 0xFFF) & ~0xFFF;
+	memset(&opt, 0, sizeof(opt));
+	opt.size = sizeof(opt);
+	uid = ksceKernelAllocMemBlock("SceVitaMemioHud", SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW,
+	                              size, &opt);
+	if (uid < 0 || ksceKernelGetMemBlockBase(uid, &base) < 0) {
+		if (uid >= 0)
+			ksceKernelFreeMemBlock(uid);
+		failed_words = words;
+		return;
+	}
+	cache_swap(uid, base, size / 4);
+}
+
 void vm_hud_fini(void)
 {
 	g_text[0].n = g_text[1].n = 0;
@@ -120,6 +181,8 @@ void vm_hud_fini(void)
 		taiHookReleaseForKernel(g_hook, g_ref);
 		g_hook = -1;
 	}
+	if (g_cache_uid >= 0)
+		cache_swap(-1, NULL, 0);
 }
 
 int vm_hud_installed(void)
@@ -131,8 +194,17 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 {
 	int back = g_front ^ 1;
 	HudText *t = &g_text[back];
+	const HudText *cur = &g_text[g_front];
 	if (n < 0) n = 0;
 	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
+	/* The same text as on screen: nothing to do (the cache stays valid). */
+	if (n == cur->n && style == cur->style) {
+		int same = 1;
+		for (int i = 0; i < n && same; i++)
+			same = !strncmp(lines[i], cur->lines[i], VM_HUD_LINE_MAX);
+		if (same)
+			return;
+	}
 	t->maxlen = 0;
 	for (int i = 0; i < n; i++) {
 		int len = 0;
@@ -147,6 +219,8 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 	}
 	t->style = style;
 	t->n = n;
+	t->gen = ++g_gen;
+	cache_fit(t);
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
 }

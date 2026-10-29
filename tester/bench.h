@@ -59,6 +59,7 @@ typedef struct BenchPluginState {
 	int      status;         /* VM_ST_* of the device under test                */
 	uint32_t reads, writes;  /* that device's faster-path transfer counters     */
 	uint32_t errors, mismatches;
+	uint32_t passthru;       /* large transfers left stock: the buffer was busy */
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 	int      verify_ready;   /* ... and its check buffer is allocated           */
@@ -209,6 +210,11 @@ typedef struct BenchVerify {
 } BenchVerify;
 void bench_verify(const BenchResult *res, BenchVerify *out);
 void bench_verify_run(const BenchRun *r, BenchVerify *out);
+
+/* Large transfers that went stock because the device's one staging buffer was
+ * in use, over the completed runs (ON only). Near 0: a second buffer would not
+ * help. */
+uint32_t bench_passthru(const BenchResult *res);
 int bench_valid(const BenchResult *res);           /* ran to the end */
 
 #endif /* VITAMEMIO_TESTER_BENCH_H */

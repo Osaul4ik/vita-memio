@@ -93,12 +93,12 @@ static uint8_t *user_buf(size_t sectors)
 
 static int rd(uint8_t *u, uint32_t sector, uint32_t n)
 {
-	return stage_read(&g_dev[M], fake_io, REF_RD, NULL, sector, u, n);
+	return stage_xfer(&g_dev[M], 0, fake_io, REF_RD, 0, NULL, sector, u, n);
 }
 
 static int wr(const uint8_t *u, uint32_t sector, uint32_t n, tai_hook_ref_t rd_ref)
 {
-	return stage_write(&g_dev[M], fake_io, REF_WR, rd_ref, NULL, sector, (void *)u, n);
+	return stage_xfer(&g_dev[M], 1, fake_io, REF_WR, rd_ref, NULL, sector, (void *)u, n);
 }
 
 static void test_small_goes_stock(void)
@@ -123,7 +123,6 @@ static void test_staged_read(void)
 	CHECK(io_calls == 1 && last_buf == staging);
 	CHECK(memcmp(u, disk + 10 * 512, 100 * 512) == 0);
 	CHECK(g_dev[M].st.reads == 1 && g_dev[M].rd_bytes == 100 * 512);
-	CHECK(g_dev[M].us_total == 2500 && g_dev[M].us_max == 2500);
 	free(u);
 }
 
@@ -135,7 +134,7 @@ static void test_large_read_is_split(void)
 	CHECK(rd(u, 5, 1000) == 0);
 	CHECK(io_calls == 2);                     /* 512 + 488 sectors */
 	CHECK(memcmp(u, disk + 5 * 512, 1000 * 512) == 0);
-	CHECK(g_dev[M].us_total == 5000);
+	CHECK(g_dev[M].st.reads == 1 && g_dev[M].tm.rd_sectors == 1000);
 	free(u);
 }
 
@@ -296,7 +295,7 @@ static void test_shadow_alloc_not_retried(void)
 	CHECK(g_shadow == NULL);
 }
 
-static void test_get_reports_time(void)
+static void test_get_reports_state(void)
 {
 	VmDevState out[VM_DEV_COUNT];
 	uint8_t *u = user_buf(100);
@@ -304,8 +303,8 @@ static void test_get_reports_time(void)
 	reset();
 	CHECK(rd(u, 0, 100) == 0);
 	vm_stage_get(out, 1);
-	CHECK(out[M].status == VM_ST_ACTIVE);
-	CHECK(out[M].time_ms == 2 && out[M].max_ms == 2);     /* 2500 us */
+	CHECK(out[M].status == VM_ST_ACTIVE && out[M].reads == 1);
+	CHECK(out[M].time_ms == 0 && out[M].max_ms == 0);     /* no longer measured */
 	vm_stage_get(out, 0);
 	CHECK(out[M].status == VM_ST_UNAVAIL);
 	free(u);
@@ -368,27 +367,62 @@ static void count_free_bufs(int *n)
 			(*n)++;
 }
 
-static void test_init_all_hooks(void)
+/* Every device back to the boot state: nothing allocated, nothing switched on. */
+static void boot_state(void)
 {
-	int n;
+	static const int port[VM_DEV_COUNT] = { 1, 0, -1 };
 
 	reset();
-	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		memset(&g_dev[i], 0, sizeof(g_dev[i]));
+		g_dev[i].port = port[i];
+		g_dev[i].uid = -1;
+	}
+	for (int i = 0; i < H_COUNT; i++) {
+		g_hook[i] = -1;
+		g_ref[i] = 0;
+	}
+	g_live = 0;
+}
+
+static VmSettings devices_on(int sd2vita, int internal, int memcard)
+{
+	VmSettings s;
+
+	memset(&s, 0, sizeof(s));
+	s.sd2vita = sd2vita;
+	s.internal = internal;
+	s.memcard = memcard;
+	return s;
+}
+
+static void test_init_all_hooks(void)
+{
+	VmSettings s = devices_on(1, 1, 1);
+	int n;
+
+	boot_state();
+	vm_stage_apply(&s);                       /* at boot, before the hooks: */
+	CHECK(fake_alloc_calls == 0);             /* nothing yet (could be safe mode) */
 	CHECK(vm_stage_init() == VM_OK);
 	count_free_bufs(&n);
-	CHECK(n == 3 && fake_hook_calls == 6);
+	CHECK(n == 3 && fake_alloc_calls == 3 && fake_hook_calls == 6);
 	vm_stage_fini();
 	CHECK(fake_hook_releases == 6 && fake_free_calls == 3);
 	count_free_bufs(&n);
 	CHECK(n == 0);
+	vm_stage_apply(&s);                       /* after fini: nothing allocated again */
+	count_free_bufs(&n);
+	CHECK(n == 0 && fake_alloc_calls == 3);
 }
 
 static void test_init_sdif_hook_fails_releases_everything(void)
 {
+	VmSettings s = devices_on(1, 1, 1);
 	int n;
 
-	reset();
-	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	boot_state();
+	vm_stage_apply(&s);
 	fake_hook_fail_at = 2;                    /* the second SDIF hook fails */
 	CHECK(vm_stage_init() == VM_ERR_RESOLVE);
 	count_free_bufs(&n);
@@ -398,15 +432,71 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 
 static void test_init_memcard_hook_fails_only_memcard_stock(void)
 {
-	reset();
-	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	VmSettings s = devices_on(1, 1, 1);
+	VmDevState out[VM_DEV_COUNT];
+
+	boot_state();
+	vm_stage_apply(&s);
 	fake_hook_fail_at = 6;                    /* the memory card's write hook fails */
 	CHECK(vm_stage_init() == VM_OK);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 1);
 	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf != NULL);
 	CHECK(fake_hook_releases == 1);           /* the memory card's read hook */
+	s.memcard = 0;                            /* switching it again allocates nothing */
+	vm_stage_apply(&s);
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 3);
+	vm_stage_get(out, 1);
+	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_fini();
 	CHECK(fake_hook_releases == 5);
+}
+
+/* A buffer only for the devices that are on; one switched on later gets its
+ * buffer then and keeps it; a failed allocation is retried only when the
+ * device is switched off and on again. */
+static void test_buffers_on_demand(void)
+{
+	VmSettings s = devices_on(1, 0, 0);
+	VmDevState out[VM_DEV_COUNT];
+	int n;
+
+	boot_state();
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	count_free_bufs(&n);
+	CHECK(n == 1 && g_dev[VM_DEV_SD2VITA].buf && fake_alloc_calls == 1);
+
+	s.internal = 1;                           /* switched on in Settings */
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_INTERNAL].buf != NULL && fake_alloc_calls == 2);
+	s.internal = 0;                           /* off again: the buffer is kept */
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_INTERNAL].buf != NULL && fake_free_calls == 0);
+	s.internal = 1;
+	vm_stage_apply(&s);
+	CHECK(fake_alloc_calls == 2);
+
+	fake_alloc_fail = 1;                      /* the memory card: no memory left */
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 3);   /* tried once */
+	vm_stage_get(out, 1);
+	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
+	vm_stage_worker_tick();
+	CHECK(g_dev[VM_DEV_MEMCARD].alloc_logged == 1);
+	fake_alloc_fail = 0;
+	s.memcard = 0;
+	vm_stage_apply(&s);
+	s.memcard = 1;
+	vm_stage_apply(&s);                       /* off and on: a fresh try */
+	CHECK(g_dev[VM_DEV_MEMCARD].buf != NULL && fake_alloc_calls == 4);
+	vm_stage_get(out, 1);
+	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_ACTIVE);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 3);
 }
 
 int main(void)
@@ -424,11 +514,12 @@ int main(void)
 	RUN(test_shadow_not_leaked_without_read_ref);
 	RUN(test_busy_and_disabled_go_stock);
 	RUN(test_shadow_alloc_not_retried);
-	RUN(test_get_reports_time);
+	RUN(test_get_reports_state);
 	RUN(test_timing_split);
 	RUN(test_init_all_hooks);
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
+	RUN(test_buffers_on_demand);
 
 	free(staging);
 	printf(vm_failures ? "test_stage: %d FAILED\n" : "test_stage: ok\n", vm_failures);

@@ -11,9 +11,6 @@
 #define VM_SETTINGS_PATH  VM_DATA_DIR "/settings.bin"
 /* A save is written here first and then renamed over VM_SETTINGS_PATH. */
 #define VM_SETTINGS_TMP   VM_DATA_DIR "/settings.tmp"
-/* Where builds before the rename kept them: read once if the new folder has
- * none, then saved to the new place. */
-#define VM_SETTINGS_OLD   "ur0:data/turbostorage/settings.bin"
 
 /* The live settings. Read freely (each field is one aligned word); write only
  * through vm_settings_set(). */

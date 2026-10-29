@@ -61,6 +61,8 @@ typedef struct BenchPluginState {
 	uint32_t errors, mismatches;
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
+	int      verify_ready;   /* ... and its check buffer is allocated           */
+	uint32_t verified;       /* faster transfers the plugin re-read and compared */
 	/* Where the faster path's time goes (vmGetTiming; an older kernel module
 	 * does not have it: timing_ok = 0). Counters only grow and wrap. */
 	int      timing_ok;
@@ -197,6 +199,16 @@ void bench_timing(const BenchResult *res, BenchTiming *out);
 /* Verdicts. */
 int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O error */
 int bench_plugin_ok(const BenchResult *res);       /* the plugin did what its state says */
+
+/* The plugin's own verify mode over the completed runs: transfers it re-read
+ * and compared, and how many of those differed. 0 if verify mode was off. */
+typedef struct BenchVerify {
+	int      on;             /* verify mode was on when the test started       */
+	int      ready;          /* its check buffer was there                     */
+	uint32_t checked, mismatches;
+} BenchVerify;
+void bench_verify(const BenchResult *res, BenchVerify *out);
+void bench_verify_run(const BenchRun *r, BenchVerify *out);
 int bench_valid(const BenchResult *res);           /* ran to the end */
 
 #endif /* VITAMEMIO_TESTER_BENCH_H */

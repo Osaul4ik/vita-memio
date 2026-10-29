@@ -10,7 +10,7 @@
 #include "../include/vitamemio.h"
 
 #define RESULTS_PATH      VM_DATA_DIR "/results.txt"
-#define RESULTS_LINE_MAX  72
+#define RESULTS_LINE_MAX  90
 #define RESULTS_LINES_MAX 700
 
 /* Append `text`; creates the file. 0 on success. */

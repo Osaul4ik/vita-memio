@@ -94,6 +94,29 @@ static void plugin_text(const BenchResult *r, char *out, size_t cap)
 	}
 }
 
+/* The plugin's verify mode in one line; empty when it does not apply. */
+static void verify_text(const BenchResult *r, char *out, size_t cap)
+{
+	BenchVerify v;
+
+	out[0] = 0;
+	if (r->plugin_mode != BPM_ON)
+		return;
+	bench_verify(r, &v);
+	if (!v.on)
+		snprintf(out, cap, "plugin verify: off");
+	else if (!v.ready)
+		snprintf(out, cap, "plugin verify: on, but no check buffer - nothing was checked");
+	else if (v.mismatches)
+		snprintf(out, cap, "plugin verify: FAIL - %u of %u checked transfers differed",
+		         (unsigned)v.mismatches, (unsigned)v.checked);
+	else if (v.checked)
+		snprintf(out, cap, "plugin verify: PASS - %u transfers checked, no mismatch",
+		         (unsigned)v.checked);
+	else
+		snprintf(out, cap, "plugin verify: on, no transfer checked");
+}
+
 /* ---- the file block ---------------------------------------------------------- */
 
 static void metric_table(Out *o, const BenchAgg *a, int latency)
@@ -121,7 +144,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 {
 	Out o = { out, cap, 0 };
 	BenchAgg a;
-	char pl[96], v[16];
+	char pl[96], v[16], vt[128];
 
 	if (!cap)
 		return 0;
@@ -136,6 +159,9 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	put(&o, "plugin during the test: %s\n", pl);
 	if (res->plugin_mode == BPM_ON && res->plugin0.verify)
 		put(&o, "WARNING: the plugin's verify mode is on, so the timings are slower\n");
+	verify_text(res, vt, sizeof(vt));
+	if (vt[0])
+		put(&o, "%s\n", vt);
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
 	    (unsigned)res->profile.file_mib, (unsigned)res->profile.rounds);
@@ -209,6 +235,13 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			put(&o, " (faster-path transfers: %u reads, %u writes)",
 			    (unsigned)(r->after.reads - r->before.reads),
 			    (unsigned)(r->after.writes - r->before.writes));
+		if (res->plugin_mode == BPM_ON && r->complete && r->before.verify) {
+			BenchVerify rv;
+
+			bench_verify_run(r, &rv);
+			put(&o, ", plugin verify %u checked / %u mismatches",
+			    (unsigned)rv.checked, (unsigned)rv.mismatches);
+		}
 		put(&o, "\n");
 		if (r->note[0])
 			put(&o, "    note: %s\n", r->note);
@@ -272,20 +305,21 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 {
 	Lines s = { lines, max, 0 };
 	BenchAgg a;
-	char x[16], y[16];
+	char x[16], y[16], vt[128];
 
 	bench_aggregate(res, &a);
 	line(&s, "device: %s    plugin: %s", bench_device_name(res->device),
 	     bench_plugin_mode_name(res->plugin_mode));
 	line(&s, "status: %s%s%s", verdict(res), res->failed ? " - " : "",
 	     res->failed ? res->fail_reason : "");
+	line(&s, "data check: %s", bench_integrity_ok(res) ? "PASS" : "FAIL");
 	if (checkable(res))
-		line(&s, "data check: %s    plugin as expected: %s",
-		     bench_integrity_ok(res) ? "PASS" : "FAIL", bench_plugin_ok(res) ? "PASS" : "FAIL");
-	else
-		line(&s, "data check: %s", bench_integrity_ok(res) ? "PASS" : "FAIL");
+		line(&s, "plugin as expected: %s", bench_plugin_ok(res) ? "PASS" : "FAIL");
 	if (res->plugin_mode == BPM_ON && res->plugin0.verify)
 		line(&s, "WARNING: verify mode is on, timings are slower");
+	verify_text(res, vt, sizeof(vt));
+	if (vt[0])
+		line(&s, "%s", vt);
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])
 			line(&s, "run %d: %s", i + 1, res->runs[i].note);

@@ -10,7 +10,7 @@
 
 #include "bench.h"
 
-#define TESTER_VERSION  "0.3.0"
+#define TESTER_VERSION  "0.4.0"
 
 typedef struct ReportMeta {
 	const char *timestamp;        /* "2026-10-28 12:30:11"                      */
@@ -28,7 +28,7 @@ void report_fmt_change(char *out, size_t cap, double off, double on);
  * cap). */
 size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, size_t cap);
 
-#define REPORT_LINE_MAX  72
+#define REPORT_LINE_MAX  90
 #define REPORT_LINES_MAX 80
 
 /* Short lines for the screen (at most `max`). Returns the number of lines. */

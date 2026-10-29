@@ -3,7 +3,8 @@
  * vitamemio_tester.vpk together with the plugin).
  *
  * It ONLY tests. It never switches the plugin or changes any of its settings:
- * the user turns the plugin on or off for a device in Settings > vita-memio,
+ * the user turns the plugin on or off for a device in Settings > Devices >
+ * vita-memio (verify mode too),
  * then runs the test here. A test runs the same storage tests several times in
  * the plugin state found at the start (bench.c), checks every byte, appends the
  * result together with that plugin state to ur0:data/vita-memio/results.txt,
@@ -30,8 +31,6 @@
 /* The newlib heap: back buffer (2 MiB), the test's 1 MiB buffer, report text. */
 int _newlib_heap_size_user = 16 * 1024 * 1024;
 
-#define TITLE "vita-memio tester"
-
 _Static_assert(REPORT_LINE_MAX == RESULTS_LINE_MAX, "the viewer shows both kinds of lines");
 
 static const char *const k_roots[] = {
@@ -55,29 +54,20 @@ static char g_view[RESULTS_LINES_MAX][RESULTS_LINE_MAX];
 
 /* ---- small screens ----------------------------------------------------------- */
 
-static void header(const char *title)
-{
-	ui_clear();
-	ui_row_bg(0, UI_SELBG);
-	ui_text(1, 0, UI_ACCENT, TITLE);
-	ui_textf(UI_COLS - 1 - (int)strlen(title), 0, UI_FG, "%s", title);
-}
-
-static void footer(const char *text)
-{
-	ui_text(1, UI_ROWS - 1, UI_DIM, text);
-}
+#define HINT_BACK "\x02 back"
 
 static uint32_t line_color(const char *l)
 {
-	if (strstr(l, "FAIL") || strstr(l, "FAILED") || strstr(l, "NOT as expected"))
+	if (strstr(l, "FAIL") || strstr(l, "NOT as expected"))
 		return UI_BAD;
 	if (strstr(l, "PASS"))
 		return UI_GOOD;
+	if (strstr(l, "WARNING"))
+		return UI_WARN;
 	if (!strncmp(l, "csv", 3))
 		return UI_DIM;
 	if (!strncmp(l, "====", 4) || !strncmp(l, "----", 4))
-		return UI_ACCENT;
+		return UI_EDGE;
 	return UI_FG;
 }
 
@@ -85,17 +75,28 @@ static uint32_t line_color(const char *l)
 static void viewer(const char *title, char (*lines)[RESULTS_LINE_MAX], int n, int from_end,
                    const char *foot)
 {
-	const int rows = UI_ROWS - 3;
+	const int rows = UI_ROWS - 7;                /* panel rows 3..UI_ROWS-3 */
 	int top = from_end && n > rows ? n - rows : 0;
 
 	for (;;) {
+		char pos[48], hints[UI_COLS + 1];
 		unsigned k;
 
-		header(title);
+		snprintf(pos, sizeof(pos), "lines %d-%d of %d", n ? top + 1 : 0,
+		         top + rows < n ? top + rows : n, n);
+		ui_header(title, pos);
+		ui_panel(1, 3, UI_COLS - 2, rows + 2, NULL);
 		for (int i = 0; i < rows && top + i < n; i++)
-			ui_text(1, 2 + i, line_color(lines[top + i]), lines[top + i]);
-		ui_textf(1, UI_ROWS - 1, UI_DIM, "lines %d-%d of %d   up/down, L/R page   %s",
-		         n ? top + 1 : 0, top + rows < n ? top + rows : n, n, foot);
+			ui_text(3, 4 + i, line_color(lines[top + i]), lines[top + i]);
+		if (n > rows) {                             /* a scroll bar on the right */
+			int y0 = UI_TOP + 4 * UI_CH, h = rows * UI_CH;
+			int bh = h * rows / n, by = y0 + (h - bh) * top / (n - rows);
+
+			ui_fill((UI_COLS - 2) * UI_CW, y0, 3, h, UI_EDGE);
+			ui_fill((UI_COLS - 2) * UI_CW, by, 3, bh < 6 ? 6 : bh, UI_ACCENT);
+		}
+		snprintf(hints, sizeof(hints), "\x03 scroll   \x05 \x06 page   " HINT_BACK "   %s", foot);
+		ui_footer(hints);
 		ui_present();
 		k = ui_poll();
 		if (k & UI_BACK)
@@ -107,14 +108,21 @@ static void viewer(const char *title, char (*lines)[RESULTS_LINE_MAX], int n, in
 	}
 }
 
+static void box_lines(const char *title, uint32_t color, const char *l1, const char *l2,
+                      const char *l3)
+{
+	ui_panel(10, 8, UI_COLS - 20, 9, title);
+	ui_text(14, 10, color, l1);
+	if (l2) ui_text(14, 12, UI_FG, l2);
+	if (l3) ui_text(14, 13, UI_FG, l3);
+}
+
 static void message(uint32_t color, const char *l1, const char *l2, const char *l3)
 {
 	for (;;) {
-		header("");
-		ui_text(2, 5, color, l1);
-		if (l2) ui_text(2, 7, UI_FG, l2);
-		if (l3) ui_text(2, 8, UI_FG, l3);
-		footer("press cross or circle");
+		ui_header("tester", "");
+		box_lines(NULL, color, l1, l2, l3);
+		ui_footer("\x01 ok");
 		ui_present();
 		if (ui_poll() & (UI_OK | UI_BACK))
 			return;
@@ -126,16 +134,84 @@ static int confirm(const char *title, const char *l1, const char *l2, const char
 	for (;;) {
 		unsigned k;
 
-		header(title);
-		ui_text(2, 5, UI_WARN, l1);
-		if (l2) ui_text(2, 7, UI_FG, l2);
-		if (l3) ui_text(2, 8, UI_FG, l3);
-		footer("cross: yes    circle: no");
+		ui_header("tester", "");
+		box_lines(title, UI_WARN, l1, l2, l3);
+		ui_footer("\x01 yes   \x02 no");
 		ui_present();
 		k = ui_poll();
 		if (k & UI_OK) return 1;
 		if (k & UI_BACK) return 0;
 	}
+}
+
+/* ---- the plugin, live (read only) ---------------------------------------------------- */
+
+/* What one device is doing, as a short word and its colour. */
+static const char *dev_state(const VmState *st, int dev, uint32_t *color)
+{
+	if (st->disabled != VM_DIS_NONE) { *color = UI_DIM; return "inactive"; }
+	switch (st->dev[dev].status) {
+	case VM_ST_ACTIVE:    *color = UI_GOOD; return "ON";
+	case VM_ST_OFF:       *color = UI_DIM;  return "off";
+	case VM_ST_FALLBACK:  *color = UI_BAD;  return "FELL BACK";
+	case VM_ST_NO_BUFFER: *color = UI_WARN; return "no buffer";
+	default:              *color = UI_DIM;  return "inactive";
+	}
+}
+
+/* One line about the plugin's verify mode. */
+static void verify_line(const VmState *st, char *out, size_t cap, uint32_t *color)
+{
+	if (!st->settings.verify) {
+		*color = UI_DIM;
+		snprintf(out, cap, "verify: off  (Settings > Devices > vita-memio > Verify transfers)");
+	} else if (!st->verify_ready) {
+		*color = UI_WARN;
+		snprintf(out, cap, "verify: ON, but no check buffer yet - nothing is checked");
+	} else {
+		*color = UI_ACCENT;
+		snprintf(out, cap, "verify: ON - every faster transfer is read again and compared (slower)");
+	}
+}
+
+/* The PLUGIN panel: one line per device, then verify mode. 7 rows from `row`. */
+static void plugin_panel(int row, int hl_dev)
+{
+	VmState st;
+	char vl[UI_COLS + 1];
+	uint32_t c;
+
+	ui_panel(1, row, UI_COLS - 2, 7, "PLUGIN");
+	memset(&st, 0, sizeof(st));
+	if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC) {
+		ui_text(4, row + 2, UI_WARN, "The kernel module does not answer: the plugin state is unknown.");
+		ui_text(4, row + 3, UI_DIM, "Tests still run and measure the storage.");
+		return;
+	}
+	ui_text(4, row + 1, UI_DIM, "device");
+	ui_text(16, row + 1, UI_DIM, "state");
+	ui_text(28, row + 1, UI_DIM, "faster read");
+	ui_text(43, row + 1, UI_DIM, "faster write");
+	ui_text(58, row + 1, UI_DIM, "errors");
+	ui_text(67, row + 1, UI_DIM, "verified");
+	ui_text(79, row + 1, UI_DIM, "mismatches");
+	for (int d = 0; d < VM_DEV_COUNT; d++) {
+		const VmDevState *ds = &st.dev[d];
+		int r = row + 2 + d;
+		const char *w = dev_state(&st, d, &c);
+
+		if (d == hl_dev)
+			ui_text(2, r, UI_ACCENT, ">");
+		ui_text(4, r, d == hl_dev ? UI_FG : UI_DIM, bench_device_name(d));
+		ui_text(16, r, c, w);
+		ui_textf(28, r, UI_FG, "%u MiB", (unsigned)ds->read_mib);
+		ui_textf(43, r, UI_FG, "%u MiB", (unsigned)ds->write_mib);
+		ui_textf(58, r, ds->errors ? UI_BAD : UI_FG, "%u", (unsigned)ds->errors);
+		ui_textf(67, r, st.settings.verify ? UI_FG : UI_DIM, "%u", (unsigned)ds->verified);
+		ui_textf(79, r, ds->mismatches ? UI_BAD : UI_FG, "%u", (unsigned)ds->mismatches);
+	}
+	verify_line(&st, vl, sizeof(vl), &c);
+	ui_text(4, row + 6, c, vl);
 }
 
 /* ---- running a test -------------------------------------------------------------- */
@@ -184,20 +260,26 @@ static void on_progress(const BenchProgress *p)
 			overall = 1000;
 	}
 
-	header("running");
-	ui_textf(2, 3, UI_FG, "device: %s    folder: %s", bench_device_name(g_cfg->device), g_cfg->dir);
-	ui_textf(2, 4, UI_FG, "profile: %s (%u MiB file, %u runs)", g_cfg->profile->name,
+	ui_header("tester", "running");
+	ui_panel(1, 3, UI_COLS - 2, 5, "TEST");
+	ui_textf(4, 4, UI_FG, "device  %s", bench_device_name(g_cfg->device));
+	ui_textf(40, 4, UI_FG, "folder  %s", g_cfg->dir);
+	ui_textf(4, 5, UI_FG, "profile %s (%u MiB file, %u runs)", g_cfg->profile->name,
 	         (unsigned)g_cfg->profile->file_mib, (unsigned)g_cfg->profile->rounds);
-	ui_textf(2, 7, UI_ACCENT, "run %d of %d    plugin %s", p->run_index + 1, p->run_total,
-	         bench_plugin_mode_name(p->plugin_mode));
-	ui_textf(2, 9, UI_FG, "%s", phase[p->phase >= 0 && p->phase <= BP_CLEANUP ? p->phase : 0]);
+	ui_textf(4, 6, UI_ACCENT, "run %d of %d", p->run_index + 1, p->run_total);
+	ui_textf(40, 6, UI_FG, "plugin  %s", bench_plugin_mode_name(p->plugin_mode));
+
+	ui_panel(1, 9, UI_COLS - 2, 8, "PROGRESS");
+	ui_textf(4, 10, UI_FG, "%s", phase[p->phase >= 0 && p->phase <= BP_CLEANUP ? p->phase : 0]);
 	if (p->phase == BP_METRIC && p->metric >= 0)
-		ui_textf(2, 10, UI_FG, "%s", bench_metric_name[p->metric]);
-	ui_bar(2, 12, 76, p->permille, UI_ACCENT);
-	ui_text(2, 14, UI_DIM, "everything:");
-	ui_bar(2, 15, 76, overall, UI_GOOD);
-	ui_text(2, 18, UI_DIM, "Hold circle to stop. The test file is removed, also when you stop.");
-	ui_text(2, 19, UI_DIM, "The plugin settings are not touched.");
+		ui_textf(40, 10, UI_ACCENT, "%s", bench_metric_name[p->metric]);
+	ui_bar(4, 12, UI_COLS - 8, p->permille, UI_ACCENT);
+	ui_text(4, 14, UI_DIM, "everything");
+	ui_bar(4, 15, UI_COLS - 8, overall, UI_GOOD);
+
+	plugin_panel(18, g_cfg->device);
+	ui_footer("\x02 hold to stop   the test file is removed also when stopped;"
+	          " plugin settings are not touched");
 	ui_present();
 }
 
@@ -285,38 +367,6 @@ static void clear_results(void)
 		message(UI_BAD, "Could not delete results.txt.", NULL, NULL);
 }
 
-/* What the plugin does for the selected device right now (read only). */
-static void plugin_line(char *out, size_t cap)
-{
-	VmState st;
-	BenchPluginState ps;
-	const char *dev = bench_device_name(g_dev);
-
-	memset(&st, 0, sizeof(st));
-	if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC) {
-		snprintf(out, cap, "plugin: the kernel module does not answer (state unknown)");
-		return;
-	}
-	memset(&ps, 0, sizeof(ps));
-	ps.available = 1;
-	ps.disabled = st.disabled;
-	ps.status = st.dev[g_dev].status;
-	switch (bench_plugin_mode(&ps)) {
-	case BPM_ON:
-		snprintf(out, cap, "plugin for %s: ON%s", dev, st.settings.verify ? " (verify mode is on)" : "");
-		break;
-	case BPM_OFF:
-		snprintf(out, cap, "plugin for %s: OFF", dev);
-		break;
-	case BPM_INACTIVE:
-		snprintf(out, cap, "plugin: inactive (safe mode, unknown firmware or no hooks)");
-		break;
-	default:
-		snprintf(out, cap, "plugin for %s: fell back to stock or has no buffer", dev);
-		break;
-	}
-}
-
 enum { M_DEVICE, M_FOLDER, M_PROFILE, M_RUN, M_VIEW, M_CLEAR, M_EXIT, M_COUNT };
 
 static void menu(void)
@@ -324,39 +374,42 @@ static void menu(void)
 	int sel = M_RUN;
 
 	for (;;) {
-		char pl[UI_COLS + 1], item[M_COUNT][UI_COLS + 1];
+		char item[M_COUNT][UI_COLS + 1];
 		long sz = results_size(RESULTS_PATH);
 		const BenchProfile *pr = k_profiles[g_profile];
 		unsigned k;
 
-		plugin_line(pl, sizeof(pl));
-		snprintf(item[M_DEVICE], sizeof(item[0]), "Device         < %s >", bench_device_name(g_dev));
-		snprintf(item[M_FOLDER], sizeof(item[0]), "Test folder    < %s >", k_roots[g_root]);
-		snprintf(item[M_PROFILE], sizeof(item[0]), "Profile        < %s: %u MiB file, %u runs >",
+		snprintf(item[M_DEVICE], sizeof(item[0]), "Device          %s", bench_device_name(g_dev));
+		snprintf(item[M_FOLDER], sizeof(item[0]), "Test folder     %s", k_roots[g_root]);
+		snprintf(item[M_PROFILE], sizeof(item[0]), "Profile         %s: %u MiB file, %u runs",
 		         pr->name, (unsigned)pr->file_mib, (unsigned)pr->rounds);
-		snprintf(item[M_RUN], sizeof(item[0]), "Run test (plugin as set in Settings)");
+		snprintf(item[M_RUN], sizeof(item[0]), "Run test        plugin as set in Settings");
 		if (sz < 0)
-			snprintf(item[M_VIEW], sizeof(item[0]), "View saved results (none yet)");
+			snprintf(item[M_VIEW], sizeof(item[0]), "Saved results   none yet");
 		else
-			snprintf(item[M_VIEW], sizeof(item[0]), "View saved results (%ld KiB)", (sz + 1023) / 1024);
-		snprintf(item[M_CLEAR], sizeof(item[0]), "Clear saved results");
+			snprintf(item[M_VIEW], sizeof(item[0]), "Saved results   view (%ld KiB)", (sz + 1023) / 1024);
+		snprintf(item[M_CLEAR], sizeof(item[0]), "Clear results");
 		snprintf(item[M_EXIT], sizeof(item[0]), "Exit");
 
-		header("v" TESTER_VERSION);
-		ui_text(2, 3, UI_DIM, pl);
+		ui_header("tester", "v" TESTER_VERSION);
+		plugin_panel(3, g_dev);
+		ui_panel(1, 11, UI_COLS - 2, 8, "TEST");
 		for (int i = 0; i < M_COUNT; i++) {
-			int row = 6 + i * 2;
+			int row = 12 + i;
+			int choice = i == M_DEVICE || i == M_FOLDER || i == M_PROFILE;
 
 			if (i == sel)
-				ui_row_bg(row, UI_SELBG);
-			ui_text(2, row, i == sel ? UI_FG : UI_DIM, item[i]);
+				ui_select(2, row, UI_COLS - 4);
+			ui_text(5, row, i == sel ? UI_FG : UI_DIM, item[i]);
+			if (choice && i == sel)
+				ui_text(UI_COLS - 8, row, UI_ACCENT, "\x04");
 		}
-		ui_text(2, 22, UI_DIM, "Pick the device that the folder is on (SD2Vita and the memory card");
-		ui_text(2, 23, UI_DIM, "are usually ux0:). If they do not match, the test says so.");
-		ui_text(2, 25, UI_DIM, "The test never changes the plugin. Turn it on or off for the device");
-		ui_text(2, 26, UI_DIM, "in Settings > vita-memio, then run the test again to compare.");
-		ui_text(2, 27, UI_DIM, "Every run is appended to ur0:data/vita-memio/results.txt.");
-		footer("up/down: choose   left/right: change   cross: select");
+		ui_text(3, 21, UI_DIM, "Pick the device the folder is on (SD2Vita and the memory card are usually ux0:).");
+		ui_text(3, 22, UI_DIM, "If they do not match, the test says so.");
+		ui_text(3, 24, UI_DIM, "The tester never changes the plugin. Switch it, and verify mode, in");
+		ui_text(3, 25, UI_DIM, "Settings > Devices > vita-memio, then run the test again to compare.");
+		ui_text(3, 26, UI_DIM, "Every run is appended to ur0:data/vita-memio/results.txt.");
+		ui_footer("\x03 choose   \x04 change   \x01 select");
 		ui_present();
 
 		k = ui_poll();

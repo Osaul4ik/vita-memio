@@ -104,6 +104,8 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->mismatches = st.dev[v->dev].mismatches;
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
+	out->verify_ready = st.verify_ready;
+	out->verified = st.dev[v->dev].verified;
 	{
 		/* Optional: a kernel module older than this tester has no vmGetTiming
 		 * (the weak import then just returns), so check the result and magic. */

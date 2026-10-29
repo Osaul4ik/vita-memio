@@ -60,6 +60,7 @@ static const char X_GROUP[] =
 	ROW_TOGGLE("sd2vita")
 	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
+	ROW_TOGGLE("verify")
 	ROW_LIST("hud")
 		ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
 	"</list>"
@@ -141,17 +142,17 @@ static const vm_u16 *device_hint(int dev, int help_id)
 	return o;
 }
 
-/* Row title / help ids per setting key; -1 = not on the page (verify is a
- * diagnostic with no switch; the reserved slot is unused). */
+/* Row title / help ids per setting key; -1 = not on the page (the reserved
+ * slot is unused). */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
-	[VM_KEY_VERIFY] = -1, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
+	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
 	[VM_KEY_HUD_POS] = VM_I18N_ROW_HUD_POS, [VM_KEY_RESERVED5] = -1,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
-	[VM_KEY_VERIFY] = -1, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
+	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
 	[VM_KEY_HUD_POS] = VM_I18N_HINT_HUD_POS, [VM_KEY_RESERVED5] = -1,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD,
 };

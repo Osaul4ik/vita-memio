@@ -55,7 +55,7 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
    ur0:tai/vitamemio.suprx
    ```
 3. Reboot. The switches are in **Settings > Devices > vita-memio**.
-4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings).
+4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers** (Settings > Devices > vita-memio): with it on, every faster transfer is read again the standard way and compared; it is slower and meant for checking.
 
 Settings, logs and test results live in `ur0:data/vita-memio/`. The log holds one line per start and otherwise only problems.
 
@@ -68,5 +68,7 @@ Settings, logs and test results live in `ur0:data/vita-memio/`. The log holds on
 All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage), including the original implementation, technical approach, testing and documentation.
 
 The original project builds on [taiHEN](https://github.com/henkaku/taiHEN), [VitaSDK](https://vitasdk.org), and [vitacompanion](https://github.com/devnoname120/vitacompanion). The original author also credits [bythos14](https://github.com/bythos14) for the inspiration from IOStaging.
+
+The tester's font is a subset of [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov, under the SIL Open Font License 1.1 (`tester/vita/OFL-Terminus.txt`, also inside the VPK). Its look follows overlay menus such as [PSVshell](https://github.com/Electry/PSVshell); no PSVshell code is used.
 
 Please consult the upstream repository for the original project's license and full license terms: [MIT License](https://github.com/juanjsebgarcia/vita-turbo-storage/blob/main/LICENSE).

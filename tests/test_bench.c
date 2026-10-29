@@ -33,7 +33,10 @@ typedef struct Fake {
 	int      initial_on;
 	int      status_override;    /* -1: derive from `on`                       */
 	int      disabled, unavailable, verify;
-	uint32_t reads, writes, errors, mismatches;
+	int      verify_ready;       /* the plugin's check buffer is there         */
+	int      verify_dead;        /* verify on and ready, but nothing is checked */
+	int      mismatch_at_read;   /* the Nth faster read fails the plugin check */
+	uint32_t reads, writes, errors, mismatches, verified;
 	int      no_timing;          /* kernel module without vmGetTiming          */
 	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
 
@@ -101,6 +104,12 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
 	if (counts(f, n)) {
 		f->reads++;
+		if (f->verify && f->verify_ready && !f->verify_dead)
+			f->verified++;
+		if (f->mismatch_at_read && f->reads == (uint32_t)f->mismatch_at_read) {
+			f->mismatches++;
+			f->status_override = VM_ST_FALLBACK;   /* the plugin goes back to stock */
+		}
 		f->rs += n / 512;                          /* 20 us io + 4 us copy per block */
 		f->ri += (n / 512) * 20;
 		f->rc += (n / 512) * 4;
@@ -127,6 +136,8 @@ static int f_pwrite(void *c, int h, const void *buf, uint32_t n, uint64_t off)
 	f->now += 400 + (uint64_t)(n * (f->on ? 0.15 : 0.17));
 	if (counts(f, n)) {
 		f->writes++;
+		if (f->verify && f->verify_ready && !f->verify_dead)
+			f->verified++;
 		f->ws += n / 512;                          /* 30 us io + 2 us copy per block */
 		f->wi += (n / 512) * 30;
 		f->wc += (n / 512) * 2;
@@ -171,6 +182,8 @@ static int f_get(void *c, BenchPluginState *o)
 	o->mismatches = f->mismatches;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
+	o->verify_ready = f->verify_ready;
+	o->verified = f->verified;
 	if (!f->no_timing) {
 		o->timing_ok = 1;
 		o->rd_sectors = f->rs; o->rd_io_us = f->ri; o->rd_copy_us = f->rc;
@@ -336,6 +349,73 @@ static void test_plugin_counters(void)
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	CHECK(!bench_plugin_ok(r) && strstr(r->runs[0].note, "although the plugin is OFF"));
+	CHECK_UNTOUCHED(f);
+	free(text);
+	free(r);
+	free(f.data);
+}
+
+static void test_plugin_verify(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchEnv e;
+	BenchVerify v;
+	char *text = malloc(40000);
+	char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	int n, found;
+
+	/* on and working: every faster transfer checked, PASS */
+	fake_init(&f, 1);
+	f.verify = f.verify_ready = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_plugin_ok(r));
+	bench_verify(r, &v);
+	CHECK(v.on && v.ready && v.checked > 0 && v.mismatches == 0);
+	CHECK(v.checked == (r->runs[0].after.reads - r->runs[0].before.reads) +
+	                   (r->runs[0].after.writes - r->runs[0].before.writes));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin verify: PASS - "));
+	CHECK(strstr(text, ", plugin verify ") && strstr(text, " / 0 mismatches"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	found = 0;
+	for (int i = 0; i < n; i++)
+		found |= !strncmp(lines[i], "plugin verify: PASS", 19);
+	CHECK(found);
+
+	/* a mismatch: the run fails with its own note, the report says FAIL */
+	fake_init(&f, 1);
+	f.verify = f.verify_ready = 1;
+	f.mismatch_at_read = 2;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && !bench_plugin_ok(r));
+	CHECK(strstr(r->runs[0].note, "plugin verify: 1 mismatch(es)"));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin verify: FAIL - 1 of "));
+
+	/* on, but the check buffer is not there: said so, not a failure */
+	fake_init(&f, 1);
+	f.verify = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_plugin_ok(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin verify: on, but no check buffer"));
+
+	/* on and ready, but nothing got checked: a failure */
+	fake_init(&f, 1);
+	f.verify = f.verify_ready = f.verify_dead = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && !bench_plugin_ok(r));
+	CHECK(strstr(r->runs[0].note, "checked no transfer"));
+
+	/* off: a plain line, the counters are not read into anything */
+	fake_init(&f, 1);
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_plugin_ok(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin verify: off"));
 	CHECK_UNTOUCHED(f);
 	free(text);
 	free(r);
@@ -661,9 +741,11 @@ static void test_screen_lines(void)
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	CHECK(n > 25 && n <= REPORT_LINES_MAX);
 	CHECK(strcmp(lines[0], "device: Internal    plugin: ON") == 0);
-	CHECK(strstr(lines[2], "data check: PASS"));
-	CHECK(strcmp(lines[3], "read  us/block: io 20.0  copy 4.0") == 0);
-	CHECK(strcmp(lines[4], "write us/block: io 30.0  copy 2.0") == 0);
+	CHECK(strcmp(lines[2], "data check: PASS") == 0);
+	CHECK(strcmp(lines[3], "plugin as expected: PASS") == 0);
+	CHECK(strcmp(lines[4], "plugin verify: off") == 0);
+	CHECK(strcmp(lines[5], "read  us/block: io 20.0  copy 4.0") == 0);
+	CHECK(strcmp(lines[6], "write us/block: io 30.0  copy 2.0") == 0);
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
 	for (int max = 0; max < 6; max++) {              /* a short array is never overrun */
@@ -726,7 +808,7 @@ static void test_results_file(void)
 	strcpy(big + 200, "\r\nplain\n\x01\xC3\xA9z\n");
 	CHECK(results_append(path, big) == 0);
 	n = results_load(path, L, RESULTS_LINES_MAX);
-	CHECK(n == 5);                                   /* 71 + 71 + 58, "plain", "???z" */
+	CHECK(n == 5);                                   /* 89 + 89 + 22, "plain", "???z" */
 	CHECK(strlen(L[0]) == RESULTS_LINE_MAX - 1 && strlen(L[1]) == RESULTS_LINE_MAX - 1);
 	CHECK(strlen(L[2]) == 200 - 2 * (RESULTS_LINE_MAX - 1));
 	CHECK(strcmp(L[3], "plain") == 0 && strcmp(L[4], "???z") == 0);
@@ -810,6 +892,7 @@ int main(void)
 	RUN(test_write_corruption_is_caught);
 	RUN(test_read_corruption_is_caught);
 	RUN(test_plugin_counters);
+	RUN(test_plugin_verify);
 	RUN(test_state_changed_mid_test);
 	RUN(test_other_plugin_states_still_run);
 	RUN(test_plugin_mode_names);

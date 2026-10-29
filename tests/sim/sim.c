@@ -11,6 +11,8 @@
  *   SIM_EXIT_FRAME=n                   exit after n frames
  *   SIM_SD2VITA=0|1                    the plugin's SD2Vita setting (default 1)
  *   SIM_NOBUF=1                        a device that is on reports "no buffer"
+ *   SIM_VERIFY=0|1                     the plugin's verify mode (default 1)
+ *   SIM_MISMATCH=n                     the nth checked transfer differs (falls back)
  *
  * This is a test aid for the screens and the control flow, not a Vita emulator: it
  * says nothing about real speeds or about the console's drivers.
@@ -58,14 +60,24 @@ int sceIoDclose(SceUID fd) { return close(fd); }
 static VmSettings g_set = { 1, 0, 1, 0, 1, 0, 0 };
 static VmDevState g_dev[VM_DEV_COUNT];
 static int g_sim_fail_nobuf;
+static int g_sim_mismatch_at, g_sim_fallback[VM_DEV_COUNT];
 
 static void count(int write, SceSize n)
 {
 	for (int d = 0; d < VM_DEV_COUNT; d++) {
 		int on = d == VM_DEV_SD2VITA ? g_set.sd2vita : d == VM_DEV_INTERNAL ? g_set.internal : g_set.memcard;
 
-		if (on && n >= 32768) {
+		if (on && n >= 32768 && !g_sim_fallback[d]) {
 			if (write) g_dev[d].writes++; else g_dev[d].reads++;
+			g_dev[d].read_mib = g_dev[d].reads / 8;
+			g_dev[d].write_mib = g_dev[d].writes / 8;
+			if (g_set.verify) {
+				g_dev[d].verified++;
+				if (g_sim_mismatch_at && g_dev[d].verified == (uint32_t)g_sim_mismatch_at) {
+					g_dev[d].mismatches++;
+					g_sim_fallback[d] = 1;
+				}
+			}
 		}
 	}
 }
@@ -80,11 +92,13 @@ int vmGetState(VmState *o)
 	o->magic = VM_STATE_MAGIC;
 	o->settings = g_set;
 	o->fingerprint = 0xC0FFEE01;
+	o->verify_ready = g_set.verify;
 	for (int d = 0; d < VM_DEV_COUNT; d++) {
 		int on = d == VM_DEV_SD2VITA ? g_set.sd2vita : d == VM_DEV_INTERNAL ? g_set.internal : g_set.memcard;
 
 		o->dev[d] = g_dev[d];
-		o->dev[d].status = on ? (g_sim_fail_nobuf ? VM_ST_NO_BUFFER : VM_ST_ACTIVE) : VM_ST_OFF;
+		o->dev[d].status = !on ? VM_ST_OFF : g_sim_fallback[d] ? VM_ST_FALLBACK :
+		                   g_sim_fail_nobuf ? VM_ST_NO_BUFFER : VM_ST_ACTIVE;
 	}
 	return VM_OK;
 }
@@ -248,5 +262,7 @@ int main(int argc, char **argv)
 	if ((s = getenv("SIM_SNAP_MAX"))) g_snap_max = atoi(s);
 	g_sim_fail_nobuf = getenv("SIM_NOBUF") != NULL;
 	if ((s = getenv("SIM_SD2VITA"))) g_set.sd2vita = atoi(s);   /* "as set in Settings" */
+	if ((s = getenv("SIM_VERIFY"))) g_set.verify = atoi(s);
+	if ((s = getenv("SIM_MISMATCH"))) g_sim_mismatch_at = atoi(s);
 	return tester_main();
 }

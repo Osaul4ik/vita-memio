@@ -160,7 +160,9 @@ if(VM_BUILD_TESTER)
   vita_create_self(vitamemio_tester.self vitamemio_tester UNSAFE)
   set(VITA_ELF_CREATE_FLAGS "${VM_SAVED_ELF_CREATE_FLAGS}")
 
-  set(TESTER_VPK_FILES "")
+  # The tester's bitmap font is a subset of Terminus Font (SIL OFL 1.1): its
+  # license travels with it.
+  set(TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/tester/vita/OFL-Terminus.txt OFL-Terminus.txt)
   if(EXISTS "${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png")
     list(APPEND TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png sce_sys/icon0.png)
   endif()

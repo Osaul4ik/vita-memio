@@ -43,9 +43,11 @@ make log    VITA_IP=<vita>                 # fetch the kernel and user logs
 make results VITA_IP=<vita>                # fetch the tester's results.txt
 ```
 
-The tester app (`vitamemio_tester.vpk`) measures reads and writes and reports
-each storage's counters, including `mismatches`. Any mismatch is a bug: please
-report it.
+**Test with verify mode on.** Turn on *Verify transfers* in *Settings → Devices →
+vita-memio*: every faster transfer is then read again the standard way and
+compared. The tester app (`vitamemio_tester.vpk`) shows the `verified` and
+`mismatches` counters live and adds a `plugin verify: PASS/FAIL` line to each
+result. Any mismatch is a bug: please report it.
 
 A simple end-to-end check: download a large file from the Vita over FTP with
 vita-memio off, again with it on, and compare the two copies.

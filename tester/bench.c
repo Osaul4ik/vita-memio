@@ -284,21 +284,32 @@ static void check_plugin(const BenchResult *res, BenchRun *r)
 	const int mode = res->plugin_mode;
 	int grew = a->reads > b->reads && a->writes > b->writes;
 	int moved = a->reads != b->reads || a->writes != b->writes;
-	int clean = a->errors == b->errors && a->mismatches == b->mismatches;
 
 	r->plugin_ok = 1;
 	if (mode != BPM_OFF && mode != BPM_ON)
 		return;
-	if (bench_plugin_mode(b) != mode || bench_plugin_mode(a) != mode) {
+	/* Checked first: a mismatch or an error also switches the device to stock,
+	 * which would otherwise only show as "the state changed". */
+	if (mode == BPM_ON && a->mismatches != b->mismatches) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note),
+		         "plugin verify: %u mismatch(es), the device went back to stock",
+		         (unsigned)(a->mismatches - b->mismatches));
+	} else if (mode == BPM_ON && a->errors != b->errors) {
+		r->plugin_ok = 0;
+		snprintf(r->note, sizeof(r->note),
+		         "the faster path had %u error(s), the device went back to stock",
+		         (unsigned)(a->errors - b->errors));
+	} else if (bench_plugin_mode(b) != mode || bench_plugin_mode(a) != mode) {
 		r->plugin_ok = 0;
 		snprintf(r->note, sizeof(r->note), "the plugin state changed during the test");
 	} else if (mode == BPM_ON && !grew) {
 		r->plugin_ok = 0;
 		snprintf(r->note, sizeof(r->note),
 		         "no transfer took the faster path (wrong device or folder?)");
-	} else if (mode == BPM_ON && !clean) {
+	} else if (mode == BPM_ON && b->verify && b->verify_ready && a->verified == b->verified) {
 		r->plugin_ok = 0;
-		snprintf(r->note, sizeof(r->note), "the plugin counted errors or mismatches");
+		snprintf(r->note, sizeof(r->note), "plugin verify is on but checked no transfer");
 	} else if (mode == BPM_OFF && moved) {
 		r->plugin_ok = 0;
 		snprintf(r->note, sizeof(r->note), "faster path used although the plugin is OFF");
@@ -517,6 +528,31 @@ int bench_plugin_ok(const BenchResult *res)
 		if (res->runs[i].complete && !res->runs[i].plugin_ok)
 			return 0;
 	return 1;
+}
+
+void bench_verify_run(const BenchRun *r, BenchVerify *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->on = r->before.verify;
+	out->ready = r->before.verify_ready;
+	if (!out->on || !r->complete)
+		return;
+	out->checked = r->after.verified - r->before.verified;
+	out->mismatches = r->after.mismatches - r->before.mismatches;
+}
+
+void bench_verify(const BenchResult *res, BenchVerify *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->on = res->plugin0.verify;
+	out->ready = res->plugin0.verify_ready;
+	for (int i = 0; i < res->nruns; i++) {
+		BenchVerify v;
+
+		bench_verify_run(&res->runs[i], &v);
+		out->checked += v.checked;
+		out->mismatches += v.mismatches;
+	}
 }
 
 int bench_valid(const BenchResult *res)

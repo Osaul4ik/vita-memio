@@ -84,6 +84,33 @@ s("VM_I18N_ROW_MEMCARD", en="Faster Vita memory card", engb="Faster Vita memory 
   ptbr="Cartão de memória Vita mais rápido", ru="Ускорить карту памяти Vita", ko="Vita 메모리 카드 가속",
   zht="加速 Vita 記憶卡", zhs="加速 Vita 存储卡", fi="Nopeampi Vita-muistikortti", sv="Snabbare Vita-minneskort",
   da="Hurtigere Vita-hukommelseskort", no="Raskere Vita-minnekort", pl="Szybsza karta pamięci Vita", tr="Daha hızlı Vita hafıza kartı")
+s("VM_I18N_ROW_VERIFY", en="Verify transfers", engb="Verify transfers", ja="転送を検証",
+  fr="Vérifier les transferts", es="Verificar transferencias", de="Übertragungen prüfen",
+  it="Verifica trasferimenti", nl="Overdrachten controleren", pt="Verificar transferências",
+  ptbr="Verificar transferências", ru="Проверять передачи", ko="전송 검증", zht="驗證傳輸",
+  zhs="验证传输", fi="Tarkista siirrot", sv="Kontrollera överföringar", da="Kontrollér overførsler",
+  no="Kontroller overføringer", pl="Sprawdzaj transfery", tr="Aktarımları doğrula")
+s("VM_I18N_HINT_VERIFY",
+  en="For testing: every faster transfer is read again the standard way and compared. Storage is slower while this is on. On any difference the device switches back to standard speed. The tester app shows the results.",
+  engb="For testing: every faster transfer is read again the standard way and compared. Storage is slower while this is on. On any difference the device switches back to standard speed. The tester app shows the results.",
+  ja="テスト用：高速化された転送をすべて標準の方法で読み直して比較します。オンの間はストレージが遅くなります。違いがあるとそのデバイスは標準速度に戻ります。結果はテスターアプリに表示されます。",
+  fr="Pour les tests : chaque transfert accéléré est relu de la manière standard et comparé. Le stockage est plus lent tant que c'est activé. À la moindre différence, l'appareil revient à la vitesse standard. L'application de test affiche les résultats.",
+  es="Para pruebas: cada transferencia acelerada se vuelve a leer de la forma estándar y se compara. El almacenamiento va más lento mientras está activado. Ante cualquier diferencia, el dispositivo vuelve a la velocidad estándar. La aplicación de prueba muestra los resultados.",
+  de="Zum Testen: Jede beschleunigte Übertragung wird auf die normale Weise erneut gelesen und verglichen. Solange dies an ist, ist der Speicher langsamer. Bei einer Abweichung kehrt das Gerät zur normalen Geschwindigkeit zurück. Die Tester-App zeigt die Ergebnisse.",
+  it="Per i test: ogni trasferimento accelerato viene riletto nel modo standard e confrontato. Mentre è attivo la memoria è più lenta. A qualsiasi differenza il dispositivo torna alla velocità standard. L'app di test mostra i risultati.",
+  nl="Voor tests: elke versnelde overdracht wordt opnieuw op de standaardmanier gelezen en vergeleken. Zolang dit aan staat is de opslag trager. Bij een verschil schakelt het apparaat terug naar standaardsnelheid. De test-app toont de resultaten.",
+  pt="Para testes: cada transferência acelerada é lida de novo da forma padrão e comparada. O armazenamento fica mais lento enquanto estiver ligado. Perante qualquer diferença, o dispositivo volta à velocidade padrão. A aplicação de teste mostra os resultados.",
+  ptbr="Para testes: cada transferência acelerada é lida de novo do jeito padrão e comparada. O armazenamento fica mais lento enquanto estiver ligado. Diante de qualquer diferença, o dispositivo volta à velocidade padrão. O app de teste mostra os resultados.",
+  ru="Для тестирования: каждая ускоренная передача повторно читается обычным способом и сравнивается. Пока это включено, память работает медленнее. При любом расхождении устройство возвращается к обычной скорости. Результаты показывает приложение-тестер.",
+  ko="테스트용: 가속된 모든 전송을 표준 방식으로 다시 읽어 비교합니다. 켜져 있는 동안 저장소가 느려집니다. 차이가 있으면 해당 장치는 표준 속도로 돌아갑니다. 결과는 테스터 앱에 표시됩니다.",
+  zht="測試用：每次加速的傳輸都會以標準方式重新讀取並比對。開啟時儲存空間會變慢。只要有差異，該裝置就會恢復標準速度。結果會顯示在測試程式中。",
+  zhs="测试用：每次加速的传输都会以标准方式重新读取并比对。开启时存储会变慢。只要有差异，该设备就会恢复标准速度。结果会显示在测试程序中。",
+  fi="Testaukseen: jokainen nopeutettu siirto luetaan uudelleen tavallisella tavalla ja verrataan. Tallennustila on hitaampi, kun tämä on päällä. Jos eroja löytyy, laite palaa tavalliseen nopeuteen. Testisovellus näyttää tulokset.",
+  sv="För test: varje snabbare överföring läses om på det vanliga sättet och jämförs. Lagringen är långsammare medan detta är på. Vid minsta skillnad går enheten tillbaka till normal hastighet. Testappen visar resultaten.",
+  da="Til test: hver hurtigere overførsel læses igen på den normale måde og sammenlignes. Lageret er langsommere, mens dette er slået til. Ved enhver forskel skifter enheden tilbage til normal hastighed. Testappen viser resultaterne.",
+  no="For testing: hver raskere overføring leses på nytt på vanlig måte og sammenlignes. Lagringen er tregere mens dette er på. Ved enhver forskjell går enheten tilbake til vanlig hastighet. Testappen viser resultatene.",
+  pl="Do testów: każdy przyspieszony transfer jest odczytywany ponownie w standardowy sposób i porównywany. Gdy to jest włączone, pamięć działa wolniej. Przy każdej różnicy urządzenie wraca do standardowej prędkości. Wyniki pokazuje aplikacja testowa.",
+  tr="Test için: hızlandırılmış her aktarım standart yolla yeniden okunur ve karşılaştırılır. Açıkken depolama daha yavaştır. Herhangi bir farkta cihaz standart hıza döner. Sonuçları test uygulaması gösterir.")
 s("VM_I18N_HINT_MEMCARD",
   en="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
@@ -233,7 +260,7 @@ s("VM_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb=
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_HUD_POS', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_HUD_POS', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ITEM_POS_TL', 'VM_I18N_ITEM_POS_TR', 'VM_I18N_ITEM_POS_BL', 'VM_I18N_ITEM_POS_BR', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_HUD_POS', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_HUD_POS', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ITEM_POS_TL', 'VM_I18N_ITEM_POS_TR', 'VM_I18N_ITEM_POS_BL', 'VM_I18N_ITEM_POS_BR', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

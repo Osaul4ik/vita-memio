@@ -12,7 +12,7 @@
  *   - run the 1 Hz worker: saves settings, allocates the verify buffer on
  *     demand, feeds the HUD (hud.c, installed only once the HUD is first
  *     switched on), logs problems, follows the logging switch, and clears the
- *     boot guard once the home screen (SceShell) is up;
+ *     boot guard once the home screen (SceShell) has been up for 30 s;
  *   - publish the user-callable "SceVitaMemio" syscall library (see
  *     include/vitamemio_kernel_api.h and vitamemio_kernel.yml).
  *
@@ -38,11 +38,15 @@
 #include "hud_i18n.h"
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
-/* The boot counts as finished once SceShell (the home screen) has been loaded
- * for this many worker ticks (seconds). */
-#define VM_GUARD_SHELL_TICKS  2
+/* The start counts as good once the home screen (SceShell) has been up for
+ * this many worker ticks (seconds), not as soon as it appears: a setting that
+ * makes the console restart shortly after the home screen (the GPU-mapping
+ * watch once did, about 10 s in) must also end in safe mode, not in a loop.
+ * The price: restarting by hand within this time after the home screen also
+ * leads to safe mode once (Reset safe mode ends it). */
+#define VM_GUARD_SHELL_TICKS  30
 /* Only if SceShell cannot be looked up at all: clear the guard after this long. */
-#define VM_GUARD_FALLBACK_SECS  60
+#define VM_GUARD_FALLBACK_SECS  120
 
 /* Storage driver (SceSdif) module fingerprints of the firmwares this build
  * supports. Its code is identical across all of them; anything else stays
@@ -464,8 +468,8 @@ int module_start(SceSize argc, const void *args)
 	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_VERSION_STR, (unsigned)g_fingerprint);
 
 	/* Crash-loop guard: the file holds '1' from here until the home screen
-	 * (SceShell) is up, then '0'. Finding '1' at start means the last start
-	 * never got there, so this boot installs nothing; Settings > Advanced >
+	 * (SceShell) has been up for VM_GUARD_SHELL_TICKS, then '0'. Finding '1'
+	 * at start means the last start never got that far, so this boot installs nothing; Settings > Advanced >
 	 * Reset safe mode (vmResetSafeMode) clears it. It is only ever overwritten,
 	 * never deleted (a delete can be lost if the console is reset before the
 	 * storage flushes). */

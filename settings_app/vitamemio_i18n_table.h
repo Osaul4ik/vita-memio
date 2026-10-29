@@ -639,48 +639,48 @@
 	"Güvenli modu sıfırla",   /* tr */
 },
 [VM_I18N_HINT_SAFE_ON] = {
-	"セーフモード中：前回の起動がホーム画面まで到達しなかったため、vita-memio は起動していません。設定は変更できます。原因の項目をオフにしてから解除し、本体を再起動してください。",   /* ja */
-	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* en */
-	"Le mode sans échec est ACTIVÉ : vita-memio n'a pas démarré, car le dernier démarrage n'a pas atteint l'écran d'accueil. Les réglages restent modifiables : désactivez ce qui l'a causé, réinitialisez le mode sans échec, puis redémarrez la console.",   /* fr */
-	"El modo seguro está ACTIVADO: vita-memio no se inició porque el último arranque no llegó a la pantalla de inicio. Los ajustes se pueden cambiar: desactiva lo que lo causó, restablece el modo seguro y reinicia la consola.",   /* es */
-	"Der abgesicherte Modus ist AN: vita-memio wurde nicht gestartet, weil der letzte Start den Startbildschirm nicht erreicht hat. Die Einstellungen lassen sich weiter ändern: die Ursache ausschalten, den Modus zurücksetzen und die Konsole neu starten.",   /* de */
-	"La modalità provvisoria è ATTIVA: vita-memio non è partito perché l'ultimo avvio non ha raggiunto la schermata iniziale. Le impostazioni si possono cambiare: disattiva ciò che l'ha causato, reimposta la modalità e riavvia la console.",   /* it */
-	"Veilige modus staat AAN: vita-memio is niet gestart, omdat de laatste start het startscherm niet bereikte. Instellingen kunnen nog worden gewijzigd: zet uit wat het veroorzaakte, herstel de veilige modus en start de console opnieuw.",   /* nl */
-	"O modo de segurança está LIGADO: o vita-memio não arrancou, porque o último arranque não chegou ao ecrã inicial. As definições podem ser alteradas: desligue o que o causou, reponha o modo de segurança e reinicie a consola.",   /* pt */
-	"Безопасный режим ВКЛЮЧЁН: vita-memio не запущен, так как прошлый запуск не дошёл до главного экрана. Настройки можно менять: выключите то, что вызвало сбой, сбросьте безопасный режим и перезагрузите консоль.",   /* ru */
-	"안전 모드 켜짐: 지난 시작이 홈 화면까지 가지 못해 vita-memio가 시작되지 않았습니다. 설정은 바꿀 수 있습니다. 원인이 된 항목을 끄고 안전 모드를 초기화한 뒤 본체를 다시 시작하세요.",   /* ko */
-	"安全模式已開啟：由於上次啟動未能進入主畫面，vita-memio 未啟動。仍可變更設定：關閉造成問題的項目，重設安全模式後重新啟動主機。",   /* zht */
-	"安全模式已开启：由于上次启动未能进入主屏幕，vita-memio 未启动。仍可更改设置：关闭导致问题的项目，重置安全模式后重新启动主机。",   /* zhs */
-	"Vikasietotila on PÄÄLLÄ: vita-memio ei käynnistynyt, koska edellinen käynnistys ei päässyt aloitusnäyttöön. Asetuksia voi yhä muuttaa: kytke syy pois, nollaa vikasietotila ja käynnistä konsoli uudelleen.",   /* fi */
-	"Felsäkert läge är PÅ: vita-memio startade inte, eftersom den senaste starten inte nådde hemskärmen. Inställningarna kan fortfarande ändras: stäng av det som orsakade det, återställ läget och starta om konsolen.",   /* sv */
-	"Fejlsikret tilstand er SLÅET TIL: vita-memio startede ikke, fordi den sidste opstart ikke nåede startskærmen. Indstillingerne kan stadig ændres: slå årsagen fra, nulstil tilstanden, og genstart konsollen.",   /* da */
-	"Sikker modus er PÅ: vita-memio startet ikke, fordi forrige oppstart ikke nådde startskjermen. Innstillingene kan fortsatt endres: slå av det som forårsaket det, tilbakestill sikker modus og start konsollen på nytt.",   /* no */
-	"Tryb awaryjny jest WŁĄCZONY: vita-memio nie wystartował, bo ostatni start nie dotarł do ekranu głównego. Ustawienia można zmieniać: wyłącz to, co spowodowało problem, zresetuj tryb awaryjny i uruchom konsolę ponownie.",   /* pl */
-	"O modo de segurança está LIGADO: o vita-memio não iniciou, porque a última inicialização não chegou à tela inicial. As configurações podem ser alteradas: desligue o que causou isso, redefina o modo de segurança e reinicie o console.",   /* ptbr */
-	"Safe mode is ON: vita-memio did not start, because the last start did not reach the home screen. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* engb */
-	"Güvenli mod AÇIK: son başlatma ana ekrana ulaşmadığı için vita-memio başlamadı. Ayarlar yine de değiştirilebilir: soruna yol açanı kapatın, güvenli modu sıfırlayın ve konsolu yeniden başlatın.",   /* tr */
+	"セーフモード中：前回の起動がホーム画面で30秒間続かなかったため、vita-memio は起動していません。設定は変更できます。原因の項目をオフにしてから解除し、本体を再起動してください。",   /* ja */
+	"Safe mode is ON: vita-memio did not start, because the last start did not stay on the home screen for 30 seconds. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* en */
+	"Le mode sans échec est ACTIVÉ : vita-memio n'a pas démarré, car le dernier démarrage n'est pas resté 30 secondes sur l'écran d'accueil. Les réglages restent modifiables : désactivez ce qui l'a causé, réinitialisez le mode sans échec, puis redémarrez la console.",   /* fr */
+	"El modo seguro está ACTIVADO: vita-memio no se inició porque el último arranque no se mantuvo 30 segundos en la pantalla de inicio. Los ajustes se pueden cambiar: desactiva lo que lo causó, restablece el modo seguro y reinicia la consola.",   /* es */
+	"Der abgesicherte Modus ist AN: vita-memio wurde nicht gestartet, weil der letzte Start nicht 30 Sekunden lang auf dem Startbildschirm lief. Die Einstellungen lassen sich weiter ändern: die Ursache ausschalten, den Modus zurücksetzen und die Konsole neu starten.",   /* de */
+	"La modalità provvisoria è ATTIVA: vita-memio non è partito perché l'ultimo avvio non è rimasto 30 secondi nella schermata iniziale. Le impostazioni si possono cambiare: disattiva ciò che l'ha causato, reimposta la modalità e riavvia la console.",   /* it */
+	"Veilige modus staat AAN: vita-memio is niet gestart, omdat de laatste start niet 30 seconden op het startscherm bleef. Instellingen kunnen nog worden gewijzigd: zet uit wat het veroorzaakte, herstel de veilige modus en start de console opnieuw.",   /* nl */
+	"O modo de segurança está LIGADO: o vita-memio não arrancou, porque o último arranque não ficou 30 segundos no ecrã inicial. As definições podem ser alteradas: desligue o que o causou, reponha o modo de segurança e reinicie a consola.",   /* pt */
+	"Безопасный режим ВКЛЮЧЁН: vita-memio не запущен, так как прошлый запуск не продержался 30 секунд на главном экране. Настройки можно менять: выключите то, что вызвало сбой, сбросьте безопасный режим и перезагрузите консоль.",   /* ru */
+	"안전 모드 켜짐: 지난 시작이 홈 화면에서 30초를 버티지 못해 vita-memio가 시작되지 않았습니다. 설정은 바꿀 수 있습니다. 원인이 된 항목을 끄고 안전 모드를 초기화한 뒤 본체를 다시 시작하세요.",   /* ko */
+	"安全模式已開啟：由於上次啟動未能在主畫面持續 30 秒，vita-memio 未啟動。仍可變更設定：關閉造成問題的項目，重設安全模式後重新啟動主機。",   /* zht */
+	"安全模式已开启：由于上次启动未能在主屏幕持续 30 秒，vita-memio 未启动。仍可更改设置：关闭导致问题的项目，重置安全模式后重新启动主机。",   /* zhs */
+	"Vikasietotila on PÄÄLLÄ: vita-memio ei käynnistynyt, koska edellinen käynnistys ei pysynyt aloitusnäytössä 30 sekuntia. Asetuksia voi yhä muuttaa: kytke syy pois, nollaa vikasietotila ja käynnistä konsoli uudelleen.",   /* fi */
+	"Felsäkert läge är PÅ: vita-memio startade inte, eftersom den senaste starten inte höll i 30 sekunder på hemskärmen. Inställningarna kan fortfarande ändras: stäng av det som orsakade det, återställ läget och starta om konsolen.",   /* sv */
+	"Fejlsikret tilstand er SLÅET TIL: vita-memio startede ikke, fordi den sidste opstart ikke holdt i 30 sekunder på startskærmen. Indstillingerne kan stadig ændres: slå årsagen fra, nulstil tilstanden, og genstart konsollen.",   /* da */
+	"Sikker modus er PÅ: vita-memio startet ikke, fordi forrige oppstart ikke holdt i 30 sekunder på startskjermen. Innstillingene kan fortsatt endres: slå av det som forårsaket det, tilbakestill sikker modus og start konsollen på nytt.",   /* no */
+	"Tryb awaryjny jest WŁĄCZONY: vita-memio nie wystartował, bo ostatni start nie utrzymał się 30 sekund na ekranie głównym. Ustawienia można zmieniać: wyłącz to, co spowodowało problem, zresetuj tryb awaryjny i uruchom konsolę ponownie.",   /* pl */
+	"O modo de segurança está LIGADO: o vita-memio não iniciou, porque a última inicialização não ficou 30 segundos na tela inicial. As configurações podem ser alteradas: desligue o que causou isso, redefina o modo de segurança e reinicie o console.",   /* ptbr */
+	"Safe mode is ON: vita-memio did not start, because the last start did not stay on the home screen for 30 seconds. Settings can still be changed: switch off what caused it, then reset safe mode and restart the console.",   /* engb */
+	"Güvenli mod AÇIK: son başlatma ana ekranda 30 saniye kalamadığı için vita-memio başlamadı. Ayarlar yine de değiştirilebilir: soruna yol açanı kapatın, güvenli modu sıfırlayın ve konsolu yeniden başlatın.",   /* tr */
 },
 [VM_I18N_HINT_SAFE_OFF] = {
-	"セーフモードはオフです。起動がホーム画面まで到達しなかった場合、vita-memio は自動でセーフモードになります。",   /* ja */
-	"Safe mode is off. vita-memio switches to it by itself when a start does not reach the home screen.",   /* en */
-	"Le mode sans échec est désactivé. vita-memio s'y met de lui-même si un démarrage n'atteint pas l'écran d'accueil.",   /* fr */
-	"El modo seguro está desactivado. vita-memio lo activa por sí mismo si un arranque no llega a la pantalla de inicio.",   /* es */
-	"Der abgesicherte Modus ist aus. vita-memio schaltet ihn selbst ein, wenn ein Start den Startbildschirm nicht erreicht.",   /* de */
-	"La modalità provvisoria è disattivata. vita-memio la attiva da solo se un avvio non raggiunge la schermata iniziale.",   /* it */
-	"Veilige modus staat uit. vita-memio schakelt hem zelf in als een start het startscherm niet bereikt.",   /* nl */
-	"O modo de segurança está desligado. O vita-memio ativa-o sozinho se um arranque não chegar ao ecrã inicial.",   /* pt */
-	"Безопасный режим выключен. vita-memio включит его сам, если запуск не дойдёт до главного экрана.",   /* ru */
-	"안전 모드가 꺼져 있습니다. 시작이 홈 화면까지 가지 못하면 vita-memio가 스스로 안전 모드로 전환합니다.",   /* ko */
-	"安全模式已關閉。若啟動未能進入主畫面，vita-memio 會自動切換為安全模式。",   /* zht */
-	"安全模式已关闭。若启动未能进入主屏幕，vita-memio 会自动切换为安全模式。",   /* zhs */
-	"Vikasietotila on pois päältä. vita-memio siirtyy siihen itse, jos käynnistys ei pääse aloitusnäyttöön.",   /* fi */
-	"Felsäkert läge är av. vita-memio slår på det själv om en start inte når hemskärmen.",   /* sv */
-	"Fejlsikret tilstand er slået fra. vita-memio slår den selv til, hvis en opstart ikke når startskærmen.",   /* da */
-	"Sikker modus er av. vita-memio slår den på selv hvis en oppstart ikke når startskjermen.",   /* no */
-	"Tryb awaryjny jest wyłączony. vita-memio włącza go sam, gdy start nie dotrze do ekranu głównego.",   /* pl */
-	"O modo de segurança está desligado. O vita-memio o ativa sozinho se uma inicialização não chegar à tela inicial.",   /* ptbr */
-	"Safe mode is off. vita-memio switches to it by itself when a start does not reach the home screen.",   /* engb */
-	"Güvenli mod kapalı. Bir başlatma ana ekrana ulaşmazsa vita-memio kendiliğinden ona geçer.",   /* tr */
+	"セーフモードはオフです。起動がホーム画面で30秒間続かなかった場合、vita-memio は自動でセーフモードになります。",   /* ja */
+	"Safe mode is off. vita-memio switches to it by itself when a start does not stay on the home screen for 30 seconds.",   /* en */
+	"Le mode sans échec est désactivé. vita-memio s'y met de lui-même si un démarrage ne reste pas 30 secondes sur l'écran d'accueil.",   /* fr */
+	"El modo seguro está desactivado. vita-memio lo activa por sí mismo si un arranque no se mantiene 30 segundos en la pantalla de inicio.",   /* es */
+	"Der abgesicherte Modus ist aus. vita-memio schaltet ihn selbst ein, wenn ein Start nicht 30 Sekunden lang auf dem Startbildschirm läuft.",   /* de */
+	"La modalità provvisoria è disattivata. vita-memio la attiva da solo se un avvio non resta 30 secondi nella schermata iniziale.",   /* it */
+	"Veilige modus staat uit. vita-memio schakelt hem zelf in als een start niet 30 seconden op het startscherm blijft.",   /* nl */
+	"O modo de segurança está desligado. O vita-memio ativa-o sozinho se um arranque não ficar 30 segundos no ecrã inicial.",   /* pt */
+	"Безопасный режим выключен. vita-memio включит его сам, если запуск не продержится 30 секунд на главном экране.",   /* ru */
+	"안전 모드가 꺼져 있습니다. 시작이 홈 화면에서 30초를 버티지 못하면 vita-memio가 스스로 안전 모드로 전환합니다.",   /* ko */
+	"安全模式已關閉。若啟動未能在主畫面持續 30 秒，vita-memio 會自動切換為安全模式。",   /* zht */
+	"安全模式已关闭。若启动未能在主屏幕持续 30 秒，vita-memio 会自动切换为安全模式。",   /* zhs */
+	"Vikasietotila on pois päältä. vita-memio siirtyy siihen itse, jos käynnistys ei pysy aloitusnäytössä 30 sekuntia.",   /* fi */
+	"Felsäkert läge är av. vita-memio slår på det själv om en start inte håller i 30 sekunder på hemskärmen.",   /* sv */
+	"Fejlsikret tilstand er slået fra. vita-memio slår den selv til, hvis en opstart ikke holder i 30 sekunder på startskærmen.",   /* da */
+	"Sikker modus er av. vita-memio slår den på selv hvis en oppstart ikke holder i 30 sekunder på startskjermen.",   /* no */
+	"Tryb awaryjny jest wyłączony. vita-memio włącza go sam, gdy start nie utrzyma się 30 sekund na ekranie głównym.",   /* pl */
+	"O modo de segurança está desligado. O vita-memio o ativa sozinho se uma inicialização não ficar 30 segundos na tela inicial.",   /* ptbr */
+	"Safe mode is off. vita-memio switches to it by itself when a start does not stay on the home screen for 30 seconds.",   /* engb */
+	"Güvenli mod kapalı. Bir başlatma ana ekranda 30 saniye kalamazsa vita-memio kendiliğinden ona geçer.",   /* tr */
 },
 [VM_I18N_MSG_SAFE_OK] = {
 	"セーフモードを解除しました。次回の再起動後、vita-memio は通常どおり起動します。",   /* ja */

@@ -1,8 +1,10 @@
 /*
  * test_gpumap.c - the GPU-mapping watch (kernel/gpumap.c): it only installs
- * when asked, passes the calls on, records what it can, never waits, drops
- * rather than overflows, and the worker drains everything in order.
+ * when asked and the flag file is there, the hooks pass the calls on and call
+ * nothing else, never wait, drop rather than overflow, and the worker drains
+ * everything in order, looking the addresses up itself.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,18 +13,23 @@
 #include "fakes.h"
 #include "vm_test.h"
 
+static int lookups;                     /* sysmem lookups made */
+
 int ksceKernelVAtoPA(const void *va, uintptr_t *pa)
 {
+	lookups++;
 	*pa = (uintptr_t)va ^ 0x40000000u;
 	return 0;
 }
 SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size)
 {
 	(void)size;
+	lookups++;
 	return addr ? 0x1234 : -1;
 }
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 {
+	lookups++;
 	return addr ? 0x0D00 : -1;
 }
 SceUID ksceKernelGetProcessId(void) { return 0x40010003; }
@@ -34,19 +41,46 @@ static void reset(void)
 	g_maps = g_unmaps = g_dropped = 0;
 	g_tried = g_logged = 0;
 	g_h_map = g_h_unmap = -1;
+	lookups = 0;
+}
+
+static void set_flag(int on)
+{
+	char p[512];
+
+	snprintf(p, sizeof(p), "%s/gpumap.on", fakes_tmpdir_new());
+	if (on) {
+		FILE *f = fopen(p, "w");
+
+		CHECK(f != NULL);
+		if (f)
+			fclose(f);
+	}
 }
 
 static void test_installs_only_when_wanted(void)
 {
+	/* the switches on but no flag file: never hooks the GPU driver */
 	reset();
-	vm_gpumap_tick(0, 1);
+	set_flag(0);
+	for (uint32_t t = 0; t < 40; t++)
+		vm_gpumap_tick(1, t);
 	CHECK(fake_hook_calls == 0 && !g_tried);
-	vm_gpumap_tick(1, 2);
+	fakes_tmpdir_remove();
+
+	reset();
+	set_flag(1);
+	vm_gpumap_tick(0, 10);
+	CHECK(fake_hook_calls == 0 && !g_tried);         /* switches off */
+	vm_gpumap_tick(1, 11);
+	CHECK(fake_hook_calls == 0);                     /* looked for every 10 s */
+	vm_gpumap_tick(1, 20);
 	CHECK(fake_hook_calls == 2 && g_h_map >= 0 && g_h_unmap >= 0);
-	vm_gpumap_tick(1, 3);
+	vm_gpumap_tick(1, 30);
 	CHECK(fake_hook_calls == 2);                     /* once */
 	vm_gpumap_fini();
 	CHECK(fake_hook_releases == 2 && g_h_map < 0);
+	fakes_tmpdir_remove();
 }
 
 static void test_records_and_drains(void)
@@ -56,11 +90,11 @@ static void test_records_and_drains(void)
 	hk_unmap(0xC0FFEE, 0x20000000, 0x10000, 0, 0, 0, 0, 0);
 	CHECK(g_maps == 1 && g_unmaps == 1 && g_ev_head == 2);
 	CHECK(g_ev[0].kind == 1 && g_ev[0].pid == 0x40010003 && g_ev[0].a[2] == 0x81000000);
-	CHECK(g_ev[0].pa == (0x81000000u ^ 0x40000000u) && g_ev[0].blk == 0x1234 &&
-	      g_ev[0].memtype == 0x0D00 && g_ev[0].a[4] == 3);
-	CHECK(g_ev[1].kind == 2 && g_ev[1].blk == 0);    /* unmap: no lookups */
+	CHECK(g_ev[0].a[4] == 3 && g_ev[1].kind == 2 && g_ev[1].a[2] == 0x10000);
+	CHECK(lookups == 0);                             /* nothing inside the GPU driver */
 	vm_gpumap_tick(0, 5);
 	CHECK(g_ev_tail == 2 && g_logged == 2);
+	CHECK(lookups == 3);                             /* the map, in the worker */
 }
 
 static void test_never_waits_and_drops_when_full(void)

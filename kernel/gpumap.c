@@ -7,24 +7,36 @@
  * The GPU driver (SceGpuEs4) maps memory into the GPU's MMU through
  * ksceGpuMmuMapMemory / ksceGpuMmuUnmapMemory (SceGpuEs4ForDriver); what
  * their arguments are exactly is not documented, so this build only watches:
- * a pass-through hook on both records each call (process, arguments, what the
- * "base" argument is in that process: physical address, memory block, memory
- * type) and the worker writes them to kernel.log. Nothing is changed.
+ * a pass-through hook on both records each call (process and arguments) and
+ * the worker writes them to kernel.log, with what "base" is in the kernel's
+ * address space (physical address, memory block, memory type) looked up
+ * there. Nothing is changed.
  *
- * Installed only while both Enable log and GPU-safe reads are on. The hooks
- * forward eight arguments, so they pass on whatever the real functions take.
+ * The hooks run inside the GPU driver, which may hold its own or the memory
+ * manager's locks: they call nothing but the original and record the raw
+ * arguments (an earlier build looked the address up in there, and the console
+ * restarted when a game started).
+ *
+ * Installed only while Enable log and GPU-safe reads are on AND the file
+ * ur0:data/vita-memio/gpumap.on exists, so GPU-safe reads alone never hook
+ * the GPU driver. The hooks forward eight arguments, so they pass on whatever
+ * the real functions take.
  */
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/kernel/threadmgr.h>
+#include <psp2kern/io/fcntl.h>
 #include <taihen.h>
 
+#include "../include/vitamemio.h"
 #include "gpumap.h"
 #include "klog.h"
 
 #define LIB_GPU_DRIVER  0x54802381   /* SceGpuEs4ForDriver     */
 #define NID_GPU_MAP     0xEF4B16D3   /* ksceGpuMmuMapMemory    */
 #define NID_GPU_UNMAP   0x9AAAD91C   /* ksceGpuMmuUnmapMemory  */
+
+#define GPUMAP_FLAG     VM_DATA_DIR "/gpumap.on"   /* the watch's own switch */
 
 /* SceSysmemForDriver: the memory type at an address of the current address
  * space (masked with 0xFF00), or < 0. */
@@ -35,9 +47,6 @@ typedef struct {
 	uint32_t pid;
 	uint32_t a[5];              /* the first five arguments */
 	int32_t  ret;
-	uint32_t pa;                /* of a[2] ("base") in the calling process, or 0 */
-	int32_t  blk;               /* its memory block, or < 0 */
-	int32_t  memtype;           /* the memory type at a2 (0xFF00 mask), or < 0 */
 } GpuEvent;
 
 #define EVENTS 64
@@ -57,26 +66,15 @@ static int            g_logged;         /* events written so far this boot */
 static void record(uint32_t kind, const uint32_t *a, int ret)
 {
 	GpuEvent e;
-	uintptr_t pa = 0;
-	SceUID blk;
 
-	/* What "base" (the third argument) is in the calling process. */
-	memset(&e, 0, sizeof(e));
+	/* Only the raw call: no lookups in here (see the top). */
 	e.kind = kind;
 	e.pid = (uint32_t)ksceKernelGetProcessId();
 	for (int k = 0; k < 5; k++)
 		e.a[k] = a[k];
 	e.ret = ret;
-	if (kind == 1) {
-		if (ksceKernelVAtoPA((const void *)(uintptr_t)a[2], &pa) < 0)
-			pa = 0;
-		blk = ksceKernelFindMemBlockByAddr((const void *)(uintptr_t)a[2], 0);
-		e.pa = (uint32_t)pa;
-		e.blk = blk;
-		e.memtype = ksceKernelGetMemBlockMemtypeByAddr((const void *)(uintptr_t)a[2]);
-	}
-	/* Never wait in here (this runs inside the GPU driver): if another call
-	 * is recording right now, or the worker is behind, only count it. */
+	/* Never wait in here: if another call is recording right now, or the
+	 * worker is behind, only count it. */
 	if (__sync_lock_test_and_set(&g_ev_lock, 1)) {
 		__sync_fetch_and_add(&g_dropped, 1);
 		return;
@@ -113,9 +111,32 @@ static int hk_unmap(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
 	return r;
 }
 
+static int flag_on(void)
+{
+	SceUID fd = ksceIoOpen(GPUMAP_FLAG, SCE_O_RDONLY, 0);
+
+	if (fd < 0)
+		return 0;
+	ksceIoClose(fd);
+	return 1;
+}
+
+/* What `va` is in the kernel's address space, looked up here in the worker. */
+static void lookup(uint32_t va, uint32_t *pa, int32_t *blk, int32_t *memtype)
+{
+	uintptr_t p = 0;
+
+	if (ksceKernelVAtoPA((const void *)(uintptr_t)va, &p) < 0)
+		p = 0;
+	*pa = (uint32_t)p;
+	*blk = ksceKernelFindMemBlockByAddr((const void *)(uintptr_t)va, 0);
+	*memtype = ksceKernelGetMemBlockMemtypeByAddr((const void *)(uintptr_t)va);
+}
+
 void vm_gpumap_tick(int wanted, uint32_t uptime_s)
 {
-	if (wanted && !g_tried) {
+	/* The flag file is looked for every 10 s while the switches are on. */
+	if (wanted && !g_tried && uptime_s % 10 == 0 && flag_on()) {
 		g_tried = 1;
 		g_h_map = taiHookFunctionExportForKernel(KERNEL_PID, &g_r_map, "SceGpuEs4",
 		                                         LIB_GPU_DRIVER, NID_GPU_MAP, hk_map);
@@ -130,17 +151,22 @@ void vm_gpumap_tick(int wanted, uint32_t uptime_s)
 
 		if (g_logged < LOG_MAX) {
 			g_logged++;
-			if (e->kind == 1)
+			if (e->kind == 1) {
+				uint32_t pa;
+				int32_t blk, memtype;
+
+				lookup(e->a[2], &pa, &blk, &memtype);
 				VM_KLOGI("gpumap: map pid=0x%08x a0=0x%08x a1=0x%08x a2=0x%08x a3=0x%08x "
-				         "a4=0x%08x ret=0x%08x | a2: pa=0x%08x blk=0x%08x memtype=0x%08x",
+				         "a4=0x%08x ret=0x%08x | a2 (kernel view, later): pa=0x%08x "
+				         "blk=0x%08x memtype=0x%08x",
 				         (unsigned)e->pid, (unsigned)e->a[0], (unsigned)e->a[1],
 				         (unsigned)e->a[2], (unsigned)e->a[3], (unsigned)e->a[4],
-				         (unsigned)e->ret, (unsigned)e->pa, (unsigned)e->blk,
-				         (unsigned)e->memtype);
-			else
+				         (unsigned)e->ret, (unsigned)pa, (unsigned)blk, (unsigned)memtype);
+			} else {
 				VM_KLOGI("gpumap: unmap pid=0x%08x a0=0x%08x a1=0x%08x a2=0x%08x ret=0x%08x",
 				         (unsigned)e->pid, (unsigned)e->a[0], (unsigned)e->a[1],
 				         (unsigned)e->a[2], (unsigned)e->ret);
+			}
 		}
 		__sync_synchronize();
 		g_ev_tail++;

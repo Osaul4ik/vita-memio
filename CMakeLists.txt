@@ -164,6 +164,7 @@ if(TS_BUILD_TESTER)
     NAME "Turbo Storage Tester"
     ${TESTER_VPK_FILES}
   )
-  # `cmake --build` builds the VPK together with the modules.
-  add_custom_target(tester_vpk ALL DEPENDS storageturbo_tester.vpk)
+  # vita_create_vpk already defines the target `storageturbo_tester.vpk` as part of
+  # ALL, so `cmake --build` builds the VPK together with the modules. (It is a
+  # target, not a file: do not list it in DEPENDS of another target.)
 endif()

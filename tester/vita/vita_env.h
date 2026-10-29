@@ -8,6 +8,8 @@
 
 #include <stddef.h>
 
+#include <psp2/kernel/sysmem.h>
+
 #include "../bench.h"
 
 typedef struct VitaEnv {
@@ -15,6 +17,7 @@ typedef struct VitaEnv {
 	int        dev;                              /* enum vm_dev under test        */
 	void     (*on_progress)(const BenchProgress *p);
 	int      (*poll_cancel)(void);               /* 1 when the user asked to stop */
+	SceUID     nc_uid;                           /* the NC reads' memory block    */
 } VitaEnv;
 
 void vita_env_init(VitaEnv *v, int dev,

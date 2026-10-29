@@ -125,7 +125,18 @@ static void verify_text(const BenchResult *r, char *out, size_t cap)
 
 /* ---- the file block ---------------------------------------------------------- */
 
-static void metric_table(Out *o, const BenchAgg *a, int latency)
+/* One value of the tables; "-" for a metric that was not measured. */
+static void cell(char *b, size_t cap, const BenchResult *res, int m, double v)
+{
+	if (bench_metric_measured(res, m))
+		report_fmt1(b, cap, v);
+	else
+		snprintf(b, cap, "-");
+}
+
+#define NC_LEGEND "NC: into non-cacheable memory, as games load data for the graphics chip"
+
+static void metric_table(Out *o, const BenchResult *res, const BenchAgg *a, int latency)
 {
 	char x[16], y[16];
 
@@ -135,11 +146,11 @@ static void metric_table(Out *o, const BenchAgg *a, int latency)
 		put(o, "%-16s %-9s %9s\n", "metric", "unit", "average");
 	for (int m = 0; m < BM_COUNT; m++) {
 		if (latency) {
-			report_fmt1(x, sizeof(x), a->med_ms[m]);
-			report_fmt1(y, sizeof(y), a->p99_ms[m]);
+			cell(x, sizeof(x), res, m, a->med_ms[m]);
+			cell(y, sizeof(y), res, m, a->p99_ms[m]);
 			put(o, "%-16s %-9s %9s %9s\n", bench_metric_name[m], "", x, y);
 		} else {
-			report_fmt1(x, sizeof(x), a->v[m]);
+			cell(x, sizeof(x), res, m, a->v[m]);
 			put(o, "%-16s %-9s %9s\n", bench_metric_name[m], bench_metric_unit(m), x);
 		}
 	}
@@ -184,9 +195,11 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin behaved as its state says: %s\n", bench_plugin_ok(res) ? "PASS" : "FAIL");
 	put(&o, "----------------------------------------------------------------\n");
 	if (a.n) {
-		metric_table(&o, &a, 0);
+		metric_table(&o, res, &a, 0);
+		if (bench_metric_measured(res, BM_NC_R_1M))
+			put(&o, "(%s)\n", NC_LEGEND);
 		put(&o, "\n");
-		metric_table(&o, &a, 1);
+		metric_table(&o, res, &a, 1);
 		put(&o, "\n");
 	} else {
 		put(&o, "(no complete run, so no result table)\n\n");
@@ -357,14 +370,18 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 	line(&s, "");
 	line(&s, "%-15s %10s", "metric", "average");
 	for (int m = 0; m < BM_COUNT; m++) {
-		report_fmt1(x, sizeof(x), a.v[m]);
+		cell(x, sizeof(x), res, m, a.v[m]);
 		line(&s, "%-15s %10s %s", bench_metric_name[m], x, bench_metric_unit(m));
+	}
+	if (bench_metric_measured(res, BM_NC_R_1M)) {
+		line(&s, "NC: into non-cacheable memory,");
+		line(&s, "    as games load data for the GPU");
 	}
 	line(&s, "");
 	line(&s, "%-15s %10s %10s", "ms per call", "median", "p99");
 	for (int m = 0; m < BM_COUNT; m++) {
-		report_fmt1(x, sizeof(x), a.med_ms[m]);
-		report_fmt1(y, sizeof(y), a.p99_ms[m]);
+		cell(x, sizeof(x), res, m, a.med_ms[m]);
+		cell(y, sizeof(y), res, m, a.p99_ms[m]);
 		line(&s, "%-15s %10s %10s", bench_metric_name[m], x, y);
 	}
 	return s.n;

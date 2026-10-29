@@ -7,6 +7,7 @@
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/sysmem.h>
 
 #include "../../include/vitamemio_kernel_api.h"
 #include "vita_env.h"
@@ -136,6 +137,40 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	return 0;
 }
 
+/* ---- non-cacheable memory for the NC reads ---------------------------------- */
+
+/* The kind of memory games give the graphics chip: the CPU writes go
+ * straight to memory, with nothing left in the cache. */
+static void *v_nc_alloc(void *ctx, uint32_t size)
+{
+	VitaEnv *v = ctx;
+	void *base = NULL;
+	SceUID uid;
+
+	size = (size + 0xFFFFu) & ~0xFFFFu;
+	uid = sceKernelAllocMemBlock("vmtest_nc", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE,
+	                             size, NULL);
+	if (uid < 0)
+		return NULL;
+	if (sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+		sceKernelFreeMemBlock(uid);
+		return NULL;
+	}
+	v->nc_uid = uid;
+	return base;
+}
+
+static void v_nc_free(void *ctx, void *p)
+{
+	VitaEnv *v = ctx;
+
+	(void)p;
+	if (v->nc_uid >= 0) {
+		sceKernelFreeMemBlock(v->nc_uid);
+		v->nc_uid = -1;
+	}
+}
+
 /* ---- the BenchEnv ---------------------------------------------------------------- */
 
 static void v_progress(void *ctx, const BenchProgress *p)
@@ -172,4 +207,7 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->env.plugin_get = v_plugin_get;
 	v->env.progress = v_progress;
 	v->env.cancelled = v_cancelled;
+	v->env.nc_alloc = v_nc_alloc;
+	v->env.nc_free = v_nc_free;
+	v->nc_uid = -1;
 }

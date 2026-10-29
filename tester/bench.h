@@ -16,6 +16,11 @@
  *   small files: create (open new, write 4K, close) | read (open, read 4K,
  *   close) | delete - mostly the file system's own small transfers, which
  *   the plugin only speeds up with "small transfers too" on
+ *   NC read 1M | NC read 128K - sequential reads into non-cacheable memory,
+ *   the way games load data for the graphics chip (with GPU-safe reads on,
+ *   the plugin has nothing to clean there; the other reads go into ordinary
+ *   cached memory, which it does clean). Only where the platform can give
+ *   such memory (BenchEnv.nc_alloc); otherwise not measured
  * Only the time spent inside the read/write calls counts: filling and checking
  * the data happens outside the timer.
  *
@@ -45,6 +50,7 @@ enum bench_metric {
 	BM_RR_4K, BM_RR_32K, BM_RR_128K, BM_RR_1M,
 	BM_RW_4K, BM_RW_32K, BM_RW_128K, BM_RW_1M,
 	BM_SF_CREATE, BM_SF_READ, BM_SF_DELETE,
+	BM_NC_R_1M, BM_NC_R_128K,
 	BM_COUNT
 };
 
@@ -114,6 +120,10 @@ typedef struct BenchEnv {
 	/* Optional. */
 	void (*progress)(void *ctx, const struct BenchProgress *p);
 	int (*cancelled)(void *ctx);
+	/* Optional: 1 MiB of non-cacheable memory for the NC reads, and its
+	 * release. NULL (or no memory): the NC reads are not measured. */
+	void *(*nc_alloc)(void *ctx, uint32_t size);
+	void (*nc_free)(void *ctx, void *p);
 } BenchEnv;
 
 /* ---- configuration and results ---------------------------------------------- */
@@ -191,6 +201,10 @@ typedef struct BenchAgg {
 } BenchAgg;
 
 void bench_aggregate(const BenchResult *res, BenchAgg *out);
+
+/* Whether metric m was measured in at least one complete run (the NC reads
+ * are not without non-cacheable memory, small files not with sf_files 0). */
+int bench_metric_measured(const BenchResult *res, int m);
 
 /* The faster path's time per 512-byte block, over the complete runs: inside the
  * system read/write ("io") and in the CPU copy. ok = 0 when there is nothing to

@@ -277,7 +277,7 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_progress, f_cancelled };
+	               f_get, f_progress, f_cancelled, NULL, NULL };
 	return e;
 }
 
@@ -332,6 +332,98 @@ static void test_full_run_on(void)
 	CHECK(a.med_ms[BM_SEQ_R_1M] > 62.0 && a.med_ms[BM_SEQ_R_1M] < 64.0);
 	CHECK(r->runs[0].ops[BM_SEQ_R_1M] == 2 && r->runs[0].ops[BM_SEQ_R_128K] == 16);
 	CHECK(r->runs[0].ops[BM_RR_4K] == 20 && r->runs[0].ops[BM_RW_1M] == 2);
+	free(r);
+	free(f.data);
+}
+
+/* The NC reads: measured into the platform's non-cacheable memory, checked
+ * like every other read, the memory given back on every path; without such
+ * memory they are not measured and the tables say "-". */
+static int g_nc_allocs, g_nc_frees;
+static void *g_nc_last;
+static void *f_nc_alloc(void *c, uint32_t size)
+{
+	(void)c;
+	g_nc_allocs++;
+	return g_nc_last = malloc(size);
+}
+static void f_nc_free(void *c, void *p)
+{
+	(void)c;
+	CHECK(p == g_nc_last);
+	g_nc_frees++;
+	free(p);
+}
+static void *f_nc_none(void *c, uint32_t size) { (void)c; (void)size; return NULL; }
+
+static void test_nc_reads(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchEnv e;
+	char *text = malloc(40000);
+	char (*lines)[REPORT_LINE_MAX] = malloc(REPORT_LINES_MAX * REPORT_LINE_MAX);
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	int n, found;
+
+	/* with the memory */
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.nc_alloc = f_nc_alloc;
+	e.nc_free = f_nc_free;
+	g_nc_allocs = g_nc_frees = 0;
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_integrity_ok(r) && bench_plugin_ok(r));
+	CHECK(g_nc_allocs == 1 && g_nc_frees == 1);
+	CHECK(r->runs[0].ops[BM_NC_R_1M] == 2 && r->runs[0].ops[BM_NC_R_128K] == 16);
+	CHECK(r->runs[0].value[BM_NC_R_1M] > 0 && bench_metric_measured(r, BM_NC_R_1M));
+	CHECK(!bench_metric_is_iops(BM_NC_R_1M) && !strcmp(bench_metric_unit(BM_NC_R_128K), "MiB/s"));
+	CHECK_UNTOUCHED(f);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "\nNC read 1M       MiB/s     ") && strstr(text, "(NC: into non-cacheable"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	CHECK(n < REPORT_LINES_MAX);                     /* still fits the viewer */
+	found = 0;
+	for (int i = 0; i < n; i++)
+		found |= !strncmp(lines[i], "NC: into non-cacheable", 22);
+	CHECK(found);
+
+	/* corrupted data read into it is caught like any other */
+	fake_init(&f, 1);
+	f.corrupt_write_on = 1;
+	e = env_for(&f);
+	e.nc_alloc = f_nc_alloc;
+	e.nc_free = f_nc_free;
+	g_nc_allocs = g_nc_frees = 0;
+	bench_run(&e, &cfg, r);
+	CHECK(!bench_integrity_ok(r) && g_nc_frees == g_nc_allocs);
+
+	/* cancelled half way: the memory is still given back */
+	fake_init(&f, 1);
+	f.cancel_after_polls = 30;
+	e = env_for(&f);
+	e.nc_alloc = f_nc_alloc;
+	e.nc_free = f_nc_free;
+	g_nc_allocs = g_nc_frees = 0;
+	CHECK(bench_run(&e, &cfg, r) == 1 && g_nc_allocs == 1 && g_nc_frees == 1);
+
+	/* no such memory (or no callback): not measured, "-" in the tables */
+	for (int k = 0; k < 2; k++) {
+		fake_init(&f, 1);
+		e = env_for(&f);
+		if (k) {
+			e.nc_alloc = f_nc_none;
+			e.nc_free = f_nc_free;
+		}
+		g_nc_frees = 0;
+		CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && g_nc_frees == 0);
+		CHECK(r->runs[0].ops[BM_NC_R_1M] == 0 && !bench_metric_measured(r, BM_NC_R_128K));
+		report_format(r, &m, text, 40000);
+		CHECK(strstr(text, "\nNC read 1M       MiB/s             -\n"));
+		CHECK(!strstr(text, "(NC: into"));
+	}
+	free(lines);
+	free(text);
 	free(r);
 	free(f.data);
 }
@@ -550,7 +642,8 @@ static void test_small_files(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "small transfers too: on");
 	CHECK(found);
-	CHECK(strstr(lines[n - 1], "files delete"));
+	CHECK(strstr(lines[n - 3], "files delete"));      /* then the two NC reads */
+	CHECK(strstr(lines[n - 1], "NC read 128K"));
 
 	/* a small file that reads back wrong fails the data check */
 	fake_init(&f, 1);
@@ -1066,6 +1159,7 @@ int main(void)
 {
 	RUN(test_full_run_on);
 	RUN(test_full_run_off);
+	RUN(test_nc_reads);
 	RUN(test_write_corruption_is_caught);
 	RUN(test_read_corruption_is_caught);
 	RUN(test_plugin_counters);

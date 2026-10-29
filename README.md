@@ -120,6 +120,8 @@ Its main screen shows live, for each storage, what the plugin is doing (state, d
 - the plugin's verify results;
 - how many large transfers went the standard way because the staging buffer was busy.
 
+It also reads the file into non-cacheable memory (*NC read 1M / 128K*), the kind games load data for the graphics chip into. With **GPU-safe reads** on, the ordinary reads show what the cache cleaning costs and the NC reads show the speed a game gets for that memory, so both can be seen without switching it off.
+
 To see what **Small transfers too** does, run the test with it off and with it on and compare the *files create / read / delete* rows.
 
 Pick the storage that the test folder is on: on most setups both the SD2Vita and the memory card are `ux0:`. If the storage and folder don't match, the test says so.

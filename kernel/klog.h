@@ -1,10 +1,10 @@
 /*
- * klog.h - kernel-side logger for the SceStorageTurbo kernel module.
+ * klog.h - kernel-side logger for the SceVitaMemio kernel module.
  *
- * Primary sink is ksceDebugPrintf with a "[storageturbo]" tag (visible over a
+ * Primary sink is ksceDebugPrintf with a "[vitamemio]" tag (visible over a
  * kernel debug channel). In addition every line is appended to
- * ur0:data/turbostorage/kernel.log via ksceIo*, best-effort and
- * failure-tolerant. When the file passes TS_KLOG_MAX_BYTES it is renamed to
+ * ur0:data/vita-memio/kernel.log via ksceIo*, best-effort and
+ * failure-tolerant. When the file passes VM_KLOG_MAX_BYTES it is renamed to
  * kernel.old.log and a fresh one is started, so an overnight run keeps about
  * twice that much history.
  *
@@ -18,37 +18,37 @@
  * The self-contained formatter means no libc (%s %d %i %u %x %X %c %p %%,
  * optional zero-pad width).
  */
-#ifndef STORAGETURBO_KLOG_H
-#define STORAGETURBO_KLOG_H
+#ifndef VITAMEMIO_KLOG_H
+#define VITAMEMIO_KLOG_H
 
 #include <stdint.h>
 
-#include "../include/storageturbo.h"
+#include "../include/vitamemio.h"
 
-#define TS_KLOG_ERR    0
-#define TS_KLOG_WARN   1
-#define TS_KLOG_INFO   2
-#define TS_KLOG_DEBUG  3
-#define TS_KLOG_TRACE  4
+#define VM_KLOG_ERR    0
+#define VM_KLOG_WARN   1
+#define VM_KLOG_INFO   2
+#define VM_KLOG_DEBUG  3
+#define VM_KLOG_TRACE  4
 
-#ifndef TS_KLOG_DEFAULT_LEVEL
-#define TS_KLOG_DEFAULT_LEVEL  TS_KLOG_DEBUG
+#ifndef VM_KLOG_DEFAULT_LEVEL
+#define VM_KLOG_DEFAULT_LEVEL  VM_KLOG_DEBUG
 #endif
 
-#define TS_KLOG_DIR       TS_DATA_DIR
-#define TS_KLOG_PATH      TS_KLOG_DIR "/kernel.log"
-#define TS_KLOG_PATH_OLD  TS_KLOG_DIR "/kernel.old.log"
-#define TS_KLOG_MAX_BYTES (128 * 1024)
+#define VM_KLOG_DIR       VM_DATA_DIR
+#define VM_KLOG_PATH      VM_KLOG_DIR "/kernel.log"
+#define VM_KLOG_PATH_OLD  VM_KLOG_DIR "/kernel.old.log"
+#define VM_KLOG_MAX_BYTES (128 * 1024)
 
-void ts_klog_init(void);
-void ts_klog_fini(void);
+void vm_klog_init(void);
+void vm_klog_fini(void);
 
-void ts_klog(int level, const char *fmt, ...);
+void vm_klog(int level, const char *fmt, ...);
 
-#define TS_KLOGE(...) ts_klog(TS_KLOG_ERR,   __VA_ARGS__)
-#define TS_KLOGW(...) ts_klog(TS_KLOG_WARN,  __VA_ARGS__)
-#define TS_KLOGI(...) ts_klog(TS_KLOG_INFO,  __VA_ARGS__)
-#define TS_KLOGD(...) ts_klog(TS_KLOG_DEBUG, __VA_ARGS__)
-#define TS_KLOGT(...) ts_klog(TS_KLOG_TRACE, __VA_ARGS__)
+#define VM_KLOGE(...) vm_klog(VM_KLOG_ERR,   __VA_ARGS__)
+#define VM_KLOGW(...) vm_klog(VM_KLOG_WARN,  __VA_ARGS__)
+#define VM_KLOGI(...) vm_klog(VM_KLOG_INFO,  __VA_ARGS__)
+#define VM_KLOGD(...) vm_klog(VM_KLOG_DEBUG, __VA_ARGS__)
+#define VM_KLOGT(...) vm_klog(VM_KLOG_TRACE, __VA_ARGS__)
 
-#endif /* STORAGETURBO_KLOG_H */
+#endif /* VITAMEMIO_KLOG_H */

@@ -1,18 +1,18 @@
 /*
- * main.c - the Turbo Storage tester app (a normal Vita application, built into
- * storageturbo_tester.vpk together with the plugin).
+ * main.c - the vita-memio tester app (a normal Vita application, built into
+ * vitamemio_tester.vpk together with the plugin).
  *
  * It ONLY tests. It never switches the plugin or changes any of its settings:
- * the user turns the plugin on or off for a device in Settings > Turbo Storage,
+ * the user turns the plugin on or off for a device in Settings > vita-memio,
  * then runs the test here. A test runs the same storage tests several times in
  * the plugin state found at the start (bench.c), checks every byte, appends the
- * result together with that plugin state to ur0:data/turbostorage/results.txt,
+ * result together with that plugin state to ur0:data/vita-memio/results.txt,
  * shows it, and the file can be cleared. Run it once with the plugin OFF and once
  * ON to compare.
  *
- * The kernel module is not required: the import of its SceStorageTurbo library is
+ * The kernel module is not required: the import of its SceVitaMemio library is
  * weak, so without it the app still starts, the plugin state shows as unknown and
- * the test still measures the storage (tsGetState's result is always checked).
+ * the test still measures the storage (vmGetState's result is always checked).
  */
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +20,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/rtc.h>
 
-#include "../include/storageturbo_kernel_api.h"
+#include "../include/vitamemio_kernel_api.h"
 #include "bench.h"
 #include "report.h"
 #include "results.h"
@@ -30,21 +30,21 @@
 /* The newlib heap: back buffer (2 MiB), the test's 1 MiB buffer, report text. */
 int _newlib_heap_size_user = 16 * 1024 * 1024;
 
-#define TITLE "Turbo Storage tester"
+#define TITLE "vita-memio tester"
 
 _Static_assert(REPORT_LINE_MAX == RESULTS_LINE_MAX, "the viewer shows both kinds of lines");
 
 static const char *const k_roots[] = {
-	"ux0:TurboTest/", "uma0:TurboTest/", "imc0:TurboTest/", "ur0:TurboTest/", "grw0:TurboTest/",
+	"ux0:MemioTest/", "uma0:MemioTest/", "imc0:MemioTest/", "ur0:MemioTest/", "grw0:MemioTest/",
 };
 #define N_ROOTS ((int)(sizeof(k_roots) / sizeof(k_roots[0])))
-/* The folder that usually belongs to each device (enum ts_dev order). */
-static const int k_root_default[TS_DEV_COUNT] = { 0, 3, 0 };
+/* The folder that usually belongs to each device (enum vm_dev order). */
+static const int k_root_default[VM_DEV_COUNT] = { 0, 3, 0 };
 
 static const BenchProfile *const k_profiles[] = { &bench_profile_quick, &bench_profile_standard };
 #define N_PROFILES 2
 
-static int g_dev = TS_DEV_SD2VITA;
+static int g_dev = VM_DEV_SD2VITA;
 static int g_root = 0;
 static int g_profile = 0;
 
@@ -219,7 +219,7 @@ static void run_test(void)
 	char stamp[48], foot[96];
 	int rc, n, saved;
 
-	if (g_dev == TS_DEV_INTERNAL &&
+	if (g_dev == VM_DEV_INTERNAL &&
 	    !confirm("internal storage", "Internal storage is the console's own storage.",
 	             "The test writes one file in the folder and removes it, but the plugin",
 	             "is experimental there. Run the test?"))
@@ -243,10 +243,10 @@ static void run_test(void)
 
 	timestamp(stamp, sizeof(stamp));
 	meta.timestamp = stamp;
-	meta.plugin_version = TS_VERSION_STR;
+	meta.plugin_version = VM_VERSION_STR;
 	meta.folder = cfg.dir;
 	report_format(&g_res, &meta, g_report, sizeof(g_report));
-	vita_mkdirs(TS_DATA_DIR "/");
+	vita_mkdirs(VM_DATA_DIR "/");
 	saved = results_append(RESULTS_PATH, g_report) == 0;
 
 	n = report_screen_lines(&g_res, g_screen, REPORT_LINES_MAX);
@@ -288,12 +288,12 @@ static void clear_results(void)
 /* What the plugin does for the selected device right now (read only). */
 static void plugin_line(char *out, size_t cap)
 {
-	TsState st;
+	VmState st;
 	BenchPluginState ps;
 	const char *dev = bench_device_name(g_dev);
 
 	memset(&st, 0, sizeof(st));
-	if (tsGetState(&st) != TS_OK || st.magic != TS_STATE_MAGIC) {
+	if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC) {
 		snprintf(out, cap, "plugin: the kernel module does not answer (state unknown)");
 		return;
 	}
@@ -354,8 +354,8 @@ static void menu(void)
 		ui_text(2, 22, UI_DIM, "Pick the device that the folder is on (SD2Vita and the memory card");
 		ui_text(2, 23, UI_DIM, "are usually ux0:). If they do not match, the test says so.");
 		ui_text(2, 25, UI_DIM, "The test never changes the plugin. Turn it on or off for the device");
-		ui_text(2, 26, UI_DIM, "in Settings > Turbo Storage, then run the test again to compare.");
-		ui_text(2, 27, UI_DIM, "Every run is appended to ur0:data/turbostorage/results.txt.");
+		ui_text(2, 26, UI_DIM, "in Settings > vita-memio, then run the test again to compare.");
+		ui_text(2, 27, UI_DIM, "Every run is appended to ur0:data/vita-memio/results.txt.");
 		footer("up/down: choose   left/right: change   cross: select");
 		ui_present();
 
@@ -363,7 +363,7 @@ static void menu(void)
 		if ((k & UI_UP) && sel > 0) sel--;
 		if ((k & UI_DOWN) && sel < M_COUNT - 1) sel++;
 		if (sel == M_DEVICE && (k & (UI_LEFT | UI_RIGHT))) {
-			g_dev = (g_dev + ((k & UI_RIGHT) ? 1 : TS_DEV_COUNT - 1)) % TS_DEV_COUNT;
+			g_dev = (g_dev + ((k & UI_RIGHT) ? 1 : VM_DEV_COUNT - 1)) % VM_DEV_COUNT;
 			g_root = k_root_default[g_dev];
 		}
 		if (sel == M_FOLDER && (k & (UI_LEFT | UI_RIGHT)))

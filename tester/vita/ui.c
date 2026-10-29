@@ -31,7 +31,7 @@ int ui_init(void)
 	g_back = malloc((size_t)W * H * 4);
 	if (!g_back)
 		return -1;
-	g_block = sceKernelAllocMemBlock("ts_tester_fb", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,
+	g_block = sceKernelAllocMemBlock("vm_tester_fb", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,
 	                                 FB_BYTES, NULL);
 	if (g_block < 0 || sceKernelGetMemBlockBase(g_block, &base) < 0 || !base) {
 		free(g_back);
@@ -77,9 +77,9 @@ static void put_char(int x, int y, unsigned char ch, uint32_t color)
 {
 	const unsigned char *g;
 
-	if (ch < TS_FONT_FIRST || ch > TS_FONT_LAST)
+	if (ch < VM_FONT_FIRST || ch > VM_FONT_LAST)
 		return;
-	g = ts_font8x8[ch - TS_FONT_FIRST];
+	g = vm_font8x8[ch - VM_FONT_FIRST];
 	for (int dy = 0; dy < CELL; dy++) {
 		unsigned char row = g[dy * 8 / CELL];
 		uint32_t *p = g_back + (size_t)(y + dy) * W + x;

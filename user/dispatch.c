@@ -1,8 +1,8 @@
 /*
  * dispatch.c - the developer command server (TCP :1340), SceShell instance only.
  *
- * Same listener as Wi-Fi Turbo's :1339 surface: it only listens while
- * Developer mode is on (a Turbo Storage setting, off by default), so a normal
+ * The listener only listens while
+ * Developer mode is on (a vita-memio setting, off by default), so a normal
  * console has no open port. One command per line, one reply per command:
  *
  *   help                      this list
@@ -12,12 +12,12 @@
  *   set <key> <value>         sd2vita|memcard|devmode 0/1,
  *                             hud 0-2 (off/compact/extended), hud_pos 0-3
  *                             (internal and verify too, but only in a build made
- *                             with -DTS_DEV_ALLOW_RISKY=1: in a normal build the
+ *                             with -DVM_DEV_ALLOW_RISKY=1: in a normal build the
  *                             network port cannot change them)
  *
  * The port has no password, so it is kept small: Developer mode (kernel side)
- * switches itself off after TS_DEVMODE_MINUTES, and an idle client is dropped
- * after TS_DEV_IDLE_SECS so it cannot hold the single connection forever.
+ * switches itself off after VM_DEVMODE_MINUTES, and an idle client is dropped
+ * after VM_DEV_IDLE_SECS so it cannot hold the single connection forever.
  *
  * BOOT-SAFE: module_start only starts this thread; it waits ~3 s before any
  * SceNet call (touching the network during early SceShell boot can wedge the
@@ -28,18 +28,18 @@
 #include <stdarg.h>
 #include <string.h>
 
-#include "../include/storageturbo.h"
-#include "../include/storageturbo_kernel_api.h"
+#include "../include/vitamemio.h"
+#include "../include/vitamemio_kernel_api.h"
 #include "dispatch.h"
-#include "../settings_app/tslog.h"
+#include "../settings_app/vmlog.h"
 
-#define TS_DEFERRED_BRINGUP_DELAY_US  (3 * 1000 * 1000)
+#define VM_DEFERRED_BRINGUP_DELAY_US  (3 * 1000 * 1000)
 
-static const char *const k_keys[TS_KEY_COUNT] = {
+static const char *const k_keys[VM_KEY_COUNT] = {
 	"sd2vita", "internal", "verify", "hud", "hud_pos", "devmode", "memcard",
 };
 static const char *const k_status[] = { "off", "active", "fallback", "no-buffer", "unavailable" };
-static const char *const k_dev[TS_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
+static const char *const k_dev[VM_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
 
 static int    g_run = 0;
 static SceUID g_thread = -1;
@@ -104,7 +104,7 @@ static int parse_int(const char *s, int *v)
 		s++;
 	while (*s >= '0' && *s <= '9') {
 		/* Saturate instead of overflowing: any value this large is out of range
-		 * for every key and is rejected by tsSetSetting(). */
+		 * for every key and is rejected by vmSetSetting(). */
 		if (n < 100000)
 			n = n * 10 + (*s - '0');
 		s++;
@@ -114,13 +114,13 @@ static int parse_int(const char *s, int *v)
 	return any;
 }
 
-void ts_dispatch_exec(const char *line, char *out, int cap)
+void vm_dispatch_exec(const char *line, char *out, int cap)
 {
 	char *p = out, *end = out + cap;
 
 	out[0] = 0;
 	if (!strcmp(line, "help")) {
-#ifdef TS_DEV_ALLOW_RISKY
+#ifdef VM_DEV_ALLOW_RISKY
 		put(p, end, "commands: help | version | ping | status | set <key> <value>\n"
 		            "keys: sd2vita memcard internal verify devmode (0/1), hud (0-2), hud_pos (0-3)");
 #else
@@ -129,19 +129,19 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		            "internal and verify: Settings only (diagnostics build to change them here)");
 #endif
 	} else if (!strcmp(line, "version")) {
-		put(p, end, "turbo-storage %s", TS_VERSION_STR);
+		put(p, end, "vita-memio %s", VM_VERSION_STR);
 	} else if (!strcmp(line, "ping")) {
-		int r = tsSelfTestPing();
-		put(p, end, "ping %s (0x%08x)", r == (int)TS_SELFTEST_MAGIC ? "ok" : "FAILED", (unsigned)r);
+		int r = vmSelfTestPing();
+		put(p, end, "ping %s (0x%08x)", r == (int)VM_SELFTEST_MAGIC ? "ok" : "FAILED", (unsigned)r);
 	} else if (!strcmp(line, "status")) {
-		TsState st;
+		VmState st;
 
-		if (tsGetState(&st) != TS_OK || st.magic != TS_STATE_MAGIC) {
+		if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC) {
 			put(p, end, "status: kernel module not answering");
 			return;
 		}
-		p += put(p, end, "turbo-storage %s disabled=%d fingerprint=0x%08x uptime=%us verify_ready=%d\n",
-		         TS_VERSION_STR, (int)st.disabled, (unsigned)st.fingerprint,
+		p += put(p, end, "vita-memio %s disabled=%d fingerprint=0x%08x uptime=%us verify_ready=%d\n",
+		         VM_VERSION_STR, (int)st.disabled, (unsigned)st.fingerprint,
 		         (unsigned)st.uptime_s, (int)st.verify_ready);
 		p += put(p, end, "settings: sd2vita=%d memcard=%d internal=%d verify=%d hud=%d hud_pos=%d devmode=%d\n",
 		         (int)st.settings.sd2vita, (int)st.settings.memcard, (int)st.settings.internal,
@@ -149,9 +149,9 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		         (int)st.settings.devmode);
 		p += put(p, end, "memcard slow mode: %s\n", st.memcard_slow == 1 ? "ON" :
 		         st.memcard_slow == 0 ? "off" : "unknown");
-		for (int i = 0; i < TS_DEV_COUNT; i++) {
-			const TsDevState *d = &st.dev[i];
-			int s = d->status >= 0 && d->status <= TS_ST_UNAVAIL ? d->status : TS_ST_UNAVAIL;
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			const VmDevState *d = &st.dev[i];
+			int s = d->status >= 0 && d->status <= VM_ST_UNAVAIL ? d->status : VM_ST_UNAVAIL;
 
 			p += put(p, end, "%s: %s reads=%u (%u MiB) writes=%u (%u MiB) busy=%u errors=%u "
 			         "verified=%u mismatches=%u time=%ums max=%ums\n", k_dev[i], k_status[s],
@@ -166,7 +166,7 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 		const char *k = line + 4;
 		int key = -1, v;
 
-		for (int i = 0; i < TS_KEY_COUNT; i++) {
+		for (int i = 0; i < VM_KEY_COUNT; i++) {
 			int n = (int)strlen(k_keys[i]);
 			if (!strncmp(k, k_keys[i], n) && k[n] == ' ') {
 				key = i;
@@ -178,16 +178,16 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 			put(p, end, "set: usage: set <key> <value> (see help)");
 			return;
 		}
-#ifndef TS_DEV_ALLOW_RISKY
+#ifndef VM_DEV_ALLOW_RISKY
 		/* The port is open to the whole network with no password: it must not be
 		 * able to switch on the internal-storage path or the verify diagnostic. */
-		if (key == TS_KEY_INTERNAL || key == TS_KEY_VERIFY) {
+		if (key == VM_KEY_INTERNAL || key == VM_KEY_VERIFY) {
 			put(p, end, "set %s: not allowed over the network (use Settings)", k_keys[key]);
 			return;
 		}
 #endif
-		int r = tsSetSetting(key, v);
-		put(p, end, "set %s = %d -> %s", k_keys[key], v, r == TS_OK ? "ok" : "rejected");
+		int r = vmSetSetting(key, v);
+		put(p, end, "set %s = %d -> %s", k_keys[key], v, r == VM_OK ? "ok" : "rejected");
 	} else {
 		put(p, end, "unknown command (try: help)");
 	}
@@ -195,16 +195,16 @@ void ts_dispatch_exec(const char *line, char *out, int cap)
 
 static int devmode_on(void)
 {
-	TsState st;
-	return tsGetState(&st) == TS_OK && st.magic == TS_STATE_MAGIC && st.settings.devmode;
+	VmState st;
+	return vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC && st.settings.devmode;
 }
 
 static int server_thread(SceSize args, void *argp)
 {
 	(void)args; (void)argp;
 
-	sceKernelDelayThread(TS_DEFERRED_BRINGUP_DELAY_US);
-	/* Self-healing listener, as in Wi-Fi Turbo: a dead socket is rebuilt rather
+	sceKernelDelayThread(VM_DEFERRED_BRINGUP_DELAY_US);
+	/* Self-healing listener: a dead socket is rebuilt rather
 	 * than spun on; no socket at all while Developer mode is off. */
 	while (g_run) {
 		if (!devmode_on()) {
@@ -216,12 +216,12 @@ static int server_thread(SceSize args, void *argp)
 			SceNetSockaddrIn addr;
 			memset(&addr, 0, sizeof(addr));
 			addr.sin_family = SCE_NET_AF_INET;
-			addr.sin_port = sceNetHtons(TS_DEV_PORT);
+			addr.sin_port = sceNetHtons(VM_DEV_PORT);
 			addr.sin_addr.s_addr = sceNetHtonl(SCE_NET_INADDR_ANY);
 			if (sceNetBind(srv, (SceNetSockaddr *)&addr, sizeof(addr)) < 0) {
 				static int bind_logged;     /* once, not every retry */
 				if (!bind_logged++)
-					TS_LOGI("[DEV] bind :%d failed - retrying", TS_DEV_PORT);
+					VM_LOGI("[DEV] bind :%d failed - retrying", VM_DEV_PORT);
 				sceNetSocketClose(srv);
 				srv = -1;
 			} else {
@@ -241,7 +241,7 @@ static int server_thread(SceSize args, void *argp)
 				break;
 			if (cli < 0) {
 				if (++accept_fails >= 25) {
-					TS_LOGI("[DEV] accept failing (0x%08x) - rebuilding listener", (unsigned)cli);
+					VM_LOGI("[DEV] accept failing (0x%08x) - rebuilding listener", (unsigned)cli);
 					break;
 				}
 				sceKernelDelayThread(200 * 1000);
@@ -249,9 +249,9 @@ static int server_thread(SceSize args, void *argp)
 			}
 			accept_fails = 0;
 			/* An idle or half-open client must not hold the only connection:
-			 * recv/send give up after TS_DEV_IDLE_SECS and the client is closed. */
+			 * recv/send give up after VM_DEV_IDLE_SECS and the client is closed. */
 			{
-				int tmo = TS_DEV_IDLE_SECS * 1000 * 1000;   /* microseconds */
+				int tmo = VM_DEV_IDLE_SECS * 1000 * 1000;   /* microseconds */
 
 				sceNetSetsockopt(cli, SCE_NET_SOL_SOCKET, SCE_NET_SO_RCVTIMEO, &tmo, sizeof(tmo));
 				sceNetSetsockopt(cli, SCE_NET_SOL_SOCKET, SCE_NET_SO_SNDTIMEO, &tmo, sizeof(tmo));
@@ -265,7 +265,7 @@ static int server_thread(SceSize args, void *argp)
 				line[n] = 0;
 				while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
 					line[--n] = 0;
-				ts_dispatch_exec(line, reply, sizeof(reply));
+				vm_dispatch_exec(line, reply, sizeof(reply));
 				int rl = (int)strlen(reply);
 				reply[rl++] = '\n';
 				sceNetSend(cli, reply, rl, 0);
@@ -285,7 +285,7 @@ static int server_thread(SceSize args, void *argp)
 /* Developer mode is switched in the Settings app, a different process, so
  * nothing there can reach this socket. Watch the setting once a second and
  * close the listener when it goes off: that wakes the blocked accept() and the
- * server loop parks (Wi-Fi Turbo closes its socket the same way). */
+ * server loop parks. */
 static int watch_thread(SceSize args, void *argp)
 {
 	(void)args; (void)argp;
@@ -298,24 +298,24 @@ static int watch_thread(SceSize args, void *argp)
 	return 0;
 }
 
-void ts_dispatch_start(void)
+void vm_dispatch_start(void)
 {
 	if (g_thread >= 0)
 		return;
 	g_run = 1;
-	g_thread = sceKernelCreateThread("TsDevServer", server_thread, 0x40, 0x4000, 0, 0, NULL);
+	g_thread = sceKernelCreateThread("VmDevServer", server_thread, 0x40, 0x4000, 0, 0, NULL);
 	if (g_thread >= 0)
 		sceKernelStartThread(g_thread, 0, NULL);
 	else
 		g_run = 0;
 	if (g_run) {
-		g_watch = sceKernelCreateThread("TsDevWatch", watch_thread, 0x40, 0x1000, 0, 0, NULL);
+		g_watch = sceKernelCreateThread("VmDevWatch", watch_thread, 0x40, 0x1000, 0, 0, NULL);
 		if (g_watch >= 0)
 			sceKernelStartThread(g_watch, 0, NULL);
 	}
 }
 
-void ts_dispatch_stop(void)
+void vm_dispatch_stop(void)
 {
 	g_run = 0;
 	if (g_srv >= 0)

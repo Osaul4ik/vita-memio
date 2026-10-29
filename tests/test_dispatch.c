@@ -1,45 +1,45 @@
 /*
  * test_dispatch.c - host tests for user/dispatch.c, the developer command port's
- * parser. Built twice: normally, and with -DTS_DEV_ALLOW_RISKY=1 (the diagnostics
+ * parser. Built twice: normally, and with -DVM_DEV_ALLOW_RISKY=1 (the diagnostics
  * build), because the two differ on `set internal` and `set verify`.
  *
- * The kernel calls (tsGetState, tsSetSetting, tsSelfTestPing) are fakes backed by
- * a TsSettings array; the sockets are never used.
+ * The kernel calls (vmGetState, vmSetSetting, vmSelfTestPing) are fakes backed by
+ * a VmSettings array; the sockets are never used.
  */
 #include "../user/dispatch.c"
 
 #include <stdlib.h>
 
 #include "fakes.h"
-#include "ts_test.h"
+#include "vm_test.h"
 
 /* ---- fake kernel API ---------------------------------------------------------- */
-static TsSettings g_set;
+static VmSettings g_set;
 
-int tsSelfTestPing(void) { return (int)TS_SELFTEST_MAGIC; }
+int vmSelfTestPing(void) { return (int)VM_SELFTEST_MAGIC; }
 
-int tsGetState(TsState *out)
+int vmGetState(VmState *out)
 {
 	memset(out, 0, sizeof(*out));
 	out->size = sizeof(*out);
-	out->magic = TS_STATE_MAGIC;
+	out->magic = VM_STATE_MAGIC;
 	out->settings = g_set;
 	out->fingerprint = 0x2e7c52f7;
 	out->uptime_s = 42;
-	out->dev[TS_DEV_SD2VITA].status = TS_ST_ACTIVE;
-	out->dev[TS_DEV_SD2VITA].reads = 7;
-	out->dev[TS_DEV_SD2VITA].time_ms = 1234;
-	out->dev[TS_DEV_SD2VITA].max_ms = 56;
-	out->dev[TS_DEV_MEMCARD].status = TS_ST_FALLBACK;
-	return TS_OK;
+	out->dev[VM_DEV_SD2VITA].status = VM_ST_ACTIVE;
+	out->dev[VM_DEV_SD2VITA].reads = 7;
+	out->dev[VM_DEV_SD2VITA].time_ms = 1234;
+	out->dev[VM_DEV_SD2VITA].max_ms = 56;
+	out->dev[VM_DEV_MEMCARD].status = VM_ST_FALLBACK;
+	return VM_OK;
 }
 
-int tsSetSetting(int key, int value)
+int vmSetSetting(int key, int value)
 {
-	if (!ts_setting_valid(key, value))
-		return TS_ERR_ARG;
-	*ts_setting_field(&g_set, key) = value;
-	return TS_OK;
+	if (!vm_setting_valid(key, value))
+		return VM_ERR_ARG;
+	*vm_setting_field(&g_set, key) = value;
+	return VM_OK;
 }
 
 /* ---- unused socket/thread functions the file references ----------------------- */
@@ -66,7 +66,7 @@ static char out[1024];
 static const char *run(const char *line)
 {
 	memset(out, 'X', sizeof(out));
-	ts_dispatch_exec(line, out, sizeof(out));
+	vm_dispatch_exec(line, out, sizeof(out));
 	return out;
 }
 
@@ -76,7 +76,7 @@ static void test_basic_commands(void)
 {
 	memset(&g_set, 0, sizeof(g_set));
 	CHECK(has(run("help"), "commands:"));
-	CHECK(has(run("version"), TS_VERSION_STR));
+	CHECK(has(run("version"), VM_VERSION_STR));
 	CHECK(has(run("ping"), "ping ok"));
 	CHECK(has(run("nonsense"), "unknown command"));
 	CHECK(has(run(""), "unknown command"));
@@ -84,7 +84,7 @@ static void test_basic_commands(void)
 
 static void test_help_matches_build(void)
 {
-#ifdef TS_DEV_ALLOW_RISKY
+#ifdef VM_DEV_ALLOW_RISKY
 	CHECK(has(run("help"), "internal verify"));
 #else
 	CHECK(!has(run("help"), "internal verify"));
@@ -98,7 +98,7 @@ static void test_status(void)
 
 	memset(&g_set, 0, sizeof(g_set));
 	r = run("status");
-	CHECK(has(r, "turbo-storage") && has(r, "fingerprint=0x2e7c52f7"));
+	CHECK(has(r, "vita-memio") && has(r, "fingerprint=0x2e7c52f7"));
 	CHECK(has(r, "sd2vita: active reads=7"));
 	CHECK(has(r, "time=1234ms max=56ms"));
 	CHECK(has(r, "memcard: fallback"));
@@ -142,7 +142,7 @@ static void test_set_huge_number(void)
 static void test_risky_keys(void)
 {
 	memset(&g_set, 0, sizeof(g_set));
-#ifdef TS_DEV_ALLOW_RISKY
+#ifdef VM_DEV_ALLOW_RISKY
 	CHECK(has(run("set internal 1"), "ok") && g_set.internal == 1);
 	CHECK(has(run("set verify 1"), "ok") && g_set.verify == 1);
 #else
@@ -162,7 +162,7 @@ static void test_small_reply_buffers(void)
 			char *b = malloc(cap);          /* exact size: ASan sees an overrun */
 
 			memset(&g_set, 0, sizeof(g_set));
-			ts_dispatch_exec(cmds[c], b, cap);
+			vm_dispatch_exec(cmds[c], b, cap);
 			CHECK(memchr(b, 0, cap) != NULL);
 			free(b);
 		}
@@ -180,11 +180,11 @@ int main(void)
 	RUN(test_risky_keys);
 	RUN(test_small_reply_buffers);
 
-#ifdef TS_DEV_ALLOW_RISKY
-	printf(ts_failures ? "test_dispatch (diagnostics build): %d FAILED\n"
-	                   : "test_dispatch (diagnostics build): ok\n", ts_failures);
+#ifdef VM_DEV_ALLOW_RISKY
+	printf(vm_failures ? "test_dispatch (diagnostics build): %d FAILED\n"
+	                   : "test_dispatch (diagnostics build): ok\n", vm_failures);
 #else
-	printf(ts_failures ? "test_dispatch: %d FAILED\n" : "test_dispatch: ok\n", ts_failures);
+	printf(vm_failures ? "test_dispatch: %d FAILED\n" : "test_dispatch: ok\n", vm_failures);
 #endif
-	return ts_failures ? 1 : 0;
+	return vm_failures ? 1 : 0;
 }

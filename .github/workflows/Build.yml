@@ -58,31 +58,31 @@ jobs:
 
       - name: Check both modules exist and are not empty
         run: |
-          for f in build/storageturbo_kernel.skprx build/storageturbo.suprx build/storageturbo_tester.vpk; do
+          for f in build/vitamemio_kernel.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do
             test -s "$f" || { echo "missing or empty: $f"; exit 1; }
           done
 
       - name: SHA-256 sums
         run: |
           cd build
-          sha256sum storageturbo_kernel.skprx storageturbo.suprx storageturbo_tester.vpk | tee SHA256SUMS
+          sha256sum vitamemio_kernel.skprx vitamemio.suprx vitamemio_tester.vpk | tee SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
-          name: turbo-storage-${{ github.sha }}
+          name: vita-memio-${{ github.sha }}
           path: |
-            build/storageturbo_kernel.skprx
-            build/storageturbo.suprx
-            build/storageturbo_tester.vpk
+            build/vitamemio_kernel.skprx
+            build/vitamemio.suprx
+            build/vitamemio_tester.vpk
             build/SHA256SUMS
           if-no-files-found: error
 
   # Same build with the diagnostics build option on, so a change that breaks
-  # `-DTS_DEV_ALLOW_RISKY=1` is caught too. Not uploaded.
+  # `-DVM_DEV_ALLOW_RISKY=1` is caught too. Not uploaded.
   build-dev-diagnostics:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build with TS_DEV_ALLOW_RISKY
-        run: make build BUILD=build-dev CMAKE_ARGS="-DTS_DEV_ALLOW_RISKY=ON"
+      - name: Build with VM_DEV_ALLOW_RISKY
+        run: make build BUILD=build-dev CMAKE_ARGS="-DVM_DEV_ALLOW_RISKY=ON"

@@ -2,8 +2,8 @@
  * ui.h - a tiny text UI on the Vita framebuffer (960x544), using the plugin's own
  * 8x8 font scaled to 12x12 glyphs on a 12x14 grid: 80 columns x 38 rows.
  */
-#ifndef STORAGETURBO_TESTER_UI_H
-#define STORAGETURBO_TESTER_UI_H
+#ifndef VITAMEMIO_TESTER_UI_H
+#define VITAMEMIO_TESTER_UI_H
 
 #include <stdint.h>
 

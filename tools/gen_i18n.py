@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""gen_i18n.py - writes settings_app/storageturbo_i18n_table.h from the table below.
+"""gen_i18n.py - writes settings_app/vitamemio_i18n_table.h from the table below.
 
-Columns follow the Vita system-language order (TS_LANG_*). English (US/UK) is
+Columns follow the Vita system-language order (VM_LANG_*). English (US/UK) is
 authoritative; the others are machine translations, open to correction.
 Run from the repo root:  python3 tools/gen_i18n.py
 """
@@ -12,36 +12,36 @@ T = {}
 def s(id_, **kw):
     T[id_] = kw
 
-s("TS_I18N_TITLE", **{l: "Turbo Storage" for l in LANGS})
-s("TS_I18N_ROW_SD2VITA", en="Faster SD2Vita", engb="Faster SD2Vita", ja="SD2Vitaを高速化",
+s("VM_I18N_TITLE", **{l: "vita-memio" for l in LANGS})
+s("VM_I18N_ROW_SD2VITA", en="Faster SD2Vita", engb="Faster SD2Vita", ja="SD2Vitaを高速化",
   fr="SD2Vita plus rapide", es="SD2Vita más rápido", de="Schnellere SD2Vita", it="SD2Vita più veloce",
   nl="Snellere SD2Vita", pt="SD2Vita mais rápido", ptbr="SD2Vita mais rápido", ru="Ускорить SD2Vita",
   ko="SD2Vita 가속", zht="加速 SD2Vita", zhs="加速 SD2Vita", fi="Nopeampi SD2Vita",
   sv="Snabbare SD2Vita", da="Hurtigere SD2Vita", no="Raskere SD2Vita", pl="Szybsze SD2Vita",
   tr="Daha hızlı SD2Vita")
-s("TS_I18N_ROW_INTERNAL", en="Faster internal storage", engb="Faster internal storage",
+s("VM_I18N_ROW_INTERNAL", en="Faster internal storage", engb="Faster internal storage",
   ja="本体ストレージを高速化", fr="Stockage interne plus rapide", es="Almacenamiento interno más rápido",
   de="Schnellerer interner Speicher", it="Memoria interna più veloce", nl="Snellere interne opslag",
   pt="Armazenamento interno mais rápido", ptbr="Armazenamento interno mais rápido",
   ru="Ускорить встроенную память", ko="내장 저장소 가속", zht="加速內建儲存空間", zhs="加速内置存储",
   fi="Nopeampi sisäinen tallennustila", sv="Snabbare intern lagring", da="Hurtigere intern lagring",
   no="Raskere intern lagring", pl="Szybsza pamięć wewnętrzna", tr="Daha hızlı dahili depolama")
-s("TS_I18N_ROW_HUD", en="Storage HUD", engb="Storage HUD", ja="ストレージHUD", fr="HUD de stockage",
+s("VM_I18N_ROW_HUD", en="Storage HUD", engb="Storage HUD", ja="ストレージHUD", fr="HUD de stockage",
   es="HUD de almacenamiento", de="Speicher-HUD", it="HUD memoria", nl="Opslag-HUD", pt="HUD de armazenamento",
   ptbr="HUD de armazenamento", ru="HUD памяти", ko="저장소 HUD", zht="儲存 HUD", zhs="存储 HUD",
   fi="Tallennus-HUD", sv="Lagrings-HUD", da="Lager-HUD", no="Lagrings-HUD", pl="HUD pamięci",
   tr="Depolama HUD")
-s("TS_I18N_ROW_HUD_POS", en="HUD position", engb="HUD position", ja="HUDの位置", fr="Position du HUD",
+s("VM_I18N_ROW_HUD_POS", en="HUD position", engb="HUD position", ja="HUDの位置", fr="Position du HUD",
   es="Posición del HUD", de="HUD-Position", it="Posizione HUD", nl="HUD-positie", pt="Posição do HUD",
   ptbr="Posição do HUD", ru="Положение HUD", ko="HUD 위치", zht="HUD 位置", zhs="HUD 位置",
   fi="HUD:n sijainti", sv="HUD-position", da="HUD-placering", no="HUD-plassering", pl="Położenie HUD",
   tr="HUD konumu")
-s("TS_I18N_ROW_DEVMODE", en="Developer mode", engb="Developer mode", ja="開発者モード",
+s("VM_I18N_ROW_DEVMODE", en="Developer mode", engb="Developer mode", ja="開発者モード",
   fr="Mode développeur", es="Modo desarrollador", de="Entwicklermodus", it="Modalità sviluppatore",
   nl="Ontwikkelaarsmodus", pt="Modo de programador", ptbr="Modo de desenvolvedor", ru="Режим разработчика",
   ko="개발자 모드", zht="開發者模式", zhs="开发者模式", fi="Kehittäjätila", sv="Utvecklarläge",
   da="Udviklertilstand", no="Utviklermodus", pl="Tryb programisty", tr="Geliştirici modu")
-s("TS_I18N_HINT_SD2VITA",
+s("VM_I18N_HINT_SD2VITA",
   en="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing a microSD card in an SD2Vita adapter. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   ja="SD2Vitaアダプターに入れたmicroSDカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",
@@ -62,7 +62,7 @@ s("TS_I18N_HINT_SD2VITA",
   no="Gjør lesing og skriving på et microSD-kort i en SD2Vita-adapter raskere. Filene dine og måten de lagres på endres ikke. Slå av hvis du mistenker et problem. Trer i kraft umiddelbart; ingen omstart nødvendig.",
   pl="Przyspiesza odczyt i zapis karty microSD w adapterze SD2Vita. Twoje pliki i sposób ich zapisu się nie zmieniają. Wyłącz, jeśli podejrzewasz problem. Działa od razu, bez ponownego uruchamiania.",
   tr="SD2Vita adaptöründeki microSD kartın okuma ve yazma hızını artırır. Dosyalarınız ve saklanma biçimleri değişmez. Bir sorundan şüphelenirseniz kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
-s("TS_I18N_HINT_INTERNAL",
+s("VM_I18N_HINT_INTERNAL",
   en="Speeds up reading and writing the console's built-in storage. Off by default as a precaution, because this storage also holds system data and plugin settings. As an extra precaution, turn it off before updating or downgrading the firmware. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing the console's built-in storage. Off by default as a precaution, because this storage also holds system data and plugin settings. As an extra precaution, turn it off before updating or downgrading the firmware. Takes effect immediately; no reboot needed.",
   ja="本体内蔵ストレージの読み書きを高速化します。このストレージにはシステムデータやプラグインの設定も保存されているため、念のため初期設定はオフです。念のため、ファームウェアのアップデートやダウングレードの前にはオフにしてください。すぐに反映され、再起動は不要です。",
@@ -83,13 +83,13 @@ s("TS_I18N_HINT_INTERNAL",
   no="Gjør lesing og skriving på konsollens innebygde lagring raskere. Av som standard av forsiktighet, fordi lagringen også inneholder systemdata og plugininnstillinger. Som et ekstra forholdsregel bør du slå det av før du oppdaterer eller nedgraderer fastvaren. Trer i kraft umiddelbart; ingen omstart nødvendig.",
   pl="Przyspiesza odczyt i zapis wbudowanej pamięci konsoli. Domyślnie wyłączone dla bezpieczeństwa, ponieważ ta pamięć przechowuje też dane systemowe i ustawienia wtyczek. Dla dodatkowego bezpieczeństwa wyłącz je przed aktualizacją lub obniżeniem wersji oprogramowania. Działa od razu, bez ponownego uruchamiania.",
   tr="Konsolun dahili depolamasının okuma ve yazma hızını artırır. Bu depolama sistem verilerini ve eklenti ayarlarını da tuttuğu için önlem olarak varsayılan olarak kapalıdır. Ek bir önlem olarak, yazılımı güncellemeden veya eski sürüme düşürmeden önce kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
-s("TS_I18N_ROW_MEMCARD", en="Faster Vita memory card", engb="Faster Vita memory card", ja="Vitaメモリーカードを高速化",
+s("VM_I18N_ROW_MEMCARD", en="Faster Vita memory card", engb="Faster Vita memory card", ja="Vitaメモリーカードを高速化",
   fr="Carte mémoire Vita plus rapide", es="Tarjeta de memoria Vita más rápida", de="Schnellere Vita-Speicherkarte",
   it="Scheda di memoria Vita più veloce", nl="Snellere Vita-geheugenkaart", pt="Cartão de memória Vita mais rápido",
   ptbr="Cartão de memória Vita mais rápido", ru="Ускорить карту памяти Vita", ko="Vita 메모리 카드 가속",
   zht="加速 Vita 記憶卡", zhs="加速 Vita 存储卡", fi="Nopeampi Vita-muistikortti", sv="Snabbare Vita-minneskort",
   da="Hurtigere Vita-hukommelseskort", no="Raskere Vita-minnekort", pl="Szybsza karta pamięci Vita", tr="Daha hızlı Vita hafıza kartı")
-s("TS_I18N_HINT_MEMCARD",
+s("VM_I18N_HINT_MEMCARD",
   en="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   engb="Speeds up reading and writing the official PS Vita memory card. Your files and how they are stored do not change. Turn off if you suspect a problem. Takes effect immediately; no reboot needed.",
   ja="PS Vita専用メモリーカードの読み書きを高速化します。ファイルや保存方法は変わりません。問題が疑われる場合はオフにしてください。すぐに反映され、再起動は不要です。",
@@ -110,7 +110,7 @@ s("TS_I18N_HINT_MEMCARD",
   no="Gjør lesing og skriving på det offisielle PS Vita-minnekortet raskere. Filene dine og måten de lagres på endres ikke. Slå av hvis du mistenker et problem. Trer i kraft umiddelbart; ingen omstart nødvendig.",
   pl="Przyspiesza odczyt i zapis oficjalnej karty pamięci PS Vita. Twoje pliki i sposób ich zapisu się nie zmieniają. Wyłącz, jeśli podejrzewasz problem. Działa od razu, bez ponownego uruchamiania.",
   tr="Resmi PS Vita hafıza kartının okuma ve yazma hızını artırır. Dosyalarınız ve saklanma biçimleri değişmez. Bir sorundan şüphelenirseniz kapatın. Hemen etkili olur; yeniden başlatma gerekmez.")
-s("TS_I18N_ST_SLOW",
+s("VM_I18N_ST_SLOW",
   en="Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",
   engb="Note: the system's slow mode for memory cards is on, which deliberately slows every memory card transfer.",
   ja="注意：システムのメモリーカード低速モードがオンになっており、すべての転送が意図的に遅くなっています。",
@@ -131,7 +131,7 @@ s("TS_I18N_ST_SLOW",
   no="Merk: systemets trege modus for minnekort er på og gjør bevisst hver overføring tregere.",
   pl="Uwaga: systemowy tryb wolnej karty pamięci jest włączony i celowo spowalnia każdy transfer.",
   tr="Not: sistemin hafıza kartı yavaş modu açık; her aktarımı bilerek yavaşlatır.")
-s("TS_I18N_HINT_HUD",
+s("VM_I18N_HINT_HUD",
   en="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
   engb="Show live storage speed over every app. Compact: one line per storage in use. Extended: adds totals and errors.",
   ja="すべてのアプリ上にストレージの速度をリアルタイム表示します。コンパクト：使用中のストレージごとに1行。拡張：合計とエラーも表示。",
@@ -152,7 +152,7 @@ s("TS_I18N_HINT_HUD",
   no="Viser lagringshastigheten live over alle apper. Kompakt: én linje per lagring i bruk. Utvidet: legger til totaler og feil.",
   pl="Pokazuje prędkość pamięci na żywo nad każdą aplikacją. Kompaktowy: jedna linia na używaną pamięć. Rozszerzony: dodaje sumy i błędy.",
   tr="Depolama hızını her uygulamanın üzerinde canlı gösterir. Kompakt: kullanılan her depolama için bir satır. Genişletilmiş: toplamları ve hataları ekler.")
-s("TS_I18N_HINT_HUD_POS", en="Which corner of the screen the HUD sits in.", engb="Which corner of the screen the HUD sits in.",
+s("VM_I18N_HINT_HUD_POS", en="Which corner of the screen the HUD sits in.", engb="Which corner of the screen the HUD sits in.",
   ja="HUDを表示する画面の隅。", fr="Le coin de l'écran où s'affiche le HUD.", es="En qué esquina de la pantalla aparece el HUD.",
   de="In welcher Bildschirmecke das HUD erscheint.", it="In quale angolo dello schermo appare l'HUD.",
   nl="In welke hoek van het scherm de HUD staat.", pt="Em que canto do ecrã aparece o HUD.",
@@ -161,7 +161,7 @@ s("TS_I18N_HINT_HUD_POS", en="Which corner of the screen the HUD sits in.", engb
   fi="Missä näytön kulmassa HUD näkyy.", sv="I vilket hörn av skärmen HUD:en visas.",
   da="Hvilket hjørne af skærmen HUD'en vises i.", no="Hvilket hjørne av skjermen HUD-en vises i.",
   pl="W którym rogu ekranu pojawia się HUD.", tr="HUD'nin ekranın hangi köşesinde görüneceği.")
-s("TS_I18N_HINT_DEVMODE",
+s("VM_I18N_HINT_DEVMODE",
   en="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
   engb="Opens a command port (TCP 1340) on your local network for diagnostics. Leave off unless you are testing.",
   ja="診断用にローカルネットワーク上でコマンドポート（TCP 1340）を開きます。テスト時以外はオフにしてください。",
@@ -184,14 +184,14 @@ s("TS_I18N_HINT_DEVMODE",
   tr="Tanılama için yerel ağınızda bir komut bağlantı noktası (TCP 1340) açar. Test etmiyorsanız kapalı bırakın.")
 def items(id_, d):
     s(id_, **d)
-items("TS_I18N_ITEM_HUD_OFF", dict(en="Off", engb="Off", ja="オフ", fr="Désactivé", es="Desactivado", de="Aus", it="Disattivato", nl="Uit", pt="Desligado", ptbr="Desligado", ru="Выкл.", ko="끔", zht="關閉", zhs="关闭", fi="Pois", sv="Av", da="Fra", no="Av", pl="Wyłączony", tr="Kapalı"))
-items("TS_I18N_ITEM_HUD_COMPACT", dict(en="Compact", engb="Compact", ja="コンパクト", fr="Compact", es="Compacto", de="Kompakt", it="Compatto", nl="Compact", pt="Compacto", ptbr="Compacto", ru="Компактно", ko="간단히", zht="精簡", zhs="精简", fi="Tiivis", sv="Kompakt", da="Kompakt", no="Kompakt", pl="Kompaktowy", tr="Kompakt"))
-items("TS_I18N_ITEM_HUD_EXTENDED", dict(en="Extended", engb="Extended", ja="拡張", fr="Étendu", es="Extendido", de="Erweitert", it="Esteso", nl="Uitgebreid", pt="Alargado", ptbr="Estendido", ru="Расширенно", ko="자세히", zht="詳細", zhs="详细", fi="Laaja", sv="Utökad", da="Udvidet", no="Utvidet", pl="Rozszerzony", tr="Genişletilmiş"))
-items("TS_I18N_ITEM_POS_TL", dict(en="Top left", engb="Top left", ja="左上", fr="En haut à gauche", es="Arriba a la izquierda", de="Oben links", it="In alto a sinistra", nl="Linksboven", pt="Canto superior esquerdo", ptbr="Canto superior esquerdo", ru="Слева сверху", ko="왼쪽 위", zht="左上", zhs="左上", fi="Ylävasen", sv="Uppe till vänster", da="Øverst til venstre", no="Øverst til venstre", pl="Lewy górny", tr="Sol üst"))
-items("TS_I18N_ITEM_POS_TR", dict(en="Top right", engb="Top right", ja="右上", fr="En haut à droite", es="Arriba a la derecha", de="Oben rechts", it="In alto a destra", nl="Rechtsboven", pt="Canto superior direito", ptbr="Canto superior direito", ru="Справа сверху", ko="오른쪽 위", zht="右上", zhs="右上", fi="Yläoikea", sv="Uppe till höger", da="Øverst til højre", no="Øverst til høyre", pl="Prawy górny", tr="Sağ üst"))
-items("TS_I18N_ITEM_POS_BL", dict(en="Bottom left", engb="Bottom left", ja="左下", fr="En bas à gauche", es="Abajo a la izquierda", de="Unten links", it="In basso a sinistra", nl="Linksonder", pt="Canto inferior esquerdo", ptbr="Canto inferior esquerdo", ru="Слева снизу", ko="왼쪽 아래", zht="左下", zhs="左下", fi="Alavasen", sv="Nere till vänster", da="Nederst til venstre", no="Nederst til venstre", pl="Lewy dolny", tr="Sol alt"))
-items("TS_I18N_ITEM_POS_BR", dict(en="Bottom right", engb="Bottom right", ja="右下", fr="En bas à droite", es="Abajo a la derecha", de="Unten rechts", it="In basso a destra", nl="Rechtsonder", pt="Canto inferior direito", ptbr="Canto inferior direito", ru="Справа снизу", ko="오른쪽 아래", zht="右下", zhs="右下", fi="Alaoikea", sv="Nere till höger", da="Nederst til højre", no="Nederst til høyre", pl="Prawy dolny", tr="Sağ alt"))
-s("TS_I18N_ST_FALLBACK",
+items("VM_I18N_ITEM_HUD_OFF", dict(en="Off", engb="Off", ja="オフ", fr="Désactivé", es="Desactivado", de="Aus", it="Disattivato", nl="Uit", pt="Desligado", ptbr="Desligado", ru="Выкл.", ko="끔", zht="關閉", zhs="关闭", fi="Pois", sv="Av", da="Fra", no="Av", pl="Wyłączony", tr="Kapalı"))
+items("VM_I18N_ITEM_HUD_COMPACT", dict(en="Compact", engb="Compact", ja="コンパクト", fr="Compact", es="Compacto", de="Kompakt", it="Compatto", nl="Compact", pt="Compacto", ptbr="Compacto", ru="Компактно", ko="간단히", zht="精簡", zhs="精简", fi="Tiivis", sv="Kompakt", da="Kompakt", no="Kompakt", pl="Kompaktowy", tr="Kompakt"))
+items("VM_I18N_ITEM_HUD_EXTENDED", dict(en="Extended", engb="Extended", ja="拡張", fr="Étendu", es="Extendido", de="Erweitert", it="Esteso", nl="Uitgebreid", pt="Alargado", ptbr="Estendido", ru="Расширенно", ko="자세히", zht="詳細", zhs="详细", fi="Laaja", sv="Utökad", da="Udvidet", no="Utvidet", pl="Rozszerzony", tr="Genişletilmiş"))
+items("VM_I18N_ITEM_POS_TL", dict(en="Top left", engb="Top left", ja="左上", fr="En haut à gauche", es="Arriba a la izquierda", de="Oben links", it="In alto a sinistra", nl="Linksboven", pt="Canto superior esquerdo", ptbr="Canto superior esquerdo", ru="Слева сверху", ko="왼쪽 위", zht="左上", zhs="左上", fi="Ylävasen", sv="Uppe till vänster", da="Øverst til venstre", no="Øverst til venstre", pl="Lewy górny", tr="Sol üst"))
+items("VM_I18N_ITEM_POS_TR", dict(en="Top right", engb="Top right", ja="右上", fr="En haut à droite", es="Arriba a la derecha", de="Oben rechts", it="In alto a destra", nl="Rechtsboven", pt="Canto superior direito", ptbr="Canto superior direito", ru="Справа сверху", ko="오른쪽 위", zht="右上", zhs="右上", fi="Yläoikea", sv="Uppe till höger", da="Øverst til højre", no="Øverst til høyre", pl="Prawy górny", tr="Sağ üst"))
+items("VM_I18N_ITEM_POS_BL", dict(en="Bottom left", engb="Bottom left", ja="左下", fr="En bas à gauche", es="Abajo a la izquierda", de="Unten links", it="In basso a sinistra", nl="Linksonder", pt="Canto inferior esquerdo", ptbr="Canto inferior esquerdo", ru="Слева снизу", ko="왼쪽 아래", zht="左下", zhs="左下", fi="Alavasen", sv="Nere till vänster", da="Nederst til venstre", no="Nederst til venstre", pl="Lewy dolny", tr="Sol alt"))
+items("VM_I18N_ITEM_POS_BR", dict(en="Bottom right", engb="Bottom right", ja="右下", fr="En bas à droite", es="Abajo a la derecha", de="Unten rechts", it="In basso a destra", nl="Rechtsonder", pt="Canto inferior direito", ptbr="Canto inferior direito", ru="Справа снизу", ko="오른쪽 아래", zht="右下", zhs="右下", fi="Alaoikea", sv="Nere till höger", da="Nederst til højre", no="Nederst til høyre", pl="Prawy dolny", tr="Sağ alt"))
+s("VM_I18N_ST_FALLBACK",
   en="Switched back to standard after an error. Turn off and on to retry; please report it.",
   engb="Switched back to standard after an error. Turn off and on to retry; please report it.",
   ja="エラーのため通常に戻りました。オフにしてからオンにすると再試行します。報告をお願いします。",
@@ -212,7 +212,7 @@ s("TS_I18N_ST_FALLBACK",
   no="Gikk tilbake til standard etter en feil. Slå av og på for å prøve igjen; rapporter det gjerne.",
   pl="Po błędzie przełączono z powrotem na tryb standardowy. Wyłącz i włącz, aby spróbować ponownie; zgłoś to.",
   tr="Bir hatadan sonra standarda dönüldü. Yeniden denemek için kapatıp açın; lütfen bildirin.")
-s("TS_I18N_ST_NO_BUFFER", en="Unavailable: not enough memory at boot. Standard speed.", engb="Unavailable: not enough memory at boot. Standard speed.",
+s("VM_I18N_ST_NO_BUFFER", en="Unavailable: not enough memory at boot. Standard speed.", engb="Unavailable: not enough memory at boot. Standard speed.",
   ja="利用不可：起動時のメモリ不足。通常の速度。", fr="Indisponible : mémoire insuffisante au démarrage. Vitesse standard.",
   es="No disponible: memoria insuficiente al arrancar. Velocidad estándar.", de="Nicht verfügbar: zu wenig Speicher beim Start. Normale Geschwindigkeit.",
   it="Non disponibile: memoria insufficiente all'avvio. Velocità standard.", nl="Niet beschikbaar: te weinig geheugen bij het opstarten. Standaardsnelheid.",
@@ -222,7 +222,7 @@ s("TS_I18N_ST_NO_BUFFER", en="Unavailable: not enough memory at boot. Standard s
   fi="Ei käytettävissä: muisti ei riittänyt käynnistyksessä. Tavallinen nopeus.", sv="Ej tillgängligt: för lite minne vid start. Normal hastighet.",
   da="Utilgængelig: for lidt hukommelse ved opstart. Normal hastighed.", no="Utilgjengelig: for lite minne ved oppstart. Normal hastighet.",
   pl="Niedostępne: za mało pamięci przy uruchomieniu. Standardowa prędkość.", tr="Kullanılamıyor: açılışta bellek yetersiz. Standart hız.")
-s("TS_I18N_ST_FIRMWARE", en="Inactive: this firmware is not supported. Standard speed.", engb="Inactive: this firmware is not supported. Standard speed.",
+s("VM_I18N_ST_FIRMWARE", en="Inactive: this firmware is not supported. Standard speed.", engb="Inactive: this firmware is not supported. Standard speed.",
   ja="無効：このファームウェアには対応していません。通常の速度。", fr="Inactif : ce firmware n'est pas pris en charge. Vitesse standard.",
   es="Inactivo: este firmware no es compatible. Velocidad estándar.", de="Inaktiv: Diese Firmware wird nicht unterstützt. Normale Geschwindigkeit.",
   it="Inattivo: questo firmware non è supportato. Velocità standard.", nl="Inactief: deze firmware wordt niet ondersteund. Standaardsnelheid.",
@@ -232,14 +232,14 @@ s("TS_I18N_ST_FIRMWARE", en="Inactive: this firmware is not supported. Standard 
   fi="Ei käytössä: tätä laiteohjelmistoa ei tueta. Tavallinen nopeus.", sv="Inaktiv: den här firmwaren stöds inte. Normal hastighet.",
   da="Inaktiv: denne firmware understøttes ikke. Normal hastighed.", no="Inaktiv: denne fastvaren støttes ikke. Normal hastighet.",
   pl="Nieaktywne: to oprogramowanie nie jest obsługiwane. Standardowa prędkość.", tr="Etkin değil: bu yazılım desteklenmiyor. Standart hız.")
-s("TS_I18N_ST_HOOKS", en="Inactive: could not start. Standard speed.", engb="Inactive: could not start. Standard speed.",
+s("VM_I18N_ST_HOOKS", en="Inactive: could not start. Standard speed.", engb="Inactive: could not start. Standard speed.",
   ja="無効：開始できませんでした。通常の速度。", fr="Inactif : impossible de démarrer. Vitesse standard.", es="Inactivo: no se pudo iniciar. Velocidad estándar.",
   de="Inaktiv: Start fehlgeschlagen. Normale Geschwindigkeit.", it="Inattivo: impossibile avviare. Velocità standard.", nl="Inactief: kon niet starten. Standaardsnelheid.",
   pt="Inativo: não foi possível iniciar. Velocidade padrão.", ptbr="Inativo: não foi possível iniciar. Velocidade padrão.",
   ru="Неактивно: не удалось запустить. Обычная скорость.", ko="비활성: 시작할 수 없습니다. 일반 속도.", zht="未啟用：無法啟動。標準速度。", zhs="未启用：无法启动。标准速度。",
   fi="Ei käytössä: käynnistys epäonnistui. Tavallinen nopeus.", sv="Inaktiv: kunde inte starta. Normal hastighet.", da="Inaktiv: kunne ikke starte. Normal hastighed.",
   no="Inaktiv: kunne ikke starte. Normal hastighet.", pl="Nieaktywne: nie udało się uruchomić. Standardowa prędkość.", tr="Etkin değil: başlatılamadı. Standart hız.")
-s("TS_I18N_ST_SAFE", en="Inactive: safe mode after an incomplete start. Standard speed.", engb="Inactive: safe mode after an incomplete start. Standard speed.",
+s("VM_I18N_ST_SAFE", en="Inactive: safe mode after an incomplete start. Standard speed.", engb="Inactive: safe mode after an incomplete start. Standard speed.",
   ja="無効：前回の起動が完了しなかったためセーフモード。通常の速度。", fr="Inactif : mode sans échec après un démarrage incomplet. Vitesse standard.",
   es="Inactivo: modo seguro tras un inicio incompleto. Velocidad estándar.", de="Inaktiv: abgesicherter Modus nach unvollständigem Start. Normale Geschwindigkeit.",
   it="Inattivo: modalità provvisoria dopo un avvio incompleto. Velocità standard.", nl="Inactief: veilige modus na een onvolledige start. Standaardsnelheid.",
@@ -249,7 +249,7 @@ s("TS_I18N_ST_SAFE", en="Inactive: safe mode after an incomplete start. Standard
   fi="Ei käytössä: vikasietotila keskeytyneen käynnistyksen jälkeen. Tavallinen nopeus.", sv="Inaktiv: felsäkert läge efter en ofullständig start. Normal hastighet.",
   da="Inaktiv: sikker tilstand efter en ufuldstændig start. Normal hastighed.", no="Inaktiv: sikker modus etter en ufullstendig oppstart. Normal hastighet.",
   pl="Nieaktywne: tryb awaryjny po niepełnym uruchomieniu. Standardowa prędkość.", tr="Etkin değil: tamamlanmayan başlatma sonrası güvenli mod. Standart hız.")
-s("TS_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb="Inactive: the kernel plugin is not loaded.",
+s("VM_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb="Inactive: the kernel plugin is not loaded.",
   ja="無効：カーネルプラグインが読み込まれていません。", fr="Inactif : le plugin noyau n'est pas chargé.", es="Inactivo: el plugin de kernel no está cargado.",
   de="Inaktiv: Das Kernel-Plugin ist nicht geladen.", it="Inattivo: il plugin kernel non è caricato.", nl="Inactief: de kernelplugin is niet geladen.",
   pt="Inativo: o plugin de kernel não está carregado.", ptbr="Inativo: o plugin de kernel não está carregado.", ru="Неактивно: плагин ядра не загружен.",
@@ -259,7 +259,7 @@ s("TS_I18N_ST_NO_KERNEL", en="Inactive: the kernel plugin is not loaded.", engb=
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['TS_I18N_TITLE', 'TS_I18N_ROW_SD2VITA', 'TS_I18N_ROW_INTERNAL', 'TS_I18N_ROW_HUD', 'TS_I18N_ROW_HUD_POS', 'TS_I18N_ROW_DEVMODE', 'TS_I18N_ROW_MEMCARD', 'TS_I18N_HINT_SD2VITA', 'TS_I18N_HINT_INTERNAL', 'TS_I18N_HINT_HUD', 'TS_I18N_HINT_HUD_POS', 'TS_I18N_HINT_DEVMODE', 'TS_I18N_HINT_MEMCARD', 'TS_I18N_ITEM_HUD_OFF', 'TS_I18N_ITEM_HUD_COMPACT', 'TS_I18N_ITEM_HUD_EXTENDED', 'TS_I18N_ITEM_POS_TL', 'TS_I18N_ITEM_POS_TR', 'TS_I18N_ITEM_POS_BL', 'TS_I18N_ITEM_POS_BR', 'TS_I18N_ST_FALLBACK', 'TS_I18N_ST_NO_BUFFER', 'TS_I18N_ST_FIRMWARE', 'TS_I18N_ST_HOOKS', 'TS_I18N_ST_SAFE', 'TS_I18N_ST_NO_KERNEL', 'TS_I18N_ST_SLOW']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_HUD_POS', 'VM_I18N_ROW_DEVMODE', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_HUD_POS', 'VM_I18N_HINT_DEVMODE', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ITEM_POS_TL', 'VM_I18N_ITEM_POS_TR', 'VM_I18N_ITEM_POS_BL', 'VM_I18N_ITEM_POS_BR', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]
@@ -271,5 +271,5 @@ for k in ORDER:
     for l in LANGS:
         out.append(f'\t"{esc(row[l])}",   /* {l} */')
     out.append("},")
-open("settings_app/storageturbo_i18n_table.h", "w").write("\n".join(out) + "\n")
+open("settings_app/vitamemio_i18n_table.h", "w").write("\n".join(out) + "\n")
 print("wrote", len(ORDER), "strings x", len(LANGS), "languages")

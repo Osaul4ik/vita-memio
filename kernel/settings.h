@@ -1,24 +1,27 @@
 /*
- * settings.h - the kernel module owns Turbo Storage's settings: loaded from
- * ur0:data/turbostorage/settings.bin at boot, changed through tsSetSetting(),
+ * settings.h - the kernel module owns vita-memio's settings: loaded from
+ * ur0:data/vita-memio/settings.bin at boot, changed through vmSetSetting(),
  * written back by the 1 Hz worker. See settings.c.
  */
-#ifndef STORAGETURBO_SETTINGS_H
-#define STORAGETURBO_SETTINGS_H
+#ifndef VITAMEMIO_SETTINGS_H
+#define VITAMEMIO_SETTINGS_H
 
-#include "../include/storageturbo.h"
+#include "../include/vitamemio.h"
 
-#define TS_SETTINGS_PATH  TS_DATA_DIR "/settings.bin"
-/* A save is written here first and then renamed over TS_SETTINGS_PATH. */
-#define TS_SETTINGS_TMP   TS_DATA_DIR "/settings.tmp"
+#define VM_SETTINGS_PATH  VM_DATA_DIR "/settings.bin"
+/* A save is written here first and then renamed over VM_SETTINGS_PATH. */
+#define VM_SETTINGS_TMP   VM_DATA_DIR "/settings.tmp"
+/* Where builds before the rename kept them: read once if the new folder has
+ * none, then saved to the new place. */
+#define VM_SETTINGS_OLD   "ur0:data/turbostorage/settings.bin"
 
 /* The live settings. Read freely (each field is one aligned word); write only
- * through ts_settings_set(). */
-extern volatile TsSettings g_ts_settings;
+ * through vm_settings_set(). */
+extern volatile VmSettings g_vm_settings;
 
-void ts_settings_init(void);                 /* defaults, then the saved file  */
-int  ts_settings_set(int key, int value);    /* validate + apply; TS_ERR_ARG   */
-void ts_settings_copy(TsSettings *out);
-void ts_settings_flush(void);                /* save if changed (worker only)  */
+void vm_settings_init(void);                 /* defaults, then the saved file  */
+int  vm_settings_set(int key, int value);    /* validate + apply; VM_ERR_ARG   */
+void vm_settings_copy(VmSettings *out);
+void vm_settings_flush(void);                /* save if changed (worker only)  */
 
-#endif /* STORAGETURBO_SETTINGS_H */
+#endif /* VITAMEMIO_SETTINGS_H */

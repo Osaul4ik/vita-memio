@@ -1,4 +1,4 @@
-storageturbo_kernel:
+vitamemio_kernel:
   attributes: 0
   version:
     major: 0
@@ -7,10 +7,10 @@ storageturbo_kernel:
     start: module_start
     stop: module_stop
   libraries:
-    SceStorageTurbo:
+    SceVitaMemio:
       syscall: true
       functions:
-        - tsGetState
-        - tsSetSetting
-        - tsSelfTestPing
-        - tsGetTiming
+        - vmGetState
+        - vmSetSetting
+        - vmSelfTestPing
+        - vmGetTiming

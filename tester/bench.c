@@ -48,19 +48,19 @@ int bench_metric_is_iops(int metric)
 
 const char *bench_device_name(int dev)
 {
-	return dev == TS_DEV_INTERNAL ? "Internal" :
-	       dev == TS_DEV_MEMCARD  ? "Memory card" : "SD2Vita";
+	return dev == VM_DEV_INTERNAL ? "Internal" :
+	       dev == VM_DEV_MEMCARD  ? "Memory card" : "SD2Vita";
 }
 
 int bench_plugin_mode(const BenchPluginState *st)
 {
 	if (!st->available)
 		return BPM_UNKNOWN;
-	if (st->disabled != TS_DIS_NONE)
+	if (st->disabled != VM_DIS_NONE)
 		return BPM_INACTIVE;
 	switch (st->status) {
-	case TS_ST_OFF:    return BPM_OFF;
-	case TS_ST_ACTIVE: return BPM_ON;
+	case VM_ST_OFF:    return BPM_OFF;
+	case VM_ST_ACTIVE: return BPM_ON;
 	default:           return BPM_TROUBLE;
 	}
 }

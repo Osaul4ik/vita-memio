@@ -8,7 +8,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 
-#include "../../include/storageturbo_kernel_api.h"
+#include "../../include/vitamemio_kernel_api.h"
 #include "vita_env.h"
 
 /* ---- time and files ---------------------------------------------------------- */
@@ -84,16 +84,16 @@ static int v_mkdirs(void *ctx, const char *dir)
 
 /* ---- the plugin (read only) -------------------------------------------------- */
 
-/* The tester only ever READS the plugin's state (tsGetState). It never calls
- * tsSetSetting: switching the plugin on or off is done by the user in Settings. */
+/* The tester only ever READS the plugin's state (vmGetState). It never calls
+ * vmSetSetting: switching the plugin on or off is done by the user in Settings. */
 static int v_plugin_get(void *ctx, BenchPluginState *out)
 {
 	VitaEnv *v = ctx;
-	TsState st;
+	VmState st;
 
 	memset(out, 0, sizeof(*out));
 	memset(&st, 0, sizeof(st));
-	if (tsGetState(&st) != TS_OK || st.magic != TS_STATE_MAGIC)
+	if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC)
 		return -1;
 	out->available = 1;
 	out->disabled = st.disabled;
@@ -105,14 +105,14 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;
 	{
-		/* Optional: a kernel module older than this tester has no tsGetTiming
+		/* Optional: a kernel module older than this tester has no vmGetTiming
 		 * (the weak import then just returns), so check the result and magic. */
-		TsTiming tm;
+		VmTiming tm;
 
 		memset(&tm, 0, sizeof(tm));
-		if (tsGetTiming(&tm) == TS_OK && tm.magic == TS_TIMING_MAGIC &&
+		if (vmGetTiming(&tm) == VM_OK && tm.magic == VM_TIMING_MAGIC &&
 		    tm.size == sizeof(tm)) {
-			const TsTimingDev *t = &tm.dev[v->dev];
+			const VmTimingDev *t = &tm.dev[v->dev];
 
 			out->timing_ok = 1;
 			out->rd_sectors = t->rd_sectors;

@@ -5,13 +5,13 @@
  * with accents dropped. Languages whose script the font cannot draw
  * (Japanese, Russian, Korean, Chinese) show English.
  *
- * Words are upper case, like the other Turbo HUDs. Only words are translated; units and abbreviations (R, W, MB/s, MiB,
+ * Words are upper case. Only words are translated; units and abbreviations (R, W, MB/s, MiB,
  * SD2Vita) stay the same everywhere. Keep entries short: a HUD line is narrow.
  *
  * lang is the Vita system-language index (/CONFIG/SYSTEM/language).
  */
-#ifndef STORAGETURBO_HUD_I18N_H
-#define STORAGETURBO_HUD_I18N_H
+#ifndef VITAMEMIO_HUD_I18N_H
+#define VITAMEMIO_HUD_I18N_H
 
 enum hud_tr_tok {
 	HTR_INTERNAL = 0, /* the internal storage's name           */
@@ -31,4 +31,4 @@ enum hud_tr_tok {
  * languages. Never returns NULL. */
 const char *hud_tr(int lang, int tok);
 
-#endif /* STORAGETURBO_HUD_I18N_H */
+#endif /* VITAMEMIO_HUD_I18N_H */

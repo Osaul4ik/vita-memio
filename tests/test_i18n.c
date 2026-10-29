@@ -3,26 +3,26 @@
  * check over the whole generated translation table (valid UTF-8, English present,
  * every string fits the page's buffers). Run it after editing tools/gen_i18n.py.
  */
-#include "../settings_app/storageturbo_i18n.c"
+#include "../settings_app/vitamemio_i18n.c"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "ts_test.h"
+#include "vm_test.h"
 
 /* the registry / app-util calls the language lookup makes */
 static int fake_lang = 1;
 int sceRegMgrGetKeyInt(const char *c, const char *n, int *v) { (void)c; (void)n; *v = fake_lang; return 0; }
 int sceAppUtilSystemParamGetInt(int id, int *v) { (void)id; *v = 1; return 0; }
 
-/* sizeof the Settings page's text buffers (storageturbo_settings.c: g_txt[..][576]) */
+/* sizeof the Settings page's text buffers (vitamemio_settings.c: g_txt[..][576]) */
 #define PAGE_UNITS 576
 
 static unsigned short *to16(const char *s, int cap, int *n)
 {
 	unsigned short *o = malloc(cap * sizeof(*o));    /* exact size for ASan */
 
-	*n = ts_i18n_to_u16(s, o, cap);
+	*n = vm_i18n_to_u16(s, o, cap);
 	return o;
 }
 
@@ -86,10 +86,10 @@ static void test_conversion_limits(void)
 	CHECK(n == 0 && o[0] == 0);
 	free(o);
 
-	CHECK(ts_i18n_to_u16("abc", NULL, 8) == 0);
-	CHECK(ts_i18n_to_u16("abc", (unsigned short[1]){ 7 }, 0) == 0);
+	CHECK(vm_i18n_to_u16("abc", NULL, 8) == 0);
+	CHECK(vm_i18n_to_u16("abc", (unsigned short[1]){ 7 }, 0) == 0);
 	unsigned short z[2] = { 9, 9 };
-	CHECK(ts_i18n_to_u16(NULL, z, 2) == 0 && z[0] == 0);
+	CHECK(vm_i18n_to_u16(NULL, z, 2) == 0 && z[0] == 0);
 }
 
 /* strict UTF-8: no overlongs, surrogates or code points past U+10FFFF */
@@ -123,11 +123,11 @@ static int valid_utf8(const char *str, int *units)
 
 static void test_table(void)
 {
-	for (int id = 0; id < TS_I18N_COUNT; id++) {
-		const char *en = g_tbl[id][TS_LANG_ENGLISH_US];
+	for (int id = 0; id < VM_I18N_COUNT; id++) {
+		const char *en = g_tbl[id][VM_LANG_ENGLISH_US];
 
 		CHECK(en != NULL && en[0]);
-		for (int lang = 0; lang < TS_LANG_COUNT; lang++) {
+		for (int lang = 0; lang < VM_LANG_COUNT; lang++) {
 			const char *t = g_tbl[id][lang];
 			int units;
 
@@ -135,44 +135,44 @@ static void test_table(void)
 				continue;                    /* falls back to English */
 			if (!valid_utf8(t, &units) || units >= PAGE_UNITS) {
 				printf("  FAIL id %d lang %d: bad UTF-8 or %d units\n", id, lang, units);
-				ts_failures++;
+				vm_failures++;
 			}
-			CHECK(strcmp(ts_i18n_for(id, lang), t) == 0);
+			CHECK(strcmp(vm_i18n_for(id, lang), t) == 0);
 		}
 	}
-	CHECK(ts_i18n_for(-1, 1)[0] == 0 && ts_i18n_for(TS_I18N_COUNT, 1)[0] == 0);
-	CHECK(strcmp(ts_i18n_for(TS_I18N_TITLE, 999), ts_i18n_for(TS_I18N_TITLE, TS_LANG_ENGLISH_US)) == 0);
+	CHECK(vm_i18n_for(-1, 1)[0] == 0 && vm_i18n_for(VM_I18N_COUNT, 1)[0] == 0);
+	CHECK(strcmp(vm_i18n_for(VM_I18N_TITLE, 999), vm_i18n_for(VM_I18N_TITLE, VM_LANG_ENGLISH_US)) == 0);
 }
 
 /* The device rows show "<help> <why it is not working>" in one buffer. */
 static void test_device_hint_fits(void)
 {
-	static const int hints[] = { TS_I18N_HINT_SD2VITA, TS_I18N_HINT_INTERNAL, TS_I18N_HINT_MEMCARD };
-	static const int why[] = { TS_I18N_ST_NO_KERNEL, TS_I18N_ST_FIRMWARE, TS_I18N_ST_HOOKS,
-	                           TS_I18N_ST_SAFE, TS_I18N_ST_FALLBACK, TS_I18N_ST_NO_BUFFER,
-	                           TS_I18N_ST_SLOW };
+	static const int hints[] = { VM_I18N_HINT_SD2VITA, VM_I18N_HINT_INTERNAL, VM_I18N_HINT_MEMCARD };
+	static const int why[] = { VM_I18N_ST_NO_KERNEL, VM_I18N_ST_FIRMWARE, VM_I18N_ST_HOOKS,
+	                           VM_I18N_ST_SAFE, VM_I18N_ST_FALLBACK, VM_I18N_ST_NO_BUFFER,
+	                           VM_I18N_ST_SLOW };
 
 	for (unsigned h = 0; h < sizeof(hints) / sizeof(hints[0]); h++)
 		for (unsigned w = 0; w < sizeof(why) / sizeof(why[0]); w++)
-			for (int lang = 0; lang < TS_LANG_COUNT; lang++) {
+			for (int lang = 0; lang < VM_LANG_COUNT; lang++) {
 				int a, b;
 
-				valid_utf8(ts_i18n_for(hints[h], lang), &a);
-				valid_utf8(ts_i18n_for(why[w], lang), &b);
+				valid_utf8(vm_i18n_for(hints[h], lang), &a);
+				valid_utf8(vm_i18n_for(why[w], lang), &b);
 				if (a + 1 + b >= PAGE_UNITS) {
 					printf("  FAIL hint %u + status %u lang %d: %d units, page holds %d\n",
 					       h, w, lang, a + 1 + b, PAGE_UNITS - 1);
-					ts_failures++;
+					vm_failures++;
 				}
 			}
 }
 
 static void test_language_lookup(void)
 {
-	fake_lang = 0;  CHECK(ts_i18n_lang() == 0);
-	fake_lang = 19; CHECK(ts_i18n_lang() == 19);
-	fake_lang = 99; CHECK(ts_i18n_lang() == 1);      /* out of range: via app util -> 1 */
-	fake_lang = -3; CHECK(ts_i18n_lang() == 1);
+	fake_lang = 0;  CHECK(vm_i18n_lang() == 0);
+	fake_lang = 19; CHECK(vm_i18n_lang() == 19);
+	fake_lang = 99; CHECK(vm_i18n_lang() == 1);      /* out of range: via app util -> 1 */
+	fake_lang = -3; CHECK(vm_i18n_lang() == 1);
 	fake_lang = 1;
 }
 
@@ -184,6 +184,6 @@ int main(void)
 	RUN(test_device_hint_fits);
 	RUN(test_language_lookup);
 
-	printf(ts_failures ? "test_i18n: %d FAILED\n" : "test_i18n: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_i18n: %d FAILED\n" : "test_i18n: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

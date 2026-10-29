@@ -4,7 +4,7 @@
  *
  * stage.c is included (not linked) so the tests can reach its statics. The
  * "driver" is an in-memory disk behind fake_io(); the memory card slot
- * (TS_DEV_MEMCARD, port -1) is used because it needs no card context. Built with
+ * (VM_DEV_MEMCARD, port -1) is used because it needs no card context. Built with
  * AddressSanitizer + UBSan, so an out-of-range copy fails the run.
  */
 #include <stddef.h>
@@ -20,20 +20,20 @@ static void *fake_copy(void *d, const void *s, size_t n)
 	fake_now_us += copy_cost_us;
 	return memcpy(d, s, n);
 }
-#define ts_copy_from_stage fake_copy
-#define ts_copy_to_stage fake_copy
+#define vm_copy_from_stage fake_copy
+#define vm_copy_to_stage fake_copy
 
 #include "../kernel/stage.c"
 
 #include <stdlib.h>
 
 #include "fakes.h"
-#include "ts_test.h"
+#include "vm_test.h"
 
 #define DISK_SECTORS 4096
 #define REF_RD       1
 #define REF_WR       2
-#define M            TS_DEV_MEMCARD
+#define M            VM_DEV_MEMCARD
 
 static uint8_t disk[DISK_SECTORS * 512];
 static uint8_t *staging;
@@ -265,7 +265,7 @@ static void test_busy_and_disabled_go_stock(void)
 /* Regression: a failed verify-buffer allocation used to be retried every tick. */
 static void test_shadow_alloc_not_retried(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	reset();
 	memset(&s, 0, sizeof(s));
@@ -273,41 +273,41 @@ static void test_shadow_alloc_not_retried(void)
 	fake_alloc_fail = 1;
 	g_verify = 1;
 	for (int i = 0; i < 5; i++)
-		ts_stage_worker_tick();
+		vm_stage_worker_tick();
 	CHECK(fake_alloc_calls == 1);
 	CHECK(g_shadow == NULL && g_shadow_uid < 0);
 
 	/* turning verify off and on again is a fresh attempt */
 	s.verify = 0;
-	ts_stage_apply(&s);
+	vm_stage_apply(&s);
 	s.verify = 1;
-	ts_stage_apply(&s);
-	ts_stage_worker_tick();
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
 	CHECK(fake_alloc_calls == 2);
 
 	fake_alloc_fail = 0;
 	s.verify = 0;
-	ts_stage_apply(&s);
+	vm_stage_apply(&s);
 	s.verify = 1;
-	ts_stage_apply(&s);
-	ts_stage_worker_tick();
-	CHECK(g_shadow != NULL && ts_stage_verify_ready());
-	ts_stage_fini();
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(g_shadow != NULL && vm_stage_verify_ready());
+	vm_stage_fini();
 	CHECK(g_shadow == NULL);
 }
 
 static void test_get_reports_time(void)
 {
-	TsDevState out[TS_DEV_COUNT];
+	VmDevState out[VM_DEV_COUNT];
 	uint8_t *u = user_buf(100);
 
 	reset();
 	CHECK(rd(u, 0, 100) == 0);
-	ts_stage_get(out, 1);
-	CHECK(out[M].status == TS_ST_ACTIVE);
+	vm_stage_get(out, 1);
+	CHECK(out[M].status == VM_ST_ACTIVE);
 	CHECK(out[M].time_ms == 2 && out[M].max_ms == 2);     /* 2500 us */
-	ts_stage_get(out, 0);
-	CHECK(out[M].status == TS_ST_UNAVAIL);
+	vm_stage_get(out, 0);
+	CHECK(out[M].status == VM_ST_UNAVAIL);
 	free(u);
 }
 
@@ -315,21 +315,21 @@ static void test_get_reports_time(void)
  * verify-mode re-read is in neither. */
 static void test_timing_split(void)
 {
-	TsTimingDev t[TS_DEV_COUNT];
+	VmTimingDev t[VM_DEV_COUNT];
 	uint8_t *u = user_buf(1100);
 
 	reset();
 	copy_cost_us = 300;
 	CHECK(rd(u, 0, 1100) == 0);                    /* 512 + 512 + 76: 3 chunks */
 	CHECK(wr(u, 0, 600, REF_RD) == 0);             /* 512 + 88: 2 chunks */
-	ts_stage_timing(t);
+	vm_stage_timing(t);
 	CHECK(t[M].rd_sectors == 1100 && t[M].rd_io_us == 3 * 2500 && t[M].rd_copy_us == 3 * 300);
 	CHECK(t[M].wr_sectors == 600 && t[M].wr_io_us == 2 * 2500 && t[M].wr_copy_us == 2 * 300);
-	CHECK(t[TS_DEV_SD2VITA].rd_sectors == 0 && t[TS_DEV_INTERNAL].wr_io_us == 0);
+	CHECK(t[VM_DEV_SD2VITA].rd_sectors == 0 && t[VM_DEV_INTERNAL].wr_io_us == 0);
 
 	/* small transfers stay stock and are not counted */
 	CHECK(rd(u, 0, 8) == 0);
-	ts_stage_timing(t);
+	vm_stage_timing(t);
 	CHECK(t[M].rd_sectors == 1100);
 
 	/* a failing chunk is not counted (the rest is finished stock) */
@@ -337,7 +337,7 @@ static void test_timing_split(void)
 	copy_cost_us = 300;
 	fail_at_call = 2;
 	CHECK(rd(u, 0, 1100) == 0);
-	ts_stage_timing(t);
+	vm_stage_timing(t);
 	CHECK(t[M].rd_sectors == 512 && t[M].rd_io_us == 2500 && t[M].rd_copy_us == 300);
 
 	/* verify mode: the stock re-read is not in io time */
@@ -346,7 +346,7 @@ static void test_timing_split(void)
 	g_shadow = calloc(1, STAGE_BYTES);
 	CHECK(rd(u, 0, 100) == 0);
 	CHECK(io_calls == 2);
-	ts_stage_timing(t);
+	vm_stage_timing(t);
 	CHECK(t[M].rd_sectors == 100 && t[M].rd_io_us == 2500 && t[M].rd_copy_us == 0);
 	free(g_shadow);
 	g_shadow = NULL;
@@ -355,7 +355,7 @@ static void test_timing_split(void)
 	reset();
 	g_dev[M].tm.rd_io_us = 0xFFFFFF00u;
 	CHECK(rd(u, 0, 100) == 0);
-	ts_stage_timing(t);
+	vm_stage_timing(t);
 	CHECK((uint32_t)(t[M].rd_io_us - 0xFFFFFF00u) == 2500);
 	free(u);
 }
@@ -363,7 +363,7 @@ static void test_timing_split(void)
 static void count_free_bufs(int *n)
 {
 	*n = 0;
-	for (int i = 0; i < TS_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].buf)
 			(*n)++;
 }
@@ -373,11 +373,11 @@ static void test_init_all_hooks(void)
 	int n;
 
 	reset();
-	for (int i = 0; i < TS_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
-	CHECK(ts_stage_init() == TS_OK);
+	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	CHECK(vm_stage_init() == VM_OK);
 	count_free_bufs(&n);
 	CHECK(n == 3 && fake_hook_calls == 6);
-	ts_stage_fini();
+	vm_stage_fini();
 	CHECK(fake_hook_releases == 6 && fake_free_calls == 3);
 	count_free_bufs(&n);
 	CHECK(n == 0);
@@ -388,9 +388,9 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 	int n;
 
 	reset();
-	for (int i = 0; i < TS_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
 	fake_hook_fail_at = 2;                    /* the second SDIF hook fails */
-	CHECK(ts_stage_init() == TS_ERR_RESOLVE);
+	CHECK(vm_stage_init() == VM_ERR_RESOLVE);
 	count_free_bufs(&n);
 	CHECK(n == 0 && fake_free_calls == 3);    /* all buffers given back */
 	CHECK(fake_hook_releases == 1);           /* and the one hook that was live */
@@ -399,13 +399,13 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 static void test_init_memcard_hook_fails_only_memcard_stock(void)
 {
 	reset();
-	for (int i = 0; i < TS_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
+	for (int i = 0; i < VM_DEV_COUNT; i++) { g_dev[i].buf = NULL; g_dev[i].uid = -1; }
 	fake_hook_fail_at = 6;                    /* the memory card's write hook fails */
-	CHECK(ts_stage_init() == TS_OK);
-	CHECK(g_dev[TS_DEV_MEMCARD].buf == NULL);
-	CHECK(g_dev[TS_DEV_SD2VITA].buf != NULL && g_dev[TS_DEV_INTERNAL].buf != NULL);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL);
+	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf != NULL);
 	CHECK(fake_hook_releases == 1);           /* the memory card's read hook */
-	ts_stage_fini();
+	vm_stage_fini();
 	CHECK(fake_hook_releases == 5);
 }
 
@@ -431,6 +431,6 @@ int main(void)
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 
 	free(staging);
-	printf(ts_failures ? "test_stage: %d FAILED\n" : "test_stage: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_stage: %d FAILED\n" : "test_stage: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

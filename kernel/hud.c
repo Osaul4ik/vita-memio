@@ -1,13 +1,13 @@
 /*
- * hud.c - draw the Turbo Storage HUD over the live framebuffer.
+ * hud.c - draw the vita-memio HUD over the live framebuffer.
  *
- * Technique (the standard taiHEN overlay idiom, as in Wi-Fi Turbo): hook
+ * Technique (the standard taiHEN overlay idiom): hook
  * SceDisplay's set-framebuffer funnel. The caller hands us the framebuffer
  * base, pitch and size every frame; we let the original run, then blit our
  * text into the same buffer before the display controller scans it out.
  *
  * Strictly read + overdraw: no storage state is touched here. The text comes
- * from the 1 Hz worker (main.c) through ts_hud_set_text(), double-buffered so
+ * from the 1 Hz worker (main.c) through vm_hud_set_text(), double-buffered so
  * the frame hook never reads a half-written line.
  *
  * Position: one of the four corners, computed from the framebuffer's own width
@@ -26,7 +26,7 @@
 #include "hud.h"
 #include "font8x8.h"
 #include "klog.h"
-#include "../include/storageturbo.h"
+#include "../include/vitamemio.h"
 
 #define HUD_FG         0xFFFFFFFFu /* opaque white (ABGR8888)                 */
 #define HUD_SHADOW     0xFF000000u /* opaque black drop shadow                */
@@ -35,7 +35,7 @@ static SceUID         g_hook = -1;
 static tai_hook_ref_t g_ref;
 
 typedef struct {
-	char lines[TS_HUD_LINES][TS_HUD_LINE_MAX];
+	char lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
 	int  n;
 	int  pos;
 	int  maxlen;   /* longest line, for right/bottom alignment              */
@@ -58,9 +58,9 @@ static inline void put_px(uint32_t *fb, int pitch, int w, int h,
 static void draw_char(uint32_t *fb, int pitch, int w, int h, int scale,
                       int ox, int oy, char ch, uint32_t color)
 {
-	if ((unsigned char)ch < TS_FONT_FIRST || (unsigned char)ch > TS_FONT_LAST)
+	if ((unsigned char)ch < VM_FONT_FIRST || (unsigned char)ch > VM_FONT_LAST)
 		return;
-	const unsigned char *g = ts_font8x8[(unsigned char)ch - TS_FONT_FIRST];
+	const unsigned char *g = vm_font8x8[(unsigned char)ch - VM_FONT_FIRST];
 	for (int row = 0; row < 8; row++) {
 		unsigned char bits = g[row];
 		for (int col = 0; col < 8; col++) {
@@ -91,14 +91,14 @@ static void render(uint32_t *fb, int pitch, int w, int h)
 	if (t->n <= 0)
 		return;
 
-	int scale  = 2;   /* 16 px glyphs at any resolution, as Wi-Fi Turbo's HUD */
+	int scale  = 2;   /* 16 px glyphs at any resolution */
 	int margin = 12 * scale;
 	int line_h = 8 * scale + 2 * scale;
 	int box_w  = t->maxlen * 8 * scale;
 	int box_h  = t->n * line_h;
 
-	int right  = t->pos == TS_POS_TOP_RIGHT || t->pos == TS_POS_BOTTOM_RIGHT;
-	int bottom = t->pos == TS_POS_BOTTOM_LEFT || t->pos == TS_POS_BOTTOM_RIGHT;
+	int right  = t->pos == VM_POS_TOP_RIGHT || t->pos == VM_POS_BOTTOM_RIGHT;
+	int bottom = t->pos == VM_POS_BOTTOM_LEFT || t->pos == VM_POS_BOTTOM_RIGHT;
 	int x = right ? w - margin - box_w : margin;
 	/* The system status bar is ~30 px tall at 960x544; keep clear of it. */
 	int y = bottom ? h - margin - box_h : margin + (scale == 2 ? 24 : 12);
@@ -156,7 +156,7 @@ static int hook_set_framebuf(int head, int index,
 	return ret;
 }
 
-int ts_hud_init(void)
+int vm_hud_init(void)
 {
 	memset(g_text, 0, sizeof(g_text));
 
@@ -170,13 +170,13 @@ int ts_hud_init(void)
 	                                        0x16466675, /* ...SetFrameBufInternal */
 	                                        hook_set_framebuf);
 	if (g_hook < 0) {
-		TS_KLOGW("hud: set-framebuffer hook failed (0x%08x)", (unsigned)g_hook);
-		return TS_ERR_RESOLVE;
+		VM_KLOGW("hud: set-framebuffer hook failed (0x%08x)", (unsigned)g_hook);
+		return VM_ERR_RESOLVE;
 	}
-	return TS_OK;
+	return VM_OK;
 }
 
-void ts_hud_fini(void)
+void vm_hud_fini(void)
 {
 	g_text[0].n = g_text[1].n = 0;
 	if (g_hook >= 0) {
@@ -185,21 +185,21 @@ void ts_hud_fini(void)
 	}
 }
 
-int ts_hud_installed(void)
+int vm_hud_installed(void)
 {
 	return g_hook >= 0;
 }
 
-void ts_hud_set_text(const char lines[][TS_HUD_LINE_MAX], int n, int pos)
+void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int pos)
 {
 	int back = g_front ^ 1;
 	HudText *t = &g_text[back];
 	if (n < 0) n = 0;
-	if (n > TS_HUD_LINES) n = TS_HUD_LINES;
+	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
 	t->maxlen = 0;
 	for (int i = 0; i < n; i++) {
 		int len = 0;
-		while (len < TS_HUD_LINE_MAX - 1 && lines[i][len]) {
+		while (len < VM_HUD_LINE_MAX - 1 && lines[i][len]) {
 			t->lines[i][len] = lines[i][len];
 			len++;
 		}

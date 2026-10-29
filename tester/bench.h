@@ -1,9 +1,9 @@
 /*
- * bench.h - the Turbo Storage benchmark engine (tester/bench.c).
+ * bench.h - the vita-memio benchmark engine (tester/bench.c).
  *
  * Runs one set of storage tests several times on one device, in whatever state the
  * plugin is in. The tester NEVER changes a plugin setting: the user switches the
- * plugin on or off in Settings > Turbo Storage and runs the test again; every run
+ * plugin on or off in Settings > vita-memio and runs the test again; every run
  * is saved with the plugin state it was made in, so the two can be compared.
  * Everything that touches the console goes through BenchEnv, so this file and
  * bench.c have no Vita dependencies and run unchanged in the host tests
@@ -24,14 +24,14 @@
  *     read/write counters must grow during a run and it must stay ACTIVE; with
  *     it OFF the counters must not move. Otherwise the run is flagged.
  */
-#ifndef STORAGETURBO_TESTER_BENCH_H
-#define STORAGETURBO_TESTER_BENCH_H
+#ifndef VITAMEMIO_TESTER_BENCH_H
+#define VITAMEMIO_TESTER_BENCH_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../include/storageturbo.h"
-#include "../include/storageturbo_kernel_api.h"     /* TS_DIS_* */
+#include "../include/vitamemio.h"
+#include "../include/vitamemio_kernel_api.h"     /* VM_DIS_* */
 
 #define BENCH_MAX_RUNS    16
 #define BENCH_PATH_MAX    160
@@ -48,20 +48,20 @@ extern const char *const bench_metric_name[BM_COUNT];
 /* 0: the value is MiB/s, 1: the value is operations per second. */
 int bench_metric_is_iops(int metric);
 
-/* Display name of a device (enum ts_dev). */
+/* Display name of a device (enum vm_dev). */
 const char *bench_device_name(int dev);
 
 /* ---- what the engine needs from the platform ------------------------------- */
 
 typedef struct BenchPluginState {
 	int      available;      /* the kernel module answered                      */
-	int      disabled;       /* TsState.disabled (TS_DIS_*); 0 = plugin active  */
-	int      status;         /* TS_ST_* of the device under test                */
+	int      disabled;       /* VmState.disabled (VM_DIS_*); 0 = plugin active  */
+	int      status;         /* VM_ST_* of the device under test                */
 	uint32_t reads, writes;  /* that device's faster-path transfer counters     */
 	uint32_t errors, mismatches;
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
-	/* Where the faster path's time goes (tsGetTiming; an older kernel module
+	/* Where the faster path's time goes (vmGetTiming; an older kernel module
 	 * does not have it: timing_ok = 0). Counters only grow and wrap. */
 	int      timing_ok;
 	uint32_t rd_sectors, rd_io_us, rd_copy_us;
@@ -120,7 +120,7 @@ extern const BenchProfile bench_profile_quick;
 extern const BenchProfile bench_profile_standard;
 
 typedef struct BenchConfig {
-	int                 device;     /* enum ts_dev                              */
+	int                 device;     /* enum vm_dev                              */
 	const BenchProfile *profile;
 	const char         *dir;        /* test folder with a trailing '/'          */
 } BenchConfig;
@@ -199,4 +199,4 @@ int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O e
 int bench_plugin_ok(const BenchResult *res);       /* the plugin did what its state says */
 int bench_valid(const BenchResult *res);           /* ran to the end */
 
-#endif /* STORAGETURBO_TESTER_BENCH_H */
+#endif /* VITAMEMIO_TESTER_BENCH_H */

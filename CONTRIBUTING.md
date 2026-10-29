@@ -11,7 +11,7 @@ non-negotiable:
 - **Never corrupt data.** The faster path must produce exactly what the standard
   path would. Any new path ships with verify-mode coverage (`kernel/stage.c`) and
   is tested with verify mode on before it is trusted.
-- **Leave the driver alone.** Turbo Storage only changes the buffer handed to the
+- **Leave the driver alone.** vita-memio only changes the buffer handed to the
   system's own exported read/write functions. Don't re-implement, patch or reorder
   driver internals.
 - **Never cache or defer writes.** A write must have reached the card before the
@@ -37,7 +37,7 @@ You need HENkaku/Ensō on firmware 3.60–3.74 and
 [vitacompanion](https://github.com/devnoname120/vitacompanion), which provides FTP
 on :1337 and commands on :1338.
 
-Turn on *Developer mode* in *Settings → System → Turbo Storage* so the plugin's
+Turn on *Developer mode* in *Settings → System → vita-memio* so the plugin's
 port 1340 is open.
 
 ```sh
@@ -52,7 +52,7 @@ and compares; `status` shows `verified` and `mismatches` per storage. Any
 mismatch is a bug: please report it.
 
 A simple end-to-end check: download a large file from the Vita over FTP with
-Turbo Storage off, again with it on, and compare the two copies.
+vita-memio off, again with it on, and compare the two copies.
 
 If a change misbehaves, **hold L while the Vita boots** to skip all plugins, then
 fix `ur0:tai/config.txt` or the module over FTP.
@@ -67,7 +67,7 @@ The Settings page is shown in all 20 Vita system languages. Only English is
 written by a person; the rest are machine translations, and corrections from
 native speakers are very welcome. The strings live in `tools/gen_i18n.py`: edit
 them there, then run `python3 tools/gen_i18n.py` to regenerate
-`settings_app/storageturbo_i18n_table.h`. Keep "Turbo Storage" and "SD2Vita"
+`settings_app/vitamemio_i18n_table.h`. Keep "vita-memio" and "SD2Vita"
 untranslated. The HUD's words are in `kernel/hud_i18n.c` (plain ASCII, accents
 dropped, Latin-script languages only).
 
@@ -75,7 +75,7 @@ dropped, Latin-script languages only).
 
 - One logical change per PR, with a clear description of what changed and how you
   tested it (on hardware, with verify mode, if it touches `kernel/stage.c`).
-- Commit messages in the existing style: `storageturbo: <what changed>`,
+- Commit messages in the existing style: `vitamemio: <what changed>`,
   `docs: <what changed>`.
 - By contributing you agree that your contribution is licensed under the MIT
   licence of this project.

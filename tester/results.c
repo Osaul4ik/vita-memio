@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../include/storageturbo.h"
+#include "../include/vitamemio.h"
 #include "results.h"
 
 #define TAIL_BYTES (96 * 1024)    /* the viewer shows the end of a long file */

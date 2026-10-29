@@ -1,19 +1,19 @@
 /*
- * ts_fmt.h - the tiny printf subset shared by the kernel logger (kernel/klog.c)
- * and the user-module logger (settings_app/tslog.c).
+ * vm_fmt.h - the tiny printf subset shared by the kernel logger (kernel/klog.c)
+ * and the user-module logger (settings_app/vmlog.c).
  *
  * Neither module has a libc printf, so both format with this: %s %d %i %u %x %X
  * %c %p %%, with an optional zero-pad width. It writes at most cap-1 characters
  * and always terminates the buffer. Header-only (static inline) so each module
  * gets its own copy and there is nothing to link.
  */
-#ifndef STORAGETURBO_FMT_H
-#define STORAGETURBO_FMT_H
+#ifndef VITAMEMIO_FMT_H
+#define VITAMEMIO_FMT_H
 
 #include <stdarg.h>
 #include <stdint.h>
 
-static inline int ts_fmt_uint(char *buf, int cap, int pos, unsigned v, unsigned base,
+static inline int vm_fmt_uint(char *buf, int cap, int pos, unsigned v, unsigned base,
                     int upper, int width, int zero)
 {
 	const char *digs = upper ? "0123456789ABCDEF" : "0123456789abcdef";
@@ -28,7 +28,7 @@ static inline int ts_fmt_uint(char *buf, int cap, int pos, unsigned v, unsigned 
 	return pos;
 }
 
-static inline int ts_fmt_v(char *buf, int cap, const char *fmt, va_list ap)
+static inline int vm_fmt_v(char *buf, int cap, const char *fmt, va_list ap)
 {
 	int pos = 0;
 	if (cap <= 0)
@@ -51,26 +51,26 @@ static inline int ts_fmt_v(char *buf, int cap, const char *fmt, va_list ap)
 			int v = va_arg(ap, int);
 			if (v < 0) {
 				if (pos < cap - 1) buf[pos++] = '-';
-				pos = ts_fmt_uint(buf, cap, pos, (unsigned)(-(v + 1)) + 1u, 10, 0,
+				pos = vm_fmt_uint(buf, cap, pos, (unsigned)(-(v + 1)) + 1u, 10, 0,
 				               width > 0 ? width - 1 : 0, zero);
 			} else {
-				pos = ts_fmt_uint(buf, cap, pos, (unsigned)v, 10, 0, width, zero);
+				pos = vm_fmt_uint(buf, cap, pos, (unsigned)v, 10, 0, width, zero);
 			}
 			break;
 		}
 		case 'u':
-			pos = ts_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 10, 0, width, zero);
+			pos = vm_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 10, 0, width, zero);
 			break;
 		case 'x':
-			pos = ts_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 16, 0, width, zero);
+			pos = vm_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 16, 0, width, zero);
 			break;
 		case 'X':
-			pos = ts_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 16, 1, width, zero);
+			pos = vm_fmt_uint(buf, cap, pos, va_arg(ap, unsigned), 16, 1, width, zero);
 			break;
 		case 'p':
 			if (pos < cap - 1) buf[pos++] = '0';
 			if (pos < cap - 1) buf[pos++] = 'x';
-			pos = ts_fmt_uint(buf, cap, pos,
+			pos = vm_fmt_uint(buf, cap, pos,
 			               (unsigned)(uintptr_t)va_arg(ap, void *), 16, 0, 8, 1);
 			break;
 		case 'c': {
@@ -91,4 +91,4 @@ static inline int ts_fmt_v(char *buf, int cap, const char *fmt, va_list ap)
 	return pos;
 }
 
-#endif /* STORAGETURBO_FMT_H */
+#endif /* VITAMEMIO_FMT_H */

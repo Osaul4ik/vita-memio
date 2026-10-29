@@ -40,6 +40,30 @@ The original author reported the following results on the upstream test console:
 
 
 
+## Install (this fork)
+
+Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester app `vitamemio_tester.vpk`.
+
+1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`.
+2. Add to `ur0:tai/config.txt` (`make config` prints these lines):
+
+   ```
+   *KERNEL
+   ur0:tai/vitamemio_kernel.skprx
+
+   *main
+   ur0:tai/vitamemio.suprx
+
+   *NPXS10015
+   ur0:tai/vitamemio.suprx
+   ```
+3. Reboot. The switches are in **Settings > System > vita-memio**.
+4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings).
+
+Settings, logs and test results live in `ur0:data/vita-memio/`. The log holds one line per start and otherwise only problems.
+
+**Upgrading from a build named `storageturbo`:** replace the `storageturbo_kernel.skprx` / `storageturbo.suprx` lines in `config.txt` with the ones above and delete the old files from `ur0:tai/` (never load both). Your settings are taken over from `ur0:data/turbostorage/` on the first start. The old tester (`TURBOTST0`) can be deleted in LiveArea.
+
 ## Credits
 
 All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage), including the original implementation, technical approach, testing and documentation.

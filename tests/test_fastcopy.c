@@ -9,9 +9,9 @@
 #include <string.h>
 
 #include "../kernel/fastcopy.h"
-#include "ts_test.h"
+#include "vm_test.h"
 
-int ts_failures;
+int vm_failures;
 
 static void one(size_t soff, size_t doff, size_t n)
 {
@@ -22,7 +22,7 @@ static void one(size_t soff, size_t doff, size_t n)
 	memset(dbuf, 0xA5, doff + n + 16);
 	memcpy(want, dbuf, doff + n + 16);
 	memcpy(want + doff, sbuf + soff, n);
-	CHECK(ts_fast_copy(dbuf + doff, sbuf + soff, n) == dbuf + doff);
+	CHECK(vm_fast_copy(dbuf + doff, sbuf + soff, n) == dbuf + doff);
 	CHECK(memcmp(dbuf, want, doff + n + 16) == 0);   /* data, and the guard bytes */
 	free(sbuf);
 	free(dbuf);
@@ -42,6 +42,6 @@ int main(void)
 			for (size_t dof = 0; dof < 4; dof++)
 				one(so, dof, big[i]);
 	one(0, 0, 0);
-	printf(ts_failures ? "test_fastcopy: %d FAILED\n" : "test_fastcopy: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_fastcopy: %d FAILED\n" : "test_fastcopy: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

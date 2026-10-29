@@ -19,37 +19,37 @@ all: run
 run: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done; echo "all host tests passed"
 
-test_stage: test_stage.c fakes.c fakes.h ts_test.h ../kernel/stage.c ../kernel/stage.h
+test_stage: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/stage.h
 	$(CC) $(CFLAGS) -o $@ test_stage.c fakes.c
 
-test_settings: test_settings.c fakes.c fakes.h ts_test.h ../kernel/settings.c ../kernel/settings.h
+test_settings: test_settings.c fakes.c fakes.h vm_test.h ../kernel/settings.c ../kernel/settings.h
 	$(CC) $(CFLAGS) -o $@ test_settings.c fakes.c
 
-test_dispatch: test_dispatch.c fakes.c fakes.h ts_test.h ../user/dispatch.c
+test_dispatch: test_dispatch.c fakes.c fakes.h vm_test.h ../user/dispatch.c
 	$(CC) $(CFLAGS) -o $@ test_dispatch.c fakes.c
 
-test_dispatch_risky: test_dispatch.c fakes.c fakes.h ts_test.h ../user/dispatch.c
-	$(CC) $(CFLAGS) -DTS_DEV_ALLOW_RISKY=1 -o $@ test_dispatch.c fakes.c
+test_dispatch_risky: test_dispatch.c fakes.c fakes.h vm_test.h ../user/dispatch.c
+	$(CC) $(CFLAGS) -DVM_DEV_ALLOW_RISKY=1 -o $@ test_dispatch.c fakes.c
 
-test_util: test_util.c ts_test.h fakes.c ../include/ts_fmt.h ../include/ts_devmode.h
+test_util: test_util.c vm_test.h fakes.c ../include/vm_fmt.h ../include/vm_devmode.h
 	$(CC) $(CFLAGS) -o $@ test_util.c fakes.c
 
-test_i18n: test_i18n.c ts_test.h fakes.c ../settings_app/storageturbo_i18n.c ../settings_app/storageturbo_i18n_table.h
+test_i18n: test_i18n.c vm_test.h fakes.c ../settings_app/vitamemio_i18n.c ../settings_app/vitamemio_i18n_table.h
 	$(CC) $(CFLAGS) -o $@ test_i18n.c fakes.c
 
 TESTER := ../tester/bench.c ../tester/report.c ../tester/results.c
 
-test_bench: test_bench.c fakes.c fakes.h ts_test.h $(TESTER) ../tester/bench.h ../tester/pattern.h ../tester/report.h ../tester/results.h
+test_bench: test_bench.c fakes.c fakes.h vm_test.h $(TESTER) ../tester/bench.h ../tester/pattern.h ../tester/report.h ../tester/results.h
 	$(CC) $(CFLAGS) -o $@ test_bench.c $(TESTER) fakes.c
 
-test_fastcopy: test_fastcopy.c ts_test.h ../kernel/fastcopy.h
+test_fastcopy: test_fastcopy.c vm_test.h ../kernel/fastcopy.h
 	$(CC) $(CFLAGS) -o $@ test_fastcopy.c
 
 # The fast copy's ARM (LDM/STM) path, run under qemu-user: needs
 # gcc-arm-linux-gnueabihf and qemu-user. Thumb-2 (as VitaSDK builds) and ARM.
 ARM_CC ?= arm-linux-gnueabihf-gcc
 .PHONY: arm
-arm: test_fastcopy.c ts_test.h ../kernel/fastcopy.h
+arm: test_fastcopy.c vm_test.h ../kernel/fastcopy.h
 	@set -e; for m in -mthumb -marm; do for o in -O1 -O2 -Os; do \
 	  $(ARM_CC) -std=gnu99 $$m $$o -mcpu=cortex-a9 -Wall -Wextra -Werror -static \
 	    -o test_fastcopy_arm test_fastcopy.c; \

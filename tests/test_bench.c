@@ -19,7 +19,7 @@
 #include "../tester/report.h"
 #include "../tester/results.h"
 #include "fakes.h"
-#include "ts_test.h"
+#include "vm_test.h"
 
 /* ---- the fake console --------------------------------------------------------- */
 
@@ -34,7 +34,7 @@ typedef struct Fake {
 	int      status_override;    /* -1: derive from `on`                       */
 	int      disabled, unavailable, verify;
 	uint32_t reads, writes, errors, mismatches;
-	int      no_timing;          /* kernel module without tsGetTiming          */
+	int      no_timing;          /* kernel module without vmGetTiming          */
 	uint32_t rs, ri, rc, ws, wi, wc;   /* faster-path timing counters          */
 
 	int      corrupt_read_on, corrupt_write_on;
@@ -162,9 +162,9 @@ static int f_get(void *c, BenchPluginState *o)
 		return -1;
 	o->available = 1;
 	o->disabled = f->disabled;
-	o->status = f->disabled ? TS_ST_UNAVAIL
-	          : f->on ? (f->status_override >= 0 ? f->status_override : TS_ST_ACTIVE)
-	          : TS_ST_OFF;
+	o->status = f->disabled ? VM_ST_UNAVAIL
+	          : f->on ? (f->status_override >= 0 ? f->status_override : VM_ST_ACTIVE)
+	          : VM_ST_OFF;
 	o->reads = f->reads;
 	o->writes = f->writes;
 	o->errors = f->errors;
@@ -227,7 +227,7 @@ static void test_full_run_on(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchAgg a;
 	BenchEnv e;
 
@@ -260,7 +260,7 @@ static void test_full_run_off(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_MEMCARD, &tiny, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_MEMCARD, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
 	fake_init(&f, 0);
@@ -279,7 +279,7 @@ static void test_write_corruption_is_caught(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_MEMCARD, &one_round, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_MEMCARD, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 
 	fake_init(&f, 1);
@@ -297,7 +297,7 @@ static void test_read_corruption_is_caught(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 
 	fake_init(&f, 1);
@@ -314,7 +314,7 @@ static void test_plugin_counters(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 	char *text = malloc(40000);
 	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
@@ -346,7 +346,7 @@ static void test_state_changed_mid_test(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
 	fake_init(&f, 1);
@@ -364,7 +364,7 @@ static void test_other_plugin_states_still_run(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
 	BenchEnv e;
 
 	/* no kernel module */
@@ -376,17 +376,17 @@ static void test_other_plugin_states_still_run(void)
 
 	/* safe mode */
 	fake_init(&f, 1);
-	f.disabled = TS_DIS_SAFE;
+	f.disabled = VM_DIS_SAFE;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_INACTIVE && bench_plugin_ok(r));
 
 	/* fell back to stock / no buffer */
 	fake_init(&f, 1);
-	f.status_override = TS_ST_FALLBACK;
+	f.status_override = VM_ST_FALLBACK;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_TROUBLE);
 	fake_init(&f, 1);
-	f.status_override = TS_ST_NO_BUFFER;
+	f.status_override = VM_ST_NO_BUFFER;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && r->plugin_mode == BPM_TROUBLE);
 	CHECK_UNTOUCHED(f);
@@ -406,11 +406,11 @@ static void test_plugin_mode_names(void)
 
 	CHECK(bench_plugin_mode(&st) == BPM_UNKNOWN);
 	st.available = 1;
-	st.status = TS_ST_OFF;      CHECK(bench_plugin_mode(&st) == BPM_OFF);
-	st.status = TS_ST_ACTIVE;   CHECK(bench_plugin_mode(&st) == BPM_ON);
-	st.status = TS_ST_FALLBACK; CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
-	st.status = TS_ST_UNAVAIL;  CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
-	st.disabled = TS_DIS_HOOKS; CHECK(bench_plugin_mode(&st) == BPM_INACTIVE);
+	st.status = VM_ST_OFF;      CHECK(bench_plugin_mode(&st) == BPM_OFF);
+	st.status = VM_ST_ACTIVE;   CHECK(bench_plugin_mode(&st) == BPM_ON);
+	st.status = VM_ST_FALLBACK; CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
+	st.status = VM_ST_UNAVAIL;  CHECK(bench_plugin_mode(&st) == BPM_TROUBLE);
+	st.disabled = VM_DIS_HOOKS; CHECK(bench_plugin_mode(&st) == BPM_INACTIVE);
 	CHECK(!strcmp(bench_plugin_mode_name(BPM_ON), "ON"));
 	CHECK(!strcmp(bench_plugin_mode_name(BPM_OFF), "OFF"));
 	CHECK(!strcmp(bench_plugin_mode_name(99), "UNKNOWN"));
@@ -420,7 +420,7 @@ static void test_cancel_cleans_up(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
 	int total;
@@ -449,7 +449,7 @@ static void test_io_errors_clean_up(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
 	BenchEnv e;
 
 	fake_init(&f, 1);
@@ -482,7 +482,7 @@ static void test_bad_profiles(void)
 	};
 
 	for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
-		BenchConfig cfg = { TS_DEV_SD2VITA, &bad[i], "ux0:data/t/" };
+		BenchConfig cfg = { VM_DEV_SD2VITA, &bad[i], "ux0:data/t/" };
 
 		fake_init(&f, 1);
 		e = env_for(&f);
@@ -558,7 +558,7 @@ static void test_report_text(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_SD2VITA, &tiny, "uma0:data/t/" };
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "uma0:data/t/" };
 	BenchEnv e;
 	ReportMeta m = { "2026-10-28 12:30:11", "0.2.0-alpha", "uma0:data/t/" };
 	char *text = malloc(40000);
@@ -567,7 +567,7 @@ static void test_report_text(void)
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	CHECK(report_format(r, &m, text, 40000) == strlen(text));
-	CHECK(strstr(text, "Turbo Storage tester " TESTER_VERSION "   2026-10-28 12:30:11"));
+	CHECK(strstr(text, "vita-memio tester " TESTER_VERSION "   2026-10-28 12:30:11"));
 	CHECK(strstr(text, "plugin 0.2.0-alpha   storage driver id 0x2e7c52f7"));
 	CHECK(strstr(text, "plugin during the test: ON for SD2Vita"));
 	CHECK(strstr(text, "device: SD2Vita   folder: uma0:data/t/"));
@@ -650,7 +650,7 @@ static void test_screen_lines(void)
 {
 	Fake f = { 0 };
 	BenchResult *r = new_result();
-	BenchConfig cfg = { TS_DEV_INTERNAL, &one_round, "ur0:data/t/" };
+	BenchConfig cfg = { VM_DEV_INTERNAL, &one_round, "ur0:data/t/" };
 	BenchEnv e;
 	char (*lines)[REPORT_LINE_MAX] = malloc(REPORT_LINES_MAX * REPORT_LINE_MAX);
 	int n;
@@ -825,6 +825,6 @@ int main(void)
 	RUN(test_results_file);
 	RUN(test_pattern);
 
-	printf(ts_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

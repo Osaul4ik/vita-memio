@@ -1,4 +1,4 @@
-# vita-turbo-storage - build and deploy helpers.
+# vita-memio - build and deploy helpers.
 #
 #   make                      build both modules (uses your VitaSDK if $VITASDK
 #                             is set, otherwise the pinned VitaSDK Docker image)
@@ -12,17 +12,17 @@
 #   make clean
 #
 # install/deploy/log talk to vitacompanion (FTP on :1337, commands on :1338)
-# running on the Vita. Output: build/storageturbo_kernel.skprx, build/storageturbo.suprx
+# running on the Vita. Output: build/vitamemio_kernel.skprx, build/vitamemio.suprx
 
 BUILD   ?= build
 VITA_IP ?=
-# Extra CMake options, e.g. make CMAKE_ARGS="-DTS_DEV_ALLOW_RISKY=ON"
+# Extra CMake options, e.g. make CMAKE_ARGS="-DVM_DEV_ALLOW_RISKY=ON"
 CMAKE_ARGS ?=
 # Pinned so every build uses the same toolchain (VitaSDK 2026.08, GCC 15.2).
 VITASDK_IMAGE ?= vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
 
-MODULES := $(BUILD)/storageturbo_kernel.skprx $(BUILD)/storageturbo.suprx
-TESTER_VPK := $(BUILD)/storageturbo_tester.vpk
+MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio.suprx
+TESTER_VPK := $(BUILD)/vitamemio_tester.vpk
 FTP      = ftp://$(VITA_IP):1337
 
 .PHONY: all build install deploy log results config clean check-ip test cppcheck sim
@@ -55,18 +55,18 @@ deploy: install
 
 log: check-ip
 	@mkdir -p logs
-	curl -sS "$(FTP)/ur0:/data/turbostorage/kernel.log" -o logs/kernel.log
-	curl -sS "$(FTP)/ur0:/data/turbostorage/user.log" -o logs/user.log
+	curl -sS "$(FTP)/ur0:/data/vita-memio/kernel.log" -o logs/kernel.log
+	curl -sS "$(FTP)/ur0:/data/vita-memio/user.log" -o logs/user.log
 	@echo "Saved logs/kernel.log and logs/user.log"
 
 results: check-ip
 	@mkdir -p logs
-	curl -sS "$(FTP)/ur0:/data/turbostorage/results.txt" -o logs/results.txt
+	curl -sS "$(FTP)/ur0:/data/vita-memio/results.txt" -o logs/results.txt
 	@echo "Saved logs/results.txt"
 
 config:
-	@printf '%s\n' '*KERNEL' 'ur0:tai/storageturbo_kernel.skprx' '' '*main' 'ur0:tai/storageturbo.suprx' '' \
-	  '*NPXS10015' 'ur0:tai/storageturbo.suprx'
+	@printf '%s\n' '*KERNEL' 'ur0:tai/vitamemio_kernel.skprx' '' '*main' 'ur0:tai/vitamemio.suprx' '' \
+	  '*NPXS10015' 'ur0:tai/vitamemio.suprx'
 
 # Host tests (no VitaSDK needed): see tests/Makefile.
 test:
@@ -83,7 +83,7 @@ cppcheck:
 	cppcheck --enable=warning,performance,portability --inline-suppr --error-exitcode=1 --quiet \
 	  -I include -I kernel -I user -I settings_app \
 	  --suppress=missingIncludeSystem --suppress=unknownMacro \
-	  kernel user tester settings_app/storageturbo_settings.c settings_app/tslog.c settings_app/storageturbo_i18n.c
+	  kernel user tester settings_app/vitamemio_settings.c settings_app/vmlog.c settings_app/vitamemio_i18n.c
 
 clean:
 	rm -rf $(BUILD) logs

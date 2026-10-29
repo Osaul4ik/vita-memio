@@ -49,11 +49,11 @@
  *   into staging (writes): the system memcpy. The burst copy made it slower
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
-#ifndef ts_copy_from_stage
-#define ts_copy_from_stage ts_fast_copy
+#ifndef vm_copy_from_stage
+#define vm_copy_from_stage vm_fast_copy
 #endif
-#ifndef ts_copy_to_stage
-#define ts_copy_to_stage memcpy
+#ifndef vm_copy_to_stage
+#define vm_copy_to_stage memcpy
 #endif
 
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */
@@ -88,14 +88,14 @@ typedef struct Dev {
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
 	uint64_t      us_total;             /* time inside faster-path transfers, us */
 	uint32_t      us_max;               /* the slowest one, us                   */
-	TsTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
-	TsDevState    st;            /* counters (status filled in by stage_get)   */
+	VmTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
+	VmDevState    st;            /* counters (status filled in by stage_get)   */
 } Dev;
 
-static Dev g_dev[TS_DEV_COUNT] = {
-	[TS_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
-	[TS_DEV_INTERNAL] = { .port = 0, .uid = -1 },
-	[TS_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
+static Dev g_dev[VM_DEV_COUNT] = {
+	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
+	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1 },
+	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
 };
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
@@ -107,7 +107,7 @@ static volatile int g_shadow_failed;   /* allocation failed: do not retry every 
 
 /* Returned to the caller when a hook is entered before taiHEN has stored its
  * continuation (SCE_ERROR_ERRNO_EIO): a failed transfer, never a jump to NULL. */
-#define TS_IO_ERROR  ((int)0x80010005)
+#define VM_IO_ERROR  ((int)0x80010005)
 
 enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_RD_MS, H_WR_MS, H_COUNT };
 #define H_SDIF_COUNT H_RD_MS          /* the SceSdif hooks come first          */
@@ -154,15 +154,15 @@ static int alloc_buf(unsigned type, int phycont, SceUID *uid, void **base)
 	opt.size = sizeof(opt);
 	if (phycont)
 		opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_PHYCONT;
-	*uid = ksceKernelAllocMemBlock("SceStorageTurbo", type, STAGE_BYTES, &opt);
+	*uid = ksceKernelAllocMemBlock("SceVitaMemio", type, STAGE_BYTES, &opt);
 	if (*uid < 0)
 		return *uid;
 	if (ksceKernelGetMemBlockBase(*uid, base) < 0) {
 		ksceKernelFreeMemBlock(*uid);
 		*uid = -1;
-		return TS_ERR_NOMEM;
+		return VM_ERR_NOMEM;
 	}
-	return TS_OK;
+	return VM_OK;
 }
 
 /* Take the device buffer for one request, or 0 if the request stays stock. */
@@ -174,7 +174,7 @@ static int take(Dev *d, int mine, uint32_t nsec)
 		d->st.passthru++;
 		return 0;
 	}
-	/* Re-check after taking the buffer: ts_stage_fini clears `enabled` first and
+	/* Re-check after taking the buffer: vm_stage_fini clears `enabled` first and
 	 * then waits for `busy` to drop, so a request that passed the check above
 	 * just before that must not go on to use the buffer. */
 	__sync_synchronize();
@@ -224,7 +224,7 @@ static int stage_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (ret < 0)
 			break;
 		t2 = ksceKernelGetSystemTimeLow();
-		ts_copy_from_stage(dst, d->buf, bytes);
+		vm_copy_from_stage(dst, d->buf, bytes);
 		t3 = ksceKernelGetSystemTimeLow();
 		d->tm.rd_sectors += n;
 		d->tm.rd_io_us += t2 - t1;
@@ -278,7 +278,7 @@ static int stage_write(Dev *d, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_r
 
 		uint32_t t1 = ksceKernelGetSystemTimeLow(), t2, t3;
 
-		ts_copy_to_stage(d->buf, src, bytes);
+		vm_copy_to_stage(d->buf, src, bytes);
 		t2 = ksceKernelGetSystemTimeLow();
 		ret = io(ref, part, sector, d->buf, n);
 		if (ret < 0)
@@ -321,8 +321,8 @@ static int h_rd_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_RD_SD);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_read(&g_dev[TS_DEV_SD2VITA], io_sdif, r, part, sector, buf, nsec);
+		return VM_IO_ERROR;
+	return stage_read(&g_dev[VM_DEV_SD2VITA], io_sdif, r, part, sector, buf, nsec);
 }
 
 static int h_wr_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
@@ -330,8 +330,8 @@ static int h_wr_sd(void *part, uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_WR_SD);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_write(&g_dev[TS_DEV_SD2VITA], io_sdif, r, g_ref[H_RD_SD], part,
+		return VM_IO_ERROR;
+	return stage_write(&g_dev[VM_DEV_SD2VITA], io_sdif, r, g_ref[H_RD_SD], part,
 	                   sector, buf, nsec);
 }
 
@@ -340,8 +340,8 @@ static int h_rd_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_RD_MMC);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_read(&g_dev[TS_DEV_INTERNAL], io_sdif, r, part, sector, buf, nsec);
+		return VM_IO_ERROR;
+	return stage_read(&g_dev[VM_DEV_INTERNAL], io_sdif, r, part, sector, buf, nsec);
 }
 
 static int h_wr_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
@@ -349,8 +349,8 @@ static int h_wr_mmc(void *part, uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_WR_MMC);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_write(&g_dev[TS_DEV_INTERNAL], io_sdif, r, g_ref[H_RD_MMC], part,
+		return VM_IO_ERROR;
+	return stage_write(&g_dev[VM_DEV_INTERNAL], io_sdif, r, g_ref[H_RD_MMC], part,
 	                   sector, buf, nsec);
 }
 
@@ -359,8 +359,8 @@ static int h_rd_ms(uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_RD_MS);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_read(&g_dev[TS_DEV_MEMCARD], io_msif, r, NULL, sector, buf, nsec);
+		return VM_IO_ERROR;
+	return stage_read(&g_dev[VM_DEV_MEMCARD], io_msif, r, NULL, sector, buf, nsec);
 }
 
 static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
@@ -368,12 +368,12 @@ static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 	tai_hook_ref_t r = ref_of(H_WR_MS);
 
 	if (!r)
-		return TS_IO_ERROR;
-	return stage_write(&g_dev[TS_DEV_MEMCARD], io_msif, r, g_ref[H_RD_MS], NULL,
+		return VM_IO_ERROR;
+	return stage_write(&g_dev[VM_DEV_MEMCARD], io_msif, r, g_ref[H_RD_MS], NULL,
 	                   sector, buf, nsec);
 }
 
-int ts_stage_init(void)
+int vm_stage_init(void)
 {
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
 		{ H_RD_SD,  NID_READ_SD,   h_rd_sd  },
@@ -386,12 +386,12 @@ int ts_stage_init(void)
 
 	/* Buffers first, at boot while contiguous memory is easy to find. A device
 	 * without one simply stays stock. */
-	for (int i = 0; i < TS_DEV_COUNT; i++) {
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		int r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, &g_dev[i].uid, &g_dev[i].buf);
 
 		if (r < 0) {
 			g_dev[i].buf = NULL;
-			TS_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
+			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
 			         (unsigned)r);
 		}
 	}
@@ -400,10 +400,10 @@ int ts_stage_init(void)
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceSdif", LIB_SDIF, k_hooks[i].nid,
 			k_hooks[i].fn);
 		if (g_hook[k_hooks[i].h] < 0) {
-			TS_KLOGE("stage: hook %d failed (0x%08x) - releasing all", i,
+			VM_KLOGE("stage: hook %d failed (0x%08x) - releasing all", i,
 			         (unsigned)g_hook[k_hooks[i].h]);
-			ts_stage_fini();
-			return TS_ERR_RESOLVE;
+			vm_stage_fini();
+			return VM_ERR_RESOLVE;
 		}
 	}
 	/* The memory card is optional: if its hooks can't be installed, only the
@@ -413,14 +413,14 @@ int ts_stage_init(void)
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceMsif", LIB_MSIF, k_hooks[i].nid,
 			k_hooks[i].fn);
 		if (g_hook[k_hooks[i].h] < 0) {
-			TS_KLOGW("stage: memory card hook %d failed (0x%08x) - memory card stays stock",
+			VM_KLOGW("stage: memory card hook %d failed (0x%08x) - memory card stays stock",
 			         i, (unsigned)g_hook[k_hooks[i].h]);
 			for (int j = H_SDIF_COUNT; j < H_COUNT; j++)
 				if (g_hook[j] >= 0) {
 					taiHookReleaseForKernel(g_hook[j], g_ref[j]);
 					g_hook[j] = -1;
 				}
-			Dev *m = &g_dev[TS_DEV_MEMCARD];
+			Dev *m = &g_dev[VM_DEV_MEMCARD];
 			if (m->uid >= 0) {
 				ksceKernelFreeMemBlock(m->uid);
 				m->uid = -1;
@@ -429,15 +429,15 @@ int ts_stage_init(void)
 			break;
 		}
 	}
-	return TS_OK;
+	return VM_OK;
 }
 
-void ts_stage_fini(void)
+void vm_stage_fini(void)
 {
 	/* Stop taking the faster path, then wait for any transfer in flight. */
-	for (int i = 0; i < TS_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++)
 		g_dev[i].enabled = 0;
-	for (int i = 0; i < TS_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++)
 		while (g_dev[i].busy)
 			ksceKernelDelayThread(1000);
 	for (int i = H_COUNT - 1; i >= 0; i--)
@@ -445,7 +445,7 @@ void ts_stage_fini(void)
 			taiHookReleaseForKernel(g_hook[i], g_ref[i]);
 			g_hook[i] = -1;
 		}
-	for (int i = 0; i < TS_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].uid >= 0) {
 			ksceKernelFreeMemBlock(g_dev[i].uid);
 			g_dev[i].uid = -1;
@@ -458,11 +458,11 @@ void ts_stage_fini(void)
 	}
 }
 
-void ts_stage_apply(const TsSettings *s)
+void vm_stage_apply(const VmSettings *s)
 {
-	const int32_t want[TS_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
+	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
 
-	for (int i = 0; i < TS_DEV_COUNT; i++) {
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		if (want[i] && !g_dev[i].enabled)
 			g_dev[i].fallback = 0;   /* switching it back on is a fresh start */
 		g_dev[i].enabled = want[i] ? 1 : 0;
@@ -472,7 +472,7 @@ void ts_stage_apply(const TsSettings *s)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
 }
 
-void ts_stage_worker_tick(void)
+void vm_stage_worker_tick(void)
 {
 	/* The verify buffer is only allocated once verify mode is first turned on. */
 	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
@@ -482,25 +482,25 @@ void ts_stage_worker_tick(void)
 			g_shadow = NULL;
 			g_shadow_uid = -1;
 			g_shadow_failed = 1;    /* do not retry every second */
-			TS_KLOGW("stage: verify buffer not allocated (0x%08x)", (unsigned)r);
+			VM_KLOGW("stage: verify buffer not allocated (0x%08x)", (unsigned)r);
 		}
 	}
 }
 
-void ts_stage_bytes(int dev, uint64_t *rd, uint64_t *wr)
+void vm_stage_bytes(int dev, uint64_t *rd, uint64_t *wr)
 {
 	*rd = g_dev[dev].all_rd;
 	*wr = g_dev[dev].all_wr;
 }
 
-int ts_stage_verify_ready(void)
+int vm_stage_verify_ready(void)
 {
 	return g_shadow != NULL;
 }
 
-void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
+void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 {
-	for (int i = 0; i < TS_DEV_COUNT; i++) {
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const Dev *d = &g_dev[i];
 
 		out[i] = d->st;
@@ -508,26 +508,26 @@ void ts_stage_get(TsDevState out[TS_DEV_COUNT], int plugin_active)
 		out[i].write_mib = (uint32_t)(d->wr_bytes >> 20);
 		out[i].time_ms = (uint32_t)(d->us_total / 1000u);
 		out[i].max_ms = d->us_max / 1000u;
-		out[i].status = !plugin_active ? TS_ST_UNAVAIL :
-		                !d->enabled    ? TS_ST_OFF :
-		                !d->buf        ? TS_ST_NO_BUFFER :
-		                d->fallback    ? TS_ST_FALLBACK : TS_ST_ACTIVE;
+		out[i].status = !plugin_active ? VM_ST_UNAVAIL :
+		                !d->enabled    ? VM_ST_OFF :
+		                !d->buf        ? VM_ST_NO_BUFFER :
+		                d->fallback    ? VM_ST_FALLBACK : VM_ST_ACTIVE;
 	}
 }
 
-void ts_stage_timing(TsTimingDev out[TS_DEV_COUNT])
+void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
 {
-	for (int i = 0; i < TS_DEV_COUNT; i++)
+	for (int i = 0; i < VM_DEV_COUNT; i++)
 		out[i] = g_dev[i].tm;
 }
 
 /* Memory card slow mode (Sony's own throttle: it sleeps after every memory
- * card transfer). Read only; Turbo Storage never changes it. 1 on, 0 off,
+ * card transfer). Read only; vita-memio never changes it. 1 on, 0 off,
  * -1 if the driver's getter isn't available. */
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);
 
-int ts_stage_memcard_slow(void)
+int vm_stage_memcard_slow(void)
 {
 	static int (*get)(void);
 	static int tried;

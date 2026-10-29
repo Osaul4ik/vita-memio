@@ -3,20 +3,20 @@
  *
  * Drawn by hooking SceDisplay's set-framebuffer path, so it appears over
  * whatever is on screen in any app. It draws only text the 1 Hz worker hands
- * it (ts_hud_set_text); the frame hook itself formats nothing.
+ * it (vm_hud_set_text); the frame hook itself formats nothing.
  */
-#ifndef STORAGETURBO_HUD_H
-#define STORAGETURBO_HUD_H
+#ifndef VITAMEMIO_HUD_H
+#define VITAMEMIO_HUD_H
 
-#define TS_HUD_LINES     6
-#define TS_HUD_LINE_MAX  48   /* chars incl. NUL; ASCII only               */
+#define VM_HUD_LINES     6
+#define VM_HUD_LINE_MAX  48   /* chars incl. NUL; ASCII only               */
 
-int  ts_hud_init(void);   /* install the set-framebuffer hook              */
-void ts_hud_fini(void);
-int  ts_hud_installed(void);
+int  vm_hud_init(void);   /* install the set-framebuffer hook              */
+void vm_hud_fini(void);
+int  vm_hud_installed(void);
 
 /* Replace the text (n lines, n = 0 hides the HUD) and the screen corner
- * (TS_POS_*). Worker thread only. */
-void ts_hud_set_text(const char lines[][TS_HUD_LINE_MAX], int n, int pos);
+ * (VM_POS_*). Worker thread only. */
+void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int pos);
 
-#endif /* STORAGETURBO_HUD_H */
+#endif /* VITAMEMIO_HUD_H */

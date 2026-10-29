@@ -9,8 +9,8 @@
  * Offsets and sizes must be multiples of 4 and the buffer 4-byte aligned (the
  * tester only uses multiples of 512 and malloc'd buffers).
  */
-#ifndef STORAGETURBO_TESTER_PATTERN_H
-#define STORAGETURBO_TESTER_PATTERN_H
+#ifndef VITAMEMIO_TESTER_PATTERN_H
+#define VITAMEMIO_TESTER_PATTERN_H
 
 #include <stdint.h>
 
@@ -53,4 +53,4 @@ static inline uint32_t tp_verify(const void *buf, uint64_t off, uint32_t n, uint
 	return bad;
 }
 
-#endif /* STORAGETURBO_TESTER_PATTERN_H */
+#endif /* VITAMEMIO_TESTER_PATTERN_H */

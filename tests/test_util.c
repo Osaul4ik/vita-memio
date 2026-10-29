@@ -1,14 +1,14 @@
 /*
- * test_util.c - the small pure helpers: the shared printf subset (ts_fmt.h) and
- * the Developer mode auto-off rule (ts_devmode.h).
+ * test_util.c - the small pure helpers: the shared printf subset (vm_fmt.h) and
+ * the Developer mode auto-off rule (vm_devmode.h).
  */
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../include/ts_devmode.h"
-#include "../include/ts_fmt.h"
-#include "ts_test.h"
+#include "../include/vm_devmode.h"
+#include "../include/vm_fmt.h"
+#include "vm_test.h"
 
 static int fmt(char *buf, int cap, const char *f, ...)
 {
@@ -16,17 +16,17 @@ static int fmt(char *buf, int cap, const char *f, ...)
 	int n;
 
 	va_start(ap, f);
-	n = ts_fmt_v(buf, cap, f, ap);
+	n = vm_fmt_v(buf, cap, f, ap);
 	va_end(ap);
 	return n;
 }
 
-/* ts_fmt must print the same as the C library for what the loggers use. */
+/* vm_fmt must print the same as the C library for what the loggers use. */
 #define SAME(f, ...) do { \
 	char a[128], b[128]; \
 	fmt(a, sizeof(a), f, __VA_ARGS__); \
 	snprintf(b, sizeof(b), f, __VA_ARGS__); \
-	if (strcmp(a, b)) { printf("  FAIL %s:%d: \"%s\" -> \"%s\", libc \"%s\"\n", __FILE__, __LINE__, f, a, b); ts_failures++; } \
+	if (strcmp(a, b)) { printf("  FAIL %s:%d: \"%s\" -> \"%s\", libc \"%s\"\n", __FILE__, __LINE__, f, a, b); vm_failures++; } \
 } while (0)
 
 static void test_matches_libc(void)
@@ -83,25 +83,25 @@ static void test_truncation(void)
 static void test_devmode_auto_off(void)
 {
 	uint32_t since = 0;
-	const uint32_t limit = (uint32_t)TS_DEVMODE_MINUTES * 60u;
+	const uint32_t limit = (uint32_t)VM_DEVMODE_MINUTES * 60u;
 
-	CHECK(!ts_devmode_tick(1, 0, &since) && since == 0);   /* off: nothing counts */
-	CHECK(!ts_devmode_tick(5, 1, &since) && since == 5);   /* on: starts counting */
-	CHECK(!ts_devmode_tick(5 + limit - 1, 1, &since));     /* one second short    */
-	CHECK(ts_devmode_tick(5 + limit, 1, &since));          /* time is up          */
+	CHECK(!vm_devmode_tick(1, 0, &since) && since == 0);   /* off: nothing counts */
+	CHECK(!vm_devmode_tick(5, 1, &since) && since == 5);   /* on: starts counting */
+	CHECK(!vm_devmode_tick(5 + limit - 1, 1, &since));     /* one second short    */
+	CHECK(vm_devmode_tick(5 + limit, 1, &since));          /* time is up          */
 	CHECK(since == 0);
 
 	/* switched off by the user before the limit: the clock restarts next time */
-	CHECK(!ts_devmode_tick(100, 1, &since) && since == 100);
-	CHECK(!ts_devmode_tick(200, 0, &since) && since == 0);
-	CHECK(!ts_devmode_tick(300, 1, &since) && since == 300);
-	CHECK(!ts_devmode_tick(300 + limit - 1, 1, &since));
-	CHECK(ts_devmode_tick(300 + limit, 1, &since));
+	CHECK(!vm_devmode_tick(100, 1, &since) && since == 100);
+	CHECK(!vm_devmode_tick(200, 0, &since) && since == 0);
+	CHECK(!vm_devmode_tick(300, 1, &since) && since == 300);
+	CHECK(!vm_devmode_tick(300 + limit - 1, 1, &since));
+	CHECK(vm_devmode_tick(300 + limit, 1, &since));
 
 	/* left on across a boot: counts from the first tick */
 	since = 0;
-	CHECK(!ts_devmode_tick(1, 1, &since) && since == 1);
-	CHECK(ts_devmode_tick(1 + limit, 1, &since));
+	CHECK(!vm_devmode_tick(1, 1, &since) && since == 1);
+	CHECK(vm_devmode_tick(1 + limit, 1, &since));
 }
 
 int main(void)
@@ -111,6 +111,6 @@ int main(void)
 	RUN(test_truncation);
 	RUN(test_devmode_auto_off);
 
-	printf(ts_failures ? "test_util: %d FAILED\n" : "test_util: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_util: %d FAILED\n" : "test_util: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

@@ -9,11 +9,11 @@
  */
 #include "hud_i18n.h"
 
-#define TS_HUD_LANG_COUNT 20
+#define VM_HUD_LANG_COUNT 20
 
 #define EN { "INTERNAL", "ON", "OFF", "STANDARD", "ERROR", "UNAVAILABLE", "ERR", "VERIFY", "MEMORY CARD", "SLOW" }
 
-static const char *const T[TS_HUD_LANG_COUNT][HTR_COUNT] = {
+static const char *const T[VM_HUD_LANG_COUNT][HTR_COUNT] = {
 /* 0  JA (non-Latin -> EN) */ EN,
 /* 1  EN-US              */ EN,
 /* 2  FR                 */ { "INTERNE", "ACTIVE", "DESACTIVE", "STANDARD", "ERREUR", "INDISPONIBLE", "ERR", "VERIF", "CARTE MEMOIRE", "LENT" },
@@ -40,7 +40,7 @@ const char *hud_tr(int lang, int tok)
 {
 	if (tok < 0 || tok >= HTR_COUNT)
 		return "";
-	if (lang < 0 || lang >= TS_HUD_LANG_COUNT)
+	if (lang < 0 || lang >= VM_HUD_LANG_COUNT)
 		lang = 1;                      /* English (US) fallback */
 	return T[lang][tok];
 }

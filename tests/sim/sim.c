@@ -34,7 +34,7 @@
 #include <psp2/kernel/sysmem.h>
 #include <psp2/rtc.h>
 
-#include "../../include/storageturbo_kernel_api.h"
+#include "../../include/vitamemio_kernel_api.h"
 
 /* ---- files -------------------------------------------------------------------- */
 
@@ -55,14 +55,14 @@ SceUID sceIoDopen(const char *d) { DIR *p = opendir(d); return p ? (SceUID)(long
 int sceIoDclose(SceUID fd) { return close(fd); }
 
 /* The fake plugin. */
-static TsSettings g_set = { 1, 0, 1, 0, 1, 0, 0 };
-static TsDevState g_dev[TS_DEV_COUNT];
+static VmSettings g_set = { 1, 0, 1, 0, 1, 0, 0 };
+static VmDevState g_dev[VM_DEV_COUNT];
 static int g_sim_fail_nobuf;
 
 static void count(int write, SceSize n)
 {
-	for (int d = 0; d < TS_DEV_COUNT; d++) {
-		int on = d == TS_DEV_SD2VITA ? g_set.sd2vita : d == TS_DEV_INTERNAL ? g_set.internal : g_set.memcard;
+	for (int d = 0; d < VM_DEV_COUNT; d++) {
+		int on = d == VM_DEV_SD2VITA ? g_set.sd2vita : d == VM_DEV_INTERNAL ? g_set.internal : g_set.memcard;
 
 		if (on && n >= 32768) {
 			if (write) g_dev[d].writes++; else g_dev[d].reads++;
@@ -73,33 +73,33 @@ static void count(int write, SceSize n)
 int sceIoPread(SceUID fd, void *d, SceSize n, SceOff off) { count(0, n); return (int)pread(fd, d, n, off); }
 int sceIoPwrite(SceUID fd, const void *d, SceSize n, SceOff off) { count(1, n); return (int)pwrite(fd, d, n, off); }
 
-int tsGetState(TsState *o)
+int vmGetState(VmState *o)
 {
 	memset(o, 0, sizeof(*o));
 	o->size = sizeof(*o);
-	o->magic = TS_STATE_MAGIC;
+	o->magic = VM_STATE_MAGIC;
 	o->settings = g_set;
 	o->fingerprint = 0xC0FFEE01;
-	for (int d = 0; d < TS_DEV_COUNT; d++) {
-		int on = d == TS_DEV_SD2VITA ? g_set.sd2vita : d == TS_DEV_INTERNAL ? g_set.internal : g_set.memcard;
+	for (int d = 0; d < VM_DEV_COUNT; d++) {
+		int on = d == VM_DEV_SD2VITA ? g_set.sd2vita : d == VM_DEV_INTERNAL ? g_set.internal : g_set.memcard;
 
 		o->dev[d] = g_dev[d];
-		o->dev[d].status = on ? (g_sim_fail_nobuf ? TS_ST_NO_BUFFER : TS_ST_ACTIVE) : TS_ST_OFF;
+		o->dev[d].status = on ? (g_sim_fail_nobuf ? VM_ST_NO_BUFFER : VM_ST_ACTIVE) : VM_ST_OFF;
 	}
-	return TS_OK;
+	return VM_OK;
 }
 
-/* No tsSetSetting here on purpose: the tester must never change a plugin
+/* No vmSetSetting here on purpose: the tester must never change a plugin
  * setting, so if it ever calls it, building the simulator fails to link. */
-int tsSelfTestPing(void) { return TS_SELFTEST_MAGIC; }
+int vmSelfTestPing(void) { return VM_SELFTEST_MAGIC; }
 
 /* Timing: 20 us io and 5 us copy per block for reads, 30 / 2 for writes. */
-int tsGetTiming(TsTiming *o)
+int vmGetTiming(VmTiming *o)
 {
 	memset(o, 0, sizeof(*o));
 	o->size = sizeof(*o);
-	o->magic = TS_TIMING_MAGIC;
-	for (int d = 0; d < TS_DEV_COUNT; d++) {
+	o->magic = VM_TIMING_MAGIC;
+	for (int d = 0; d < VM_DEV_COUNT; d++) {
 		o->dev[d].rd_sectors = g_dev[d].reads * 64;
 		o->dev[d].rd_io_us = g_dev[d].reads * 64 * 20;
 		o->dev[d].rd_copy_us = g_dev[d].reads * 64 * 5;
@@ -107,7 +107,7 @@ int tsGetTiming(TsTiming *o)
 		o->dev[d].wr_io_us = g_dev[d].writes * 64 * 30;
 		o->dev[d].wr_copy_us = g_dev[d].writes * 64 * 2;
 	}
-	return TS_OK;
+	return VM_OK;
 }
 
 /* ---- time, memory ---------------------------------------------------------------- */

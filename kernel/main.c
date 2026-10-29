@@ -1,5 +1,5 @@
 /*
- * main.c - SceStorageTurbo kernel module entry point.
+ * main.c - SceVitaMemio kernel module entry point.
  *
  * Responsibilities:
  *   - bring up the logger (klog.c);
@@ -12,8 +12,8 @@
  *   - run the 1 Hz worker: saves settings, allocates the verify buffer on
  *     demand, feeds the HUD (hud.c, installed only once the HUD is first
  *     switched on), logs status changes, re-arms the boot guard;
- *   - publish the user-callable "SceStorageTurbo" syscall library (see
- *     include/storageturbo_kernel_api.h and storageturbo_kernel.yml).
+ *   - publish the user-callable "SceVitaMemio" syscall library (see
+ *     include/vitamemio_kernel_api.h and vitamemio_kernel.yml).
  *
  * The exported functions are the user->kernel boundary. The state is copied out
  * with ksceKernelMemcpyKernelToUser, which fails cleanly on a bad pointer; key
@@ -27,17 +27,17 @@
 #include <psp2kern/kernel/threadmgr.h>
 #include <taihen.h>
 
-#include "../include/storageturbo.h"
-#include "../include/storageturbo_kernel_api.h"
-#include "../include/ts_devmode.h"
+#include "../include/vitamemio.h"
+#include "../include/vitamemio_kernel_api.h"
+#include "../include/vm_devmode.h"
 #include "klog.h"
 #include "settings.h"
 #include "stage.h"
 #include "hud.h"
 #include "hud_i18n.h"
 
-#define TS_GUARD_PATH  TS_DATA_DIR "/boot_guard"
-#define TS_GUARD_SECS  30
+#define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
+#define VM_GUARD_SECS  30
 
 /* Storage driver (SceSdif) module fingerprints of the firmwares this build
  * supports. Its code is identical across all of them; anything else stays
@@ -57,7 +57,7 @@ static const uint32_t k_known_fw[] = {
 	0xabd91b5b,   /* 3.74 */
 };
 
-static int      g_disabled = TS_DIS_NONE;
+static int      g_disabled = VM_DIS_NONE;
 static uint32_t g_fingerprint;
 static SceUID   g_worker = -1;
 static volatile int g_run = 1;
@@ -69,7 +69,7 @@ static char g_guard_txt[48];   /* last content read, for the log */
 static char guard_read(void)
 {
 	memset(g_guard_txt, 0, sizeof(g_guard_txt));
-	SceUID fd = ksceIoOpen(TS_GUARD_PATH, SCE_O_RDONLY, 0);
+	SceUID fd = ksceIoOpen(VM_GUARD_PATH, SCE_O_RDONLY, 0);
 	if (fd >= 0) {
 		ksceIoRead(fd, g_guard_txt, sizeof(g_guard_txt) - 1);
 		ksceIoClose(fd);
@@ -87,7 +87,7 @@ static void guard_write(char c, const char *who)
 	buf[n++] = c;
 	n += snprintf(buf + n, sizeof(buf) - n, " up=%u by=%s\n",
 	              (unsigned)ksceKernelGetSystemTimeLow(), who);
-	SceUID fd = ksceIoOpen(TS_GUARD_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	SceUID fd = ksceIoOpen(VM_GUARD_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	if (fd >= 0) {
 		ksceIoWrite(fd, buf, n);
 		ksceIoClose(fd);
@@ -111,10 +111,10 @@ static int firmware_known(void)
 
 /* ---- 1 Hz worker ------------------------------------------------------------ */
 
-static const char *const k_dev_short[TS_DEV_COUNT] = { "SD2V", "INT ", "MC  " };   /* compact */
-static const char *const k_dev_log[TS_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
+static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "INT ", "MC  " };   /* compact */
+static const char *const k_dev_log[VM_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
 /* HUD order: the removable storages first. */
-static const int k_hud_order[TS_DEV_COUNT] = { TS_DEV_SD2VITA, TS_DEV_MEMCARD, TS_DEV_INTERNAL };
+static const int k_hud_order[VM_DEV_COUNT] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD, VM_DEV_INTERNAL };
 
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);
@@ -145,73 +145,73 @@ static void mbps(char *o, int n, uint64_t bytes)
 	snprintf(o, n, "%u.%u", (unsigned)(t / 10), (unsigned)(t % 10));
 }
 
-static void hud_feed(const TsDevState *now)
+static void hud_feed(const VmDevState *now)
 {
-	static uint64_t last_rd[TS_DEV_COUNT], last_wr[TS_DEV_COUNT];
-	static char L[TS_HUD_LINES][TS_HUD_LINE_MAX];
+	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT];
+	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
 	static int hud_failed;           /* tried once and failed: do not retry */
-	TsSettings s;
+	VmSettings s;
 	int n = 0;
 
-	ts_settings_copy(&s);
-	if (s.hud != TS_HUD_OFF)
+	vm_settings_copy(&s);
+	if (s.hud != VM_HUD_OFF)
 		read_lang();
-	if (s.hud != TS_HUD_OFF && !ts_hud_installed() && !hud_failed && ts_hud_init() != TS_OK) {
+	if (s.hud != VM_HUD_OFF && !vm_hud_installed() && !hud_failed && vm_hud_init() != VM_OK) {
 		hud_failed = 1;
-		TS_KLOGW("hud: could not install - HUD unavailable");
+		VM_KLOGW("hud: could not install - HUD unavailable");
 	}
-	if (!ts_hud_installed())
-		s.hud = TS_HUD_OFF;
+	if (!vm_hud_installed())
+		s.hud = VM_HUD_OFF;
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
 	 * or not they took the faster path. Extended adds totals and state. */
-	int slow = ts_stage_memcard_slow() == 1;
+	int slow = vm_stage_memcard_slow() == 1;
 
-	for (int o = 0; o < TS_DEV_COUNT; o++) {
-		static uint64_t seen[TS_DEV_COUNT];
+	for (int o = 0; o < VM_DEV_COUNT; o++) {
+		static uint64_t seen[VM_DEV_COUNT];
 		int i = k_hud_order[o];
 		uint64_t rd, wr;
 		char r[12], w[12];
 
-		ts_stage_bytes(i, &rd, &wr);
+		vm_stage_bytes(i, &rd, &wr);
 		mbps(r, sizeof(r), rd - last_rd[i]);
 		mbps(w, sizeof(w), wr - last_wr[i]);
 		last_rd[i] = rd;
 		last_wr[i] = wr;
 		seen[i] |= rd | wr;
-		if (s.hud == TS_HUD_OFF || !seen[i])
+		if (s.hud == VM_HUD_OFF || !seen[i])
 			continue;
-		const char *name = s.hud == TS_HUD_COMPACT ? k_dev_short[i]
-		                 : i == TS_DEV_INTERNAL ? hud_tr(g_lang, HTR_INTERNAL)
-		                 : i == TS_DEV_MEMCARD  ? hud_tr(g_lang, HTR_MEMCARD) : "SD2VITA";
-		const char *flag = now[i].status == TS_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR)
-		                 : i == TS_DEV_MEMCARD && slow     ? hud_tr(g_lang, HTR_SLOW) : "";
-		snprintf(L[n++], TS_HUD_LINE_MAX, "%.14s R %.6s W %.6s MB/s%s%.12s", name, r, w,
+		const char *name = s.hud == VM_HUD_COMPACT ? k_dev_short[i]
+		                 : i == VM_DEV_INTERNAL ? hud_tr(g_lang, HTR_INTERNAL)
+		                 : i == VM_DEV_MEMCARD  ? hud_tr(g_lang, HTR_MEMCARD) : "SD2VITA";
+		const char *flag = now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR)
+		                 : i == VM_DEV_MEMCARD && slow     ? hud_tr(g_lang, HTR_SLOW) : "";
+		snprintf(L[n++], VM_HUD_LINE_MAX, "%.14s R %.6s W %.6s MB/s%s%.12s", name, r, w,
 		         flag[0] ? " " : "", flag);
-		if (s.hud != TS_HUD_EXTENDED)
+		if (s.hud != VM_HUD_EXTENDED)
 			continue;
 		const char *state =
-			now[i].status == TS_ST_ACTIVE   ? hud_tr(g_lang, HTR_ON) :
-			now[i].status == TS_ST_OFF      ? hud_tr(g_lang, HTR_OFF) :
-			now[i].status == TS_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
+			now[i].status == VM_ST_ACTIVE   ? hud_tr(g_lang, HTR_ON) :
+			now[i].status == VM_ST_OFF      ? hud_tr(g_lang, HTR_OFF) :
+			now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
 			                                  hud_tr(g_lang, HTR_UNAVAILABLE);
-		snprintf(L[n++], TS_HUD_LINE_MAX, "  %u/%u MiB %.10s %.6s %u%s%.10s",
+		snprintf(L[n++], VM_HUD_LINE_MAX, "  %u/%u MiB %.10s %.6s %u%s%.10s",
 		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), state,
 		         hud_tr(g_lang, HTR_ERR), (unsigned)now[i].errors,
 		         s.verify ? " " : "", s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
 	}
-	if (ts_hud_installed())
-		ts_hud_set_text(L, s.hud == TS_HUD_OFF ? 0 : n, s.hud_pos);
+	if (vm_hud_installed())
+		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_pos);
 }
 
 
 /* Only problems are logged: a device that went back to stock after an error,
  * or new errors / verify mismatches. Its counters go with it. */
-static void log_problem(const TsDevState *d, int i)
+static void log_problem(const VmDevState *d, int i)
 {
-	TS_KLOGW("dev %s: %s errors=%u mismatches=%u reads=%u (%u MiB) writes=%u (%u MiB) "
+	VM_KLOGW("dev %s: %s errors=%u mismatches=%u reads=%u (%u MiB) writes=%u (%u MiB) "
 	         "verified=%u", k_dev_log[i],
-	         d->status == TS_ST_FALLBACK ? "FALLBACK (stock after an error)" : "error",
+	         d->status == VM_ST_FALLBACK ? "FALLBACK (stock after an error)" : "error",
 	         (unsigned)d->errors, (unsigned)d->mismatches, (unsigned)d->reads,
 	         (unsigned)d->read_mib, (unsigned)d->writes, (unsigned)d->write_mib,
 	         (unsigned)d->verified);
@@ -219,32 +219,32 @@ static void log_problem(const TsDevState *d, int i)
 
 static int worker(SceSize args, void *argp)
 {
-	TsDevState prev[TS_DEV_COUNT];
+	VmDevState prev[VM_DEV_COUNT];
 
 	(void)args; (void)argp;
 	memset(prev, 0, sizeof(prev));
 	while (g_run) {
-		TsDevState now[TS_DEV_COUNT];
+		VmDevState now[VM_DEV_COUNT];
 
 		ksceKernelDelayThread(1000 * 1000);
 		g_uptime++;
-		ts_settings_flush();
-		ts_stage_worker_tick();
+		vm_settings_flush();
+		vm_stage_worker_tick();
 		{
 			/* Developer mode (the open TCP port) times out by itself. */
 			static uint32_t dev_on_since;
-			TsSettings cur;
+			VmSettings cur;
 
-			ts_settings_copy(&cur);
-			if (ts_devmode_tick(g_uptime, cur.devmode, &dev_on_since))   /* g_uptime >= 1 */
-				ts_settings_set(TS_KEY_DEVMODE, 0);
+			vm_settings_copy(&cur);
+			if (vm_devmode_tick(g_uptime, cur.devmode, &dev_on_since))   /* g_uptime >= 1 */
+				vm_settings_set(VM_KEY_DEVMODE, 0);
 		}
-		if (g_uptime == TS_GUARD_SECS)
+		if (g_uptime == VM_GUARD_SECS)
 			guard_write('0', "worker");
-		ts_stage_get(now, 1);
+		vm_stage_get(now, 1);
 		hud_feed(now);
-		for (int i = 0; i < TS_DEV_COUNT; i++) {
-			int fell_back = now[i].status == TS_ST_FALLBACK && prev[i].status != TS_ST_FALLBACK;
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			int fell_back = now[i].status == VM_ST_FALLBACK && prev[i].status != VM_ST_FALLBACK;
 			int new_err = now[i].errors != prev[i].errors ||
 			              now[i].mismatches != prev[i].mismatches;
 
@@ -256,55 +256,55 @@ static int worker(SceSize args, void *argp)
 	return 0;
 }
 
-/* ---- exported SceStorageTurbo API (user-callable) --------------------------- */
+/* ---- exported SceVitaMemio API (user-callable) --------------------------- */
 
-int tsGetState(TsState *out)
+int vmGetState(VmState *out)
 {
-	TsState k;
+	VmState k;
 	if (!out)
-		return TS_ERR_ARG;
+		return VM_ERR_ARG;
 	memset(&k, 0, sizeof(k));
 	k.size = sizeof(k);
-	k.magic = TS_STATE_MAGIC;
-	ts_settings_copy(&k.settings);
+	k.magic = VM_STATE_MAGIC;
+	vm_settings_copy(&k.settings);
 	k.disabled = g_disabled;
 	k.fingerprint = g_fingerprint;
-	k.verify_ready = ts_stage_verify_ready();
+	k.verify_ready = vm_stage_verify_ready();
 	k.uptime_s = g_uptime;
-	k.memcard_slow = ts_stage_memcard_slow();
-	ts_stage_get(k.dev, g_disabled == TS_DIS_NONE);
+	k.memcard_slow = vm_stage_memcard_slow();
+	vm_stage_get(k.dev, g_disabled == VM_DIS_NONE);
 	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
-		return TS_ERR_ARG;
-	return TS_OK;
+		return VM_ERR_ARG;
+	return VM_OK;
 }
 
-int tsSetSetting(int key, int value)
+int vmSetSetting(int key, int value)
 {
-	if (g_disabled != TS_DIS_NONE)
-		return TS_ERR_NOT_READY;
-	if (!ts_setting_valid(key, value))
-		return TS_ERR_ARG;
-	return ts_settings_set(key, value);   /* applies now; worker saves + logs */
+	if (g_disabled != VM_DIS_NONE)
+		return VM_ERR_NOT_READY;
+	if (!vm_setting_valid(key, value))
+		return VM_ERR_ARG;
+	return vm_settings_set(key, value);   /* applies now; worker saves + logs */
 }
 
-int tsGetTiming(TsTiming *out)
+int vmGetTiming(VmTiming *out)
 {
-	TsTiming k;
+	VmTiming k;
 
 	if (!out)
-		return TS_ERR_ARG;
+		return VM_ERR_ARG;
 	memset(&k, 0, sizeof(k));
 	k.size = sizeof(k);
-	k.magic = TS_TIMING_MAGIC;
-	ts_stage_timing(k.dev);
+	k.magic = VM_TIMING_MAGIC;
+	vm_stage_timing(k.dev);
 	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
-		return TS_ERR_ARG;
-	return TS_OK;
+		return VM_ERR_ARG;
+	return VM_OK;
 }
 
-int tsSelfTestPing(void)
+int vmSelfTestPing(void)
 {
-	return (int)TS_SELFTEST_MAGIC;
+	return (int)VM_SELFTEST_MAGIC;
 }
 
 /* ---- module lifecycle ------------------------------------------------------- */
@@ -317,40 +317,40 @@ int module_start(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 
-	ts_klog_init();   /* FIRST, so the whole bring-up is captured (makes the dir) */
+	vm_klog_init();   /* FIRST, so the whole bring-up is captured (makes the dir) */
 	if (!firmware_known()) {
-		g_disabled = TS_DIS_FIRMWARE;
-		TS_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
-		         TS_VERSION_STR, (unsigned)g_fingerprint);
+		g_disabled = VM_DIS_FIRMWARE;
+		VM_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
+		         VM_VERSION_STR, (unsigned)g_fingerprint);
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	/* The one line every start writes: which build, on which storage driver. */
-	TS_KLOGI("kernel v%s start, storage driver 0x%08x", TS_VERSION_STR, (unsigned)g_fingerprint);
+	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_VERSION_STR, (unsigned)g_fingerprint);
 
 	/* Crash-loop guard: the file holds '1' from here until the worker has run
-	 * for TS_GUARD_SECS, then '0'. Finding '1' at start means the last start
+	 * for VM_GUARD_SECS, then '0'. Finding '1' at start means the last start
 	 * brought the console down, so this boot installs nothing. It is only ever
 	 * overwritten, never deleted (a delete can be lost if the console is reset
 	 * before the storage flushes). */
 	if (guard_read() == '1') {
-		g_disabled = TS_DIS_SAFE;
-		TS_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (write 0 to "
-		         TS_GUARD_PATH " to retry)", g_guard_txt);
+		g_disabled = VM_DIS_SAFE;
+		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (write 0 to "
+		         VM_GUARD_PATH " to retry)", g_guard_txt);
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	guard_write('1', "start");
 
-	if (ts_stage_init() != TS_OK) {
-		g_disabled = TS_DIS_HOOKS;
-		TS_KLOGW("storage hooks NOT installed: storage stays stock");
+	if (vm_stage_init() != VM_OK) {
+		g_disabled = VM_DIS_HOOKS;
+		VM_KLOGW("storage hooks NOT installed: storage stays stock");
 	}
-	ts_settings_init();   /* defaults, then the saved file; applies to stage.c */
+	vm_settings_init();   /* defaults, then the saved file; applies to stage.c */
 
-	g_worker = ksceKernelCreateThread("SceStorageTurboWorker", worker, 0x80, 0x2000, 0, 0, NULL);
+	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0, NULL);
 	if (g_worker >= 0)
 		ksceKernelStartThread(g_worker, 0, NULL);
 	else
-		TS_KLOGW("worker thread not started (0x%08x): settings will not be saved",
+		VM_KLOGW("worker thread not started (0x%08x): settings will not be saved",
 		         (unsigned)g_worker);
 
 	return SCE_KERNEL_START_SUCCESS;
@@ -359,16 +359,16 @@ int module_start(SceSize argc, const void *args)
 int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
-	if (g_disabled == TS_DIS_FIRMWARE || g_disabled == TS_DIS_SAFE) {
-		ts_klog_fini();
+	if (g_disabled == VM_DIS_FIRMWARE || g_disabled == VM_DIS_SAFE) {
+		vm_klog_fini();
 		return SCE_KERNEL_STOP_SUCCESS;
 	}
 	g_run = 0;
 	if (g_worker >= 0)
 		ksceKernelWaitThreadEnd(g_worker, NULL, NULL);
-	ts_hud_fini();
-	ts_stage_fini();
-	ts_settings_flush();
-	ts_klog_fini();
+	vm_hud_fini();
+	vm_stage_fini();
+	vm_settings_flush();
+	vm_klog_fini();
 	return SCE_KERNEL_STOP_SUCCESS;
 }

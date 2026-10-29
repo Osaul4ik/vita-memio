@@ -19,7 +19,7 @@
 
 #include "fakes.h"
 
-int ts_failures;
+int vm_failures;
 
 uint32_t fake_now_us;
 int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
@@ -27,8 +27,8 @@ int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 int fake_rename_fail, fake_write_short;
 
 /* ---- logging: swallowed ---------------------------------------------------- */
-void ts_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
-void ts_log(const char *fmt, ...) { (void)fmt; }
+void vm_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
+void vm_log(const char *fmt, ...) { (void)fmt; }
 
 /* ---- time / threads -------------------------------------------------------- */
 int ksceKernelDelayThread(unsigned us) { (void)us; return 0; }
@@ -98,7 +98,7 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
 
 void *ksceSdifGetSdContextGlobal(int port) { (void)port; return NULL; }
 
-/* ---- file system: ur0:data/turbostorage/<x> -> <tmpdir>/<x> ---------------- */
+/* ---- file system: ur0:data/vita-memio/<x> -> <tmpdir>/<x> ---------------- */
 static char g_tmp[256];
 
 const char *fakes_tmpdir_new(void)
@@ -132,12 +132,20 @@ void fakes_reset(void)
 
 static const char *map(const char *path, char *out, size_t n)
 {
-	static const char pre[] = "ur0:data/turbostorage/";
+	static const char pre[] = "ur0:data/vita-memio/";
+	static const char old[] = "ur0:data/turbostorage/";   /* before the rename */
 
-	if (strncmp(path, pre, sizeof(pre) - 1) != 0 || !g_tmp[0])
+	if (!g_tmp[0])
 		return NULL;
-	snprintf(out, n, "%s/%s", g_tmp, path + sizeof(pre) - 1);
-	return out;
+	if (!strncmp(path, pre, sizeof(pre) - 1)) {
+		snprintf(out, n, "%s/%s", g_tmp, path + sizeof(pre) - 1);
+		return out;
+	}
+	if (!strncmp(path, old, sizeof(old) - 1)) {
+		snprintf(out, n, "%s/old-%s", g_tmp, path + sizeof(old) - 1);
+		return out;
+	}
+	return NULL;
 }
 
 SceUID ksceIoOpen(const char *path, int flags, int mode)

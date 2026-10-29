@@ -18,8 +18,8 @@
  * odd-aligned buffer, a tail under 4 bytes) is left to memcpy, so the result is
  * always byte-for-byte what memcpy would give (tests/test_fastcopy.c).
  */
-#ifndef STORAGETURBO_FASTCOPY_H
-#define STORAGETURBO_FASTCOPY_H
+#ifndef VITAMEMIO_FASTCOPY_H
+#define VITAMEMIO_FASTCOPY_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -27,22 +27,22 @@
 /* GCC turns a plain copy loop back into a memcpy call (loop distribution), which
  * would undo the point of this function: keep it a loop. */
 #if defined(__GNUC__) && !defined(__clang__)
-#define TS_NO_MEMCPY_IDIOM __attribute__((optimize("no-tree-loop-distribute-patterns")))
+#define VM_NO_MEMCPY_IDIOM __attribute__((optimize("no-tree-loop-distribute-patterns")))
 #else
-#define TS_NO_MEMCPY_IDIOM
+#define VM_NO_MEMCPY_IDIOM
 #endif
 
 /* A word that may alias any other type (the buffers hold plain bytes). */
-typedef uint32_t __attribute__((may_alias)) ts_word_t;
+typedef uint32_t __attribute__((may_alias)) vm_word_t;
 
-static inline TS_NO_MEMCPY_IDIOM void *ts_fast_copy(void *dst, const void *src, size_t n)
+static inline VM_NO_MEMCPY_IDIOM void *vm_fast_copy(void *dst, const void *src, size_t n)
 {
 	uint8_t *d = dst;
 	const uint8_t *s = src;
 
 	if ((((uintptr_t)d | (uintptr_t)s) & 3u) == 0) {
-		ts_word_t *dw = (ts_word_t *)d;
-		const ts_word_t *sw = (const ts_word_t *)s;
+		vm_word_t *dw = (vm_word_t *)d;
+		const vm_word_t *sw = (const vm_word_t *)s;
 
 #if defined(__arm__)
 		/* 64 bytes per pass as two 8-register LDM/STM pairs. Written out, because
@@ -90,4 +90,4 @@ static inline TS_NO_MEMCPY_IDIOM void *ts_fast_copy(void *dst, const void *src, 
 	return dst;
 }
 
-#endif /* STORAGETURBO_FASTCOPY_H */
+#endif /* VITAMEMIO_FASTCOPY_H */

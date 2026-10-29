@@ -11,13 +11,13 @@
 #include <unistd.h>
 
 #include "fakes.h"
-#include "ts_test.h"
+#include "vm_test.h"
 
 /* settings.c hands its result to the storage code; record it instead. */
 static int apply_calls;
-static TsSettings last_applied;
+static VmSettings last_applied;
 
-void ts_stage_apply(const TsSettings *s)
+void vm_stage_apply(const VmSettings *s)
 {
 	apply_calls++;
 	last_applied = *s;
@@ -64,9 +64,9 @@ static size_t get_file(const char *name, void *out, size_t cap)
 static void clean(void)
 {
 	char p[300];
-	const char *names[] = { "settings.bin", "settings.tmp" };
+	const char *names[] = { "settings.bin", "settings.tmp", "old-settings.bin" };
 
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < 3; i++) {
 		path_of(names[i], p, sizeof(p));
 		unlink(p);
 	}
@@ -76,23 +76,23 @@ static void clean(void)
 	g_save_fails = 0;
 }
 
-static int all_defaults(const TsSettings *s)
+static int all_defaults(const VmSettings *s)
 {
-	return s->sd2vita == TS_DEF_SD2VITA && s->internal == TS_DEF_INTERNAL &&
-	       s->verify == TS_DEF_VERIFY && s->hud == TS_DEF_HUD &&
-	       s->hud_pos == TS_DEF_HUD_POS && s->devmode == TS_DEF_DEVMODE &&
-	       s->memcard == TS_DEF_MEMCARD;
+	return s->sd2vita == VM_DEF_SD2VITA && s->internal == VM_DEF_INTERNAL &&
+	       s->verify == VM_DEF_VERIFY && s->hud == VM_DEF_HUD &&
+	       s->hud_pos == VM_DEF_HUD_POS && s->devmode == VM_DEF_DEVMODE &&
+	       s->memcard == VM_DEF_MEMCARD;
 }
 
 /* Build a settings file by hand, with a correct check word. */
 static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
 {
-	TsSettingsFile f;
+	VmSettingsFile f;
 	size_t n;
 
 	memset(&f, 0, sizeof(f));
-	f.magic = TS_CFG_MAGIC;
-	f.version = TS_CFG_VERSION;
+	f.magic = VM_CFG_MAGIC;
+	f.version = VM_CFG_VERSION;
 	f.count = count;
 	for (uint32_t i = 0; i < count; i++)
 		f.values[i] = vals[i];
@@ -108,80 +108,80 @@ static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
 
 static void test_no_file_gives_defaults(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	clean();
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(all_defaults(&s));
 	CHECK(apply_calls == 1 && all_defaults(&last_applied));
 }
 
 static void test_save_and_load_roundtrip(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	clean();
-	ts_settings_init();
-	CHECK(ts_settings_set(TS_KEY_SD2VITA, 1) == TS_OK);
-	CHECK(ts_settings_set(TS_KEY_HUD, 2) == TS_OK);
-	CHECK(ts_settings_set(TS_KEY_HUD_POS, 3) == TS_OK);
-	CHECK(ts_settings_set(TS_KEY_MEMCARD, 1) == TS_OK);
+	vm_settings_init();
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_HUD, 2) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_HUD_POS, 3) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_MEMCARD, 1) == VM_OK);
 	CHECK(last_applied.sd2vita == 1 && last_applied.memcard == 1);
-	ts_settings_flush();
+	vm_settings_flush();
 	CHECK(exists("settings.bin") && !exists("settings.tmp"));
 
-	ts_settings_init();                       /* "reboot" */
-	ts_settings_copy(&s);
+	vm_settings_init();                       /* "reboot" */
+	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
 	CHECK(s.internal == 0 && s.verify == 0 && s.devmode == 0);
 }
 
 static void test_invalid_set_is_rejected(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	clean();
-	ts_settings_init();
+	vm_settings_init();
 	apply_calls = 0;
-	CHECK(ts_settings_set(TS_KEY_SD2VITA, 2) == TS_ERR_ARG);
-	CHECK(ts_settings_set(TS_KEY_HUD, -1) == TS_ERR_ARG);
-	CHECK(ts_settings_set(TS_KEY_HUD_POS, 4) == TS_ERR_ARG);
-	CHECK(ts_settings_set(99, 0) == TS_ERR_ARG);
-	CHECK(ts_settings_set(-1, 0) == TS_ERR_ARG);
-	ts_settings_copy(&s);
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 2) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_HUD, -1) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_HUD_POS, 4) == VM_ERR_ARG);
+	CHECK(vm_settings_set(99, 0) == VM_ERR_ARG);
+	CHECK(vm_settings_set(-1, 0) == VM_ERR_ARG);
+	vm_settings_copy(&s);
 	CHECK(all_defaults(&s) && apply_calls == 0 && !g_dirty);
-	CHECK(ts_settings_set(TS_KEY_SD2VITA, 0) == TS_OK);   /* same value: nothing to do */
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 0) == VM_OK);   /* same value: nothing to do */
 	CHECK(apply_calls == 0 && !g_dirty);
 }
 
 static void test_corrupt_file_gives_defaults(void)
 {
 	uint8_t buf[64];
-	TsSettings s;
+	VmSettings s;
 	size_t n;
 
 	clean();
-	ts_settings_init();
-	ts_settings_set(TS_KEY_INTERNAL, 1);
-	ts_settings_flush();
+	vm_settings_init();
+	vm_settings_set(VM_KEY_INTERNAL, 1);
+	vm_settings_flush();
 	n = get_file("settings.bin", buf, sizeof(buf));
-	CHECK(n == sizeof(TsSettingsFile));
+	CHECK(n == sizeof(VmSettingsFile));
 
 	buf[14] ^= 0x01;                          /* flip a bit in a value */
 	put_file("settings.bin", buf, n);
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(all_defaults(&s));                  /* checksum catches it: all off */
 
 	put_file("settings.bin", buf, 20);        /* truncated */
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(all_defaults(&s));
 
 	put_file("settings.bin", "", 0);          /* empty (the old non-atomic save) */
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(all_defaults(&s));
 }
 
@@ -189,16 +189,16 @@ static void test_older_file_with_fewer_keys(void)
 {
 	uint8_t buf[64];
 	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 0.1.0 had 6 keys: no memcard */
-	TsSettings s;
+	VmSettings s;
 	size_t n;
 
 	clean();
 	n = make_file(buf, 6, v);
 	put_file("settings.bin", buf, n);
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3);
-	CHECK(s.memcard == TS_DEF_MEMCARD);       /* the newer key takes its default */
+	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
 }
 
 /* A file with more keys than this build knows (the experimental build wrote 8):
@@ -207,8 +207,8 @@ static void test_file_with_more_keys(void)
 {
 	uint8_t buf[256];
 	int32_t v[8] = { 1, 0, 0, 2, 3, 0, 1, 1 };
-	uint32_t hdr[3] = { TS_CFG_MAGIC, TS_CFG_VERSION, 8 }, check;
-	TsSettings s;
+	uint32_t hdr[3] = { VM_CFG_MAGIC, VM_CFG_VERSION, 8 }, check;
+	VmSettings s;
 	size_t n;
 
 	clean();
@@ -218,87 +218,119 @@ static void test_file_with_more_keys(void)
 	memcpy(buf + 12 + sizeof(v), &check, 4);
 	n = 12 + sizeof(v) + 4;
 	put_file("settings.bin", buf, n);
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
 
 	/* the same file with a wrong check word is refused */
 	buf[n - 1] ^= 1;
 	put_file("settings.bin", buf, n);
-	ts_settings_init();
-	ts_settings_copy(&s);
-	CHECK(s.sd2vita == TS_DEF_SD2VITA && s.memcard == TS_DEF_MEMCARD);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == VM_DEF_SD2VITA && s.memcard == VM_DEF_MEMCARD);
+}
+
+/* After the rename: the settings in the old folder are read once when the new
+ * folder has none, and saved to the new place; the new file wins when both
+ * exist. */
+static void test_settings_from_the_old_folder(void)
+{
+	uint8_t buf[64], back[64];
+	int32_t old_v[7] = { 1, 0, 0, 2, 3, 0, 1 };
+	int32_t new_v[7] = { 0, 0, 0, 1, 1, 0, 0 };
+	VmSettings s;
+	size_t n;
+
+	clean();
+	n = make_file(buf, 7, old_v);
+	put_file("old-settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_pos == 3 && s.memcard == 1);
+	vm_settings_flush();                       /* the worker saves it */
+	CHECK(get_file("settings.bin", back, sizeof(back)) > 0);
+	vm_settings_init();                        /* now from the new place */
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.memcard == 1 && s.hud == 2);
+
+	clean();
+	put_file("old-settings.bin", buf, n);
+	n = make_file(buf, 7, new_v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 0 && s.hud == 1 && s.memcard == 0);   /* the new file wins */
 }
 
 static void test_one_bad_value_keeps_the_rest(void)
 {
 	uint8_t buf[64];
 	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 3, 0, 1 };
-	TsSettings s;
+	VmSettings s;
 	size_t n;
 
 	clean();
 	n = make_file(buf, 7, v);
 	put_file("settings.bin", buf, n);
-	ts_settings_init();
-	ts_settings_copy(&s);
-	CHECK(s.hud == TS_DEF_HUD);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.hud == VM_DEF_HUD);
 	CHECK(s.sd2vita == 1 && s.hud_pos == 3 && s.memcard == 1);
 }
 
 static void test_cut_save_after_remove_loads_tmp(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	clean();
-	ts_settings_init();
-	ts_settings_set(TS_KEY_SD2VITA, 1);
-	ts_settings_flush();
+	vm_settings_init();
+	vm_settings_set(VM_KEY_SD2VITA, 1);
+	vm_settings_flush();
 
 	/* second save: the old file is removed, then the rename fails (power cut) */
-	ts_settings_set(TS_KEY_MEMCARD, 1);
+	vm_settings_set(VM_KEY_MEMCARD, 1);
 	fake_rename_fail = 1;
-	ts_settings_flush();
+	vm_settings_flush();
 	CHECK(!exists("settings.bin") && exists("settings.tmp"));
 	CHECK(g_dirty == 1);                      /* will be retried */
 
 	fake_rename_fail = 0;
-	ts_settings_init();                       /* boot: no main file, finished .tmp copy */
-	ts_settings_copy(&s);
+	vm_settings_init();                       /* boot: no main file, finished .tmp copy */
+	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.memcard == 1);
 }
 
 static void test_short_write_leaves_old_file(void)
 {
-	TsSettings s;
+	VmSettings s;
 
 	clean();
-	ts_settings_init();
-	ts_settings_set(TS_KEY_SD2VITA, 1);
-	ts_settings_flush();                      /* good copy A on disk */
+	vm_settings_init();
+	vm_settings_set(VM_KEY_SD2VITA, 1);
+	vm_settings_flush();                      /* good copy A on disk */
 
-	ts_settings_set(TS_KEY_INTERNAL, 1);
+	vm_settings_set(VM_KEY_INTERNAL, 1);
 	fake_write_short = 1;                     /* the next save is cut short */
-	ts_settings_flush();
+	vm_settings_flush();
 	CHECK(exists("settings.bin"));            /* the old file was never touched */
 	CHECK(g_dirty == 1);
 
 	fake_write_short = 0;
-	ts_settings_init();
-	ts_settings_copy(&s);
+	vm_settings_init();
+	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.internal == 0); /* A, not a torn mix */
 }
 
 static void test_save_gives_up_after_retries(void)
 {
 	clean();
-	ts_settings_init();
-	ts_settings_set(TS_KEY_SD2VITA, 1);
+	vm_settings_init();
+	vm_settings_set(VM_KEY_SD2VITA, 1);
 	fake_write_short = 1;
 	for (int i = 0; i < 10; i++)
-		ts_settings_flush();
+		vm_settings_flush();
 	CHECK(g_dirty == 0);                      /* stopped retrying (and logged) */
-	ts_settings_set(TS_KEY_HUD, 1);           /* the next change tries again */
+	vm_settings_set(VM_KEY_HUD, 1);           /* the next change tries again */
 	CHECK(g_dirty == 1);
 }
 
@@ -312,12 +344,13 @@ int main(void)
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
 	RUN(test_file_with_more_keys);
+	RUN(test_settings_from_the_old_folder);
 	RUN(test_one_bad_value_keeps_the_rest);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);
 
 	fakes_tmpdir_remove();
-	printf(ts_failures ? "test_settings: %d FAILED\n" : "test_settings: ok\n", ts_failures);
-	return ts_failures ? 1 : 0;
+	printf(vm_failures ? "test_settings: %d FAILED\n" : "test_settings: ok\n", vm_failures);
+	return vm_failures ? 1 : 0;
 }

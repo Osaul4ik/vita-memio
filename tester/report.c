@@ -130,7 +130,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	plugin_text(res, pl, sizeof(pl));
 
 	put(&o, "================================================================\n");
-	put(&o, "Turbo Storage tester %s   %s\n", TESTER_VERSION, meta->timestamp);
+	put(&o, "vita-memio tester %s   %s\n", TESTER_VERSION, meta->timestamp);
 	put(&o, "plugin %s   storage driver id 0x%08x\n", meta->plugin_version,
 	    (unsigned)res->plugin0.fingerprint);
 	put(&o, "plugin during the test: %s\n", pl);

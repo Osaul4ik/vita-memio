@@ -2,13 +2,13 @@
  * Generated table; row-major, bit 0 = leftmost pixel. Original glyphs drawn
  * for this project; MIT, as the rest of the repository. Codepoints outside
  * 0x20..0x7E render as a blank cell. */
-#ifndef STORAGETURBO_FONT8X8_H
-#define STORAGETURBO_FONT8X8_H
+#ifndef VITAMEMIO_FONT8X8_H
+#define VITAMEMIO_FONT8X8_H
 
-#define TS_FONT_FIRST 0x20
-#define TS_FONT_LAST  0x7E
+#define VM_FONT_FIRST 0x20
+#define VM_FONT_LAST  0x7E
 
-static const unsigned char ts_font8x8[0x7F - 0x20][8] = {
+static const unsigned char vm_font8x8[0x7F - 0x20][8] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* 0x20 ' ' */
     { 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x08, 0x00 }, /* 0x21 '!' */
     { 0x14, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* 0x22 '"' */
@@ -106,4 +106,4 @@ static const unsigned char ts_font8x8[0x7F - 0x20][8] = {
     { 0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00, 0x00 }, /* 0x7E '~' */
 };
 
-#endif /* STORAGETURBO_FONT8X8_H */
+#endif /* VITAMEMIO_FONT8X8_H */

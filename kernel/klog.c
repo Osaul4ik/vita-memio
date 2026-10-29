@@ -1,7 +1,7 @@
 /*
  * klog.c - kernel-side logger implementation. See klog.h.
  *
- * Primary sink: ksceDebugPrintf("[storageturbo] ...").
+ * Primary sink: ksceDebugPrintf("[vita-memio] ...").
  * Secondary sink: an append-only, size-capped ur0 logfile via ksceIo*, opened
  * best-effort and disabled silently on any failure. One rotation step
  * (kernel.log -> kernel.old.log) keeps the previous chunk.
@@ -16,11 +16,11 @@
 #include <stdarg.h>
 
 #include "klog.h"
-#include "../include/ts_fmt.h"
+#include "../include/vm_fmt.h"
 
 static SceUID   g_mtx = -1;
 static int      g_inited = 0;
-static int      g_level  = TS_KLOG_DEFAULT_LEVEL;
+static int      g_level  = VM_KLOG_DEFAULT_LEVEL;
 static SceUID   g_fd = -1;
 static int      g_file_disabled = 0;
 static uint32_t g_file_bytes = 0;
@@ -35,9 +35,9 @@ static void file_open_locked(void)
 	if (g_file_disabled || g_fd >= 0)
 		return;
 	ksceIoMkdir("ur0:data", 0777);
-	ksceIoMkdir(TS_KLOG_DIR, 0777);
+	ksceIoMkdir(VM_KLOG_DIR, 0777);
 
-	SceUID fd = ksceIoOpen(TS_KLOG_PATH,
+	SceUID fd = ksceIoOpen(VM_KLOG_PATH,
 	                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
 	if (fd < 0) {
 		g_file_disabled = 1;
@@ -57,12 +57,12 @@ static void file_write_locked(const char *line, int len)
 	if (g_fd < 0)
 		return;
 
-	if (g_file_bytes + (uint32_t)len + 1 > TS_KLOG_MAX_BYTES) {
+	if (g_file_bytes + (uint32_t)len + 1 > VM_KLOG_MAX_BYTES) {
 		/* Rotate: keep one previous chunk as kernel.old.log, start afresh. */
 		ksceIoClose(g_fd);
-		ksceIoRemove(TS_KLOG_PATH_OLD);
-		ksceIoRename(TS_KLOG_PATH, TS_KLOG_PATH_OLD);
-		g_fd = ksceIoOpen(TS_KLOG_PATH,
+		ksceIoRemove(VM_KLOG_PATH_OLD);
+		ksceIoRename(VM_KLOG_PATH, VM_KLOG_PATH_OLD);
+		g_fd = ksceIoOpen(VM_KLOG_PATH,
 		                  SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 		g_file_bytes = 0;
 		if (g_fd < 0) { g_file_disabled = 1; return; }
@@ -81,23 +81,23 @@ static void file_write_locked(const char *line, int len)
 
 /* ---- public API --------------------------------------------------------- */
 
-void ts_klog_init(void)
+void vm_klog_init(void)
 {
 	if (g_inited)
 		return;
-	g_level = TS_KLOG_DEFAULT_LEVEL;
+	g_level = VM_KLOG_DEFAULT_LEVEL;
 	g_file_disabled = 0;
 	g_file_bytes = 0;
 	g_fd = -1;
 	if (g_mtx < 0)
-		g_mtx = ksceKernelCreateMutex("TsKLogMtx", 0, 0, NULL);
+		g_mtx = ksceKernelCreateMutex("VmKLogMtx", 0, 0, NULL);
 	g_inited = 1;
 	lock();
 	file_open_locked();
 	unlock();
 }
 
-void ts_klog_fini(void)
+void vm_klog_fini(void)
 {
 	if (!g_inited)
 		return;
@@ -111,16 +111,16 @@ void ts_klog_fini(void)
 static const char *level_name(int level)
 {
 	switch (level) {
-	case TS_KLOG_ERR:   return "ERR";
-	case TS_KLOG_WARN:  return "WARN";
-	case TS_KLOG_INFO:  return "INFO";
-	case TS_KLOG_DEBUG: return "DEBUG";
-	case TS_KLOG_TRACE: return "TRACE";
+	case VM_KLOG_ERR:   return "ERR";
+	case VM_KLOG_WARN:  return "WARN";
+	case VM_KLOG_INFO:  return "INFO";
+	case VM_KLOG_DEBUG: return "DEBUG";
+	case VM_KLOG_TRACE: return "TRACE";
 	default:            return "?";
 	}
 }
 
-void ts_klog(int level, const char *fmt, ...)
+void vm_klog(int level, const char *fmt, ...)
 {
 	if (level > g_level || !fmt)
 		return;
@@ -132,12 +132,12 @@ void ts_klog(int level, const char *fmt, ...)
 	uint32_t secs = (uint32_t)(t / 1000000u);
 	uint32_t us   = (uint32_t)(t % 1000000u);
 
-	/* "[storageturbo] [<s>.<us>] <LVL> " prefix. */
-	const char *tag = "[storageturbo] [";
+	/* "[vita-memio] [<s>.<us>] <LVL> " prefix. */
+	const char *tag = "[vita-memio] [";
 	while (*tag && pos < (int)sizeof(line) - 1) line[pos++] = *tag++;
-	pos = ts_fmt_uint(line, sizeof(line), pos, secs, 10, 0, 0, 0);
+	pos = vm_fmt_uint(line, sizeof(line), pos, secs, 10, 0, 0, 0);
 	if (pos < (int)sizeof(line) - 1) line[pos++] = '.';
-	pos = ts_fmt_uint(line, sizeof(line), pos, us, 10, 0, 6, 1);
+	pos = vm_fmt_uint(line, sizeof(line), pos, us, 10, 0, 6, 1);
 	if (pos < (int)sizeof(line) - 1) line[pos++] = ']';
 	if (pos < (int)sizeof(line) - 1) line[pos++] = ' ';
 	const char *lvl = level_name(level);
@@ -146,7 +146,7 @@ void ts_klog(int level, const char *fmt, ...)
 
 	va_list ap;
 	va_start(ap, fmt);
-	pos += ts_fmt_v(line + pos, (int)sizeof(line) - pos, fmt, ap);
+	pos += vm_fmt_v(line + pos, (int)sizeof(line) - pos, fmt, ap);
 	va_end(ap);
 
 	/* Primary sink: always. The debug channel adds its own newline handling, so

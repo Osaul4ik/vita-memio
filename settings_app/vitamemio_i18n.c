@@ -1,61 +1,61 @@
 /*
- * storageturbo_i18n.c - text for the Turbo Storage Settings page.
+ * vitamemio_i18n.c - text for the vita-memio Settings page.
  *
  * MACHINE-TRANSLATED CONTENT. Only English (US/UK) is authoritative; the
  * other languages are machine translations so the page is legible in all 20
  * Vita system languages. Corrections from native speakers are welcome: edit
- * tools/gen_i18n.py and regenerate storageturbo_i18n_table.h.
+ * tools/gen_i18n.py and regenerate vitamemio_i18n_table.h.
  *
  * Needs SceRegistryMgr_stub_weak and SceAppUtil_stub_weak (both resident in
  * NPXS10015).
  */
-#include "storageturbo_i18n.h"
+#include "vitamemio_i18n.h"
 
 extern int sceRegMgrGetKeyInt(const char *category, const char *name, int *value);
 extern int sceAppUtilSystemParamGetInt(int paramId, int *value);
 
-#define TS_SYSTEM_PARAM_ID_LANG 1
+#define VM_SYSTEM_PARAM_ID_LANG 1
 
-static const char *const g_tbl[TS_I18N_COUNT][TS_LANG_COUNT] = {
-#include "storageturbo_i18n_table.h"
+static const char *const g_tbl[VM_I18N_COUNT][VM_LANG_COUNT] = {
+#include "vitamemio_i18n_table.h"
 };
 
-int ts_i18n_lang(void)
+int vm_i18n_lang(void)
 {
 	int lang = -1;
 
 	/* The registry is the canonical store and has no init gate. */
 	if (sceRegMgrGetKeyInt("/CONFIG/SYSTEM", "language", &lang) >= 0 &&
-	    lang >= 0 && lang < TS_LANG_COUNT)
+	    lang >= 0 && lang < VM_LANG_COUNT)
 		return lang;
 	/* Only answers once the host app has called sceAppUtilInit(). */
 	lang = -1;
-	if (sceAppUtilSystemParamGetInt(TS_SYSTEM_PARAM_ID_LANG, &lang) >= 0 &&
-	    lang >= 0 && lang < TS_LANG_COUNT)
+	if (sceAppUtilSystemParamGetInt(VM_SYSTEM_PARAM_ID_LANG, &lang) >= 0 &&
+	    lang >= 0 && lang < VM_LANG_COUNT)
 		return lang;
-	return TS_LANG_ENGLISH_US;
+	return VM_LANG_ENGLISH_US;
 }
 
-const char *ts_i18n_for(int id, int lang)
+const char *vm_i18n_for(int id, int lang)
 {
 	const char *s;
 
-	if (id < 0 || id >= TS_I18N_COUNT)
+	if (id < 0 || id >= VM_I18N_COUNT)
 		return "";
-	if (lang < 0 || lang >= TS_LANG_COUNT)
-		lang = TS_LANG_ENGLISH_US;
+	if (lang < 0 || lang >= VM_LANG_COUNT)
+		lang = VM_LANG_ENGLISH_US;
 	s = g_tbl[id][lang];
 	if (!s)
-		s = g_tbl[id][TS_LANG_ENGLISH_US];
+		s = g_tbl[id][VM_LANG_ENGLISH_US];
 	return s ? s : "";
 }
 
-const char *ts_i18n(int id)
+const char *vm_i18n(int id)
 {
-	return ts_i18n_for(id, ts_i18n_lang());
+	return vm_i18n_for(id, vm_i18n_lang());
 }
 
-int ts_i18n_to_u16(const char *utf8, unsigned short *out, int cap)
+int vm_i18n_to_u16(const char *utf8, unsigned short *out, int cap)
 {
 	const unsigned char *s = (const unsigned char *)utf8;
 	int n = 0;

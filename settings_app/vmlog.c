@@ -17,6 +17,8 @@ static int log_on(void)
 {
 	VmState st;
 
+	for (unsigned i = 0; i < sizeof(st); i++)
+		((char *)&st)[i] = 0;             /* a weak import that did not resolve fills nothing */
 	return vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC && st.settings.log;
 }
 

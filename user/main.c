@@ -10,8 +10,8 @@
  * Loaded anywhere else (an old config.txt that still lists it under *main),
  * it does nothing.
  *
- * The kernel library SceVitaMemio is a strong import: if the kernel module
- * is not loaded, taiHEN refuses this module and nothing appears.
+ * The kernel library SceVitaMemio is a weak import: if the kernel module is
+ * not loaded, the page still appears and its status row says so.
  */
 #include <psp2/kernel/modulemgr.h>
 #include <taihen.h>

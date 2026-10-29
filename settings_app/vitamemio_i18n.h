@@ -43,6 +43,13 @@ enum vm_i18n_id {
 	VM_I18N_ST_SAFE,
 	VM_I18N_ST_NO_KERNEL,
 	VM_I18N_ST_SLOW,
+	VM_I18N_STATUS_ACTIVE,      /* the status row's title, by VmState.disabled   */
+	VM_I18N_STATUS_NO_KERNEL,
+	VM_I18N_STATUS_SAFE,
+	VM_I18N_STATUS_FIRMWARE,
+	VM_I18N_STATUS_HOOKS,
+	VM_I18N_HINT_STATUS_ACTIVE, /* ... and its help                              */
+	VM_I18N_HINT_STATUS_NO_KERNEL,
 	VM_I18N_COUNT
 };
 

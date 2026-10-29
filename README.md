@@ -67,6 +67,7 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
 
    | Row | What it does |
    |---|---|
+   | Driver: … | the kernel module's state (active, not loaded, safe mode, firmware not supported, could not start); select it for the details |
    | Faster SD2Vita / memory card / internal storage | the faster path per storage |
    | **Advanced >** Verify transfers | re-reads every faster transfer the standard way and compares (slower; for checking) |
    | **Advanced >** Enable log | writes `kernel.log` / `user.log` (the start line and problems only); off: nothing is written |
@@ -75,7 +76,7 @@ Build artifacts (GitHub Actions, or `make`): `vitamemio_kernel.skprx`, `vitamemi
    | **Advanced >** Reset safe mode | ends safe mode; vita-memio starts normally after the next restart |
 
    **Safe mode:** if a start never reaches the home screen, the next start installs nothing (safe mode) so a broken setup cannot loop. The guard is cleared once the home screen has loaded.
-4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers**.
+4. Optional: install `vitamemio_tester.vpk` (bubble "vita-memio Tester") with VitaShell to measure your own card (plugin off and on, set in Settings). Its main screen shows, live, what the plugin does for each storage, including the counters of **Verify transfers**.
 
 Settings, logs and test results live in `ur0:data/vita-memio/`. With logging on, the log holds one line per start and otherwise only problems.
 

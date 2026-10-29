@@ -17,8 +17,15 @@
  *     handler is wrapped (as HENkaku does for its own page), so the
  *     "Reset safe mode" button reaches the kernel module.
  *
- * The page: the three storage switches, then an "Advanced" sub-page with
- * verify, logging, the HUD, its style and the safe-mode reset.
+ * The page: the driver's status (a button: its title says whether the kernel
+ * module runs, its help and its dialog say more), the three storage switches,
+ * then an "Advanced" sub-page with verify, logging, the HUD, its style and the
+ * safe-mode reset.
+ *
+ * The kernel library is a weak import, so the page also appears when the
+ * kernel module is not loaded, and says so. Every state read goes through
+ * get_state(), which treats a call that did not reach the kernel as "not
+ * loaded".
  *
  * All hooks are import hooks (passthrough), so if anything doesn't match, the
  * page simply doesn't appear; nothing crashes.
@@ -61,10 +68,13 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 	"<toggle_switch id=\"vm_" k "\" title=\"vm_t_" k "\" icon=\"tex_spanner\" " \
 	"hint=\"vm_h_" k "\" key=\"/CONFIG/VITAMEMIO/" k "\"/>"
 
-#define SAFE_BUTTON_ID "vm_safe_reset"
+#define SAFE_BUTTON_ID   "vm_safe_reset"
+#define STATUS_BUTTON_ID "vm_status"
 
 static const char X_GROUP[] =
 	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">"
+	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" "
+	"hint=\"vm_h_status\" success_dialog_message=\"vm_h_status\"/>"
 	ROW_TOGGLE("sd2vita")
 	ROW_TOGGLE("memcard")
 	ROW_TOGGLE("internal")
@@ -123,6 +133,58 @@ static void l_put(Line *l, const char *t)
 	l->s[l->n] = 0;
 }
 
+/* The kernel module's state; 0 if it does not answer (not loaded: the weak
+ * import then returns without filling anything in). */
+static int get_state(VmState *st)
+{
+	for (unsigned i = 0; i < sizeof(*st); i++)
+		((char *)st)[i] = 0;
+	return vmGetState(st) == VM_OK && st->magic == VM_STATE_MAGIC &&
+	       st->size == sizeof(*st);
+}
+
+static void l_hex(Line *l, uint32_t v)
+{
+	char h[11] = "0x";
+
+	for (int i = 0; i < 8; i++)
+		h[2 + i] = "0123456789abcdef"[(v >> (28 - 4 * i)) & 15];
+	h[10] = 0;
+	l_put(l, h);
+}
+
+/* The status row: title and help (also the dialog it opens). */
+static const vm_u16 *status_text(int hint)
+{
+	VmState st;
+	Line l = { {0}, 0 };
+	int up = get_state(&st), title, help;
+
+	if (!up) {
+		title = VM_I18N_STATUS_NO_KERNEL;  help = VM_I18N_HINT_STATUS_NO_KERNEL;
+	} else if (st.disabled == VM_DIS_SAFE) {
+		title = VM_I18N_STATUS_SAFE;       help = VM_I18N_HINT_SAFE_ON;
+	} else if (st.disabled == VM_DIS_FIRMWARE) {
+		title = VM_I18N_STATUS_FIRMWARE;   help = VM_I18N_ST_FIRMWARE;
+	} else if (st.disabled == VM_DIS_HOOKS) {
+		title = VM_I18N_STATUS_HOOKS;      help = VM_I18N_ST_HOOKS;
+	} else {
+		title = VM_I18N_STATUS_ACTIVE;     help = VM_I18N_HINT_STATUS_ACTIVE;
+	}
+	if (!hint)
+		return fixed_text(title);
+	l_put(&l, vm_i18n(help));
+	l_put(&l, "  [vita-memio " VM_VERSION_STR);
+	if (up) {
+		l_put(&l, ", storage driver ");
+		l_hex(&l, st.fingerprint);
+	}
+	l_put(&l, "]");
+	vm_u16 *o = next_buf();
+	vm_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
+	return o;
+}
+
 /* A storage row's help text, plus why it isn't working when it isn't.
  * Speeds and counters are the HUD's and the tester's job. */
 static const vm_u16 *device_hint(int dev, int help_id)
@@ -131,7 +193,7 @@ static const vm_u16 *device_hint(int dev, int help_id)
 	Line l = { {0}, 0 };
 	int id = -1;
 
-	if (vmGetState(&st) != VM_OK || st.magic != VM_STATE_MAGIC)
+	if (!get_state(&st))
 		id = VM_I18N_ST_NO_KERNEL;
 	else if (st.disabled == VM_DIS_FIRMWARE)
 		id = VM_I18N_ST_FIRMWARE;
@@ -174,8 +236,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 static const vm_u16 *safe_hint(void)
 {
 	VmState st;
-	int on = vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC &&
-	         st.disabled == VM_DIS_SAFE;
+	int on = get_state(&st) && st.disabled == VM_DIS_SAFE;
 
 	return fixed_text(on ? VM_I18N_HINT_SAFE_ON : VM_I18N_HINT_SAFE_OFF);
 }
@@ -196,6 +257,10 @@ static const vm_u16 *vm_text(const char *id)
 		return 0;
 	if (s_eqn(id, "vm_t_title", 11))
 		return fixed_text(VM_I18N_TITLE);
+	if (s_eqn(id, "vm_t_status", 12))
+		return status_text(0);
+	if (s_eqn(id, "vm_h_status", 12))
+		return status_text(1);
 	if (s_eqn(id, "vm_t_advanced", 14))
 		return fixed_text(VM_I18N_TITLE_ADVANCED);
 	if (s_eqn(id, "vm_t_safe", 10))
@@ -311,7 +376,7 @@ static int get_hook(const char *cat, const char *name, int *val)
 	if (is_ts(cat) && val) {
 		VmState st;
 		int k = name ? key_index(name) : -1;
-		if (k >= 0 && vmGetState(&st) == VM_OK && st.magic == VM_STATE_MAGIC)
+		if (k >= 0 && get_state(&st))
 			*val = *vm_setting_field(&st.settings, k);
 		else
 			*val = 0;
@@ -355,10 +420,13 @@ static button_fn g_next_button;
 
 static int button_hook(const char *id, int a2, void *a3)
 {
-	static const char ID[] = SAFE_BUTTON_ID;
+	static const char ID[] = SAFE_BUTTON_ID, STATUS[] = STATUS_BUTTON_ID;
 
+	if (id && s_eqn(id, STATUS, (int)sizeof(STATUS)))
+		return 0;                         /* shows the status dialog */
 	if (id && s_eqn(id, ID, (int)sizeof(ID))) {
-		int r = vmResetSafeMode();
+		VmState st;
+		int r = get_state(&st) ? vmResetSafeMode() : VM_ERR_NOT_READY;   /* no kernel: error */
 		if (r != VM_OK)
 			VM_LOGI("[SET] safe mode reset failed (%d)", r);
 		return r == VM_OK ? 0 : -1;      /* 0: success dialog, < 0: error dialog */

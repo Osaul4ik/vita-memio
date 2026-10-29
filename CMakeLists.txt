@@ -77,8 +77,9 @@ vita_create_stubs(vitamemio-stubs vitamemio_kernel
 # module load SILENTLY - module_start never runs. Every standard system library
 # is therefore imported as its *_stub_weak variant: a weak import that cannot
 # be resolved is skipped, and when the library IS present it resolves normally.
-# Only taihen and our own kernel syscall library stay STRONG: without them the
-# module must not load at all.
+# Only taihen stays STRONG: without it the module must not load at all. Our
+# kernel syscall library is weak too, so the Settings page can say when the
+# kernel module is missing.
 add_executable(vitamemio
   user/main.c
   settings_app/vitamemio_settings.c  # Settings-app hooks (NPXS10015 only)
@@ -91,8 +92,9 @@ add_dependencies(vitamemio vitamemio-stubs)
 target_link_libraries(vitamemio
   # STRONG - must be present, fail loudly if not:
   taihen_stub
-  ${CMAKE_BINARY_DIR}/libvitamemio_kernel_stub.a   # SceVitaMemio syscalls
-  # WEAK - host-resident libs:
+  # WEAK - our kernel library (without it the page still appears and says the
+  # kernel module is not loaded), then the host-resident libs:
+  ${CMAKE_BINARY_DIR}/libvitamemio_kernel_stub_weak.a   # SceVitaMemio syscalls
   SceLibKernel_stub_weak        # sceKernel* / sceIo* helpers
   SceIofilemgr_stub_weak        # sceIoOpen/Write/Close (the log file)
   SceProcessmgr_stub_weak       # sceKernelGetProcessTimeWide (log stamps)
@@ -163,9 +165,13 @@ if(VM_BUILD_TESTER)
   # The tester's bitmap font is a subset of Terminus Font (SIL OFL 1.1): its
   # license travels with it.
   set(TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/include/OFL-Terminus.txt OFL-Terminus.txt)
-  if(EXISTS "${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png")
-    list(APPEND TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/tester/sce_sys/icon0.png sce_sys/icon0.png)
-  endif()
+  # The bubble and the LiveArea (drawn by tools/gen_livearea.py).
+  set(TESTER_LA ${CMAKE_SOURCE_DIR}/tester/sce_sys)
+  list(APPEND TESTER_VPK_FILES
+    FILE ${TESTER_LA}/icon0.png sce_sys/icon0.png
+    FILE ${TESTER_LA}/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+    FILE ${TESTER_LA}/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+    FILE ${TESTER_LA}/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
   vita_create_vpk(vitamemio_tester.vpk ${TESTER_TITLE_ID} vitamemio_tester.self
     VERSION 01.00
     NAME "vita-memio Tester"

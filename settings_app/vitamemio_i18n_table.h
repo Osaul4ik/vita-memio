@@ -726,3 +726,157 @@
 	"Could not reset safe mode.",   /* engb */
 	"Güvenli mod sıfırlanamadı.",   /* tr */
 },
+[VM_I18N_STATUS_ACTIVE] = {
+	"ドライバー：動作中",   /* ja */
+	"Driver: active",   /* en */
+	"Pilote : actif",   /* fr */
+	"Controlador: activo",   /* es */
+	"Treiber: aktiv",   /* de */
+	"Driver: attivo",   /* it */
+	"Stuurprogramma: actief",   /* nl */
+	"Controlador: ativo",   /* pt */
+	"Драйвер: работает",   /* ru */
+	"드라이버: 작동 중",   /* ko */
+	"驅動程式：運作中",   /* zht */
+	"驱动：运行中",   /* zhs */
+	"Ajuri: käytössä",   /* fi */
+	"Drivrutin: aktiv",   /* sv */
+	"Driver: aktiv",   /* da */
+	"Driver: aktiv",   /* no */
+	"Sterownik: aktywny",   /* pl */
+	"Driver: ativo",   /* ptbr */
+	"Driver: active",   /* engb */
+	"Sürücü: etkin",   /* tr */
+},
+[VM_I18N_STATUS_NO_KERNEL] = {
+	"ドライバー：未読み込み",   /* ja */
+	"Driver: not loaded",   /* en */
+	"Pilote : non chargé",   /* fr */
+	"Controlador: no cargado",   /* es */
+	"Treiber: nicht geladen",   /* de */
+	"Driver: non caricato",   /* it */
+	"Stuurprogramma: niet geladen",   /* nl */
+	"Controlador: não carregado",   /* pt */
+	"Драйвер: не загружен",   /* ru */
+	"드라이버: 로드되지 않음",   /* ko */
+	"驅動程式：未載入",   /* zht */
+	"驱动：未加载",   /* zhs */
+	"Ajuri: ei ladattu",   /* fi */
+	"Drivrutin: inte laddad",   /* sv */
+	"Driver: ikke indlæst",   /* da */
+	"Driver: ikke lastet",   /* no */
+	"Sterownik: niezaładowany",   /* pl */
+	"Driver: não carregado",   /* ptbr */
+	"Driver: not loaded",   /* engb */
+	"Sürücü: yüklenmedi",   /* tr */
+},
+[VM_I18N_STATUS_SAFE] = {
+	"ドライバー：セーフモード",   /* ja */
+	"Driver: safe mode",   /* en */
+	"Pilote : mode sans échec",   /* fr */
+	"Controlador: modo seguro",   /* es */
+	"Treiber: abgesicherter Modus",   /* de */
+	"Driver: modalità provvisoria",   /* it */
+	"Stuurprogramma: veilige modus",   /* nl */
+	"Controlador: modo de segurança",   /* pt */
+	"Драйвер: безопасный режим",   /* ru */
+	"드라이버: 안전 모드",   /* ko */
+	"驅動程式：安全模式",   /* zht */
+	"驱动：安全模式",   /* zhs */
+	"Ajuri: vikasietotila",   /* fi */
+	"Drivrutin: felsäkert läge",   /* sv */
+	"Driver: fejlsikret tilstand",   /* da */
+	"Driver: sikker modus",   /* no */
+	"Sterownik: tryb awaryjny",   /* pl */
+	"Driver: modo de segurança",   /* ptbr */
+	"Driver: safe mode",   /* engb */
+	"Sürücü: güvenli mod",   /* tr */
+},
+[VM_I18N_STATUS_FIRMWARE] = {
+	"ドライバー：非対応のファームウェア",   /* ja */
+	"Driver: firmware not supported",   /* en */
+	"Pilote : firmware non pris en charge",   /* fr */
+	"Controlador: firmware no compatible",   /* es */
+	"Treiber: Firmware nicht unterstützt",   /* de */
+	"Driver: firmware non supportato",   /* it */
+	"Stuurprogramma: firmware niet ondersteund",   /* nl */
+	"Controlador: firmware não suportado",   /* pt */
+	"Драйвер: прошивка не поддерживается",   /* ru */
+	"드라이버: 지원하지 않는 펌웨어",   /* ko */
+	"驅動程式：不支援此韌體",   /* zht */
+	"驱动：不支持此固件",   /* zhs */
+	"Ajuri: laiteohjelmistoa ei tueta",   /* fi */
+	"Drivrutin: firmware stöds inte",   /* sv */
+	"Driver: firmware understøttes ikke",   /* da */
+	"Driver: fastvaren støttes ikke",   /* no */
+	"Sterownik: nieobsługiwane oprogramowanie",   /* pl */
+	"Driver: firmware não suportado",   /* ptbr */
+	"Driver: firmware not supported",   /* engb */
+	"Sürücü: yazılım desteklenmiyor",   /* tr */
+},
+[VM_I18N_STATUS_HOOKS] = {
+	"ドライバー：起動できません",   /* ja */
+	"Driver: could not start",   /* en */
+	"Pilote : démarrage impossible",   /* fr */
+	"Controlador: no se pudo iniciar",   /* es */
+	"Treiber: Start fehlgeschlagen",   /* de */
+	"Driver: impossibile avviare",   /* it */
+	"Stuurprogramma: kon niet starten",   /* nl */
+	"Controlador: não foi possível iniciar",   /* pt */
+	"Драйвер: не удалось запустить",   /* ru */
+	"드라이버: 시작할 수 없음",   /* ko */
+	"驅動程式：無法啟動",   /* zht */
+	"驱动：无法启动",   /* zhs */
+	"Ajuri: ei voitu käynnistää",   /* fi */
+	"Drivrutin: kunde inte starta",   /* sv */
+	"Driver: kunne ikke starte",   /* da */
+	"Driver: kunne ikke starte",   /* no */
+	"Sterownik: nie można uruchomić",   /* pl */
+	"Driver: não foi possível iniciar",   /* ptbr */
+	"Driver: could not start",   /* engb */
+	"Sürücü: başlatılamadı",   /* tr */
+},
+[VM_I18N_HINT_STATUS_ACTIVE] = {
+	"カーネルプラグインは読み込まれ、動作しています。各ストレージの状態は下の項目に表示されます。",   /* ja */
+	"The kernel plugin is loaded and working; each storage below shows its own state.",   /* en */
+	"Le plugin noyau est chargé et fonctionne ; chaque stockage ci-dessous indique son propre état.",   /* fr */
+	"El plugin del kernel está cargado y funciona; cada almacenamiento de abajo muestra su propio estado.",   /* es */
+	"Das Kernel-Plugin ist geladen und arbeitet; jeder Speicher darunter zeigt seinen eigenen Zustand.",   /* de */
+	"Il plugin del kernel è caricato e funziona; ogni memoria qui sotto mostra il proprio stato.",   /* it */
+	"De kernelplug-in is geladen en werkt; elke opslag hieronder toont zijn eigen status.",   /* nl */
+	"O plugin do kernel está carregado e a funcionar; cada armazenamento abaixo mostra o seu estado.",   /* pt */
+	"Плагин ядра загружен и работает; состояние каждого хранилища показано ниже.",   /* ru */
+	"커널 플러그인이 로드되어 작동 중입니다. 각 저장소의 상태는 아래에 표시됩니다.",   /* ko */
+	"核心外掛程式已載入並正常運作；下方各儲存空間會顯示各自的狀態。",   /* zht */
+	"内核插件已加载并正常运行；下方各存储会显示各自的状态。",   /* zhs */
+	"Ydinliitännäinen on ladattu ja toimii; jokainen alla oleva tallennustila näyttää oman tilansa.",   /* fi */
+	"Kärnpluginet är laddat och fungerar; varje lagring nedan visar sitt eget läge.",   /* sv */
+	"Kerne-pluginet er indlæst og virker; hvert lager nedenfor viser sin egen tilstand.",   /* da */
+	"Kjerne-pluginen er lastet og fungerer; hver lagring nedenfor viser sin egen tilstand.",   /* no */
+	"Wtyczka jądra jest załadowana i działa; każda pamięć poniżej pokazuje swój stan.",   /* pl */
+	"O plugin do kernel está carregado e funcionando; cada armazenamento abaixo mostra seu próprio estado.",   /* ptbr */
+	"The kernel plugin is loaded and working; each storage below shows its own state.",   /* engb */
+	"Çekirdek eklentisi yüklü ve çalışıyor; aşağıdaki her depolama kendi durumunu gösterir.",   /* tr */
+},
+[VM_I18N_HINT_STATUS_NO_KERNEL] = {
+	"vitamemio_kernel.skprx が動作していません。ur0:tai/ にあり、ur0:tai/config.txt の *KERNEL に記載されているか確認してから本体を再起動してください。",   /* ja */
+	"vitamemio_kernel.skprx is not running. Check that it is in ur0:tai/ and listed under *KERNEL in ur0:tai/config.txt, then restart the console.",   /* en */
+	"vitamemio_kernel.skprx ne tourne pas. Vérifiez qu'il est dans ur0:tai/ et listé sous *KERNEL dans ur0:tai/config.txt, puis redémarrez la console.",   /* fr */
+	"vitamemio_kernel.skprx no se está ejecutando. Comprueba que está en ur0:tai/ y en la sección *KERNEL de ur0:tai/config.txt, y reinicia la consola.",   /* es */
+	"vitamemio_kernel.skprx läuft nicht. Prüfe, dass es in ur0:tai/ liegt und in ur0:tai/config.txt unter *KERNEL steht, dann starte die Konsole neu.",   /* de */
+	"vitamemio_kernel.skprx non è in esecuzione. Controlla che sia in ur0:tai/ e sotto *KERNEL in ur0:tai/config.txt, poi riavvia la console.",   /* it */
+	"vitamemio_kernel.skprx draait niet. Controleer of het in ur0:tai/ staat en onder *KERNEL in ur0:tai/config.txt, en start de console opnieuw.",   /* nl */
+	"O vitamemio_kernel.skprx não está a correr. Verifique se está em ur0:tai/ e em *KERNEL no ur0:tai/config.txt e reinicie a consola.",   /* pt */
+	"vitamemio_kernel.skprx не запущен. Проверьте, что он лежит в ur0:tai/ и указан под *KERNEL в ur0:tai/config.txt, затем перезагрузите консоль.",   /* ru */
+	"vitamemio_kernel.skprx가 실행되고 있지 않습니다. ur0:tai/에 있고 ur0:tai/config.txt의 *KERNEL 아래에 있는지 확인한 뒤 본체를 다시 시작하세요.",   /* ko */
+	"vitamemio_kernel.skprx 未執行。請確認它位於 ur0:tai/，並列在 ur0:tai/config.txt 的 *KERNEL 下，然後重新啟動主機。",   /* zht */
+	"vitamemio_kernel.skprx 未运行。请确认它位于 ur0:tai/，并列在 ur0:tai/config.txt 的 *KERNEL 下，然后重新启动主机。",   /* zhs */
+	"vitamemio_kernel.skprx ei ole käynnissä. Tarkista, että se on kansiossa ur0:tai/ ja kohdassa *KERNEL tiedostossa ur0:tai/config.txt, ja käynnistä konsoli uudelleen.",   /* fi */
+	"vitamemio_kernel.skprx körs inte. Kontrollera att den ligger i ur0:tai/ och står under *KERNEL i ur0:tai/config.txt, och starta om konsolen.",   /* sv */
+	"vitamemio_kernel.skprx kører ikke. Kontrollér, at den ligger i ur0:tai/ og står under *KERNEL i ur0:tai/config.txt, og genstart konsollen.",   /* da */
+	"vitamemio_kernel.skprx kjører ikke. Sjekk at den ligger i ur0:tai/ og står under *KERNEL i ur0:tai/config.txt, og start konsollen på nytt.",   /* no */
+	"vitamemio_kernel.skprx nie działa. Sprawdź, czy jest w ur0:tai/ i pod *KERNEL w ur0:tai/config.txt, a potem uruchom konsolę ponownie.",   /* pl */
+	"O vitamemio_kernel.skprx não está rodando. Verifique se ele está em ur0:tai/ e em *KERNEL no ur0:tai/config.txt e reinicie o console.",   /* ptbr */
+	"vitamemio_kernel.skprx is not running. Check that it is in ur0:tai/ and listed under *KERNEL in ur0:tai/config.txt, then restart the console.",   /* engb */
+	"vitamemio_kernel.skprx çalışmıyor. ur0:tai/ içinde ve ur0:tai/config.txt dosyasında *KERNEL altında olduğunu kontrol edip konsolu yeniden başlatın.",   /* tr */
+},

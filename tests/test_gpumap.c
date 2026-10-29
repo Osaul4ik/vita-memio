@@ -21,10 +21,9 @@ SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size)
 	(void)size;
 	return addr ? 0x1234 : -1;
 }
-int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type)
+int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 {
-	*type = uid == 0x1234 ? 0x0C20D060u : 0;
-	return 0;
+	return addr ? 0x0D00 : -1;
 }
 SceUID ksceKernelGetProcessId(void) { return 0x40010003; }
 
@@ -58,7 +57,7 @@ static void test_records_and_drains(void)
 	CHECK(g_maps == 1 && g_unmaps == 1 && g_ev_head == 2);
 	CHECK(g_ev[0].kind == 1 && g_ev[0].pid == 0x40010003 && g_ev[0].a[2] == 0x81000000);
 	CHECK(g_ev[0].pa == (0x81000000u ^ 0x40000000u) && g_ev[0].blk == 0x1234 &&
-	      g_ev[0].type == 0x0C20D060u && g_ev[0].a[4] == 3);
+	      g_ev[0].memtype == 0x0D00 && g_ev[0].a[4] == 3);
 	CHECK(g_ev[1].kind == 2 && g_ev[1].blk == 0);    /* unmap: no lookups */
 	vm_gpumap_tick(0, 5);
 	CHECK(g_ev_tail == 2 && g_logged == 2);

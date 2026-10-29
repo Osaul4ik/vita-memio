@@ -8,7 +8,7 @@
  * ksceGpuMmuMapMemory / ksceGpuMmuUnmapMemory (SceGpuEs4ForDriver); what
  * their arguments are exactly is not documented, so this build only watches:
  * a pass-through hook on both records each call (process, arguments, what the
- * "base" argument is in that process: physical address, memory block, block
+ * "base" argument is in that process: physical address, memory block, memory
  * type) and the worker writes them to kernel.log. Nothing is changed.
  *
  * Installed only while both Enable log and GPU-safe reads are on. The hooks
@@ -26,6 +26,10 @@
 #define NID_GPU_MAP     0xEF4B16D3   /* ksceGpuMmuMapMemory    */
 #define NID_GPU_UNMAP   0x9AAAD91C   /* ksceGpuMmuUnmapMemory  */
 
+/* SceSysmemForDriver: the memory type at an address of the current address
+ * space (masked with 0xFF00), or < 0. */
+int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);
+
 typedef struct {
 	uint32_t kind;              /* 1 map, 2 unmap */
 	uint32_t pid;
@@ -33,7 +37,7 @@ typedef struct {
 	int32_t  ret;
 	uint32_t pa;                /* of a[2] ("base") in the calling process, or 0 */
 	int32_t  blk;               /* its memory block, or < 0 */
-	uint32_t type;              /* that block's type */
+	int32_t  memtype;           /* the memory type at a2 (0xFF00 mask), or < 0 */
 } GpuEvent;
 
 #define EVENTS 64
@@ -55,7 +59,6 @@ static void record(uint32_t kind, const uint32_t *a, int ret)
 	GpuEvent e;
 	uintptr_t pa = 0;
 	SceUID blk;
-	unsigned int type = 0;
 
 	/* What "base" (the third argument) is in the calling process. */
 	memset(&e, 0, sizeof(e));
@@ -68,11 +71,9 @@ static void record(uint32_t kind, const uint32_t *a, int ret)
 		if (ksceKernelVAtoPA((const void *)(uintptr_t)a[2], &pa) < 0)
 			pa = 0;
 		blk = ksceKernelFindMemBlockByAddr((const void *)(uintptr_t)a[2], 0);
-		if (blk >= 0 && ksceKernelGetMemBlockType(blk, &type) < 0)
-			type = 0;
 		e.pa = (uint32_t)pa;
 		e.blk = blk;
-		e.type = type;
+		e.memtype = ksceKernelGetMemBlockMemtypeByAddr((const void *)(uintptr_t)a[2]);
 	}
 	/* Never wait in here (this runs inside the GPU driver): if another call
 	 * is recording right now, or the worker is behind, only count it. */
@@ -131,11 +132,11 @@ void vm_gpumap_tick(int wanted, uint32_t uptime_s)
 			g_logged++;
 			if (e->kind == 1)
 				VM_KLOGI("gpumap: map pid=0x%08x a0=0x%08x a1=0x%08x a2=0x%08x a3=0x%08x "
-				         "a4=0x%08x ret=0x%08x | a2: pa=0x%08x blk=0x%08x type=0x%08x",
+				         "a4=0x%08x ret=0x%08x | a2: pa=0x%08x blk=0x%08x memtype=0x%08x",
 				         (unsigned)e->pid, (unsigned)e->a[0], (unsigned)e->a[1],
 				         (unsigned)e->a[2], (unsigned)e->a[3], (unsigned)e->a[4],
 				         (unsigned)e->ret, (unsigned)e->pa, (unsigned)e->blk,
-				         (unsigned)e->type);
+				         (unsigned)e->memtype);
 			else
 				VM_KLOGI("gpumap: unmap pid=0x%08x a0=0x%08x a1=0x%08x a2=0x%08x ret=0x%08x",
 				         (unsigned)e->pid, (unsigned)e->a[0], (unsigned)e->a[1],

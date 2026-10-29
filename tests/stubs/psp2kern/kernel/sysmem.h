@@ -13,4 +13,3 @@ int ksceKernelGetMemBlockBase(SceUID uid, void **base);
 int ksceKernelFreeMemBlock(SceUID uid);
 int ksceKernelVAtoPA(const void *va, uintptr_t *pa);
 SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size);
-int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type);

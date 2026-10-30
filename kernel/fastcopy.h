@@ -90,4 +90,66 @@ static inline VM_NO_MEMCPY_IDIOM void *vm_fast_copy(void *dst, const void *src, 
 	return dst;
 }
 
+/*
+ * Experimental variant (selected at run time, see stage.c): keeps a load from
+ * the non-cacheable source in flight while the previous one is stored. Four
+ * 16-byte LDMs per 64 bytes into two register sets, each stored while the
+ * next set loads, instead of two 32-byte LDM/STM pairs that each wait for
+ * their data. Same contract and fallbacks as vm_fast_copy.
+ */
+static inline VM_NO_MEMCPY_IDIOM void *vm_fast_copy_pipe(void *dst, const void *src, size_t n)
+{
+	uint8_t *d = dst;
+	const uint8_t *s = src;
+
+	if ((((uintptr_t)d | (uintptr_t)s) & 3u) == 0) {
+		vm_word_t *dw = (vm_word_t *)d;
+		const vm_word_t *sw = (const vm_word_t *)s;
+
+#if defined(__arm__)
+		while (n >= 64) {
+			__asm__ volatile(
+				"ldmia %[s]!, {r3, r4, r5, r6}\n\t"
+				"ldmia %[s]!, {r8, r9, r10, r12}\n\t"
+				"stmia %[d]!, {r3, r4, r5, r6}\n\t"
+				"ldmia %[s]!, {r3, r4, r5, r6}\n\t"
+				"stmia %[d]!, {r8, r9, r10, r12}\n\t"
+				"ldmia %[s]!, {r8, r9, r10, r12}\n\t"
+				"stmia %[d]!, {r3, r4, r5, r6}\n\t"
+				"stmia %[d]!, {r8, r9, r10, r12}\n\t"
+				: [s] "+r" (sw), [d] "+r" (dw)
+				:
+				: "r3", "r4", "r5", "r6", "r8", "r9", "r10", "r12", "memory");
+			n -= 64;
+		}
+#else
+		/* Host build (tests): the same order of loads and stores in C. */
+		while (n >= 64) {
+			uint32_t a0, a1, a2, a3, b0, b1, b2, b3;
+
+			a0 = sw[0];  a1 = sw[1];  a2 = sw[2];  a3 = sw[3];
+			b0 = sw[4];  b1 = sw[5];  b2 = sw[6];  b3 = sw[7];
+			dw[0] = a0;  dw[1] = a1;  dw[2] = a2;  dw[3] = a3;
+			a0 = sw[8];  a1 = sw[9];  a2 = sw[10]; a3 = sw[11];
+			dw[4] = b0;  dw[5] = b1;  dw[6] = b2;  dw[7] = b3;
+			b0 = sw[12]; b1 = sw[13]; b2 = sw[14]; b3 = sw[15];
+			dw[8] = a0;  dw[9] = a1;  dw[10] = a2; dw[11] = a3;
+			dw[12] = b0; dw[13] = b1; dw[14] = b2; dw[15] = b3;
+			sw += 16;
+			dw += 16;
+			n -= 64;
+		}
+#endif
+		while (n >= 4) {
+			*dw++ = *sw++;
+			n -= 4;
+		}
+		d = (uint8_t *)dw;
+		s = (const uint8_t *)sw;
+	}
+	if (n)
+		memcpy(d, s, n);
+	return dst;
+}
+
 #endif /* VITAMEMIO_FASTCOPY_H */

@@ -25,6 +25,7 @@ static void *fake_copy(void *d, const void *s, size_t n)
 
 #include "../kernel/stage.c"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "fakes.h"
@@ -778,6 +779,29 @@ static void test_pipeline_reads(void)
 		d->est_io_ns = d->est_cp_ns = 0;                           /* nothing learnt yet */
 		CHECK(pipe_tail(d, 512, 0) == 512u * PIPE_DEF_CP_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CP_NS));
 		CHECK(pipe_tail(d, 512, 1) == 512u * PIPE_DEF_CPCL_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CPCL_NS));
+		/* with a cost per command the tail is shorter: (512*4200 - 600000) / 29200 */
+		d->est_io_ns = 25000; d->est_cp_ns = 4200; d->est_cmd_ns = 600000;
+		CHECK(pipe_tail(d, 512, 0) == (512u * 4200 - 600000) / 29200);   /* 53 */
+		d->est_cmd_ns = 5000000;                                   /* more than the copy */
+		CHECK(pipe_tail(d, 512, 0) == PIPE_MIN_TAIL);
+		/* learning both from one split read: 25 us per sector, 600 us per command */
+		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
+		for (int k = 0; k < 60; k++)
+			pipe_learn_io(d, 600 + 450 * 25, 450, 600 + 62 * 25, 62);
+		CHECK(d->est_io_ns > 24900 && d->est_io_ns < 25100);
+		CHECK(d->est_cmd_ns > 590000 && d->est_cmd_ns < 610000);
+		d->est_io_ns = 0; d->est_cmd_ns = 0;
+		for (int k = 0; k < 60; k++)                               /* from nothing */
+			pipe_learn_io(d, 600 + 450 * 25, 450, 600 + 62 * 25, 62);
+		CHECK(d->est_io_ns > 24500 && d->est_io_ns < 25500 && d->est_cmd_ns > 550000);
+		{
+			uint32_t io = d->est_io_ns, cmd = d->est_cmd_ns;
+
+			pipe_learn_io(d, 100, 450, 5000, 62);          /* head faster than tail: noise */
+			pipe_learn_io(d, 9000, 70, 100, 62);           /* too close to tell */
+			CHECK(d->est_io_ns == io && d->est_cmd_ns == cmd);
+		}
+		d->est_io_ns = d->est_cp_ns = d->est_cmd_ns = 0;
 		pipe_learn(&e, 0, 0, 5000);
 		CHECK(e == 0);                                             /* nothing to learn from */
 		pipe_learn(&e, 8, 1, 5000);                                /* 8000 ns: 5000 + 3000/8 */
@@ -975,6 +999,32 @@ static void test_every_switch_on_the_fly(void)
 	free(u);
 }
 
+/* The experimental copy variant follows its flag file, looked for every 5 s. */
+static void test_copy_variant_flag(void)
+{
+	char path[512];
+	FILE *f;
+
+	reset();
+	g_copy2 = 0;
+	snprintf(path, sizeof(path), "%s/copy2.on", fakes_tmpdir_new());
+	for (int i = 0; i < 5; i++)
+		vm_stage_worker_tick();
+	CHECK(g_copy2 == 0);                            /* no file */
+	f = fopen(path, "w");
+	CHECK(f != NULL);
+	if (f)
+		fclose(f);
+	for (int i = 0; i < 5; i++)
+		vm_stage_worker_tick();
+	CHECK(g_copy2 == 1);
+	remove(path);
+	for (int i = 0; i < 5; i++)
+		vm_stage_worker_tick();
+	CHECK(g_copy2 == 0);
+	fakes_tmpdir_remove();
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -990,6 +1040,7 @@ int main(void)
 	RUN(test_pipeline_not_with_verify);
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
+	RUN(test_copy_variant_flag);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

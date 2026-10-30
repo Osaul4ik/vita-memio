@@ -24,6 +24,9 @@ static void one(size_t soff, size_t doff, size_t n)
 	memcpy(want + doff, sbuf + soff, n);
 	CHECK(vm_fast_copy(dbuf + doff, sbuf + soff, n) == dbuf + doff);
 	CHECK(memcmp(dbuf, want, doff + n + 16) == 0);   /* data, and the guard bytes */
+	memset(dbuf, 0xA5, doff + n + 16);               /* the experimental variant too */
+	CHECK(vm_fast_copy_pipe(dbuf + doff, sbuf + soff, n) == dbuf + doff);
+	CHECK(memcmp(dbuf, want, doff + n + 16) == 0);
 	free(sbuf);
 	free(dbuf);
 	free(want);

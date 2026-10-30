@@ -57,6 +57,7 @@
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/kernel/threadmgr.h>
+#include <psp2kern/io/fcntl.h>
 #include <taihen.h>
 
 #include "stage.h"
@@ -69,8 +70,12 @@
  *   into staging (writes): the system memcpy. The burst copy made it slower
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
+/* Experimental: the copy variant that keeps a load in flight, chosen while the
+ * file ur0:data/vita-memio/copy2.on exists (looked for by the worker), so the
+ * two can be compared with the tester on the same build. */
+static volatile int g_copy2;
 #ifndef vm_copy_from_stage
-#define vm_copy_from_stage vm_fast_copy
+#define vm_copy_from_stage(d, s, n) (g_copy2 ? vm_fast_copy_pipe(d, s, n) : vm_fast_copy(d, s, n))
 #endif
 #ifndef vm_copy_to_stage
 #define vm_copy_to_stage memcpy
@@ -130,6 +135,7 @@ typedef struct Dev {
 	uint32_t      job_sector, job_n, job_us;
 	volatile int  job_ret;
 	uint32_t      est_io_ns, est_cp_ns;   /* per sector, for the split        */
+	uint32_t      est_cmd_ns;             /* the fixed cost of one card read   */
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
@@ -310,13 +316,17 @@ static int take(Dev *d, int mine, uint32_t nsec)
 static volatile int g_pipeline;              /* the setting                    */
 static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
 
-/* The tail of an n-sector read: its card read should take about as long as
- * the head's copy, so neither side waits much. head * cp = tail * io. */
+/* The tail of an n-sector read: its card read (a fixed cost per command plus a
+ * cost per sector) should take about as long as the head's copy, so neither
+ * side waits:  (n - t) * cp = cmd + t * io,  t = (n * cp - cmd) / (io + cp).
+ * A shorter tail leaves less to copy at the end. */
 static uint32_t pipe_tail(const Dev *d, uint32_t n, int clean)
 {
 	uint32_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
 	uint32_t cp = d->est_cp_ns ? d->est_cp_ns : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
-	uint32_t t = (uint32_t)((uint64_t)n * cp / ((uint64_t)io + cp));
+	uint64_t work = (uint64_t)n * cp;
+	uint32_t t = work > d->est_cmd_ns
+	             ? (uint32_t)((work - d->est_cmd_ns) / ((uint64_t)io + cp)) : 0;
 
 	if (t < PIPE_MIN_TAIL)
 		t = PIPE_MIN_TAIL;
@@ -325,6 +335,29 @@ static uint32_t pipe_tail(const Dev *d, uint32_t n, int clean)
 	if (t > PIPE_TAIL_SECTORS)
 		t = PIPE_TAIL_SECTORS;
 	return t;
+}
+
+/* From one split read, the card's cost per sector and per command: the head
+ * (a sectors) took head_us, the tail (t sectors) tail_us, both one command:
+ *   per sector = (head - tail) / (a - t),  per command = tail - t * per sector.
+ * Running averages; a pair that does not fit (noise) is skipped. */
+static void pipe_learn_io(Dev *d, uint32_t head_us, uint32_t a, uint32_t tail_us, uint32_t t)
+{
+	uint64_t r, cmd;
+
+	if (a <= t + 16 || head_us <= tail_us)
+		return;
+	r = (uint64_t)(head_us - tail_us) * 1000u / (a - t);
+	if ((uint64_t)tail_us * 1000u <= r * t)
+		cmd = 0;
+	else
+		cmd = (uint64_t)tail_us * 1000u - r * t;
+	if (r > 1000000u || cmd > 20000000u)
+		return;                             /* not a plausible pair */
+	if (!d->est_io_ns)
+		d->est_io_ns = PIPE_DEF_IO_NS;
+	d->est_io_ns = d->est_io_ns - (d->est_io_ns >> 3) + (uint32_t)(r >> 3);
+	d->est_cmd_ns = d->est_cmd_ns - (d->est_cmd_ns >> 3) + (uint32_t)(cmd >> 3);
 }
 
 /* A running average (1/8 weight) of a per-sector cost in ns. */
@@ -529,7 +562,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				d->tm.rd_sectors += n;
 				d->tm.rd_io_us += (t2 - t1) + d->job_us;
 				d->tm.rd_copy_us += (t3 - t2) + (t5 - t4);
-				pipe_learn(&d->est_io_ns, t2 - t1, a, PIPE_DEF_IO_NS);
+				pipe_learn_io(d, t2 - t1, a, d->job_us, t);
 				pipe_learn(&d->est_cp_ns, t3 - t2, a,
 				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 			}
@@ -780,6 +813,18 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
 			         (unsigned)g_dev[i].alloc_err);
 		}
+	/* The experimental copy variant, by its flag file (every 5 s). */
+	if (ticks % 5 == 0) {
+		SceUID fd = ksceIoOpen(VM_DATA_DIR "/copy2.on", SCE_O_RDONLY, 0);
+		int on = fd >= 0;
+
+		if (fd >= 0)
+			ksceIoClose(fd);
+		if (on != g_copy2) {
+			g_copy2 = on;
+			VM_KLOGI("stage: copy variant %s", on ? "2 (load in flight) on" : "1 (default)");
+		}
+	}
 	/* Overlapped reads: the helper and its buffer for every device switched on,
 	 * made here (never in a transfer) and then kept. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {

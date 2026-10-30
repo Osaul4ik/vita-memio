@@ -1542,6 +1542,37 @@ static void test_offload(void)
 		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
 	}
 
+	/* the helper could not be made while copy on the system core was on:
+	 * a fresh try once it is wanted again after neither setting wanted it,
+	 * whichever of the two is switched on */
+	reset();
+	fake_alloc_fail = 1;
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 0);
+	fake_alloc_fail = 0;
+	CHECK(!d->pipe_made && d->pipe_failed);
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!d->pipe_made);                           /* not wanted */
+	s.offload = VM_OFFLOAD_ALWAYS;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && fake_threads_live == 2);
+	vm_stage_fini();
+	reset();
+	fake_alloc_fail = 1;
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	fake_alloc_fail = 0;
+	CHECK(!d->pipe_made && d->pipe_failed);
+	s.pipeline = VM_PIPE_OFF;
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);                             /* both off ... */
+	s.pipeline = VM_PIPE_AUTO;
+	vm_stage_apply(&s);                             /* ... one of them on again */
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made);
+	vm_stage_fini();
+
 	/* "with GPU-safe only": a plain read stays with the caller; "always" not */
 	reset();
 	offload_on(&s, 0, VM_OFFLOAD_GPU, 1);

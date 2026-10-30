@@ -50,6 +50,10 @@
  *     read ahead or kept: every part belongs to the request, which is
  *     complete when it returns. Any error finishes the whole part stock, as
  *     above;
+ *   - copy on the system core (VM_OFFLOAD_*, off by default): a game's read
+ *     of 64 KiB or more is copied by a thread on the system core through a
+ *     kernel mapping of the game's buffer, used only if it is writable and of
+ *     the buffer's own memory type; otherwise the game's thread copies;
  *   - verify mode re-reads every faster transfer the stock way and compares;
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
@@ -121,8 +125,10 @@ typedef struct Dev {
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
 	VmTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
 	VmDevState    st;            /* counters (status filled in by stage_get)   */
-	/* Overlapped reads: the helper thread, its buffer and the one job it runs.
-	 * All valid while pipe_made; pipe_ready publishes them to the hooks. */
+	/* Overlapped reads and copy on the system core: the helper thread (card
+	 * reads), the copier thread (copies into a game's mapped buffer), the
+	 * second buffer and the one job they run. All valid while pipe_made;
+	 * pipe_ready publishes them to the hooks. */
 	int           pipe_made, pipe_failed;
 	volatile int  pipe_ready, pipe_quit;
 	SceUID        uid2, th, sem_go, sem_done, sem_free;
@@ -1389,13 +1395,11 @@ void vm_stage_apply(const VmSettings *s)
 	g_min_sectors = s->small ? 1 : MIN_SECTORS;
 	g_stats = s->stats ? 1 : 0;
 	g_gpu_safe = s->gpusafe ? 1 : 0;
-	if (s->pipeline != g_pipeline) {
-		for (int i = 0; i < VM_DEV_COUNT; i++) {
+	const int needed = g_pipeline || g_offload;   /* the helper, before this */
+
+	if (s->pipeline != g_pipeline)
+		for (int i = 0; i < VM_DEV_COUNT; i++)
 			g_dev[i].est_cp_ns[0] = g_dev[i].est_cp_ns[1] = 0;   /* measured afresh */
-			if (!g_pipeline && !g_offload)
-				g_dev[i].pipe_failed = 0;   /* switching it on again is a fresh try */
-		}
-	}
 	g_pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
 	                                                                         : VM_PIPE_OFF;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
@@ -1408,12 +1412,14 @@ void vm_stage_apply(const VmSettings *s)
 		if (o != g_offload) {
 			g_offload_state = 0;              /* switched: checked afresh */
 			g_offload_logged = 0;
-			if (!o && !g_pipeline)
-				for (int i = 0; i < VM_DEV_COUNT; i++)
-					g_dev[i].pipe_failed = 0;
 		}
 		g_offload = o;
 	}
+	/* The helper (and copier) wanted again after neither setting wanted it:
+	 * a fresh try at making them, whichever setting was switched on. */
+	if (!needed && (g_pipeline || g_offload))
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			g_dev[i].pipe_failed = 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
 }

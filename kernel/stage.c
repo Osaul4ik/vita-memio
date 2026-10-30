@@ -313,6 +313,8 @@ static int take(Dev *d, int mine, uint32_t nsec)
 #define PIPE_DEF_CP_NS     4200u
 #define PIPE_DEF_CPCL_NS   11100u
 
+#define PIPE_CPU_SYSTEM    0x00080000 /* SCE_KERNEL_CPU_MASK_SYSTEM: core 3      */
+
 static volatile int g_pipeline;              /* the setting                    */
 static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
 
@@ -441,7 +443,14 @@ static int pipe_setup(Dev *d)
 		pipe_release(d);
 		return r;
 	}
-	d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0, 0, NULL);
+	/* On the system core (core 3), which games do not run on: the helper then
+	 * starts the tail's read at once even when the game's cores are busy. If
+	 * that is refused, any core. */
+	d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0,
+	                               PIPE_CPU_SYSTEM, NULL);
+	if (d->th < 0)
+		d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0, 0,
+		                               NULL);
 	if (d->th < 0) {
 		r = d->th;
 		d->th = -1;

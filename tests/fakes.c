@@ -43,6 +43,7 @@ uint32_t ksceKernelGetSystemTimeLow(void)
 /* Real threads and counting semaphores (pthreads), so code that hands work to
  * another thread is tested with real concurrency. */
 int fake_thread_fail, fake_sema_fail, fake_threads_live, fake_semas_live;
+int fake_thread_fail_masked, fake_thread_last_mask;
 
 typedef struct { int used; pthread_mutex_t m; pthread_cond_t c; int count, max; } FakeSema;
 static FakeSema g_semas[32];
@@ -138,10 +139,12 @@ SceUID ksceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int 
                               SceSize stackSize, SceUInt attr, int cpuAffinityMask,
                               const void *option)
 {
-	(void)name; (void)initPriority; (void)stackSize; (void)attr; (void)cpuAffinityMask;
-	(void)option;
+	(void)name; (void)initPriority; (void)stackSize; (void)attr; (void)option;
 	if (fake_thread_fail)
 		return -0x30;
+	if (fake_thread_fail_masked && cpuAffinityMask)
+		return -0x32;                        /* that core is refused */
+	fake_thread_last_mask = cpuAffinityMask;
 	for (int i = 1; i < 16; i++)
 		if (!g_threads[i].used) {
 			memset(&g_threads[i], 0, sizeof(g_threads[i]));
@@ -297,6 +300,7 @@ void fakes_reset(void)
 	fake_memtype_from = NULL;
 	fake_memtype_above = 0xD000;
 	fake_thread_fail = fake_sema_fail = 0;
+	fake_thread_fail_masked = fake_thread_last_mask = 0;
 }
 
 int fake_memtype = 0xD000, fake_memtype_calls;

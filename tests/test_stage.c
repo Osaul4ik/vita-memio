@@ -737,6 +737,7 @@ static void test_pipeline_reads(void)
 	reset();
 	pipe_on(&s, 0);
 	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 2);
+	CHECK(fake_thread_last_mask == PIPE_CPU_SYSTEM);   /* on the system core */
 	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76 */
 	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
 	CHECK(io_calls == 5);                           /* split, split, not split */
@@ -864,6 +865,24 @@ static void test_pipeline_errors(void)
 		vm_stage_fini();
 		CHECK(fake_threads_live == 0);
 	}
+	g_live = saved_live;
+	free(u);
+}
+
+/* The system core refused: the helper runs on any core instead. */
+static void test_pipeline_any_core(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	reset();
+	fake_thread_fail_masked = 1;
+	pipe_on(&s, 0);
+	CHECK(d->pipe_made && fake_thread_last_mask == 0 && fake_threads_live == 1);
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && memcmp(u, disk, 512 * 512) == 0);
+	vm_stage_fini();
 	g_live = saved_live;
 	free(u);
 }
@@ -1038,6 +1057,7 @@ int main(void)
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);
+	RUN(test_pipeline_any_core);
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_copy_variant_flag);

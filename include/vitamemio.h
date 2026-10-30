@@ -22,7 +22,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.2); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define VM_VERSION_STR    "0.8.0"
+#define VM_VERSION_STR    "1.0.0"
 
 /* Which build: "+" and the commit it was built from (CMakeLists.txt sets it
  * at configure time; empty when built outside a git checkout). The version

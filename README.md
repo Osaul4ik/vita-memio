@@ -96,7 +96,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 |---|---|---|
 | GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). If the firmware cannot do this, reads simply take the normal way | On |
 | Overlapped reads | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and two helper threads per storage in use; all are given back when this and *Copy on the system core* are off, or the storage is switched off. Not used while *Verify transfers* is on | Auto |
-| Copy on the system core | Experimental. Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads; the reading speed stays the same. **GPU-safe only**: just while *GPU-safe reads* are on, where the copy costs the most. **Always**: every faster read of a game or app, into ordinary memory. If the console does not allow it, games copy as before (the log says why) | GPU-safe only |
+| Copy on the system core | Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads; the reading speed stays the same. **GPU-safe only**: just while *GPU-safe reads* are on, where the copy costs the most. **Always**: every faster read of a game or app, into ordinary memory. If the console does not allow it, games copy as before (the log says why) | GPU-safe only |
 | Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
 | Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only. Overlapped reads are not used while it is on | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
@@ -152,7 +152,7 @@ Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://git
 - **Tester app** with per-block timings, live plugin counters and every byte checked.
 - **Driver status row** in Settings, also shown when the kernel module is missing.
 - **Overlapped reads**, **Small transfers too**, **Verify transfers** and **Statistics** as Settings options.
-- **Copy on the system core** (experimental): a game's or app's reads can be copied on the console's spare core instead of its own.
+- **Copy on the system core**: a game's or app's reads can be copied on the console's spare core instead of its own.
 - **PSVshell-style HUD** next to the original look.
 - **Safe mode you can recover from**: settings can be changed in safe mode, and a start only counts as good after 30 seconds on the home screen.
 - **Host tests** for the storage path, settings, HUD and tester, run on every push.

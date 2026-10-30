@@ -35,6 +35,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/rtc.h>
 
 #include "../../include/vitamemio_kernel_api.h"
@@ -107,6 +108,13 @@ int vmGetState(VmState *o)
 /* No vmSetSetting here on purpose: the tester must never change a plugin
  * setting, so if it ever calls it, building the simulator fails to link. */
 int vmSelfTestPing(void) { return VM_SELFTEST_MAGIC; }
+int vmGetBuild(char *out, int size)
+{
+	if (!out || size <= 0)
+		return VM_ERR_ARG;
+	snprintf(out, (size_t)size, "%s", VM_BUILD_STR);
+	return VM_OK;
+}
 int vmGetSetting(int key)
 {
 	int32_t *f = vm_setting_field(&g_set, key);
@@ -132,6 +140,16 @@ int vmGetTiming(VmTiming *o)
 }
 
 /* ---- time, memory ---------------------------------------------------------------- */
+
+SceUID sceKernelGetThreadId(void) { return 1; }
+int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	info->runClocks = (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+	return 0;
+}
 
 uint64_t sceKernelGetProcessTimeWide(void)
 {

@@ -173,17 +173,22 @@ static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
 	uint64_t total = 0;
 
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off = (uint64_t)i * io, t0, t1;
+		uint64_t off = (uint64_t)i * io, t0, t1, c0;
 		int got;
 
 		if (is_cancelled(c))
 			return BR_CANCEL;
 		if (write)
 			tp_fill(buf, off, io);
+		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, *h, buf, io, off)
 		            : e->pread(e->ctx, *h, buf, io, off);
 		t1 = e->now_us(e->ctx);
+		if (e->cpu_us) {
+			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
+			r->cpu_bytes[m] += io;
+		}
 		if (got != (int)io) {
 			r->io_errors++;
 			fail(c, write ? "write error (card full?)" : "read error");
@@ -222,7 +227,7 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 	if (!n || !slots)
 		return BR_OK;
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off, t0, t1;
+		uint64_t off, t0, t1, c0;
 		int got;
 
 		if (is_cancelled(c))
@@ -233,10 +238,15 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 		off = (uint64_t)(rng % slots) * io;
 		if (write)
 			tp_fill(c->buf, off, io);          /* the pattern, so the file stays valid */
+		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, h, c->buf, io, off)
 		            : e->pread(e->ctx, h, c->buf, io, off);
 		t1 = e->now_us(e->ctx);
+		if (e->cpu_us) {
+			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
+			r->cpu_bytes[m] += io;
+		}
 		if (got != (int)io) {
 			r->io_errors++;
 			fail(c, write ? "random write error" : "random read error");
@@ -617,6 +627,24 @@ void bench_timing(const BenchResult *res, BenchTiming *out)
 	for (int i = 0; i < res->nruns; i++)
 		timing_add(&t, &res->runs[i]);
 	timing_finish(&t, out);
+}
+
+int bench_cpu_ms_per_mib(const BenchResult *res, int m, double *out)
+{
+	uint64_t us = 0, bytes = 0;
+
+	*out = 0;
+	if (m < 0 || m >= BM_COUNT)
+		return 0;
+	for (int i = 0; i < res->nruns; i++)
+		if (res->runs[i].complete) {
+			us += res->runs[i].cpu_us[m];
+			bytes += res->runs[i].cpu_bytes[m];
+		}
+	if (!bytes)
+		return 0;
+	*out = (double)us / 1000.0 / ((double)bytes / (double)MIB);
+	return 1;
 }
 
 int bench_integrity_ok(const BenchResult *res)

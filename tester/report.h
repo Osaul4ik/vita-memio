@@ -11,10 +11,12 @@
 #include "bench.h"
 
 #define TESTER_VERSION  "0.8.0"
+/* ... and which build of it (the commit, see VM_BUILD_STR) */
+#define TESTER_BUILD    TESTER_VERSION VM_BUILD_SUFFIX
 
 typedef struct ReportMeta {
 	const char *timestamp;        /* "2026-10-28 12:30:11"                      */
-	const char *plugin_version;   /* VM_VERSION_STR of the app build            */
+	const char *plugin_version;   /* the kernel module's build (vmGetBuild)     */
 	const char *folder;           /* where the test file was                    */
 } ReportMeta;
 

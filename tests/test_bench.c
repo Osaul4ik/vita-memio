@@ -28,6 +28,7 @@ typedef struct Fake {
 	size_t   size, cap;
 	int      exists, open_handles;
 	uint64_t now;
+	uint64_t cpu;                /* the testing thread's CPU time, us           */
 
 	int      on;                 /* the device's setting (the tester must not change it) */
 	int      initial_on;
@@ -61,6 +62,7 @@ typedef struct Fake {
 } Fake;
 
 static uint64_t f_now(void *c) { return ((Fake *)c)->now; }
+static uint64_t f_cpu(void *c) { return ((Fake *)c)->cpu; }
 
 static void ensure(Fake *f, size_t n)
 {
@@ -150,6 +152,7 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 	if (off + n > f->size)
 		return -1;
 	memcpy(buf, f->data + off, n);
+	f->cpu += (uint64_t)n * 1000 / 1048576;        /* 1.0 ms per MiB */
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
 	if (counts(f, n) && f->busy_every && ++f->busy_seen % f->busy_every == 0) {
 		f->passthru++;                             /* this one found the buffer busy */
@@ -283,7 +286,7 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_progress, f_cancelled, NULL, NULL };
+	               f_get, f_progress, f_cancelled, NULL, NULL, NULL };
 	return e;
 }
 
@@ -947,7 +950,7 @@ static void test_report_text(void)
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0);
 	CHECK(report_format(r, &m, text, 40000) == strlen(text));
-	CHECK(strstr(text, "vita-memio tester " TESTER_VERSION "   2026-10-28 12:30:11"));
+	CHECK(strstr(text, "vita-memio tester " TESTER_BUILD "   2026-10-28 12:30:11"));
 	CHECK(strstr(text, "plugin 0.2.0-alpha   storage driver id 0x2e7c52f7"));
 	CHECK(strstr(text, "plugin during the test: ON for SD2Vita"));
 	CHECK(strstr(text, "device: SD2Vita   folder: uma0:data/t/"));
@@ -1188,6 +1191,46 @@ static void test_pattern(void)
 	free(b);
 }
 
+/* The calling thread's CPU time: in the report when the platform gives it. */
+static void test_cpu_time(void)
+{
+	Fake f = { 0 };
+	BenchEnv e;
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchResult *r = new_result();
+	char *text = malloc(40000);
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+	double v;
+	int n, found = 0;
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(!bench_cpu_ms_per_mib(r, BM_SEQ_R_1M, &v) && v == 0);
+	report_format(r, &m, text, 40000);
+	CHECK(!strstr(text, "CPU time of the calling thread"));
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.cpu_us = f_cpu;
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(bench_cpu_ms_per_mib(r, BM_SEQ_R_1M, &v) && v > 0.99 && v < 1.01);
+	CHECK(bench_cpu_ms_per_mib(r, BM_SEQ_R_128K, &v) && v > 0.99 && v < 1.01);
+	CHECK(!bench_cpu_ms_per_mib(r, BM_SEQ_W_1M, &v) || v < 0.01);   /* writes cost nothing here */
+	CHECK(!bench_cpu_ms_per_mib(r, -1, &v) && !bench_cpu_ms_per_mib(r, BM_COUNT, &v));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "CPU time of the calling thread, ms per MiB:\n  seq read 1M     1.0\n"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	for (int i = 0; i < n; i++)
+		found |= !strcmp(lines[i], "caller CPU per MiB read: 1.0 ms");
+	CHECK(found);
+	CHECK_UNTOUCHED(f);
+	free(f.data);
+	free(text);
+	free(r);
+}
+
 int main(void)
 {
 	RUN(test_full_run_on);
@@ -1213,6 +1256,7 @@ int main(void)
 	RUN(test_formatters);
 	RUN(test_results_file);
 	RUN(test_pattern);
+	RUN(test_cpu_time);
 
 	printf(vm_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

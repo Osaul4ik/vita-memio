@@ -24,6 +24,14 @@
  * three together. Logged in both modules' init banner so a log pins the build. */
 #define VM_VERSION_STR    "0.8.0"
 
+/* Which build: "+" and the commit it was built from (CMakeLists.txt sets it
+ * at configure time; empty when built outside a git checkout). The version
+ * alone does not tell two builds of one version apart. */
+#ifndef VM_BUILD_SUFFIX
+#define VM_BUILD_SUFFIX   ""
+#endif
+#define VM_BUILD_STR      VM_VERSION_STR VM_BUILD_SUFFIX
+
 /* Everything the plugin writes lives here (created on first use). */
 #define VM_DATA_DIR       "ur0:data/vita-memio"
 

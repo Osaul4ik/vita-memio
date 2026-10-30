@@ -482,6 +482,23 @@ int vmGetSetting(int key)
 	return f ? *f : VM_ERR_ARG;
 }
 
+int vmGetBuild(char *out, int size)
+{
+	static const char b[] = VM_BUILD_STR;
+	char k[sizeof(b)];
+	int n = (int)sizeof(b);
+
+	if (!out || size <= 0)
+		return VM_ERR_ARG;
+	if (n > size)
+		n = size;
+	memcpy(k, b, sizeof(b));
+	k[n - 1] = 0;
+	if (ksceKernelMemcpyKernelToUser(out, k, n) < 0)
+		return VM_ERR_ARG;
+	return VM_OK;
+}
+
 int vmResetSafeMode(void)
 {
 	return guard_write('0', "settings");
@@ -534,12 +551,12 @@ int module_start(SceSize argc, const void *args)
 	if (!firmware_known()) {
 		g_disabled = VM_DIS_FIRMWARE;
 		VM_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",
-		         VM_VERSION_STR, (unsigned)g_fingerprint);
+		         VM_BUILD_STR, (unsigned)g_fingerprint);
 		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
 	/* The one line every start writes: which build, on which storage driver. */
-	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_VERSION_STR, (unsigned)g_fingerprint);
+	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_BUILD_STR, (unsigned)g_fingerprint);
 
 	/* Crash-loop guard: the file holds '1' from here until the home screen
 	 * (SceShell) has been up for VM_GUARD_SHELL_TICKS, then '0'. Finding '1'

@@ -127,6 +127,10 @@ typedef struct BenchEnv {
 	 * release. NULL (or no memory): the NC reads are not measured. */
 	void *(*nc_alloc)(void *ctx, uint32_t size);
 	void (*nc_free)(void *ctx, void *p);
+	/* Optional: the CPU time the calling thread has run so far, in us (what
+	 * a read costs the thread that asks for it - a game's own thread - as
+	 * opposed to how long it waits). NULL: not measured. */
+	uint64_t (*cpu_us)(void *ctx);
 } BenchEnv;
 
 /* ---- configuration and results ---------------------------------------------- */
@@ -156,6 +160,8 @@ typedef struct BenchRun {
 	uint32_t med_us[BM_COUNT];      /* median time of one call                  */
 	uint32_t p99_us[BM_COUNT];
 	uint32_t ops[BM_COUNT];
+	uint64_t cpu_us[BM_COUNT];      /* CPU time of the testing thread in the calls */
+	uint64_t cpu_bytes[BM_COUNT];   /* ... for this many bytes (0: not measured)  */
 	uint32_t verify_bad;            /* words that differed when read back       */
 	uint32_t final_bad;             /* ... in the read-back of the whole file   */
 	int      final_done;
@@ -221,6 +227,10 @@ typedef struct BenchTiming {
 
 void bench_timing_run(const BenchRun *r, BenchTiming *out);
 void bench_timing(const BenchResult *res, BenchTiming *out);
+
+/* CPU time the testing thread spent in the calls of metric m, in ms per MiB,
+ * over the complete runs. 0 when it was not measured (no BenchEnv.cpu_us). */
+int bench_cpu_ms_per_mib(const BenchResult *res, int m, double *out);
 
 /* Verdicts. */
 int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O error */

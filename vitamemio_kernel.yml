@@ -16,3 +16,4 @@ vitamemio_kernel:
         - vmGetTiming
         - vmResetSafeMode
         - vmGetSetting
+        - vmGetBuild

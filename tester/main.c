@@ -51,6 +51,7 @@ static BenchResult g_res;
 static char g_report[32768];
 static char g_screen[REPORT_LINES_MAX][REPORT_LINE_MAX];
 static char g_view[RESULTS_LINES_MAX][RESULTS_LINE_MAX];
+static char g_plugin_build[48];   /* the kernel module's build, for the report */
 
 /* ---- small screens ----------------------------------------------------------- */
 
@@ -328,7 +329,12 @@ static void run_test(void)
 
 	timestamp(stamp, sizeof(stamp));
 	meta.timestamp = stamp;
-	meta.plugin_version = VM_VERSION_STR;
+	/* the kernel module's own build; an older module (0.8.0 and before)
+	 * does not have the call, and the weak import leaves the text empty */
+	memset(g_plugin_build, 0, sizeof(g_plugin_build));
+	if (vmGetBuild(g_plugin_build, (int)sizeof(g_plugin_build)) != VM_OK || !g_plugin_build[0])
+		snprintf(g_plugin_build, sizeof(g_plugin_build), "unknown (0.8.0 or older)");
+	meta.plugin_version = g_plugin_build;
 	meta.folder = cfg.dir;
 	report_format(&g_res, &meta, g_report, sizeof(g_report));
 	vita_mkdirs(VM_DATA_DIR "/");
@@ -394,7 +400,7 @@ static void menu(void)
 		snprintf(item[M_CLEAR], sizeof(item[0]), "Clear results");
 		snprintf(item[M_EXIT], sizeof(item[0]), "Exit");
 
-		ui_header("tester", "v" TESTER_VERSION);
+		ui_header("tester", "v" TESTER_BUILD);
 		plugin_panel(3, g_dev);
 		ui_panel(1, 11, UI_COLS - 2, 8, "TEST");
 		for (int i = 0; i < M_COUNT; i++) {

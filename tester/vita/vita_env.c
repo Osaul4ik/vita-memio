@@ -8,6 +8,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/threadmgr.h>
 
 #include "../../include/vitamemio_kernel_api.h"
 #include "vita_env.h"
@@ -17,6 +18,18 @@
 static uint64_t v_now_us(void *ctx)
 {
 	return sceKernelGetProcessTimeWide();
+}
+
+/* The calling thread's run time (SceKernelThreadInfo.runClocks, in us). */
+static uint64_t v_cpu_us(void *ctx)
+{
+	SceKernelThreadInfo info;
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &info) < 0)
+		return 0;
+	return info.runClocks;
 }
 
 static int v_open(void *ctx, const char *path, int create_trunc)
@@ -204,6 +217,7 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->poll_cancel = poll_cancel;
 	v->env.ctx = v;
 	v->env.now_us = v_now_us;
+	v->env.cpu_us = v_cpu_us;
 	v->env.open = v_open;
 	v->env.pread = v_pread;
 	v->env.pwrite = v_pwrite;

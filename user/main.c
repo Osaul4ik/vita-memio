@@ -47,7 +47,7 @@ int module_start(SceSize argc, const void *args)
 	int ping = vmSelfTestPing();
 	if (ping != (int)VM_SELFTEST_MAGIC)
 		VM_LOGI("user v%s: kernel module not answering (ping 0x%08x)",
-		        VM_VERSION_STR, (unsigned)ping);
+		        VM_BUILD_STR, (unsigned)ping);
 
 	vm_settings_hooks_install();
 	return SCE_KERNEL_START_SUCCESS;

@@ -193,7 +193,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	plugin_text(res, pl, sizeof(pl));
 
 	put(&o, "================================================================\n");
-	put(&o, "vita-memio tester %s   %s\n", TESTER_VERSION, meta->timestamp);
+	put(&o, "vita-memio tester %s   %s\n", TESTER_BUILD, meta->timestamp);
 	put(&o, "plugin %s   storage driver id 0x%08x\n", meta->plugin_version,
 	    (unsigned)res->plugin0.fingerprint);
 	put(&o, "plugin during the test: %s\n", pl);
@@ -262,6 +262,29 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			}
 		}
 		put(&o, "\n");
+	}
+
+	{
+		/* What the reads and writes cost the thread that asks for them (a
+		 * game's own thread): with the copy on the system core it is lower,
+		 * however long the call itself takes. */
+		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_SEQ_W_1M };
+		double v;
+		int any = 0;
+
+		for (unsigned i = 0; i < sizeof(cm) / sizeof(cm[0]); i++) {
+			char a[16];
+
+			if (!bench_cpu_ms_per_mib(res, cm[i], &v))
+				continue;
+			if (!any)
+				put(&o, "CPU time of the calling thread, ms per MiB:\n");
+			any = 1;
+			report_fmt1(a, sizeof(a), v);
+			put(&o, "  %-15s %s\n", bench_metric_name[cm[i]], a);
+		}
+		if (any)
+			put(&o, "\n");
 	}
 
 	put(&o, "runs (value per metric, in the order of the table above):\n");
@@ -381,6 +404,14 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 			line(&s, "copy on the system core: %s",
 			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only" : "always");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
+	}
+	{
+		double v;
+
+		if (bench_cpu_ms_per_mib(res, BM_SEQ_R_1M, &v)) {
+			report_fmt1(x, sizeof(x), v);
+			line(&s, "caller CPU per MiB read: %s ms", x);
+		}
 	}
 	for (int i = 0; i < res->nruns; i++)
 		if (res->runs[i].note[0])

@@ -90,6 +90,11 @@ int vmGetTiming(VmTiming *out);
  * unknown key. Every key, including those VmState does not carry. */
 int vmGetSetting(int key);
 
+/* Which build the kernel module is (VM_BUILD_STR, e.g. "0.8.1+96bf8fb"), as a
+ * string of at most `size` bytes with its terminator (user pointer). Returns
+ * VM_OK or VM_ERR_ARG. Newer than 0.8.0: an older module does not have it. */
+int vmGetBuild(char *out, int size);
+
 /* Clear the crash-loop guard (safe mode). The plugin starts normally again at
  * the next boot; a boot already in safe mode stays inactive until then.
  * Returns VM_OK or VM_ERR_IO (the guard file could not be written). */

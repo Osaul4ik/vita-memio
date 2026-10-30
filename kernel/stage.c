@@ -127,8 +127,6 @@ typedef struct Dev {
 	volatile int  pipe_ready, pipe_quit;
 	SceUID        uid2, th, sem_go, sem_done, sem_free;
 	SceUID        th2, sem_cgo, sem_fin;  /* the copier (copy on the system core) */
-	SceUID        off_pid;                /* the last moved read: its process ... */
-	uintptr_t     off_lo, off_hi;         /* ... and buffer (log: g_off_same)     */
 	void         *buf2;
 	/* the job: parts job_first .. job_k-1 of job_sz, the first of them at
 	 * job_sector (pipe_run: from part 1; offload_run: all of them) */
@@ -402,9 +400,6 @@ static int          g_offload_logged;      /* the state the worker last logged *
 static uint32_t     g_offload_type;        /* the first mapping's memblock type */
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
-/* Would keeping a mapping for the next request pay? How often a moved read
- * lies inside the previous one's buffer (same process). For the log only. */
-static uint32_t     g_off_same;                                 /* atomic      */
 
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
@@ -930,7 +925,6 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 /* The caller's buffer for one request, mapped for the copier (see the top of
  * "copy on the system core"). */
 typedef struct OffMap {
-	Dev     *dev;
 	SceUID   pid;
 	SceUID   uid;              /* the mapping, or < 0                        */
 	uint8_t *user;             /* the request's buffer in the caller's space */
@@ -949,16 +943,6 @@ static void off_map(OffMap *m)
 	SceUID uid;
 
 	m->tried = 1;
-	{
-		Dev *d = m->dev;
-		const uintptr_t lo = (uintptr_t)m->user, hi = lo + m->len;
-
-		if (d->off_pid == m->pid && lo >= d->off_lo && hi <= d->off_hi)
-			__atomic_fetch_add(&g_off_same, 1, __ATOMIC_RELAXED);
-		d->off_pid = m->pid;
-		d->off_lo = lo;
-		d->off_hi = hi;
-	}
 	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioCopy", VM_USERMAP_RW, m->user, m->len, &page,
 	                            &size, &off);
 	if (uid < 0) {
@@ -1117,7 +1101,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int off = ready && g_offload_state >= 0 && nsec >= OFFLOAD_MIN_SECTORS &&
 	                (g_offload == VM_OFFLOAD_ALWAYS || (g_offload == VM_OFFLOAD_GPU && clean)) &&
 	                ksceKernelGetProcessId() != KERNEL_PID;
-	OffMap om = { .dev = d, .uid = -1, .user = p, .len = nsec * 512 };
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
 
@@ -1475,11 +1459,9 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
 		if (g_offload || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
-			VM_KLOGI("stage: copied on the system core %u reads %u MiB, %u into the last buffer, "
-			         "mapping failed %u (0x%08x)",
+			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
-			         (unsigned)__atomic_load_n(&g_off_same, __ATOMIC_RELAXED),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)g_offload_err);
 	}

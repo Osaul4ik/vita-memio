@@ -100,7 +100,7 @@ static void reset(void)
 	g_offload_state = g_offload_logged = 0;
 	g_offload_type = 0;
 	g_offload_err = 0;
-	g_off_reads = g_off_kib = g_off_maperr = g_off_same = 0;
+	g_off_reads = g_off_kib = g_off_maperr = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_cp_sys_kib = g_cp_game_kib = 0;
@@ -1553,11 +1553,10 @@ static void test_offload(void)
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads == 1);
-	/* the same buffer again (inside the last one): counted, for the log */
-	CHECK(g_off_same == 0);
+	/* a request inside the last one's buffer: mapped afresh (nothing kept) */
 	CHECK(rd(u + 512, 1, 128) == 0 && memcmp(u + 512, disk + 512, 128 * 512) == 0);
-	CHECK(g_off_same == 1);
-	CHECK(rd(u, 0, 300) == 0 && g_off_same == 1);   /* larger than the last one */
+	CHECK(fake_usermap_calls == 2 && fake_usermap_live == 0);
+	CHECK(rd(u, 0, 300) == 0 && fake_usermap_calls == 3);
 	/* a system thread's read: copied where it is, nothing mapped */
 	fake_pid = KERNEL_PID;
 	copies_here = copies_elsewhere = 0;

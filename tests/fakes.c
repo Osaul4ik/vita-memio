@@ -14,6 +14,7 @@
 
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
+#include "../kernel/vm_memblock.h"
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/threadmgr.h>
 #include <taihen.h>
@@ -347,13 +348,15 @@ int fake_meminfo_type = 0x1020D006, fake_meminfo_err, fake_meminfo_calls;
 /* If set, the mapping is not the caller's own page but this buffer (its
  * bytes are not the caller's: for the refused cases only). */
 void *fake_usermap_elsewhere;
-int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type)
+int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 {
 	(void)uid;
 	fake_meminfo_calls++;
 	if (fake_meminfo_err)
 		return fake_meminfo_err;
-	*type = (unsigned)fake_meminfo_type;
+	if (info->size != sizeof(*info))
+		return -1;
+	info->type = (uint32_t)fake_meminfo_type;
 	return 0;
 }
 

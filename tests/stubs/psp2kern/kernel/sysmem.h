@@ -18,5 +18,4 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
                              SceSize size, void **kernel_page, SceSize *kernel_size,
                              SceUInt32 *kernel_offset);
 int ksceKernelUserUnmap(SceUID uid);
-int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type);
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);

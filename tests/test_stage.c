@@ -1591,6 +1591,17 @@ static void test_offload(void)
 	vm_stage_apply(&s);                       /* switched again: checked afresh */
 	CHECK(g_offload_state == 0);
 	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0 && g_offload_state == 1);
+	/* a type word that does not match the memory at the address (the info
+	 * layout read wrong): refused, even with R and W in it */
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);
+	s.offload = VM_OFFLOAD_ALWAYS;
+	vm_stage_apply(&s);
+	fake_meminfo_type = 0x10208006;           /* non-cacheable, but the buffer is cached */
+	copies_elsewhere = 0;
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(g_offload_state == -1 && copies_elsewhere == 0 && fake_usermap_live == 0);
+	fake_meminfo_type = 0x1020D006;
 	/* the type cannot be read: refused too */
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);

@@ -71,6 +71,7 @@
  *   into staging (writes): the system memcpy. The burst copy made it slower
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
+#include "vm_memblock.h"
 #ifndef vm_copy_from_stage
 #define vm_copy_from_stage vm_fast_copy
 #endif
@@ -962,16 +963,22 @@ static void off_map(OffMap *m)
 	/* writable: the first mapping's memblock type has the kernel's R and W
 	 * (as SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0x1020D006) */
 	if (g_offload_state == 0) {
-		unsigned int type = 0;
+		VmMemBlockInfoEx info;
+		int r;
 
-		if (ksceKernelGetMemBlockType(uid, &type) < 0 || (type & 0x6) != 0x6) {
-			g_offload_type = type;
+		memset(&info, 0, sizeof(info));
+		info.size = sizeof(info);
+		r = ksceKernelMemBlockGetInfoEx(uid, &info);
+		g_offload_type = info.type;
+		/* the type word read right (its memory type is the one at the
+		 * address), with the kernel's read and write */
+		if (r < 0 || (int)(info.type & 0xFF00) != ksceKernelGetMemBlockMemtypeByAddr(m->user) ||
+		    (info.type & 0x6) != 0x6) {
 			ksceKernelUserUnmap(uid);
-			g_offload_err = -1;
+			g_offload_err = r < 0 ? r : -1;
 			g_offload_state = -1;           /* refused: until switched again */
 			return;
 		}
-		g_offload_type = type;
 		g_offload_state = 1;
 	}
 	m->uid = uid;

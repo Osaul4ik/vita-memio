@@ -13,7 +13,11 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Publish a release with this tag (e.g. v0.3.0); empty: build only'
+        description: 'Publish a release with this tag (e.g. v0.6.0); empty: build only'
+        required: false
+        default: ''
+      remove:
+        description: 'Delete this release and its tag first (e.g. one published by mistake); empty: none'
         required: false
         default: ''
 
@@ -105,7 +109,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release || github.ref_name }}
+          REMOVE: ${{ inputs.remove }}
         run: |
+          if [ -n "$REMOVE" ]; then
+            gh release delete "$REMOVE" --yes --cleanup-tag
+          fi
           notes=".github/release-notes/${TAG}.md"
           test -f "$notes" || { echo "missing $notes"; exit 1; }
           gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \

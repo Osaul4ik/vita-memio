@@ -22,7 +22,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.2); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define VM_VERSION_STR    "0.3.0"
+#define VM_VERSION_STR    "0.6.0"
 
 /* Everything the plugin writes lives here (created on first use). */
 #define VM_DATA_DIR       "ur0:data/vita-memio"

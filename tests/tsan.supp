@@ -1,9 +1,0 @@
-# ThreadSanitizer suppressions for tests/test_stage (make -C tests tsan).
-#
-# vm_stage_apply writes the settings (switches, minimum size, statistics,
-# GPU-safe, verify, overlapped-read mode, the learnt copy cost it resets) as
-# single aligned words that the I/O hooks read without a lock, by design: a
-# request uses whichever value it read, and each value is valid on its own.
-# Everything that hands memory between threads (the helper's job, its
-# buffers, their release) is synchronised and is not suppressed.
-race:vm_stage_apply

@@ -83,6 +83,16 @@
 #define vm_copy_to_stage memcpy
 #endif
 
+/* Words shared between the hooks (any thread, any core), the helper and
+ * copier, the worker and the settings (a syscall): each is read and written
+ * whole with these, and counters are added to atomically, so no update is
+ * lost and no 64-bit counter is read half-written. Relaxed: each value stands
+ * on its own; where memory changes hands (a buffer, a job, a result) the
+ * order is set separately (semaphores, acquire/release). */
+#define LD(x)      __atomic_load_n(&(x), __ATOMIC_RELAXED)
+#define ST(x, v)   __atomic_store_n(&(x), (v), __ATOMIC_RELAXED)
+#define ADD(x, v)  ((void)__atomic_fetch_add(&(x), (v), __ATOMIC_RELAXED))
+
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */
 #define NID_READ_SD    0xB9593652    /* ksceSdifReadSectorSd                   */
 #define NID_WRITE_SD   0xE0781171    /* ksceSdifWriteSectorSd                  */
@@ -288,33 +298,34 @@ static void ensure_buf(Dev *d)
 	void *base = NULL;
 	int r;
 
-	if (!g_live || d->buf || d->unusable || d->alloc_err)
+	if (!LD(g_live) || __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || LD(d->unusable) ||
+	    LD(d->alloc_err))
 		return;
 	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, STAGE_BYTES, &uid, &base);
 	if (r < 0) {
-		d->alloc_err = r;
-		d->alloc_logged = 0;            /* the worker logs it */
+		ST(d->alloc_logged, 0);         /* the worker logs it */
+		ST(d->alloc_err, r);
 		return;
 	}
 	d->uid = uid;
-	__sync_synchronize();
-	d->buf = base;
+	__atomic_store_n(&d->buf, base, __ATOMIC_RELEASE);   /* published last */
 }
 
 /* Take the device buffer for one request, or 0 if the request stays stock. */
 static int take(Dev *d, int mine, uint32_t nsec)
 {
-	if (!mine || !d->enabled || d->fallback || !d->buf || nsec < g_min_sectors || !nsec)
+	if (!mine || !LD(d->enabled) || LD(d->fallback) ||
+	    !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || nsec < LD(g_min_sectors) || !nsec)
 		return 0;
 	if (__sync_lock_test_and_set(&d->busy, 1)) {
-		d->st.passthru++;
+		ADD(d->st.passthru, 1);
 		return 0;
 	}
 	/* Re-check after taking the buffer: vm_stage_fini clears `enabled` first and
 	 * then waits for `busy` to drop, so a request that passed the check above
 	 * just before that must not go on to use the buffer. */
 	__sync_synchronize();
-	if (!d->enabled || d->fallback) {
+	if (!LD(d->enabled) || LD(d->fallback)) {
 		__sync_lock_release(&d->busy);
 		return 0;
 	}
@@ -519,7 +530,7 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 	const uint64_t def_cp = clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
 	int k;
 
-	if (g_pipeline == VM_PIPE_FIXED) {
+	if (LD(g_pipeline) == VM_PIPE_FIXED) {
 		k = pipe_plan_costs(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, clean ? 3 : 2,
 		                    clean ? 3 : 2, out);
 		if (!k && clean)
@@ -527,9 +538,11 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 		return k;
 	}
 	{
-		const uint64_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
-		const uint64_t cp = d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0] : def_cp;
-		const uint64_t cmd = d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS;
+		const uint32_t eio = LD(d->est_io_ns), ecp = LD(d->est_cp_ns[clean ? 1 : 0]);
+		const uint32_t ecmd = LD(d->est_cmd_ns);
+		const uint64_t io = eio ? eio : PIPE_DEF_IO_NS;
+		const uint64_t cp = ecp ? ecp : def_cp;
+		const uint64_t cmd = ecmd ? ecmd : PIPE_DEF_CMD_NS;
 
 		/* any split costs at least one more command and a shortest last
 		 * part: when that already loses to one piece, no plan is worked
@@ -562,12 +575,16 @@ static void pipe_learn_io(Dev *d, uint32_t head_us, uint32_t a, uint32_t tail_us
 		cmd = (uint64_t)tail_us * 1000u - r * t;
 	if (r > 1000000u || cmd > 20000000u)
 		return;                             /* not a plausible pair */
-	if (!d->est_io_ns)
-		d->est_io_ns = PIPE_DEF_IO_NS;
-	if (!d->est_cmd_ns)
-		d->est_cmd_ns = PIPE_DEF_CMD_NS;
-	d->est_io_ns = d->est_io_ns - (d->est_io_ns >> 3) + (uint32_t)(r >> 3);
-	d->est_cmd_ns = d->est_cmd_ns - (d->est_cmd_ns >> 3) + (uint32_t)(cmd >> 3);
+	{
+		uint32_t eio = LD(d->est_io_ns), ecmd = LD(d->est_cmd_ns);
+
+		if (!eio)
+			eio = PIPE_DEF_IO_NS;
+		if (!ecmd)
+			ecmd = PIPE_DEF_CMD_NS;
+		ST(d->est_io_ns, eio - (eio >> 3) + (uint32_t)(r >> 3));
+		ST(d->est_cmd_ns, ecmd - (ecmd >> 3) + (uint32_t)(cmd >> 3));
+	}
 }
 
 /* A running average (1/8 weight) of a per-sector cost in ns. */
@@ -578,9 +595,13 @@ static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t de
 	if (!sectors)
 		return;
 	ns = (uint32_t)((uint64_t)us * 1000u / sectors);
-	if (!*est)
-		*est = def;
-	*est = *est - (*est >> 3) + (ns >> 3);
+	{
+		uint32_t e = __atomic_load_n(est, __ATOMIC_RELAXED);
+
+		if (!e)
+			e = def;
+		__atomic_store_n(est, e - (e >> 3) + (ns >> 3), __ATOMIC_RELAXED);
+	}
 }
 
 /* The helper: reads parts first .. k-1 of a job one after another, each as soon
@@ -607,7 +628,7 @@ static int pipe_helper(SceSize args, void *argp)
 		k = d->job_k;
 		memcpy(sz, d->job_sz, sizeof(sz));
 		sector = d->job_sector;
-		timed = g_stats || g_pipeline == VM_PIPE_AUTO;   /* see stage_xfer */
+		timed = LD(g_stats) || LD(g_pipeline) == VM_PIPE_AUTO;   /* see stage_xfer */
 		for (uint32_t i = d->job_first; i < k; i++) {
 			void *buf = (i & 1) ? d->buf2 : d->buf;
 			uint32_t t0, us;
@@ -661,7 +682,7 @@ static int pipe_helper(SceSize args, void *argp)
 static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t *cp_us)
 {
 	const uint32_t k = d->job_k;
-	const int timed = g_stats || g_pipeline == VM_PIPE_AUTO;
+	const int timed = LD(g_stats) || LD(g_pipeline) == VM_PIPE_AUTO;
 	uint32_t sz[PIPE_MAX_PARTS], off = 0;
 
 	memcpy(sz, d->job_sz, sizeof(sz));
@@ -706,7 +727,7 @@ static int pipe_copier(SceSize args, void *argp)
 			break;
 		__sync_synchronize();               /* the job before its fields */
 		r = copy_parts(d, d->cjob_dst, d->cjob_clean, &done, &cp);
-		if (done && g_log_diag)
+		if (done && LD(g_log_diag))
 			__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
 		d->cjob_ret = r;
 		d->cjob_done = done;
@@ -748,21 +769,30 @@ static void pipe_release(Dev *d)
 	d->th = d->sem_go = d->sem_done = d->sem_free = d->uid2 = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->buf2 = NULL;
-	d->pipe_made = 0;
+	ST(d->pipe_made, 0);
 }
 
 /* Worker thread: stop the hooks from starting overlapped reads on `d`, wait
  * for the request in flight (if any) to finish, then free the helper and its
  * buffer. A request decides on overlapping only after taking `busy`, so once
- * `busy` drops after pipe_ready went to 0, nothing can use them. */
-static void pipe_retire(Dev *d)
+ * `busy` drops after pipe_ready went to 0, nothing can use them.
+ * The wait is bounded (PIPE_RETIRE_MS): a request stuck in the driver (a card
+ * pulled out mid-read) must not stop the worker - the threads and buffer are
+ * then kept untouched, and the next tick tries again (vm_stage_pending). 1 if
+ * released. */
+#define PIPE_RETIRE_MS  50
+static int pipe_retire(Dev *d)
 {
 	__atomic_store_n(&d->pipe_ready, 0, __ATOMIC_SEQ_CST);
 	__sync_synchronize();                 /* pairs with the fence in take() */
 	/* an acquire load: the request's last use of the buffers comes first */
-	while (__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE))
+	for (int i = 0; __atomic_load_n(&d->busy, __ATOMIC_ACQUIRE); i++) {
+		if (i >= PIPE_RETIRE_MS)
+			return 0;
 		ksceKernelDelayThread(1000);
+	}
 	pipe_release(d);
+	return 1;
 }
 
 /* Worker thread: everything the overlapped reads of device `d` need. On any
@@ -837,15 +867,21 @@ static int pipe_setup(Dev *d)
 		pipe_release(d);
 		return r;
 	}
-	d->pipe_made = 1;
+	ST(d->pipe_made, 1);
 	/* the hooks may use it from now on; everything above is seen first */
 	__atomic_store_n(&d->pipe_ready, 1, __ATOMIC_RELEASE);
 	return 0;
 }
 
-static int take_shadow(void)
+/* The verify buffer for one request (NULL: no verify for it). Published by
+ * the worker with release, taken here with acquire. */
+static void *take_shadow(void)
 {
-	return g_verify && g_shadow && !__sync_lock_test_and_set(&g_shadow_busy, 1);
+	void *b;
+
+	if (!LD(g_verify) || !(b = __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE)))
+		return NULL;
+	return __sync_lock_test_and_set(&g_shadow_busy, 1) ? NULL : b;
 }
 
 /* An overlapped read of one chunk in k parts (sz, from pipe_plan) into the
@@ -862,7 +898,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	/* Auto times itself, whatever Statistics says: the plan learns its
 	 * costs from these few clock reads. Fixed reads the clock only for
 	 * Statistics. */
-	const int timed = stats || g_pipeline == VM_PIPE_AUTO;
+	const int timed = stats || LD(g_pipeline) == VM_PIPE_AUTO;
 	uint32_t off = 0, cp_us = 0, h0, h1;
 	int ret;
 
@@ -908,7 +944,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 				return d->job_ret;          /* this part on is read again stock */
 		}
 	}
-	if (g_pipeline == VM_PIPE_AUTO) {
+	if (LD(g_pipeline) == VM_PIPE_AUTO) {
 		/* the largest part against the last one: per sector and per command */
 		uint32_t big_us = d->job_big_us, big_n = d->job_big_n;
 
@@ -921,9 +957,9 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 		           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 	}
 	if (stats) {                            /* the tester's figures */
-		d->tm.rd_sectors += off;
-		d->tm.rd_io_us += (h1 - h0) + d->job_io_us;
-		d->tm.rd_copy_us += cp_us;
+		ADD(d->tm.rd_sectors, off);
+		ADD(d->tm.rd_io_us, (h1 - h0) + d->job_io_us);
+		ADD(d->tm.rd_copy_us, cp_us);
 	}
 	return 0;
 }
@@ -939,60 +975,77 @@ typedef struct OffMap {
 	int      tried;
 } OffMap;
 
+/* Refuse copy on the system core until the setting is switched again (a
+ * refusal always wins over a concurrent "usable"). */
+static void off_refuse(int state, int err, uint32_t type)
+{
+	ST(g_offload_type, type);
+	ST(g_offload_err, err);
+	__atomic_store_n(&g_offload_state, state, __ATOMIC_RELEASE);
+}
+
 /* Map m->user for the copier. Leaves m->uid < 0 (the caller copies) unless
- * the mapping is usable. */
+ * the mapping is usable. Every mapping is checked, so no request relies on
+ * another one's check:
+ *   - writable: its memblock type has the kernel's read and write (as
+ *     SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0x1020D006), and the type word was
+ *     read right (its memory type is the one at the address);
+ *   - the same memory type as the caller's buffer at both ends of both
+ *     (cached: one coherent copy of the data for every core). */
 static void off_map(OffMap *m)
 {
 	void *page = NULL;
 	SceSize size = 0;
 	SceUInt32 off = 0;
 	SceUID uid;
+	VmMemBlockInfoEx info;
+	uint8_t *kern;
+	int r, mt;
 
 	m->tried = 1;
 	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioCopy", VM_USERMAP_RW, m->user, m->len, &page,
 	                            &size, &off);
 	if (uid < 0) {
-		__atomic_fetch_add(&g_off_maperr, 1, __ATOMIC_RELAXED);
-		g_offload_err = uid;
+		ADD(g_off_maperr, 1);
+		ST(g_offload_err, uid);
 		return;
 	}
 	if (!page || size < off || size - off < m->len) {
 		ksceKernelUserUnmap(uid);
-		g_offload_err = VM_ERR_NOMEM;
-		__atomic_fetch_add(&g_off_maperr, 1, __ATOMIC_RELAXED);
+		ADD(g_off_maperr, 1);
+		ST(g_offload_err, VM_ERR_NOMEM);
 		return;
 	}
-	/* the same memory type as the caller's buffer (cached: coherent) */
-	if (ksceKernelGetMemBlockMemtypeByAddr((uint8_t *)page + off) !=
-	    ksceKernelGetMemBlockMemtypeByAddr(m->user)) {
+	kern = (uint8_t *)page + off;
+	mt = ksceKernelGetMemBlockMemtypeByAddr(m->user);
+	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(m->user + m->len - 1) != mt ||
+	    ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
+	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != mt) {
 		ksceKernelUserUnmap(uid);
-		g_offload_err = -2;
-		g_offload_state = -2;               /* refused: until switched again */
+		off_refuse(-2, -2, 0);
 		return;
 	}
-	/* writable: the first mapping's memblock type has the kernel's R and W
-	 * (as SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0x1020D006) */
-	if (g_offload_state == 0) {
-		VmMemBlockInfoEx info;
-		int r;
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	r = ksceKernelMemBlockGetInfoEx(uid, &info);
+	if (r < 0 || (int)(info.type & 0xFF00) != mt || (info.type & 0x6) != 0x6) {
+		ksceKernelUserUnmap(uid);
+		off_refuse(-1, r < 0 ? r : -1, info.type);
+		return;
+	}
+	{
+		int zero = 0;                       /* first usable one: for the log */
 
-		memset(&info, 0, sizeof(info));
-		info.size = sizeof(info);
-		r = ksceKernelMemBlockGetInfoEx(uid, &info);
-		g_offload_type = info.type;
-		/* the type word read right (its memory type is the one at the
-		 * address), with the kernel's read and write */
-		if (r < 0 || (int)(info.type & 0xFF00) != ksceKernelGetMemBlockMemtypeByAddr(m->user) ||
-		    (info.type & 0x6) != 0x6) {
-			ksceKernelUserUnmap(uid);
-			g_offload_err = r < 0 ? r : -1;
-			g_offload_state = -1;           /* refused: until switched again */
-			return;
-		}
-		g_offload_state = 1;
+		if (__atomic_compare_exchange_n(&g_offload_state, &zero, 1, 0, __ATOMIC_ACQ_REL,
+		                                __ATOMIC_RELAXED))
+			ST(g_offload_type, info.type);
+	}
+	if (__atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) < 0) {
+		ksceKernelUserUnmap(uid);           /* refused meanwhile (another request) */
+		return;
 	}
 	m->uid = uid;
-	m->kern = (uint8_t *)page + off;
+	m->kern = kern;
 }
 
 /* One chunk (plan sz/k) of a game's read, copied on the system core: the
@@ -1044,15 +1097,15 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	}
 	if (ret < 0)
 		return ret;
-	if (g_pipeline == VM_PIPE_AUTO) {
+	if (LD(g_pipeline) == VM_PIPE_AUTO) {
 		pipe_learn_io(d, d->job_big_us, d->job_big_n, d->job_last_us, sz[k - 1]);
 		pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp_us, n,
 		           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 	}
 	if (stats) {
-		d->tm.rd_sectors += n;
-		d->tm.rd_io_us += d->job_io_us;
-		d->tm.rd_copy_us += cp_us;
+		ADD(d->tm.rd_sectors, n);
+		ADD(d->tm.rd_io_us, d->job_io_us);
+		ADD(d->tm.rd_copy_us, cp_us);
 	}
 	return 0;
 }
@@ -1070,50 +1123,54 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
 		__atomic_store_n(&g_rd_max, nsec, __ATOMIC_RELAXED);
 
-	if (mine && g_count_all) {
+	if (mine && LD(g_count_all)) {
 		if (write)
-			d->all_wr += (uint64_t)nsec * 512;
+			ADD(d->all_wr, (uint64_t)nsec * 512);
 		else
-			d->all_rd += (uint64_t)nsec * 512;
+			ADD(d->all_rd, (uint64_t)nsec * 512);
 	}
 	/* A non-cacheable caller buffer: the standard path is the faster one
 	 * (see the top). Looked at only for transfers that would be staged. */
-	if (mine && d->enabled && !d->fallback && d->buf && nsec && nsec >= g_min_sectors &&
-	    caller_uncached(p, nsec * 512)) {
-		g_nc_stock_kib += nsec / 2;
+	if (mine && LD(d->enabled) && !LD(d->fallback) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
+	    nsec && nsec >= LD(g_min_sectors) && caller_uncached(p, nsec * 512)) {
+		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
 	}
 	/* GPU-safe reads asked for, but this firmware has no cache clean to
 	 * keep that promise: such reads take the standard path, which leaves
 	 * the data in memory as promised. */
-	if (!write && g_gpu_safe && !g_dcache_clean)
+	if (!write && LD(g_gpu_safe) && !g_dcache_clean)
 		return io(ref, part, sector, buf, nsec);
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
 	if (!write)
 		rd_ref = ref;
-	verify = take_shadow();
+	void *const shadow = take_shadow();
+	verify = shadow != NULL;
 	if (verify && !rd_ref) {            /* no read hook yet: cannot verify this one */
 		__sync_lock_release(&g_shadow_busy);
 		verify = 0;
 	}
-	const int stats = g_stats;
+	const int stats = LD(g_stats);
 	int problem = 0;                    /* an error or a mismatch: wake the worker */
-	const int clean = !write && g_gpu_safe && g_dcache_clean;
+	const int clean = !write && LD(g_gpu_safe) && g_dcache_clean;
 	const int ready = !write && __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
-	const int pipe = ready && !verify && g_pipeline;
+	const int mode = LD(g_pipeline);    /* one value for the whole request */
+	const int pipe = ready && !verify && mode;
+	const int offload = LD(g_offload);
 	/* copy on the system core: a game's read (a system thread's buffers
 	 * need no mapping, and copy where they are), as the setting says */
-	const int off = ready && g_offload_state >= 0 && nsec >= OFFLOAD_MIN_SECTORS &&
-	                (g_offload == VM_OFFLOAD_ALWAYS || (g_offload == VM_OFFLOAD_GPU && clean)) &&
+	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
+	                nsec >= OFFLOAD_MIN_SECTORS &&
+	                (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
 	                ksceKernelGetProcessId() != KERNEL_PID;
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
 
 	if (clean)
-		g_gpu_cleaned_kib += left / 2;
-	while (ret >= 0 && left && !d->fallback) {
+		ADD(g_gpu_cleaned_kib, left / 2);
+	while (ret >= 0 && left && !LD(d->fallback)) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
 
@@ -1130,9 +1187,9 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				break;
 			if (stats) {
 				t3 = ksceKernelGetSystemTimeLow();
-				d->tm.wr_sectors += n;
-				d->tm.wr_copy_us += t2 - t1;
-				d->tm.wr_io_us += t3 - t2;
+				ADD(d->tm.wr_sectors, n);
+				ADD(d->tm.wr_copy_us, t2 - t1);
+				ADD(d->tm.wr_io_us, t3 - t2);
 			}
 		} else if (off) {
 			/* Copied on the system core, in parts as pipe_plan says (one
@@ -1140,7 +1197,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			uint32_t done = 0, mine_n = 0;
 
 			if (!(pipe &&
-			      n >= (g_pipeline == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
+			      n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
 			      (k = pipe_plan(d, n, clean, sz)) >= 2)) {
 				k = 1;
 				sz[0] = n;
@@ -1157,11 +1214,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				break;
 			}
 			if (k >= 2)
-				g_pipe_reads++;
+				ADD(g_pipe_reads, 1);
 			if (k > 2)
-				g_pipe_reads3++;
+				ADD(g_pipe_reads3, 1);
 		} else if (pipe &&
-		           n >= (g_pipeline == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
+		           n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
 		           (k = pipe_plan(d, n, clean, sz)) >= 2) {
 			/* Overlapped, this chunk in 2-3 parts (see pipe_run). */
 			uint32_t done = 0;
@@ -1174,9 +1231,9 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				left -= done;
 				break;
 			}
-			g_pipe_reads++;
+			ADD(g_pipe_reads, 1);
 			if (k > 2)
-				g_pipe_reads3++;
+				ADD(g_pipe_reads3, 1);
 		} else {
 			ret = io(ref, part, sector, d->buf, n);
 			if (ret < 0)
@@ -1189,16 +1246,16 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			own += n;
 			if (stats) {
 				t3 = ksceKernelGetSystemTimeLow();
-				d->tm.rd_sectors += n;
-				d->tm.rd_io_us += t2 - t1;
-				d->tm.rd_copy_us += t3 - t2;
+				ADD(d->tm.rd_sectors, n);
+				ADD(d->tm.rd_io_us, t2 - t1);
+				ADD(d->tm.rd_copy_us, t3 - t2);
 			}
 		}
-		if (verify && io(rd_ref, part, sector, g_shadow, n) >= 0) {
-			d->st.verified++;
-			if (memcmp(p, g_shadow, bytes) != 0) {
-				d->st.mismatches++;
-				d->fallback = 1;
+		if (verify && io(rd_ref, part, sector, shadow, n) >= 0) {
+			ADD(d->st.verified, 1);
+			if (memcmp(p, shadow, bytes) != 0) {
+				ADD(d->st.mismatches, 1);
+				ST(d->fallback, 1);
 				problem = 1;
 				if (write) {
 					/* rewrite this chunk the stock way, from the caller's data */
@@ -1206,7 +1263,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 					if (ret < 0)
 						break;
 				} else {
-					memcpy(p, g_shadow, bytes);   /* the caller gets stock data */
+					memcpy(p, shadow, bytes);     /* the caller gets stock data */
 					if (clean)
 						clean_out(p, bytes);
 				}
@@ -1214,9 +1271,9 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		}
 		if (stats) {
 			if (write)
-				d->wr_bytes += bytes;
+				ADD(d->wr_bytes, (uint64_t)bytes);
 			else
-				d->rd_bytes += bytes;
+				ADD(d->rd_bytes, (uint64_t)bytes);
 		}
 		p += bytes;
 		sector += n;
@@ -1228,18 +1285,22 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		__sync_lock_release(&g_shadow_busy);
 	__sync_lock_release(&d->busy);
 	if (ret < 0) {
-		d->st.errors++;
-		d->fallback = 1;
+		ADD(d->st.errors, 1);
+		ST(d->fallback, 1);
 		problem = 1;
 	} else if (write) {
-		d->st.writes++;
+		ADD(d->st.writes, 1);
 	} else {
-		d->st.reads++;
-		if (g_log_diag && !left)
+		ADD(d->st.reads, 1);
+		if (LD(g_log_diag) && !left)
 			diag_note(nsec, own);
 	}
-	if (problem && g_on_problem)
-		g_on_problem();
+	if (problem) {
+		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
+
+		if (fn)
+			fn();
+	}
 	/* Anything not done on the faster path (error, mismatch) is done stock. */
 	return left ? io(ref, part, sector, p, left) : ret;
 }
@@ -1302,9 +1363,9 @@ int vm_stage_init(void)
 	/* Buffers for the devices already switched on, now at boot while
 	 * contiguous memory is easy to find; the others get theirs when they are
 	 * switched on (vm_stage_apply). */
-	g_live = 1;
+	ST(g_live, 1);
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (g_dev[i].enabled)
+		if (LD(g_dev[i].enabled))
 			ensure_buf(&g_dev[i]);
 	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
@@ -1332,8 +1393,8 @@ int vm_stage_init(void)
 					g_hook[j] = -1;
 				}
 			Dev *m = &g_dev[VM_DEV_MEMCARD];
-			m->unusable = 1;
-			m->buf = NULL;
+			ST(m->unusable, 1);
+			__atomic_store_n(&m->buf, NULL, __ATOMIC_RELEASE);
 			if (m->uid >= 0) {
 				ksceKernelFreeMemBlock(m->uid);
 				m->uid = -1;
@@ -1348,8 +1409,8 @@ void vm_stage_fini(void)
 {
 	/* Stop taking the faster path, then wait for any transfer in flight. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		g_dev[i].enabled = 0;
-		g_dev[i].unusable = 1;          /* and never allocate again */
+		ST(g_dev[i].enabled, 0);
+		ST(g_dev[i].unusable, 1);       /* and never allocate again */
 	}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		while (__atomic_load_n(&g_dev[i].busy, __ATOMIC_ACQUIRE))
@@ -1366,67 +1427,66 @@ void vm_stage_fini(void)
 		}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].uid >= 0) {
-			g_dev[i].buf = NULL;
+			__atomic_store_n(&g_dev[i].buf, NULL, __ATOMIC_RELEASE);
 			ksceKernelFreeMemBlock(g_dev[i].uid);
 			g_dev[i].uid = -1;
 		}
 	if (g_shadow_uid >= 0) {
+		__atomic_store_n(&g_shadow, NULL, __ATOMIC_RELEASE);
 		ksceKernelFreeMemBlock(g_shadow_uid);
 		g_shadow_uid = -1;
-		g_shadow = NULL;
 	}
 }
 
 void vm_stage_apply(const VmSettings *s)
 {
 	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
+	const int needed = LD(g_pipeline) || LD(g_offload);   /* the helper, before this */
+	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
+	                   ? s->pipeline : VM_PIPE_OFF;
+	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
+	                  ? s->offload : VM_OFFLOAD_OFF;
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
 
-		if (want[i] && !d->enabled) {
-			d->fallback = 0;      /* switching it back on is a fresh start */
-			d->alloc_err = 0;     /* ... and a fresh try for its buffer    */
+		if (want[i] && !LD(d->enabled)) {
+			ST(d->fallback, 0);   /* switching it back on is a fresh start */
+			ST(d->alloc_err, 0);  /* ... and a fresh try for its buffer    */
 		}
 		if (want[i])
 			ensure_buf(d);
-		d->enabled = want[i] ? 1 : 0;
+		ST(d->enabled, want[i] ? 1 : 0);
 	}
-	g_min_sectors = s->small ? 1 : MIN_SECTORS;
-	g_stats = s->stats ? 1 : 0;
-	g_gpu_safe = s->gpusafe ? 1 : 0;
-	const int needed = g_pipeline || g_offload;   /* the helper, before this */
-
-	if (s->pipeline != g_pipeline)
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			g_dev[i].est_cp_ns[0] = g_dev[i].est_cp_ns[1] = 0;   /* measured afresh */
-	g_pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
-	                                                                         : VM_PIPE_OFF;
-	g_count_all = s->stats || s->hud != VM_HUD_OFF;
-	g_verify = s->verify ? 1 : 0;
-	g_log_diag = s->log ? 1 : 0;
-	{
-		const int o = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
-		            ? s->offload : VM_OFFLOAD_OFF;
-
-		if (o != g_offload) {
-			g_offload_state = 0;              /* switched: checked afresh */
-			g_offload_logged = 0;
+	ST(g_min_sectors, s->small ? 1u : (uint32_t)MIN_SECTORS);
+	ST(g_stats, s->stats ? 1 : 0);
+	ST(g_gpu_safe, s->gpusafe ? 1 : 0);
+	if (pipeline != LD(g_pipeline))
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			ST(g_dev[i].est_cp_ns[0], 0u);    /* measured afresh */
+			ST(g_dev[i].est_cp_ns[1], 0u);
 		}
-		g_offload = o;
+	ST(g_pipeline, pipeline);
+	ST(g_count_all, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
+	ST(g_verify, s->verify ? 1 : 0);
+	ST(g_log_diag, s->log ? 1 : 0);
+	if (offload != LD(g_offload)) {
+		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
+		ST(g_offload_logged, 0);
 	}
+	ST(g_offload, offload);
 	/* The helper (and copier) wanted again after neither setting wanted it:
 	 * a fresh try at making them, whichever setting was switched on. */
-	if (!needed && (g_pipeline || g_offload))
+	if (!needed && (pipeline || offload))
 		for (int i = 0; i < VM_DEV_COUNT; i++)
-			g_dev[i].pipe_failed = 0;
-	if (!g_verify)
-		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
+			ST(g_dev[i].pipe_failed, 0);
+	if (!s->verify)
+		ST(g_shadow_failed, 0);   /* turning verify off and on again retries the buffer */
 }
 
 void vm_stage_on_problem(void (*fn)(void))
 {
-	g_on_problem = fn;
+	__atomic_store_n(&g_on_problem, fn, __ATOMIC_RELEASE);
 }
 
 void vm_stage_worker_tick(void)
@@ -1434,7 +1494,7 @@ void vm_stage_worker_tick(void)
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
 	const uint32_t now_us = ksceKernelGetSystemTimeLow();
 
-	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
+	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
 		         "reads take the standard path");
@@ -1442,18 +1502,18 @@ void vm_stage_worker_tick(void)
 	/* Once a minute, if anything changed: how much went to non-cacheable
 	 * buffers the standard way, and how much GPU-safe reads cleaned. */
 	if (now_us - last_log_us >= 60u * 1000u * 1000u &&
-	    (g_gpu_cleaned_kib != last_cleaned || g_nc_stock_kib != last_nc ||
+	    (LD(g_gpu_cleaned_kib) != last_cleaned || LD(g_nc_stock_kib) != last_nc ||
 	     __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED) != last_max)) {
 		last_log_us = now_us;
-		last_cleaned = g_gpu_cleaned_kib;
-		last_nc = g_nc_stock_kib;
+		last_cleaned = LD(g_gpu_cleaned_kib);
+		last_nc = LD(g_nc_stock_kib);
 		last_max = __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED);
 		/* each line under the log's 192 characters */
 		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB, "
 		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
 		         (unsigned)(last_max / 2));
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
-		         (unsigned)g_pipe_reads, (unsigned)g_pipe_reads3,
+		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),
 		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
 		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000));
 		VM_KLOGI("stage: copied on core 0/1/2/3: %u/%u/%u/%u MiB; caller system %u MiB, "
@@ -1464,80 +1524,101 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
-		if (g_offload || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
+		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
-			         (unsigned)g_offload_err);
+			         (unsigned)LD(g_offload_err));
 	}
 	/* Copy on the system core: whether the mapping was found usable, once. */
-	if (g_offload && g_offload_state != g_offload_logged) {
-		g_offload_logged = g_offload_state;
-		if (g_offload_state > 0)
-			VM_KLOGI("stage: copy on the system core ready (mapping type 0x%08x)",
-			         (unsigned)g_offload_type);
-		else if (g_offload_state == -1)
-			VM_KLOGW("stage: copy on the system core refused: the mapping is not writable "
-			         "(type 0x%08x) - games copy as before", (unsigned)g_offload_type);
-		else if (g_offload_state == -2)
-			VM_KLOGW("stage: copy on the system core refused: the mapping's memory type differs "
-			         "- games copy as before");
+	{
+		const int st = __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE);
+
+		if (LD(g_offload) && st != LD(g_offload_logged)) {
+			ST(g_offload_logged, st);
+			if (st > 0)
+				VM_KLOGI("stage: copy on the system core ready (mapping type 0x%08x)",
+				         (unsigned)LD(g_offload_type));
+			else if (st == -1)
+				VM_KLOGW("stage: copy on the system core refused: the mapping is not "
+				         "writable (type 0x%08x) - games copy as before",
+				         (unsigned)LD(g_offload_type));
+			else if (st == -2)
+				VM_KLOGW("stage: copy on the system core refused: the mapping's memory type "
+				         "differs - games copy as before");
+		}
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (g_dev[i].alloc_err && !g_dev[i].alloc_logged) {
-			g_dev[i].alloc_logged = 1;
+		if (LD(g_dev[i].alloc_err) && !LD(g_dev[i].alloc_logged)) {
+			ST(g_dev[i].alloc_logged, 1);
 			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
-			         (unsigned)g_dev[i].alloc_err);
+			         (unsigned)LD(g_dev[i].alloc_err));
 		}
 	/* Overlapped reads: the helper and its buffer exist only while they can
 	 * be used - made here (never in a transfer) for every device switched on
 	 * while the setting is on, and given back once either is switched off. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
-		const int wanted = (g_pipeline || g_offload) && g_live && d->enabled && d->buf &&
-		                   !d->unusable;
+		const int wanted = (LD(g_pipeline) || LD(g_offload)) && LD(g_live) && LD(d->enabled) &&
+		                   __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) && !LD(d->unusable);
 
-		if (wanted && !d->pipe_made && !d->pipe_failed) {
+		if (wanted && !d->pipe_made && !LD(d->pipe_failed)) {
 			int r = pipe_setup(d);
 
 			if (r < 0) {
-				d->pipe_failed = 1;
+				ST(d->pipe_failed, 1);
 				VM_KLOGW("stage: dev %d overlapped reads not set up (0x%08x) - reads as before",
 				         i, (unsigned)r);
 			} else {
 				VM_KLOGI("stage: dev %d overlapped reads ready (helper and copier, %u KiB buffer)",
 				         i, (unsigned)(PIPE_TAIL_SECTORS / 2));
 			}
+		} else if (wanted && d->pipe_made && !__atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE)) {
+			/* wanted again while a release waited for a request: still intact */
+			__atomic_store_n(&d->pipe_ready, 1, __ATOMIC_RELEASE);
 		} else if (!wanted && d->pipe_made) {
-			pipe_retire(d);
-			VM_KLOGI("stage: dev %d overlapped reads off - helper, copier and buffer released", i);
+			if (pipe_retire(d))
+				VM_KLOGI("stage: dev %d overlapped reads off - helper, copier and buffer "
+				         "released", i);
 		}
 	}
 	/* The verify buffer is only allocated once verify mode is first turned on. */
-	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
-		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, STAGE_BYTES, &g_shadow_uid,
-		                  &g_shadow);
+	if (LD(g_verify) && !__atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) && g_shadow_uid < 0 &&
+	    !LD(g_shadow_failed)) {
+		void *b = NULL;
+		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, STAGE_BYTES, &g_shadow_uid, &b);
 
 		if (r < 0) {
-			g_shadow = NULL;
 			g_shadow_uid = -1;
-			g_shadow_failed = 1;    /* do not retry every second */
+			ST(g_shadow_failed, 1);   /* do not retry every second */
 			VM_KLOGW("stage: verify buffer not allocated (0x%08x)", (unsigned)r);
+		} else {
+			__atomic_store_n(&g_shadow, b, __ATOMIC_RELEASE);   /* published last */
 		}
 	}
 }
 
 void vm_stage_bytes(int dev, uint64_t *rd, uint64_t *wr)
 {
-	*rd = g_dev[dev].all_rd;
-	*wr = g_dev[dev].all_wr;
+	*rd = LD(g_dev[dev].all_rd);
+	*wr = LD(g_dev[dev].all_wr);
 }
 
 int vm_stage_verify_ready(void)
 {
-	return g_shadow != NULL;
+	return __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) != NULL;
+}
+
+/* A release of the helper waits for a request still in flight (see
+ * pipe_retire): the worker should come back soon. */
+int vm_stage_pending(void)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		if (LD(g_dev[i].pipe_made) && !__atomic_load_n(&g_dev[i].pipe_ready, __ATOMIC_ACQUIRE))
+			return 1;
+	return 0;
 }
 
 void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
@@ -1545,22 +1626,35 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const Dev *d = &g_dev[i];
 
-		out[i] = d->st;
-		out[i].read_mib = (uint32_t)(d->rd_bytes >> 20);
-		out[i].write_mib = (uint32_t)(d->wr_bytes >> 20);
+		out[i].reads = LD(d->st.reads);
+		out[i].writes = LD(d->st.writes);
+		out[i].passthru = LD(d->st.passthru);
+		out[i].errors = LD(d->st.errors);
+		out[i].verified = LD(d->st.verified);
+		out[i].mismatches = LD(d->st.mismatches);
+		out[i].read_mib = (uint32_t)(LD(d->rd_bytes) >> 20);
+		out[i].write_mib = (uint32_t)(LD(d->wr_bytes) >> 20);
 		out[i].time_ms = 0;           /* no longer measured (VmDevState is frozen) */
 		out[i].max_ms = 0;
 		out[i].status = !plugin_active ? VM_ST_UNAVAIL :
-		                !d->enabled    ? VM_ST_OFF :
-		                !d->buf        ? VM_ST_NO_BUFFER :
-		                d->fallback    ? VM_ST_FALLBACK : VM_ST_ACTIVE;
+		                !LD(d->enabled) ? VM_ST_OFF :
+		                !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) ? VM_ST_NO_BUFFER :
+		                LD(d->fallback) ? VM_ST_FALLBACK : VM_ST_ACTIVE;
 	}
 }
 
 void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
 {
-	for (int i = 0; i < VM_DEV_COUNT; i++)
-		out[i] = g_dev[i].tm;
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const VmTimingDev *t = &g_dev[i].tm;
+
+		out[i].rd_sectors = LD(t->rd_sectors);
+		out[i].rd_io_us = LD(t->rd_io_us);
+		out[i].rd_copy_us = LD(t->rd_copy_us);
+		out[i].wr_sectors = LD(t->wr_sectors);
+		out[i].wr_io_us = LD(t->wr_io_us);
+		out[i].wr_copy_us = LD(t->wr_copy_us);
+	}
 }
 
 /* Memory card slow mode (Sony's own throttle: it sleeps after every memory

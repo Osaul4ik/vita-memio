@@ -53,12 +53,14 @@ arm: test_fastcopy.c vm_test.h ../kernel/fastcopy.h
 	  printf '%s %s: ' $$m $$o; qemu-arm ./test_fastcopy_arm; \
 	done; done
 
-# The storage path with its helper threads under ThreadSanitizer (see tsan.supp).
+# The storage path with its helper threads under ThreadSanitizer, with no
+# suppressions: every word shared between threads is read and written with
+# atomics (kernel/stage.c, LD/ST/ADD), so any report is a real race.
 .PHONY: tsan
-tsan: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/stage.h tsan.supp
+tsan: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/stage.h
 	$(CC) -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter -fsanitize=thread -Istubs -pthread \
 	  -o test_stage_tsan test_stage.c fakes.c
-	TSAN_OPTIONS="suppressions=$(CURDIR)/tsan.supp halt_on_error=1" ./test_stage_tsan
+	TSAN_OPTIONS="halt_on_error=1" ./test_stage_tsan
 
 clean:
 	rm -f test_fastcopy_arm test_stage_tsan $(TESTS) sim_app sim_main.o

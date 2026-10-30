@@ -61,7 +61,7 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	(void)part;
 	int call = __sync_add_and_fetch(&io_calls, 1);
 
-	last_buf = buf;
+	__atomic_store_n(&last_buf, buf, __ATOMIC_RELAXED);   /* threads in the stress test */
 	if (call <= (int)(sizeof(io_bufs) / sizeof(io_bufs[0]))) {
 		io_bufs[call - 1] = buf;
 		io_ns[call - 1] = n;
@@ -1533,7 +1533,8 @@ static void test_offload(void)
 			CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + (size_t)n * 512);
 			CHECK(sems_empty(d));
 		}
-		CHECK(g_offload_state == 1 && fake_meminfo_calls == 1);   /* checked once */
+		/* every mapping checked on its own (no request relies on another's) */
+		CHECK(g_offload_state == 1 && fake_meminfo_calls == fake_usermap_calls);
 		CHECK(g_off_reads >= 6 && d->st.errors == 0);           /* the six of 64 KiB and up */
 		CHECK(g_cp_game_kib > 0 && g_cp_core_kib[0] > 0);       /* noted by the copier */
 		if (pipeline)
@@ -1717,6 +1718,153 @@ static void test_offload(void)
 	free(u);
 }
 
+/* pipe_retire does not wait for ever: a request stuck in the driver (here:
+ * `busy` held) leaves the helper, copier and buffer untouched for a later
+ * tick, the worker goes on, vm_stage_pending says so; wanted again
+ * meanwhile, they are simply used again; once the request is done they go. */
+static void test_pipe_retire_bounded(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+	uint32_t t0;
+
+	reset();
+	pipe_on(&s, 0);
+	CHECK(d->pipe_made && d->pipe_ready && !vm_stage_pending());
+	d->busy = 1;                                    /* a request that does not end */
+	s.pipeline = VM_PIPE_OFF;
+	vm_stage_apply(&s);
+	t0 = (uint32_t)time(NULL);
+	vm_stage_worker_tick();                         /* returns: does not hang */
+	CHECK((uint32_t)time(NULL) - t0 <= 2);
+	CHECK(d->pipe_made && !d->pipe_ready && fake_threads_live == 2 && vm_stage_pending());
+	vm_stage_worker_tick();                         /* still stuck: still kept */
+	CHECK(d->pipe_made && vm_stage_pending());
+	s.pipeline = VM_PIPE_AUTO;                      /* wanted again meanwhile */
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && d->pipe_ready && !vm_stage_pending() && fake_threads_live == 2);
+	d->busy = 0;
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0 && io_calls == 2);
+	s.pipeline = VM_PIPE_OFF;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();                         /* nothing in flight: released */
+	CHECK(!d->pipe_made && fake_threads_live == 0 && fake_semas_live == 0 && !vm_stage_pending());
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
+/* Everything at once, for ThreadSanitizer: two readers on the memory card
+ * (one of them mostly finds the buffer busy and goes stock), one on the
+ * internal storage, the settings switched on the fly (overlapped reads, copy
+ * on the system core, statistics, small transfers), the worker making and
+ * releasing the helpers, and the counters read meanwhile. The data is always
+ * the disk's and nothing fails. */
+static volatile int g_stress_stop, g_stress_bad;
+static void *g_null_ctx;                          /* the fake SD context's first word */
+
+typedef struct { int dev; int seed; int reads; } StressArg;
+
+static void *stress_reader(void *argp)
+{
+	StressArg *a = argp;
+	uint8_t *u = malloc(1100 * 512);
+	uint32_t x = (uint32_t)a->seed * 2654435761u + 1;
+
+	while (!__atomic_load_n(&g_stress_stop, __ATOMIC_ACQUIRE)) {
+		uint32_t n, at;
+		int r;
+
+		x = x * 1103515245u + 12345u;
+		n = 64 + (x >> 8) % 1037;
+		at = (x >> 4) % (DISK_SECTORS - n);
+		if (a->dev == M)
+			r = stage_xfer(&g_dev[M], 0, fake_io, REF_RD, 0, NULL, at, u, n);
+		else
+			r = stage_xfer(&g_dev[a->dev], 0, fake_io, REF_RD, 0, &g_null_ctx, at, u, n);
+		if (r != 0 || memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) != 0)
+			__atomic_fetch_add(&g_stress_bad, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&a->reads, 1, __ATOMIC_RELAXED);
+	}
+	free(u);
+	return NULL;
+}
+
+static void *stress_stats(void *argp)
+{
+	(void)argp;
+	while (!__atomic_load_n(&g_stress_stop, __ATOMIC_ACQUIRE)) {
+		VmDevState st[VM_DEV_COUNT];
+		VmTimingDev tm[VM_DEV_COUNT];
+		uint64_t rdb, wrb;
+
+		vm_stage_get(st, 1);
+		vm_stage_timing(tm);
+		vm_stage_bytes(M, &rdb, &wrb);
+		(void)vm_stage_verify_ready();
+		(void)vm_stage_pending();
+		sched_yield();
+	}
+	return NULL;
+}
+
+static void test_stress_concurrency(void)
+{
+	VmSettings s;
+	Dev *in = &g_dev[VM_DEV_INTERNAL];
+	uint8_t *staging2 = calloc(1, STAGE_BYTES);
+	pthread_t th[4];
+	StressArg args[3] = { { M, 1, 0 }, { M, 2, 0 }, { VM_DEV_INTERNAL, 3, 0 } };
+	int saved_live = g_live;
+
+	reset();
+	fake_pid = 0x42;                                /* a game: copy on the system core too */
+	in->buf = staging2;
+	in->enabled = 1;
+	in->fallback = 0;
+	in->uid = -1;
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.internal = 1;
+	s.pipeline = VM_PIPE_AUTO;
+	vm_stage_apply(&s);
+	g_live = 1;
+	vm_stage_worker_tick();
+	g_stress_stop = g_stress_bad = 0;
+	for (int i = 0; i < 3; i++)
+		CHECK(pthread_create(&th[i], NULL, stress_reader, &args[i]) == 0);
+	CHECK(pthread_create(&th[3], NULL, stress_stats, NULL) == 0);
+	/* switch until every reader has read a fair amount (slow under TSan) */
+	for (int i = 0; i < 240 || ((__atomic_load_n(&args[0].reads, __ATOMIC_RELAXED) < 40 ||
+	                             __atomic_load_n(&args[1].reads, __ATOMIC_RELAXED) < 40 ||
+	                             __atomic_load_n(&args[2].reads, __ATOMIC_RELAXED) < 40) &&
+	                            i < 20000); i++) {
+		s.pipeline = i % 3;                         /* off, auto, fixed */
+		s.offload = (i / 3) % 3 == 1 ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF;
+		s.stats = (i / 9) & 1;
+		s.small = (i / 18) & 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		sched_yield();
+	}
+	__atomic_store_n(&g_stress_stop, 1, __ATOMIC_RELEASE);
+	for (int i = 0; i < 4; i++)
+		pthread_join(th[i], NULL);
+	CHECK(g_stress_bad == 0);
+	CHECK(args[0].reads > 20 && args[1].reads > 20 && args[2].reads > 20);
+	CHECK(g_dev[M].st.errors == 0 && in->st.errors == 0 && !g_dev[M].fallback && !in->fallback);
+	CHECK(g_dev[M].st.passthru > 0);                /* the two card readers met */
+	vm_stage_fini();
+	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+	in->unusable = 0;
+	in->buf = NULL;
+	g_live = saved_live;
+	free(staging2);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1731,6 +1879,8 @@ int main(void)
 	RUN(test_plan_quick_check);
 	RUN(test_copy_diagnostics);
 	RUN(test_offload);
+	RUN(test_pipe_retire_bounded);
+	RUN(test_stress_concurrency);
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);

@@ -375,11 +375,12 @@ static int worker(SceSize args, void *argp)
 		const int running = g_disabled == VM_DIS_NONE || g_disabled == VM_DIS_HOOKS;
 		SceUInt wait = 0;
 
-		if (running && (!g_guard_done || g_vm_settings.hud != VM_HUD_OFF))
+		if (running && (!g_guard_done ||
+		                __atomic_load_n(&g_vm_settings.hud, __ATOMIC_RELAXED) != VM_HUD_OFF))
 			wait = VM_WORKER_FAST_US;
-		else if (vm_settings_pending())
-			wait = VM_WORKER_RETRY_US;
-		else if (g_vm_settings.log && running)
+		else if (vm_settings_pending() || vm_stage_pending())
+			wait = VM_WORKER_RETRY_US;      /* a save or a helper release to retry */
+		else if (__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED) && running)
 			wait = VM_WORKER_LOG_US;
 		if (g_wake >= 0)
 			ksceKernelWaitSema(g_wake, 1, wait ? &wait : NULL);   /* 0: until woken */
@@ -392,7 +393,7 @@ static int worker(SceSize args, void *argp)
 		 * still be changed there (to switch off what broke the last start),
 		 * so they are saved, and the log follows its switch. */
 		vm_settings_flush();
-		vm_klog_set_enabled(g_vm_settings.log);   /* follows the switch */
+		vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));   /* follows the switch */
 		/* Safe mode stays until it is reset, and an unknown firmware never
 		 * set the guard: nothing else runs in those two. */
 		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE)
@@ -529,7 +530,7 @@ int module_start(SceSize argc, const void *args)
 	/* The settings next: they say whether anything is logged at all. Applying
 	 * them before the hooks exist only sets the per-device switches. */
 	vm_settings_init();
-	vm_klog_set_enabled(g_vm_settings.log);
+	vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));
 	if (!firmware_known()) {
 		g_disabled = VM_DIS_FIRMWARE;
 		VM_KLOGW("kernel v%s: storage driver 0x%08x not supported - nothing installed",

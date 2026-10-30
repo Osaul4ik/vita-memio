@@ -324,7 +324,7 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
 	uintptr_t a = (uintptr_t)user_buf, page = a & ~(uintptr_t)4095;
 
 	(void)pid; (void)name;
-	fake_usermap_calls++;
+	__atomic_fetch_add(&fake_usermap_calls, 1, __ATOMIC_RELAXED);
 	if (fake_usermap_err && permission >= 0 && permission < 32 &&
 	    (fake_usermap_deny & (1 << permission)))
 		return fake_usermap_err;
@@ -332,13 +332,13 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
 		*kernel_page = fake_usermap_elsewhere;
 		*kernel_offset = 0;
 		*kernel_size = size;
-		fake_usermap_live++;
+		__atomic_fetch_add(&fake_usermap_live, 1, __ATOMIC_RELAXED);
 		return 0x4000 + permission;
 	}
 	*kernel_page = (void *)page;
 	*kernel_offset = (SceUInt32)(a - page);
 	*kernel_size = (SceSize)((a - page + size + 4095) & ~(uintptr_t)4095);
-	fake_usermap_live++;
+	__atomic_fetch_add(&fake_usermap_live, 1, __ATOMIC_RELAXED);
 	return 0x4000 + permission;
 }
 
@@ -351,7 +351,7 @@ void *fake_usermap_elsewhere;
 int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 {
 	(void)uid;
-	fake_meminfo_calls++;
+	__atomic_fetch_add(&fake_meminfo_calls, 1, __ATOMIC_RELAXED);
 	if (fake_meminfo_err)
 		return fake_meminfo_err;
 	if (info->size != sizeof(*info))
@@ -363,7 +363,7 @@ int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 int ksceKernelUserUnmap(SceUID uid)
 {
 	(void)uid;
-	fake_usermap_live--;
+	__atomic_fetch_sub(&fake_usermap_live, 1, __ATOMIC_RELAXED);
 	return 0;
 }
 
@@ -394,7 +394,7 @@ int fake_memtype_above = 0xD000;
 
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 {
-	fake_memtype_calls++;
+	__atomic_fetch_add(&fake_memtype_calls, 1, __ATOMIC_RELAXED);
 	if (fake_memtype_from && (const char *)addr >= (const char *)fake_memtype_from &&
 	    (!fake_memtype_to || (const char *)addr < (const char *)fake_memtype_to))
 		return fake_memtype_above;

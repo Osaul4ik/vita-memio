@@ -24,6 +24,8 @@ void vm_stage_worker_tick(void);
 void vm_stage_on_problem(void (*fn)(void));
 
 int  vm_stage_verify_ready(void);
+/* 1 while releasing a device's helper waits for a request still in flight. */
+int  vm_stage_pending(void);
 
 /* Memory card slow mode: 1 on, 0 off, -1 unknown. Read only. */
 int  vm_stage_memcard_slow(void);

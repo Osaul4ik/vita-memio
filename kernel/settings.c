@@ -15,6 +15,7 @@
  * worker (main.c) does the file write from its own kernel thread.
  */
 #include <psp2kern/kernel/sysclib.h>   /* memcpy/memset                        */
+#include <psp2kern/kernel/threadmgr.h> /* ksceKernelDelayThread (the set lock)  */
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
 
@@ -34,8 +35,14 @@ typedef struct VmSettingsFile {
 } VmSettingsFile;
 
 volatile VmSettings g_vm_settings;
+/* Set (release) after a changed value is in g_vm_settings, taken (acquire)
+ * by the worker before it reads them: a value is never saved stale with the
+ * flag already cleared. */
 static volatile int g_dirty = 0;
-static int          g_save_fails = 0;   /* retry a failed save a few times */
+static volatile int g_save_fails = 0;   /* retry a failed save a few times */
+/* One vm_settings_set at a time (they run in callers' syscalls): each applies
+ * a snapshot that has every earlier change in it. */
+static volatile int g_set_lock;
 
 static const int32_t g_defaults[VM_KEY_COUNT] = {
 	VM_DEF_SD2VITA, VM_DEF_INTERNAL, VM_DEF_VERIFY, VM_DEF_HUD, VM_DEF_HUD_STYLE,
@@ -116,33 +123,38 @@ int vm_settings_set(int key, int value)
 	int32_t *f = vm_setting_field((VmSettings *)&g_vm_settings, key);
 	if (!f)
 		return VM_ERR_ARG;
-	if (*f != value) {
+	while (__sync_lock_test_and_set(&g_set_lock, 1))
+		ksceKernelDelayThread(100);
+	if (__atomic_load_n(f, __ATOMIC_RELAXED) != value) {
 		VmSettings now;
 
-		*(volatile int32_t *)f = value;
-		g_save_fails = 0;
-		g_dirty = 1;
+		__atomic_store_n(f, value, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_save_fails, 0, __ATOMIC_RELAXED);
 		vm_settings_copy(&now);
 		vm_stage_apply(&now);              /* takes effect on the next transfer */
+		__atomic_store_n(&g_dirty, 1, __ATOMIC_RELEASE);   /* after the value */
 	}
+	__sync_lock_release(&g_set_lock);
 	return VM_OK;
 }
 
 void vm_settings_copy(VmSettings *out)
 {
-	memcpy(out, (const void *)&g_vm_settings, sizeof(*out));
+	/* word by word, each read whole (a key may be set meanwhile) */
+	for (int k = 0; k < VM_KEY_COUNT; k++)
+		*vm_setting_field(out, k) =
+			__atomic_load_n(vm_setting_field((VmSettings *)&g_vm_settings, k), __ATOMIC_RELAXED);
 }
 
 int vm_settings_pending(void)
 {
-	return g_dirty;
+	return __atomic_load_n(&g_dirty, __ATOMIC_ACQUIRE);
 }
 
 void vm_settings_flush(void)
 {
-	if (!g_dirty)
+	if (!__atomic_exchange_n(&g_dirty, 0, __ATOMIC_ACQ_REL))
 		return;
-	g_dirty = 0;
 
 	VmSettingsFile f;
 	VmSettings s;
@@ -171,14 +183,14 @@ void vm_settings_flush(void)
 			w = r;      /* the .tmp copy stays and is loaded at the next boot */
 	}
 	if (w != (int)sizeof(f)) {
-		if (g_save_fails++ < 5) {
+		if (__atomic_fetch_add(&g_save_fails, 1, __ATOMIC_RELAXED) < 5) {
 			VM_KLOGW("settings: save failed (0x%08x), will retry", (unsigned)w);
-			g_dirty = 1;
+			__atomic_store_n(&g_dirty, 1, __ATOMIC_RELEASE);
 		} else {
 			VM_KLOGE("settings: save failed (0x%08x), giving up until the next change",
 			         (unsigned)w);
 		}
 		return;
 	}
-	g_save_fails = 0;
+	__atomic_store_n(&g_save_fails, 0, __ATOMIC_RELAXED);
 }

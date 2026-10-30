@@ -145,6 +145,36 @@ static int wr(const uint8_t *u, uint32_t sector, uint32_t n, tai_hook_ref_t rd_r
 	return stage_xfer(&g_dev[M], 1, fake_io, REF_WR, rd_ref, NULL, sector, (void *)u, n);
 }
 
+/* div_by (the planner's division by a multiplication) is exact. */
+static void test_div_by(void)
+{
+	static const uint64_t ds[] = { 1, 2, 3, 7, 1000, 4096, 4200, 11100, 30999, 65536, 1000003,
+	                               0x7FFFFFFFu, 0xFFFFFFFFu, 0x100000000ull };
+	uint32_t r = 12345;
+
+	CHECK(div_by(5, 0, recip(0)) == ~(uint64_t)0);
+	for (unsigned j = 0; j < sizeof(ds) / sizeof(ds[0]); j++) {
+		const uint64_t d = ds[j];
+		const uint32_t inv = recip(d);
+		static const uint64_t xs[] = { 0, 1, 4095, 4096, 4097, 0xFFFFFFFEu, 0xFFFFFFFFu,
+		                               0x100000000ull, 0x123456789ull };
+
+		for (unsigned i = 0; i < sizeof(xs) / sizeof(xs[0]); i++)
+			CHECK(div_by(xs[i], d, inv) == xs[i] / d);
+		for (int i = 0; i < 200000; i++) {
+			uint64_t x;
+
+			r = r * 1664525u + 1013904223u;
+			x = r;
+			CHECK(div_by(x, d, inv) == x / d);
+			x = (x / d) * d;                    /* exact multiples and their neighbours */
+			CHECK(div_by(x, d, inv) == x / d);
+			if (x)
+				CHECK(div_by(x - 1, d, inv) == (x - 1) / d);
+		}
+	}
+}
+
 static void test_small_goes_stock(void)
 {
 	uint8_t *u = user_buf(8);
@@ -882,7 +912,7 @@ static void test_pipeline_reads(void)
 				uint32_t t[PIPE_MAX_PARTS];
 
 				for (uint32_t x = PIPE_MIN_TAIL; x <= n / kk; x++)
-					if (pipe_fit(n, (int)kk, x, io, cp, cmd, t) && kk * cmd + x * cp < best)
+					if (pipe_fit(n, (int)kk, x, io, cp, recip(cp), cmd, t) && kk * cmd + x * cp < best)
 						best = kk * cmd + x * cp;
 			}
 			CHECK(cost == best);
@@ -1869,6 +1899,7 @@ int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
 
+	RUN(test_div_by);
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);

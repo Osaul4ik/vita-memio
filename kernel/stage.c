@@ -429,6 +429,28 @@ static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      *
  * cheap and 2 parts win; with it, a third command buys a much shorter last
  * part. Odd parts go to the second buffer (PIPE_TAIL_SECTORS), even ones to
  * the staging buffer. Returns k (0: no plan, read in one piece). */
+/* x / d without a division on the hot path: the Cortex-A9 has no divide
+ * instruction, so a 64-bit division is a library call of a few hundred cycles.
+ * inv = recip(d) is worked out once per plan; then q = x * inv >> 32 is at
+ * most 2 below x / d (x < 2^32) and is corrected up to the exact quotient.
+ * Anything out of that range divides as before. */
+static inline uint32_t recip(uint64_t d)
+{
+	return d && d <= 0xFFFFFFFFu ? 0xFFFFFFFFu / (uint32_t)d : 0;
+}
+
+static inline uint64_t div_by(uint64_t x, uint64_t d, uint32_t inv)
+{
+	uint32_t q;
+
+	if (!inv || x > 0xFFFFFFFFu)
+		return d ? x / d : ~(uint64_t)0;
+	q = (uint32_t)(((uint64_t)(uint32_t)x * inv) >> 32);
+	while (((uint64_t)q + 1) * d <= x)
+		q++;
+	return q;
+}
+
 static uint32_t pipe_cap(int i)
 {
 	return (i & 1) ? PIPE_TAIL_SECTORS : STAGE_SECTORS;
@@ -437,8 +459,8 @@ static uint32_t pipe_cap(int i)
 /* The parts for k and a last part of x sectors, each earlier one as large as
  * it may be; s[0] takes the rest. 1 if that covers n exactly with every part
  * within its bounds. */
-static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint64_t cmd,
-                    uint32_t s[PIPE_MAX_PARTS])
+static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint32_t inv,
+                    uint64_t cmd, uint32_t s[PIPE_MAX_PARTS])
 {
 	uint32_t sum = x;
 
@@ -446,7 +468,7 @@ static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uin
 		return 0;
 	s[k - 1] = x;
 	for (int i = k - 2; i >= 0; i--) {
-		uint64_t m = (cmd + (uint64_t)s[i + 1] * io) / cp;
+		uint64_t m = div_by(cmd + (uint64_t)s[i + 1] * io, cp, inv);
 
 		if (m > pipe_cap(i))
 			m = pipe_cap(i);
@@ -469,10 +491,13 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
                            uint32_t out[PIPE_MAX_PARTS])
 {
 	uint64_t best = ~(uint64_t)0;
+	const uint32_t inv = recip(cp);
 	int best_k = 0;
 
 	for (int k = kmin; k <= kmax; k++) {
-		uint32_t s[PIPE_MAX_PARTS], lo = PIPE_MIN_TAIL, hi = n / k, x = 0;
+		/* k is 2 or 3: constant divisors, which the compiler multiplies */
+		uint32_t s[PIPE_MAX_PARTS], lo = PIPE_MIN_TAIL, hi = k == 2 ? n / 2 : k == 3 ? n / 3 : n / k;
+		uint32_t x = 0;
 
 		/* The earlier parts only grow with x, so the x that fit form one
 		 * range: below it the parts do not reach n, above it they leave
@@ -480,7 +505,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 		while (lo <= hi) {
 			uint32_t mid = lo + (hi - lo) / 2, t[PIPE_MAX_PARTS], sum = mid;
 
-			if (pipe_fit(n, k, mid, io, cp, cmd, s)) {
+			if (pipe_fit(n, k, mid, io, cp, inv, cmd, s)) {
 				x = mid;
 				hi = mid - 1;
 				continue;
@@ -491,7 +516,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 			}
 			t[k - 1] = mid;
 			for (int i = k - 2; i >= 1; i--) {
-				uint64_t m = (cmd + (uint64_t)t[i + 1] * io) / cp;
+				uint64_t m = div_by(cmd + (uint64_t)t[i + 1] * io, cp, inv);
 
 				t[i] = (uint32_t)(m > pipe_cap(i) ? pipe_cap(i) : m);
 				sum += t[i];
@@ -501,7 +526,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 			else
 				lo = mid + 1;               /* the parts do not reach n */
 		}
-		if (x && pipe_fit(n, k, x, io, cp, cmd, s)) {
+		if (x && pipe_fit(n, k, x, io, cp, inv, cmd, s)) {
 			uint64_t cost = (uint64_t)k * cmd + (uint64_t)x * cp;
 
 			if (cost < best) {
@@ -568,7 +593,9 @@ static void pipe_learn_io(Dev *d, uint32_t head_us, uint32_t a, uint32_t tail_us
 
 	if (a <= t + 16 || head_us <= tail_us)
 		return;
-	r = (uint64_t)(head_us - tail_us) * 1000u / (a - t);
+	/* a 32-bit division (much cheaper than a 64-bit one) whenever it fits */
+	r = head_us - tail_us < 4294967u ? (uint64_t)((head_us - tail_us) * 1000u / (a - t))
+	                                 : (uint64_t)(head_us - tail_us) * 1000u / (a - t);
 	if ((uint64_t)tail_us * 1000u <= r * t)
 		cmd = 0;
 	else
@@ -594,7 +621,7 @@ static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t de
 
 	if (!sectors)
 		return;
-	ns = (uint32_t)((uint64_t)us * 1000u / sectors);
+	ns = us < 4294967u ? us * 1000u / sectors : (uint32_t)((uint64_t)us * 1000u / sectors);
 	{
 		uint32_t e = __atomic_load_n(est, __ATOMIC_RELAXED);
 
@@ -1160,11 +1187,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int offload = LD(g_offload);
 	/* copy on the system core: a game's read (a system thread's buffers
 	 * need no mapping, and copy where they are), as the setting says */
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
 	                (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
-	                ksceKernelGetProcessId() != KERNEL_PID;
-	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
+	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
 
@@ -1202,8 +1229,6 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				k = 1;
 				sz[0] = n;
 			}
-			if (!om.pid)
-				om.pid = ksceKernelGetProcessId();
 			ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &om,
 			                  &done, &mine_n);
 			own += mine_n;

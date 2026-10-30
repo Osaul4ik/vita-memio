@@ -86,6 +86,19 @@ int ksceKernelDeleteSema(SceUID id)
 	return 0;
 }
 
+int fake_sema_count(int id)
+{
+	FakeSema *s = sema_of(id);
+	int c;
+
+	if (!s)
+		return -1;
+	pthread_mutex_lock(&s->m);
+	c = s->count;
+	pthread_mutex_unlock(&s->m);
+	return c;
+}
+
 int ksceKernelSignalSema(SceUID id, int signal)
 {
 	FakeSema *s = sema_of(id);

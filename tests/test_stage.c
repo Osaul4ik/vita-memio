@@ -85,7 +85,7 @@ static void reset(void)
 	memset(d, 0, sizeof(*d));
 	d->port = -1;
 	d->uid = -1;
-	d->uid2 = d->th = d->sem_go = d->sem_done = -1;
+	d->uid2 = d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->buf = staging;
 	d->enabled = 1;
 	g_verify = 0;
@@ -744,7 +744,7 @@ static void test_pipeline_reads(void)
 
 	reset();
 	pipe_on(&s, 0);
-	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 2);
+	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 3);
 	CHECK(fake_thread_last_mask == PIPE_CPU_SYSTEM);   /* on the system core */
 	g_pipeline = VM_PIPE_FIXED;                     /* chunk by chunk (Auto streams) */
 	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76 */
@@ -768,11 +768,33 @@ static void test_pipeline_reads(void)
 	}
 	CHECK(d->st.errors == 0 && !d->fallback);
 
-	/* 64 KiB and up are split, smaller is not */
+	/* Fixed: 64 KiB and up are split, smaller is not */
+	g_pipeline = VM_PIPE_FIXED;
 	io_calls = 0;
 	CHECK(rd(u, 0, 127) == 0 && io_calls == 1);
 	io_calls = 0;
 	CHECK(rd(u, 0, 128) == 0 && io_calls == 2);
+	/* Auto: only when the plan beats one piece. With the built-in costs a
+	 * plain 64 KiB read stays whole (an extra command costs more than the
+	 * short copy it hides). With GPU-safe and a card command of 0.42 ms (as
+	 * measured on the SD2Vita) 32 KiB is split, 16 KiB not; at 0.6 ms not. */
+	g_pipeline = VM_PIPE_AUTO;
+	d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 600000;
+	io_calls = 0;
+	CHECK(rd(u, 0, 128) == 0 && io_calls == 1 && memcmp(u, disk, 128 * 512) == 0);
+	g_gpu_safe = 1;
+	g_dcache_clean = fake_clean;
+	d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 420000;
+	io_calls = 0;
+	CHECK(rd(u, 0, 64) == 0 && io_calls == 2 && memcmp(u, disk, 64 * 512) == 0);
+	d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 420000;
+	io_calls = 0;
+	CHECK(rd(u, 0, 32) == 0 && io_calls == 1 && memcmp(u, disk, 32 * 512) == 0);
+	d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 600000;
+	io_calls = 0;
+	CHECK(rd(u, 0, 64) == 0 && io_calls == 1 && memcmp(u, disk, 64 * 512) == 0);
+	g_gpu_safe = 0;
+	g_dcache_clean = NULL;
 
 	/* the plan: with the console's costs, 2 parts without GPU-safe and 3 with */
 	{
@@ -792,7 +814,15 @@ static void test_pipeline_reads(void)
 		CHECK(pipe_plan(d, 512, 0, sz) == 2 && sz[0] == 256 && sz[1] == 256);
 		d->est_io_ns = d->est_cp_ns[0] = d->est_cp_ns[1] = d->est_cmd_ns = 0;   /* nothing learnt: defaults */
 		CHECK(pipe_plan(d, 512, 0, sz) == 2 && pipe_plan(d, 512, 1, sz) == 3);
-		CHECK(pipe_plan(d, 128, 0, sz) >= 2 && pipe_plan(d, 256, 1, sz) >= 2);
+		CHECK(pipe_plan(d, 256, 0, sz) >= 2 && pipe_plan(d, 256, 1, sz) >= 2);
+		CHECK(pipe_plan(d, 64, 1, sz) == 0 && pipe_plan(d, 128, 0, sz) == 0);
+		d->est_cmd_ns = 420000;
+		CHECK(pipe_plan(d, 64, 1, sz) == 2 && sz[0] + sz[1] == 64);
+		d->est_cmd_ns = 0;
+		CHECK(pipe_plan(d, 32, 1, sz) == 0 && pipe_plan(d, 64, 0, sz) == 0);
+		g_pipeline = VM_PIPE_FIXED;                    /* Fixed: always its parts */
+		CHECK(pipe_plan(d, 128, 0, sz) == 2);
+		g_pipeline = VM_PIPE_AUTO;
 		/* the two copy costs are kept apart: switching GPU-safe needs no relearning */
 		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
 		d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100;
@@ -970,7 +1000,17 @@ static void test_pipeline_errors(void)
 		CHECK(rd(u, 0, 512) == 0);
 		CHECK(memcmp(u, disk, 512 * 512) == 0);
 		CHECK(d->st.errors == 1 && d->fallback);
-		CHECK(last_buf == u);                    /* finished stock */
+		/* finished stock from the failed part on; the parts before it,
+		 * already copied, stay (the first part's error: all of it) */
+		{
+			uint32_t before = 0;
+
+			for (int i = 0; i + 1 < fail_at_call; i++)
+				before += io_ns[i];
+			CHECK(last_buf == u + (size_t)before * 512);
+			CHECK(io_calls == fail_at_call + 1);
+			CHECK(fake_sema_count(d->sem_free) == 0 && fake_sema_count(d->sem_done) == 0);
+		}
 		CHECK(g_pipe_reads == 0);
 		vm_stage_fini();
 		CHECK(fake_threads_live == 0);
@@ -1537,6 +1577,9 @@ static void test_stream_errors(void)
 		CHECK(d->st.errors == 1 && d->fallback && g_stream_reads == 0);
 		CHECK(last_buf == u + (size_t)before * 512);   /* the rest, stock */
 		CHECK((uint32_t)io_calls == at + 1);
+		/* nothing owed to the next job: the semaphores are empty */
+		CHECK(fake_sema_count(d->sem_free) == 0 && fake_sema_count(d->sem_done) == 0);
+		CHECK(fake_sema_count(d->sem_go) == 0);
 		vm_stage_fini();
 		CHECK(fake_threads_live == 0);
 	}
@@ -1574,6 +1617,54 @@ static void test_stream_only_auto(void)
 	free(u);
 }
 
+/* The helper reads the parts back to back on its own: one job (one go),
+ * and with each buffer already handed back it reads every part 1 .. k-1 in
+ * order, into the right buffer, without the caller asking for each. Before,
+ * every part was a separate job the caller posted after waking up. */
+static void test_helper_runs_ahead(void)
+{
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+	Stream st;
+	uint32_t sector = 100, k;
+
+	reset();
+	pipe_on(&s, 1);
+	CHECK(stream_plan_costs(2048, 25000, 11100, 600000, &st) && st.k >= 4);
+	k = st.k;
+	d->job_io = fake_io;
+	d->job_ref = REF_RD;
+	d->job_part = NULL;
+	d->job_plan = &st;
+	d->job_sector = sector + stream_part(&st, 0);
+	d->job_fail = 0;
+	__sync_synchronize();
+	/* two buffers handed back up front, one more after each part (at most
+	 * two ahead, as the caller does), never a separate request per part */
+	{
+		uint32_t given = 0;
+
+		while (given < 2 && given + 2 < k)
+			CHECK(ksceKernelSignalSema(d->sem_free, 1) == 0 && ++given);
+		CHECK(ksceKernelSignalSema(d->sem_go, 1) == 0);
+		for (uint32_t i = 1; i < k; i++) {
+			CHECK(ksceKernelWaitSema(d->sem_done, 1, NULL) == 0);
+			if (given + 2 < k)
+				CHECK(ksceKernelSignalSema(d->sem_free, 1) == 0 && ++given);
+		}
+		CHECK(given == k - 2);
+	}
+	CHECK((uint32_t)io_calls == k - 1 && d->job_fail == 0);
+	for (uint32_t i = 1; i < k; i++) {
+		CHECK(io_ns[i - 1] == stream_part(&st, i));
+		CHECK(io_bufs[i - 1] == (stream_buf(&st, i) ? d->buf2 : staging));
+	}
+	CHECK(d->job_big_n == STAGE_SECTORS && d->job_io_us == 2500 * (k - 1));
+	vm_stage_fini();
+	g_live = saved_live;
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1588,6 +1679,7 @@ int main(void)
 	RUN(test_stream_reads);
 	RUN(test_stream_errors);
 	RUN(test_stream_only_auto);
+	RUN(test_helper_runs_ahead);
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);

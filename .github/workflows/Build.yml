@@ -8,18 +8,8 @@ name: build
 on:
   push:
     branches: [main, master, Dev_lifecycle]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      release:
-        description: 'Publish a release with this tag (e.g. v0.6.0); empty: build only'
-        required: false
-        default: ''
-      remove:
-        description: 'Delete this release and its tag first (e.g. one published by mistake); empty: none'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -87,36 +77,3 @@ jobs:
             build/SHA256SUMS
             include/OFL-Terminus.txt
           if-no-files-found: error
-
-  # A pushed tag v*, or a manual run with "release" set, publishes a GitHub
-  # release with the built files once the tests, cppcheck and the build have
-  # passed (a manual run creates the tag on the commit it built). Its text is
-  # .github/release-notes/<tag>.md.
-  release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
-    needs: [test, cppcheck, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: vita-memio-${{ github.sha }}
-          path: dist
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release || github.ref_name }}
-          REMOVE: ${{ inputs.remove }}
-        run: |
-          if [ -n "$REMOVE" ]; then
-            gh release delete "$REMOVE" --yes --cleanup-tag
-          fi
-          notes=".github/release-notes/${TAG}.md"
-          test -f "$notes" || { echo "missing $notes"; exit 1; }
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \
-            --notes-file "$notes" \
-            dist/build/vitamemio_kernel.skprx dist/build/vitamemio.suprx \
-            dist/build/vitamemio_tester.vpk dist/build/SHA256SUMS

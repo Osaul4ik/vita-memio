@@ -1,0 +1,105 @@
+name: release
+
+# Publishes a GitHub release, started by hand only (Actions > release > Run
+# workflow). It runs the same checks as the build workflow - host tests,
+# cppcheck and the VitaSDK build - and only then creates the tag on the commit
+# it built and the release with the built files. The release text is
+# .github/release-notes/<tag>.md, which must exist on that commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Tag of the new release (e.g. v0.6.0)'
+        required: true
+      remove:
+        description: 'Delete this release and its tag first (e.g. one published by mistake); empty: none'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tests
+        run: make test
+      - name: Fast copy, ARM code under qemu
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-arm-linux-gnueabihf qemu-user
+          make -C tests arm
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cppcheck
+      - name: cppcheck
+        run: make cppcheck
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes exist
+        run: test -f ".github/release-notes/${{ inputs.release }}.md"
+      - name: Build (pinned VitaSDK image)
+        run: make build
+      - name: Check the files exist and are not empty
+        run: |
+          for f in build/vitamemio_kernel.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do
+            test -s "$f" || { echo "missing or empty: $f"; exit 1; }
+          done
+      - name: SHA-256 sums
+        run: |
+          cd build
+          sha256sum vitamemio_kernel.skprx vitamemio.suprx vitamemio_tester.vpk | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: |
+            build/vitamemio_kernel.skprx
+            build/vitamemio.suprx
+            build/vitamemio_tester.vpk
+            build/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    needs: [test, cppcheck, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+          REMOVE: ${{ inputs.remove }}
+        run: |
+          if [ -n "$REMOVE" ]; then
+            gh release delete "$REMOVE" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \
+            --notes-file ".github/release-notes/${TAG}.md" \
+            dist/vitamemio_kernel.skprx dist/vitamemio.suprx \
+            dist/vitamemio_tester.vpk dist/SHA256SUMS

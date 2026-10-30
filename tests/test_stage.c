@@ -51,7 +51,6 @@ static uint8_t disk[DISK_SECTORS * 512];
 static uint8_t *staging;
 
 static int io_calls, fail_at_call, corrupt_staged;
-static int io_here, io_elsewhere;         /* card reads by the caller's thread or not */
 static void *last_buf;
 static void *io_bufs[16];                 /* the buffer and size of each call */
 static uint32_t io_ns[16];
@@ -63,10 +62,6 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	int call = __sync_add_and_fetch(&io_calls, 1);
 
 	__atomic_store_n(&last_buf, buf, __ATOMIC_RELAXED);   /* threads in the stress test */
-	if (pthread_equal(pthread_self(), test_thread))
-		__atomic_fetch_add(&io_here, 1, __ATOMIC_RELAXED);
-	else
-		__atomic_fetch_add(&io_elsewhere, 1, __ATOMIC_RELAXED);
 	if (call <= (int)(sizeof(io_bufs) / sizeof(io_bufs[0]))) {
 		io_bufs[call - 1] = buf;
 		io_ns[call - 1] = n;
@@ -1689,25 +1684,16 @@ static void test_offload(void)
 			memset(u, 0, n * 512);
 			copies_here = copies_elsewhere = 0;
 			clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
-			io_here = io_elsewhere = 0;
 			CHECK(rd(u, at, n) == 0);
 			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
 			if (n >= OFFLOAD_MIN_SECTORS) {
 				CHECK(copies_here == 0 && copies_elsewhere >= 1);    /* all on the copier */
-				/* a chunk in one part is read by the caller itself; in
-				 * parts, by the helper */
-				if (!pipeline)
-					CHECK(io_here >= 1 && io_elsewhere == 0);
-				else if (n <= 256 && io_here + io_elsewhere == 1)
-					CHECK(io_here == 1);
-				else if (n == 256 && io_here + io_elsewhere > 1)
-					CHECK(io_here == 0);
 				CHECK(fake_usermap_calls == maps + 1 && fake_usermap_live == 0);   /* one, unmapped */
 				/* mapped and unmapped by the copier, not the caller's thread */
 				CHECK(!pthread_equal(fake_usermap_thread, test_thread));
 				CHECK(!pthread_equal(fake_unmap_thread, test_thread));
 			} else {
-				/* under 16 KiB: copied by the caller, nothing mapped */
+				/* under 64 KiB: copied by the caller, nothing mapped */
 				CHECK(copies_here >= 1 && copies_elsewhere == 0);
 				CHECK(fake_usermap_calls == maps);
 			}
@@ -1781,21 +1767,6 @@ static void test_offload(void)
 	vm_stage_apply(&s);
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 0, 256) == 0 && copies_elsewhere == 0 && fake_usermap_calls == 3);
-	vm_stage_fini();
-
-	/* a chunk in one part that the caller's own card read fails: unmapped,
-	 * read again the standard way, the right data */
-	reset();
-	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 0);
-	fake_pid = 0x42;
-	memset(u, 0, 64 * 512);
-	io_calls = 0;
-	fail_at_call = 1;
-	CHECK(rd(u, 5, 64) == 0 && memcmp(u, disk + 5 * 512, 64 * 512) == 0);
-	fail_at_call = 0;
-	CHECK(io_calls >= 2 && fake_usermap_calls == 1 && fake_usermap_live == 0);
-	CHECK(sems_empty(d) && d->busy == 0 && g_off_reads == 0);
-	CHECK(d->st.errors == 1 && d->fallback == 1);   /* as any failed read */
 	vm_stage_fini();
 
 	/* the mapping fails: the caller copies; tried again on the next request */

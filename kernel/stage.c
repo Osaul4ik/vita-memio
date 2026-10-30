@@ -1122,36 +1122,11 @@ static void off_map(OffMap *m)
 	m->kern = kern;
 }
 
-/* A chunk in one part, read by the caller's thread itself while the copier
- * maps the buffer: no helper to wake for a read the caller waits for anyway
- * (the card's call costs the CPU little). Its result as the helper gives it,
- * then sem_done, for whoever copies (the copier, or this thread). */
-static void offload_self_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part,
-                              uint32_t sector, uint32_t n)
-{
-	const int timed = LD(g_stats) || LD(g_pipeline) == VM_PIPE_AUTO;   /* as the helper */
-	uint32_t t0 = timed ? ksceKernelGetSystemTimeLow() : 0, us;
-	int r = io(ref, part, sector, d->buf, n);
-
-	us = timed ? ksceKernelGetSystemTimeLow() - t0 : 0;
-	if (r < 0) {
-		d->job_ret = r;
-		__atomic_store_n(&d->job_fail, 1, __ATOMIC_RELEASE);
-	} else {
-		d->job_io_us = us;
-		d->job_last_us = us;
-		d->job_big_us = us;
-		d->job_big_n = n;
-	}
-	__sync_synchronize();                 /* the part before the signal */
-	ksceKernelSignalSema(d->sem_done, 1);
-}
-
 /* One chunk (plan sz/k) of a game's read, copied on the system core: the
- * helper reads every part (one part: this thread, see offload_self_read),
- * the copier maps the buffer (while part 0 is being read) and copies each
- * part into it, and this thread waits. Without a usable mapping this thread
- * copies, as pipe_run does. *done: as pipe_run. */
+ * helper reads every part, the copier copies each into the mapped buffer,
+ * and this thread only maps the buffer (while part 0 is being read) and
+ * waits. Without a usable mapping this thread copies, as pipe_run does.
+ * *done: as pipe_run. */
 static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                        uint8_t *p, const uint32_t *sz, uint32_t k, int clean, int stats,
                        OffMap *m, int last, uint32_t *done, uint32_t *own)
@@ -1173,12 +1148,10 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	d->job_ret = 0;
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
 	__sync_synchronize();
-	const int self = k == 1, cj = !m->tried || m->uid >= 0;
+	ksceKernelSignalSema(d->sem_go, 1);       /* the card starts at once */
 	int nomap = 1;
 
-	if (!self)
-		ksceKernelSignalSema(d->sem_go, 1);   /* the card starts at once */
-	if (cj) {
+	if (!m->tried || m->uid >= 0) {
 		/* the copier maps the buffer (first chunk), copies, and on the
 		 * last chunk unmaps it: this thread only waits */
 		d->cjob_map = m;
@@ -1187,10 +1160,6 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 		d->cjob_last = last;
 		__sync_synchronize();
 		ksceKernelSignalSema(d->sem_cgo, 1);
-	}
-	if (self)
-		offload_self_read(d, io, ref, part, sector, sz[0]);
-	if (cj) {
 		ksceKernelWaitSema(d->sem_fin, 1, NULL);
 		__sync_synchronize();
 		nomap = d->cjob_nomap;

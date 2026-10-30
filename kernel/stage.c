@@ -41,13 +41,14 @@
  *     before the call returns, so the graphics chip (which reads memory, not
  *     the CPU cache) sees exactly what the stock path gives it;
  *   - overlapped reads (experimental, off by default): a faster read of at
- *     least PIPE_MIN_SECTORS is split in two. The caller's thread reads the
- *     head into the staging buffer, hands the tail to the device's helper
- *     thread (read into a second buffer) and copies the head while the card
- *     reads the tail; then it copies the tail. The split is sized so the head's
- *     copy takes about as long as the tail's read. Nothing is read ahead or
- *     kept: both parts belong to the request, which is complete when it
- *     returns. Any error finishes the whole part stock, as above;
+ *     least PIPE_MIN_SECTORS is split into two or three parts (pipe_plan).
+ *     The caller's thread reads the first into the staging buffer; each next
+ *     part is read by the device's helper thread (on the system core) while
+ *     the caller copies the one before. The parts are sized from the
+ *     measured costs so each copy is hidden behind the next read. Nothing is
+ *     read ahead or kept: every part belongs to the request, which is
+ *     complete when it returns. Any error finishes the whole part stock, as
+ *     above;
  *   - verify mode re-reads every faster transfer the stock way and compares;
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
@@ -125,6 +126,7 @@ typedef struct Dev {
 	SceUID        uid2, th, sem_go, sem_done;
 	void         *buf2;
 	io_fn         job_io;
+	void         *job_buf;
 	tai_hook_ref_t job_ref;
 	void         *job_part;
 	uint32_t      job_sector, job_n, job_us;
@@ -307,31 +309,117 @@ static int take(Dev *d, int mine, uint32_t nsec)
 #define PIPE_DEF_IO_NS     25000u
 #define PIPE_DEF_CP_NS     4200u
 #define PIPE_DEF_CPCL_NS   11100u
+#define PIPE_DEF_CMD_NS    600000u    /* a card read's fixed cost            */
+#define PIPE_MAX_PARTS     3
 
 #define PIPE_CPU_SYSTEM    0x00080000 /* SCE_KERNEL_CPU_MASK_SYSTEM: core 3      */
 
 static volatile int g_pipeline;              /* the setting                    */
 static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
+static volatile uint32_t g_pipe_reads3;      /* ... of them in three parts      */
 
-/* The tail of an n-sector read: its card read (a fixed cost per command plus a
- * cost per sector) should take about as long as the head's copy, so neither
- * side waits:  (n - t) * cp = cmd + t * io,  t = (n * cp - cmd) / (io + cp).
- * A shorter tail leaves less to copy at the end. */
-static uint32_t pipe_tail(const Dev *d, uint32_t n, int clean)
+/* How to split an n-sector read: into 2 or 3 parts, read one after another,
+ * part i+1 (by the helper) while part i is copied (by the caller). A part's
+ * copy is hidden when it takes no longer than the next part's read:
+ *     s[i] * cp <= cmd + s[i+1] * io
+ * Then the whole read takes  k * cmd + n * io + s[k-1] * cp : every command,
+ * every sector, and the last part's copy. For each k the smallest last part
+ * that still lets the earlier parts (each as large as it may be) cover n is
+ * found, and the k with the lower cost wins. Without GPU-safe the copy is
+ * cheap and 2 parts win; with it, a third command buys a much shorter last
+ * part. Odd parts go to the second buffer (PIPE_TAIL_SECTORS), even ones to
+ * the staging buffer. Returns k (0: no plan, read in one piece). */
+static uint32_t pipe_cap(int i)
 {
-	uint32_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
-	uint32_t cp = d->est_cp_ns ? d->est_cp_ns : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
-	uint64_t work = (uint64_t)n * cp;
-	uint32_t t = work > d->est_cmd_ns
-	             ? (uint32_t)((work - d->est_cmd_ns) / ((uint64_t)io + cp)) : 0;
+	return (i & 1) ? PIPE_TAIL_SECTORS : STAGE_SECTORS;
+}
 
-	if (t < PIPE_MIN_TAIL)
-		t = PIPE_MIN_TAIL;
-	if (t > n / 2)
-		t = n / 2;
-	if (t > PIPE_TAIL_SECTORS)
-		t = PIPE_TAIL_SECTORS;
-	return t;
+/* The parts for k and a last part of x sectors, each earlier one as large as
+ * it may be; s[0] takes the rest. 1 if that covers n exactly with every part
+ * within its bounds. */
+static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint64_t cmd,
+                    uint32_t s[PIPE_MAX_PARTS])
+{
+	uint32_t sum = x;
+
+	if (x > pipe_cap(k - 1))
+		return 0;
+	s[k - 1] = x;
+	for (int i = k - 2; i >= 0; i--) {
+		uint64_t m = (cmd + (uint64_t)s[i + 1] * io) / cp;
+
+		if (m > pipe_cap(i))
+			m = pipe_cap(i);
+		if (i == 0) {
+			if (sum >= n || n - sum > m || n - sum < PIPE_MIN_TAIL)
+				return 0;
+			s[0] = n - sum;
+			return 1;
+		}
+		if (m < PIPE_MIN_TAIL)
+			return 0;
+		s[i] = (uint32_t)m;
+		sum += s[i];
+	}
+	return 0;
+}
+
+static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+{
+	const uint64_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
+	const uint64_t cp = d->est_cp_ns ? d->est_cp_ns : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
+	const uint64_t cmd = d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS;
+	uint64_t best = ~(uint64_t)0;
+	int best_k = 0;
+
+	for (int k = 2; k <= PIPE_MAX_PARTS; k++) {
+		uint32_t s[PIPE_MAX_PARTS], lo = PIPE_MIN_TAIL, hi = n / k, x = 0;
+
+		/* The earlier parts only grow with x, so the x that fit form one
+		 * range: below it the parts do not reach n, above it they leave
+		 * part 0 too little. Find its start. */
+		while (lo <= hi) {
+			uint32_t mid = lo + (hi - lo) / 2, t[PIPE_MAX_PARTS], sum = mid;
+
+			if (pipe_fit(n, k, mid, io, cp, cmd, s)) {
+				x = mid;
+				hi = mid - 1;
+				continue;
+			}
+			if (mid > pipe_cap(k - 1)) {
+				hi = mid - 1;
+				continue;
+			}
+			t[k - 1] = mid;
+			for (int i = k - 2; i >= 1; i--) {
+				uint64_t m = (cmd + (uint64_t)t[i + 1] * io) / cp;
+
+				t[i] = (uint32_t)(m > pipe_cap(i) ? pipe_cap(i) : m);
+				sum += t[i];
+			}
+			if (sum + PIPE_MIN_TAIL > n)
+				hi = mid - 1;               /* part 0 left too small */
+			else
+				lo = mid + 1;               /* the parts do not reach n */
+		}
+		if (x && pipe_fit(n, k, x, io, cp, cmd, s)) {
+			uint64_t cost = (uint64_t)k * cmd + (uint64_t)x * cp;
+
+			if (cost < best) {
+				best = cost;
+				best_k = k;
+				for (int i = 0; i < k; i++)
+					out[i] = s[i];
+			}
+		}
+	}
+	if (!best_k && n >= 2 * PIPE_MIN_TAIL) {
+		/* no part can be hidden (a copy slower than the card): halves */
+		out[1] = n / 2 > PIPE_TAIL_SECTORS ? PIPE_TAIL_SECTORS : n / 2;
+		out[0] = n - out[1];
+		best_k = out[0] <= STAGE_SECTORS ? 2 : 0;
+	}
+	return best_k;
 }
 
 /* From one split read, the card's cost per sector and per command: the head
@@ -353,6 +441,8 @@ static void pipe_learn_io(Dev *d, uint32_t head_us, uint32_t a, uint32_t tail_us
 		return;                             /* not a plausible pair */
 	if (!d->est_io_ns)
 		d->est_io_ns = PIPE_DEF_IO_NS;
+	if (!d->est_cmd_ns)
+		d->est_cmd_ns = PIPE_DEF_CMD_NS;
 	d->est_io_ns = d->est_io_ns - (d->est_io_ns >> 3) + (uint32_t)(r >> 3);
 	d->est_cmd_ns = d->est_cmd_ns - (d->est_cmd_ns >> 3) + (uint32_t)(cmd >> 3);
 }
@@ -386,7 +476,7 @@ static int pipe_helper(SceSize args, void *argp)
 		__sync_synchronize();               /* the job before its fields */
 		if (g_stats)
 			t0 = ksceKernelGetSystemTimeLow();
-		d->job_ret = d->job_io(d->job_ref, d->job_part, d->job_sector, d->buf2, d->job_n);
+		d->job_ret = d->job_io(d->job_ref, d->job_part, d->job_sector, d->job_buf, d->job_n);
 		d->job_us = g_stats ? ksceKernelGetSystemTimeLow() - t0 : 0;
 		__sync_synchronize();               /* the result before the signal */
 		ksceKernelSignalSema(d->sem_done, 1);
@@ -504,6 +594,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int stats = g_stats;
 	const int clean = !write && g_gpu_safe && g_dcache_clean;
 	const int pipe = !write && !verify && g_pipeline && d->pipe_ready;
+	uint32_t sz[PIPE_MAX_PARTS];
+	int k = 0;
 
 	if (clean)
 		g_gpu_cleaned_kib += left / 2;
@@ -528,46 +620,69 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				d->tm.wr_copy_us += t2 - t1;
 				d->tm.wr_io_us += t3 - t2;
 			}
-		} else if (pipe && n >= PIPE_MIN_SECTORS) {
-			/* Overlapped: the head here, the tail on the helper meanwhile. */
-			const uint32_t t = pipe_tail(d, n, clean), a = n - t;
-			uint32_t t4 = 0, t5 = 0;
+		} else if (pipe && n >= PIPE_MIN_SECTORS && (k = pipe_plan(d, n, clean, sz)) >= 2) {
+			/* Overlapped: part 0 here, then each next part on the helper
+			 * while this thread copies the one before. Odd parts land in
+			 * the second buffer, even ones in the staging buffer, which is
+			 * free again once part 0 (or 2) is copied. */
+			uint32_t off = 0, io_us = 0, cp_us = 0, cp0_us = 0, last_us = 0;
+			void *cur = d->buf;
+			int i;
 
-			ret = io(ref, part, sector, d->buf, a);
+			ret = io(ref, part, sector, d->buf, sz[0]);
 			if (ret < 0)
 				break;
 			if (stats)
 				t2 = ksceKernelGetSystemTimeLow();
-			d->job_io = io;
-			d->job_ref = ref;
-			d->job_part = part;
-			d->job_sector = sector + a;
-			d->job_n = t;
-			__sync_synchronize();
-			ksceKernelSignalSema(d->sem_go, 1);
-			vm_copy_from_stage(p, d->buf, a * 512);
-			if (clean)
-				clean_out(p, a * 512);
-			if (stats)
-				t3 = ksceKernelGetSystemTimeLow();
-			ksceKernelWaitSema(d->sem_done, 1, NULL);
-			__sync_synchronize();
-			ret = d->job_ret;
+			for (i = 1; i <= k; i++) {
+				void *next = (i & 1) ? d->buf2 : d->buf;
+				uint32_t c0 = 0;
+
+				if (i < k) {
+					d->job_io = io;
+					d->job_ref = ref;
+					d->job_part = part;
+					d->job_sector = sector + off + sz[i - 1];
+					d->job_n = sz[i];
+					d->job_buf = next;
+					__sync_synchronize();
+					ksceKernelSignalSema(d->sem_go, 1);
+				}
+				if (stats)
+					c0 = ksceKernelGetSystemTimeLow();
+				vm_copy_from_stage(p + off * 512, cur, sz[i - 1] * 512);
+				if (clean)
+					clean_out(p + off * 512, sz[i - 1] * 512);
+				if (stats) {
+					uint32_t c = ksceKernelGetSystemTimeLow() - c0;
+
+					cp_us += c;
+					if (i == 1)
+						cp0_us = c;
+				}
+				off += sz[i - 1];
+				if (i < k) {
+					ksceKernelWaitSema(d->sem_done, 1, NULL);
+					__sync_synchronize();
+					ret = d->job_ret;
+					if (ret < 0)
+						break;          /* the whole part is read again stock */
+					io_us += d->job_us;
+					last_us = d->job_us;
+					cur = next;
+				}
+			}
 			if (ret < 0)
-				break;                  /* the whole part is read again stock */
-			if (stats)
-				t4 = ksceKernelGetSystemTimeLow();
-			vm_copy_from_stage(p + a * 512, d->buf2, t * 512);
-			if (clean)
-				clean_out(p + a * 512, t * 512);
+				break;
 			g_pipe_reads++;
+			if (k > 2)
+				g_pipe_reads3++;
 			if (stats) {
-				t5 = ksceKernelGetSystemTimeLow();
 				d->tm.rd_sectors += n;
-				d->tm.rd_io_us += (t2 - t1) + d->job_us;
-				d->tm.rd_copy_us += (t3 - t2) + (t5 - t4);
-				pipe_learn_io(d, t2 - t1, a, d->job_us, t);
-				pipe_learn(&d->est_cp_ns, t3 - t2, a,
+				d->tm.rd_io_us += (t2 - t1) + io_us;
+				d->tm.rd_copy_us += cp_us;
+				pipe_learn_io(d, t2 - t1, sz[0], last_us, sz[k - 1]);
+				pipe_learn(&d->est_cp_ns, cp0_us, sz[0],
 				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 			}
 		} else {
@@ -807,8 +922,8 @@ void vm_stage_worker_tick(void)
 		last_cleaned = g_gpu_cleaned_kib;
 		last_nc = g_nc_stock_kib;
 		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB, "
-		         "overlapped reads %u", (unsigned)last_nc, (unsigned)last_cleaned,
-		         (unsigned)g_pipe_reads);
+		         "overlapped reads %u (%u in 3 parts)", (unsigned)last_nc, (unsigned)last_cleaned,
+		         (unsigned)g_pipe_reads, (unsigned)g_pipe_reads3);
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)

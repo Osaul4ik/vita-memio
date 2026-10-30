@@ -93,7 +93,7 @@ static void reset(void)
 	g_dcache_clean = NULL;
 	g_gpu_cleaned_kib = g_nc_stock_kib = 0;
 	g_pipeline = 0;
-	g_pipe_reads = 0;
+	g_pipe_reads = g_pipe_reads3 = 0;
 	memset(io_bufs, 0, sizeof(io_bufs));
 	memset(io_ns, 0, sizeof(io_ns));
 	g_count_all = 1;
@@ -764,27 +764,64 @@ static void test_pipeline_reads(void)
 	io_calls = 0;
 	CHECK(rd(u, 0, 128) == 0 && io_calls == 2);
 
-	/* the split: head copy time = tail read time, within its bounds, and the
-	 * costs are learnt as a running average */
+	/* the plan: with the console's costs, 2 parts without GPU-safe and 3 with */
 	{
-		uint32_t e = 0;
+		uint32_t e = 0, sz[PIPE_MAX_PARTS];
 
-		d->est_io_ns = 25000; d->est_cp_ns = 4200;
-		CHECK(pipe_tail(d, 512, 0) == 512u * 4200 / 29200);       /* 73 */
-		d->est_cp_ns = 11100;
-		CHECK(pipe_tail(d, 512, 1) == 512u * 11100 / 36100);      /* 157 */
-		d->est_cp_ns = 100000;                                     /* dearer than the read */
-		CHECK(pipe_tail(d, 512, 0) == 256);                        /* at most half */
-		d->est_cp_ns = 1;
-		CHECK(pipe_tail(d, 512, 0) == PIPE_MIN_TAIL);
-		d->est_io_ns = d->est_cp_ns = 0;                           /* nothing learnt yet */
-		CHECK(pipe_tail(d, 512, 0) == 512u * PIPE_DEF_CP_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CP_NS));
-		CHECK(pipe_tail(d, 512, 1) == 512u * PIPE_DEF_CPCL_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CPCL_NS));
-		/* with a cost per command the tail is shorter: (512*4200 - 600000) / 29200 */
 		d->est_io_ns = 25000; d->est_cp_ns = 4200; d->est_cmd_ns = 600000;
-		CHECK(pipe_tail(d, 512, 0) == (512u * 4200 - 600000) / 29200);   /* 53 */
-		d->est_cmd_ns = 5000000;                                   /* more than the copy */
-		CHECK(pipe_tail(d, 512, 0) == PIPE_MIN_TAIL);
+		CHECK(pipe_plan(d, 512, 0, sz) == 2);
+		CHECK(sz[0] + sz[1] == 512 && sz[1] >= 50 && sz[1] <= 56);        /* ~54 */
+		d->est_cp_ns = 11100;
+		CHECK(pipe_plan(d, 512, 1, sz) == 3);
+		CHECK(sz[0] + sz[1] + sz[2] == 512 && sz[2] >= 30 && sz[2] <= 40); /* ~35 */
+		CHECK(sz[1] <= PIPE_TAIL_SECTORS);
+		d->est_cmd_ns = 5000000;                       /* commands dear: fewer parts */
+		CHECK(pipe_plan(d, 512, 1, sz) == 2);
+		d->est_cmd_ns = 600000;
+		d->est_cp_ns = 40000;                          /* a copy slower than the card */
+		CHECK(pipe_plan(d, 512, 0, sz) == 2 && sz[0] == 256 && sz[1] == 256);
+		d->est_io_ns = d->est_cp_ns = d->est_cmd_ns = 0;   /* nothing learnt: defaults */
+		CHECK(pipe_plan(d, 512, 0, sz) == 2 && pipe_plan(d, 512, 1, sz) == 3);
+		CHECK(pipe_plan(d, 128, 0, sz) >= 2 && pipe_plan(d, 256, 1, sz) >= 2);
+
+		/* any costs and sizes: the parts cover n, fit their buffers, every
+		 * part's copy is hidden by the next read, and no x or k is cheaper */
+		int planned = 0, three = 0;
+
+		for (uint32_t r = 1; r < 3000; r++) {
+			uint32_t n = 128 + (r * 7919u) % 385, k;
+			uint64_t io = 5000 + (r * 104729u) % 40000, cp = 1000 + (r * 1299709u) % 30000;
+			uint64_t cmd = (r * 15485863u) % 2000000, best = ~(uint64_t)0, sum = 0, cost;
+
+			d->est_io_ns = (uint32_t)io; d->est_cp_ns = (uint32_t)cp; d->est_cmd_ns = (uint32_t)(cmd ? cmd : 1);
+			cmd = d->est_cmd_ns;
+			k = (uint32_t)pipe_plan(d, n, 0, sz);
+			CHECK(k == 0 || k == 2 || k == 3);
+			if (!k)
+				continue;
+			for (uint32_t i = 0; i < k; i++) {
+				sum += sz[i];
+				CHECK(sz[i] >= PIPE_MIN_TAIL && sz[i] <= pipe_cap((int)i));
+			}
+			CHECK(sum == n);
+			if (cp >= io)                               /* the halves fallback */
+				continue;
+			for (uint32_t i = 0; i + 1 < k; i++)
+				CHECK(sz[i] * cp <= cmd + sz[i + 1] * io);
+			cost = k * cmd + sz[k - 1] * cp;
+			planned++;
+			three += k == 3;
+			for (uint32_t kk = 2; kk <= PIPE_MAX_PARTS; kk++) {
+				uint32_t t[PIPE_MAX_PARTS];
+
+				for (uint32_t x = PIPE_MIN_TAIL; x <= n / kk; x++)
+					if (pipe_fit(n, (int)kk, x, io, cp, cmd, t) && kk * cmd + x * cp < best)
+						best = kk * cmd + x * cp;
+			}
+			CHECK(cost == best);
+		}
+		CHECK(planned > 1000 && three > 100 && planned - three > 100);   /* both kinds seen */
+		d->est_io_ns = 25000; d->est_cp_ns = 4200; d->est_cmd_ns = 600000;
 		/* learning both from one split read: 25 us per sector, 600 us per command */
 		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
 		for (int k = 0; k < 60; k++)
@@ -834,10 +871,29 @@ static void test_pipeline_gpu_safe(void)
 	pipe_on(&s, 1);
 	g_dcache_clean = fake_clean;
 	clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
-	CHECK(rd(u, 0, 512) == 0 && io_calls == 2);
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 3);              /* three parts */
+	CHECK(io_bufs[0] == staging && io_bufs[1] == g_dev[M].buf2 && io_bufs[2] == staging);
+	CHECK(io_ns[0] + io_ns[1] + io_ns[2] == 512 && io_ns[2] < io_ns[1]);
 	CHECK(memcmp(u, disk, 512 * 512) == 0);
-	CHECK(clean_calls == 2);
+	CHECK(clean_calls == 3);
 	CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + 512 * 512);
+	CHECK(g_pipe_reads == 1 && g_pipe_reads3 == 1);
+
+	/* many three-part reads: always the disk's data */
+	{
+		uint8_t *v = user_buf(1100);
+
+		g_stats = 0;                            /* the fake timings teach nothing useful */
+		for (int k = 0; k < 150; k++) {
+			uint32_t n = 128 + (uint32_t)(k * 53) % 900, at = (uint32_t)(k * 97) % 2000;
+
+			memset(v, 0, n * 512);
+			CHECK(rd(v, at, n) == 0);
+			CHECK(memcmp(v, disk + (size_t)at * 512, (size_t)n * 512) == 0);
+		}
+		CHECK(g_pipe_reads3 > 100 && g_dev[M].st.errors == 0);
+		free(v);
+	}
 	vm_stage_fini();
 	g_live = saved_live;
 	free(u);
@@ -852,10 +908,15 @@ static void test_pipeline_errors(void)
 	Dev *d = &g_dev[M];
 	int saved_live = g_live;
 
-	for (int at = 1; at <= 2; at++) {          /* 1: the head, 2: the tail */
+	for (int at = 1; at <= 5; at++) {          /* 2 parts: 1, 2; 3 parts: 3..5 */
 		reset();
-		pipe_on(&s, 0);
-		fail_at_call = at;
+		pipe_on(&s, at > 2);
+		if (at > 2) {
+			g_dcache_clean = fake_clean;
+			fail_at_call = at - 2;
+		}
+		if (at <= 2)
+			fail_at_call = at;
 		memset(u, 0, 512 * 512);
 		CHECK(rd(u, 0, 512) == 0);
 		CHECK(memcmp(u, disk, 512 * 512) == 0);

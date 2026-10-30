@@ -18,11 +18,15 @@ typedef struct VitaEnv {
 	void     (*on_progress)(const BenchProgress *p);
 	int      (*poll_cancel)(void);               /* 1 when the user asked to stop */
 	SceUID     nc_uid;                           /* the NC reads' memory block    */
+	SceUID     mem_uid[3];                       /* by BENCH_MEM_*    */
 } VitaEnv;
 
 void vita_env_init(VitaEnv *v, int dev,
                    void (*on_progress)(const BenchProgress *p),
                    int (*poll_cancel)(void));
+
+/* stop the core meter's threads (started by the first test). */
+void vita_env_cores_stop(void);
 
 /* Create a folder and all its parents ("ux0:MemioTest/"). 0 when it exists after. */
 int vita_mkdirs(const char *dir);

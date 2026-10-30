@@ -17,9 +17,10 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"rnd write 4K", "rnd write 32K", "rnd write 128K", "rnd write 1M",
 	"files create", "files read", "files delete",
 	"NC read 1M", "NC read 128K",
+	"NCphy read 1M", "CDRAM read 1M",
 };
 
-typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R } Kind;
+typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R } Kind;
 
 #define SF_BYTES 4096u          /* one small file */
 
@@ -40,6 +41,8 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_SF_DELETE] = { K_SF, 0 },
 	[BM_NC_R_1M]   = { K_NC_R, MIB },
 	[BM_NC_R_128K] = { K_NC_R, 128 * 1024 },
+	[BM_NCPC_R_1M] = { K_NCPC_R, MIB },
+	[BM_CDRAM_R_1M] = { K_CDRAM_R, MIB },
 };
 
 const BenchProfile bench_profile_quick = {
@@ -100,6 +103,7 @@ typedef struct Ctx {
 	BenchResult       *res;
 	uint8_t           *buf;       /* 1 MiB I/O buffer                          */
 	uint8_t           *nc;        /* 1 MiB non-cacheable buffer, or NULL       */
+	uint8_t           *ncpc, *cdram;   /* the other kinds, or NULL */
 	uint32_t          *lat;       /* per-call times of the current metric, us  */
 	uint32_t           lat_cap;
 	char               file[BENCH_PATH_MAX + 16];
@@ -162,6 +166,19 @@ static void finish_metric(Ctx *c, BenchRun *r, int m, uint32_t n, uint64_t total
 	r->p99_us[m] = c->lat[(uint64_t)(n - 1) * 99 / 100];
 }
 
+/* the cores' busy time over one call (k0: before it). */
+static void core_note(const BenchEnv *e, BenchRun *r, int m, uint32_t io, int k_ok,
+                      const uint64_t k0[3])
+{
+	uint64_t k1[3];
+
+	if (!k_ok || e->core_busy_us(e->ctx, k1) != 0)
+		return;
+	for (int i = 0; i < 3; i++)
+		r->core_us[m][i] += k1[i] > k0[i] ? k1[i] - k0[i] : 0;
+	r->core_bytes[m] += io;
+}
+
 /* ---- the tests --------------------------------------------------------------- */
 
 static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
@@ -169,22 +186,25 @@ static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
 	const BenchEnv *e = c->env;
 	const int write = k_def[m].kind == K_SEQ_W;
 	const uint32_t io = k_def[m].io, S = c->cfg->profile->file_mib * MIB, n = S / io;
-	uint8_t *buf = k_def[m].kind == K_NC_R ? c->nc : c->buf;
+	uint8_t *buf = k_def[m].kind == K_NC_R ? c->nc : k_def[m].kind == K_NCPC_R ? c->ncpc
+	             : k_def[m].kind == K_CDRAM_R ? c->cdram : c->buf;
 	uint64_t total = 0;
 
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off = (uint64_t)i * io, t0, t1, c0;
-		int got;
+		uint64_t off = (uint64_t)i * io, t0, t1, c0, k0[3];
+		int got, k_ok;
 
 		if (is_cancelled(c))
 			return BR_CANCEL;
 		if (write)
 			tp_fill(buf, off, io);
+		k_ok = e->core_busy_us && e->core_busy_us(e->ctx, k0) == 0;
 		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, *h, buf, io, off)
 		            : e->pread(e->ctx, *h, buf, io, off);
 		t1 = e->now_us(e->ctx);
+		core_note(e, r, m, io, k_ok, k0);
 		if (e->cpu_us) {
 			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
 			r->cpu_bytes[m] += io;
@@ -227,8 +247,8 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 	if (!n || !slots)
 		return BR_OK;
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off, t0, t1, c0;
-		int got;
+		uint64_t off, t0, t1, c0, k0[3];
+		int got, k_ok;
 
 		if (is_cancelled(c))
 			return BR_CANCEL;
@@ -238,11 +258,13 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 		off = (uint64_t)(rng % slots) * io;
 		if (write)
 			tp_fill(c->buf, off, io);          /* the pattern, so the file stays valid */
+		k_ok = e->core_busy_us && e->core_busy_us(e->ctx, k0) == 0;
 		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, h, c->buf, io, off)
 		            : e->pread(e->ctx, h, c->buf, io, off);
 		t1 = e->now_us(e->ctx);
+		core_note(e, r, m, io, k_ok, k0);
 		if (e->cpu_us) {
 			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
 			r->cpu_bytes[m] += io;
@@ -438,6 +460,8 @@ static int do_run(Ctx *c, int round)
 		switch (k_def[m].kind) {
 		case K_SEQ_R: rc = run_seq(c, r, m, &h); break;
 		case K_NC_R:  rc = c->nc ? run_seq(c, r, m, &h) : BR_OK; break;
+		case K_NCPC_R: rc = c->ncpc ? run_seq(c, r, m, &h) : BR_OK; break;
+		case K_CDRAM_R: rc = c->cdram ? run_seq(c, r, m, &h) : BR_OK; break;
 		case K_RR:
 		case K_RW:    rc = run_rand(c, r, m, h); break;
 		default:      break;
@@ -514,6 +538,10 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 	}
 	if (env->nc_alloc && env->nc_free)
 		c.nc = env->nc_alloc(env->ctx, MIB);   /* none: the NC reads are skipped */
+	if (env->mem_alloc && env->mem_free) {
+		c.ncpc = env->mem_alloc(env->ctx, MIB, BENCH_MEM_NC_PHYCONT);
+		c.cdram = env->mem_alloc(env->ctx, MIB, BENCH_MEM_CDRAM);
+	}
 	if (env->mkdirs(env->ctx, cfg->dir) != 0) {
 		fail(&c, "cannot create the test folder");
 		rc = BR_FAIL;
@@ -539,6 +567,10 @@ out:
 	free(c.lat);
 	if (c.nc)
 		env->nc_free(env->ctx, c.nc);
+	if (c.ncpc)
+		env->mem_free(env->ctx, c.ncpc, BENCH_MEM_NC_PHYCONT);
+	if (c.cdram)
+		env->mem_free(env->ctx, c.cdram, BENCH_MEM_CDRAM);
 	if (rc == BR_CANCEL)
 		res->cancelled = 1;
 	return rc;
@@ -640,6 +672,24 @@ int bench_cpu_ms_per_mib(const BenchResult *res, int m, double *out)
 		if (res->runs[i].complete) {
 			us += res->runs[i].cpu_us[m];
 			bytes += res->runs[i].cpu_bytes[m];
+		}
+	if (!bytes)
+		return 0;
+	*out = (double)us / 1000.0 / ((double)bytes / (double)MIB);
+	return 1;
+}
+
+int bench_core_ms_per_mib(const BenchResult *res, int m, int core, double *out)
+{
+	uint64_t us = 0, bytes = 0;
+
+	*out = 0;
+	if (m < 0 || m >= BM_COUNT || core < 0 || core > 2)
+		return 0;
+	for (int i = 0; i < res->nruns; i++)
+		if (res->runs[i].complete) {
+			us += res->runs[i].core_us[m][core];
+			bytes += res->runs[i].core_bytes[m];
 		}
 	if (!bytes)
 		return 0;

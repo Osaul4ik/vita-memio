@@ -311,6 +311,7 @@ void fakes_tmpdir_remove(void)
  * mapping is the buffer itself (page = its 4 KiB page, offset inside it),
  * or fails with fake_usermap_err for the permissions in fake_usermap_deny. */
 int fake_pid = 0x10005;
+pthread_t fake_usermap_thread, fake_unmap_thread;   /* which thread mapped / unmapped last */
 int fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
 SceUID ksceKernelGetProcessId(void)
 {
@@ -324,6 +325,7 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
 	uintptr_t a = (uintptr_t)user_buf, page = a & ~(uintptr_t)4095;
 
 	(void)pid; (void)name;
+	__atomic_store_n(&fake_usermap_thread, pthread_self(), __ATOMIC_RELAXED);
 	__atomic_fetch_add(&fake_usermap_calls, 1, __ATOMIC_RELAXED);
 	if (fake_usermap_err && permission >= 0 && permission < 32 &&
 	    (fake_usermap_deny & (1 << permission)))
@@ -363,6 +365,7 @@ int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 int ksceKernelUserUnmap(SceUID uid)
 {
 	(void)uid;
+	__atomic_store_n(&fake_unmap_thread, pthread_self(), __ATOMIC_RELAXED);
 	__atomic_fetch_sub(&fake_usermap_live, 1, __ATOMIC_RELAXED);
 	return 0;
 }

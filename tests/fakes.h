@@ -27,3 +27,6 @@ extern int fake_memtype_above;        /* ... the memory type is this one        
 const char *fakes_tmpdir_new(void);
 void fakes_tmpdir_remove(void);
 void fakes_reset(void);
+
+#include <pthread.h>
+extern pthread_t fake_usermap_thread, fake_unmap_thread;

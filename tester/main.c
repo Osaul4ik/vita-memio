@@ -321,6 +321,7 @@ static void run_test(void)
 	memset(&g_res, 0, sizeof(g_res));
 	rc = bench_run(&venv.env, &cfg, &g_res);
 	(void)rc;
+	vita_env_cores_stop();                /* the core meter's threads */
 
 	/* Wait until the back button is released, so it does not close the next screen. */
 	while (ui_back_down())

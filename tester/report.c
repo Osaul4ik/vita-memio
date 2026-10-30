@@ -268,7 +268,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		/* What the reads and writes cost the thread that asks for them (a
 		 * game's own thread): with the copy on the system core it is lower,
 		 * however long the call itself takes. */
-		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_SEQ_W_1M };
+		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_NCPC_R_1M,
+		                          BM_CDRAM_R_1M, BM_SEQ_W_1M };
 		double v;
 		int any = 0;
 
@@ -282,6 +283,25 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 			any = 1;
 			report_fmt1(a, sizeof(a), v);
 			put(&o, "  %-15s %s\n", bench_metric_name[cm[i]], a);
+		}
+		if (any)
+			put(&o, "\n");
+		/* how busy each core really was during the calls */
+		any = 0;
+		for (unsigned i = 0; i < sizeof(cm) / sizeof(cm[0]); i++) {
+			char a[3][16];
+			int ok = 1;
+
+			for (int k = 0; k < 3; k++) {
+				ok &= bench_core_ms_per_mib(res, cm[i], k, &v);
+				report_fmt1(a[k], sizeof(a[k]), v);
+			}
+			if (!ok)
+				continue;
+			if (!any)
+				put(&o, "busy time of cores 0/1/2 during the calls, ms per MiB:\n");
+			any = 1;
+			put(&o, "  %-15s %s / %s / %s\n", bench_metric_name[cm[i]], a[0], a[1], a[2]);
 		}
 		if (any)
 			put(&o, "\n");

@@ -20,6 +20,97 @@ static uint64_t v_now_us(void *ctx)
 	return sceKernelGetProcessTimeWide();
 }
 
+/* ---- the core meter ----------------------------------------------
+ * One counting thread per game core (0-2) at the lowest priority: it runs only
+ * when nothing else wants that core. Its rate when the core is free is
+ * measured once (300 ms); later, the time a core was busy = time passed - its
+ * count / that rate. */
+static volatile uint32_t g_spin[3];
+static volatile int g_spin_quit;
+static SceUID g_spin_th[3] = { -1, -1, -1 };
+static int g_spin_state;                 /* 0 not started, 1 running, -1 unavailable */
+static uint64_t g_spin_t0;
+static uint32_t g_spin_c0[3];
+static double g_spin_rate[3];            /* counts per us, core free */
+
+static int spinner(SceSize args, void *argp)
+{
+	const int i = *(const int *)argp;
+
+	(void)args;
+	while (!g_spin_quit) {
+		for (volatile int j = 0; j < 64; j++) {
+		}
+		g_spin[i]++;
+	}
+	return 0;
+}
+
+static int cores_start(void)
+{
+	static const int masks[3] = { 0x10000, 0x20000, 0x40000 };   /* user cores 0-2 */
+	uint64_t t;
+
+	g_spin_quit = 0;
+	for (int i = 0; i < 3; i++) {
+		g_spin_th[i] = sceKernelCreateThread("vmtest_core", spinner, 191, 0x1000, 0, masks[i], NULL);
+		if (g_spin_th[i] < 0 || sceKernelStartThread(g_spin_th[i], sizeof(i), &i) < 0) {
+			vita_env_cores_stop();
+			return -1;
+		}
+	}
+	sceKernelDelayThread(20000);             /* all three running */
+	t = sceKernelGetProcessTimeWide();
+	for (int i = 0; i < 3; i++)
+		g_spin_c0[i] = g_spin[i];
+	sceKernelDelayThread(300000);            /* the rate with the cores free */
+	{
+		const uint64_t dt = sceKernelGetProcessTimeWide() - t;
+
+		for (int i = 0; i < 3; i++) {
+			g_spin_rate[i] = dt ? (double)(uint32_t)(g_spin[i] - g_spin_c0[i]) / (double)dt : 0;
+			if (g_spin_rate[i] <= 0) {
+				vita_env_cores_stop();
+				return -1;
+			}
+		}
+	}
+	g_spin_t0 = sceKernelGetProcessTimeWide();
+	for (int i = 0; i < 3; i++)
+		g_spin_c0[i] = g_spin[i];
+	return 0;
+}
+
+void vita_env_cores_stop(void)
+{
+	g_spin_quit = 1;
+	for (int i = 0; i < 3; i++)
+		if (g_spin_th[i] >= 0) {
+			sceKernelWaitThreadEnd(g_spin_th[i], NULL, NULL);
+			sceKernelDeleteThread(g_spin_th[i]);
+			g_spin_th[i] = -1;
+		}
+	g_spin_state = 0;
+}
+
+static int v_core_busy_us(void *ctx, uint64_t out[3])
+{
+	uint64_t now;
+
+	(void)ctx;
+	if (g_spin_state == 0)
+		g_spin_state = cores_start() == 0 ? 1 : -1;
+	if (g_spin_state < 0)
+		return -1;
+	now = sceKernelGetProcessTimeWide() - g_spin_t0;
+	for (int i = 0; i < 3; i++) {
+		const double idle = (double)(uint32_t)(g_spin[i] - g_spin_c0[i]) / g_spin_rate[i];
+
+		out[i] = idle < (double)now ? (uint64_t)((double)now - idle) : 0;
+	}
+	return 0;
+}
+
 /* The calling thread's run time (SceKernelThreadInfo.runClocks, in us). */
 static uint64_t v_cpu_us(void *ctx)
 {
@@ -179,6 +270,42 @@ static void *v_nc_alloc(void *ctx, uint32_t size)
 	return base;
 }
 
+/* non-cacheable memory as games use for graphics data -
+ * physically contiguous main memory, or CDRAM (the graphics memory). */
+static void *v_mem_alloc(void *ctx, uint32_t size, int kind)
+{
+	VitaEnv *v = ctx;
+	void *base = NULL;
+	SceUID uid;
+	const unsigned type = kind == BENCH_MEM_NC_PHYCONT ? SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW
+	                    : SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW;
+
+	if (kind < 1 || kind > 2)
+		return NULL;
+	size = (size + 0xFFFFFu) & ~0xFFFFFu;           /* whole MiB: both kinds need it */
+	uid = sceKernelAllocMemBlock(kind == BENCH_MEM_NC_PHYCONT ? "vmtest_ncpc" : "vmtest_cdram",
+	                             type, size, NULL);
+	if (uid < 0)
+		return NULL;
+	if (sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+		sceKernelFreeMemBlock(uid);
+		return NULL;
+	}
+	v->mem_uid[kind] = uid;
+	return base;
+}
+
+static void v_mem_free(void *ctx, void *p, int kind)
+{
+	VitaEnv *v = ctx;
+
+	(void)p;
+	if (kind >= 1 && kind <= 2 && v->mem_uid[kind] >= 0) {
+		sceKernelFreeMemBlock(v->mem_uid[kind]);
+		v->mem_uid[kind] = -1;
+	}
+}
+
 static void v_nc_free(void *ctx, void *p)
 {
 	VitaEnv *v = ctx;
@@ -230,4 +357,8 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->env.nc_alloc = v_nc_alloc;
 	v->env.nc_free = v_nc_free;
 	v->nc_uid = -1;
+	v->env.mem_alloc = v_mem_alloc;
+	v->env.core_busy_us = v_core_busy_us;
+	v->env.mem_free = v_mem_free;
+	v->mem_uid[0] = v->mem_uid[1] = v->mem_uid[2] = -1;
 }

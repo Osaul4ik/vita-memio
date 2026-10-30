@@ -286,7 +286,7 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_progress, f_cancelled, NULL, NULL, NULL };
+	               f_get, f_progress, f_cancelled, NULL, NULL, NULL, NULL, NULL, NULL };
 	return e;
 }
 
@@ -677,8 +677,9 @@ static void test_small_files(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "GPU-safe reads: on");
 	CHECK(found);
-	CHECK(strstr(lines[n - 3], "files delete"));      /* then the two NC reads */
-	CHECK(strstr(lines[n - 1], "NC read 128K"));
+	CHECK(strstr(lines[n - 5], "files delete"));      /* then the NC reads */
+	CHECK(strstr(lines[n - 3], "NC read 128K"));
+	CHECK(strstr(lines[n - 1], "CDRAM read 1M"));    /* the other kinds */
 
 	/* a small file that reads back wrong fails the data check */
 	fake_init(&f, 1);
@@ -1231,6 +1232,94 @@ static void test_cpu_time(void)
 	free(r);
 }
 
+/* the reads into the other kinds of non-cacheable memory, when
+ * the platform gives it; each block given back. */
+static int g_mem_allocs, g_mem_frees;
+static void *f_mem_alloc(void *c, uint32_t size, int kind)
+{
+	(void)c;
+	if (kind == BENCH_MEM_CDRAM)
+		return NULL;                     /* not given: that one is skipped */
+	g_mem_allocs++;
+	return malloc(size);
+}
+
+static void f_mem_free(void *c, void *p, int kind)
+{
+	(void)c; (void)kind;
+	g_mem_frees++;
+	free(p);
+}
+
+static void test_other_memory(void)
+{
+	Fake f = { 0 };
+	BenchEnv e;
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchResult *r = new_result();
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.mem_alloc = f_mem_alloc;
+	e.mem_free = f_mem_free;
+	e.cpu_us = f_cpu;
+	g_mem_allocs = g_mem_frees = 0;
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_integrity_ok(r));
+	CHECK(g_mem_allocs == 1 && g_mem_frees == 1);
+	CHECK(bench_metric_measured(r, BM_NCPC_R_1M) && !bench_metric_measured(r, BM_CDRAM_R_1M));
+	CHECK(r->runs[0].ops[BM_NCPC_R_1M] == 2 && r->runs[0].value[BM_NCPC_R_1M] > 0);
+	CHECK(!strcmp(bench_metric_name[BM_NCPC_R_1M], "NCphy read 1M"));
+	CHECK_UNTOUCHED(f);
+	free(f.data);
+	free(r);
+}
+
+/* the cores' busy time over the calls, when the platform gives
+ * it: here core 1 is busy 2 ms per MiB read, the others never. */
+static int f_core_busy(void *c, uint64_t out[3])
+{
+	const Fake *f = c;
+
+	out[0] = 0;
+	out[1] = f->cpu * 2;
+	out[2] = 0;
+	return 0;
+}
+
+static void test_core_meter(void)
+{
+	Fake f = { 0 };
+	BenchEnv e;
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchResult *r = new_result();
+	char *text = malloc(40000);
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	double v;
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.cpu_us = f_cpu;
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(!bench_core_ms_per_mib(r, BM_SEQ_R_1M, 1, &v));
+	report_format(r, &m, text, 40000);
+	CHECK(!strstr(text, "busy time of cores"));
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.cpu_us = f_cpu;
+	e.core_busy_us = f_core_busy;
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(bench_core_ms_per_mib(r, BM_SEQ_R_1M, 1, &v) && v > 1.99 && v < 2.01);
+	CHECK(bench_core_ms_per_mib(r, BM_SEQ_R_1M, 0, &v) && v == 0);
+	CHECK(!bench_core_ms_per_mib(r, BM_SEQ_R_1M, 3, &v));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "busy time of cores 0/1/2 during the calls, ms per MiB:\n"
+	                   "  seq read 1M     0.0 / 2.0 / 0.0\n"));
+	CHECK_UNTOUCHED(f);
+	free(f.data);
+	free(text);
+	free(r);
+}
+
 int main(void)
 {
 	RUN(test_full_run_on);
@@ -1257,6 +1346,8 @@ int main(void)
 	RUN(test_results_file);
 	RUN(test_pattern);
 	RUN(test_cpu_time);
+	RUN(test_other_memory);
+	RUN(test_core_meter);
 
 	printf(vm_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

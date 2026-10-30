@@ -142,6 +142,18 @@ int vmGetTiming(VmTiming *o)
 /* ---- time, memory ---------------------------------------------------------------- */
 
 SceUID sceKernelGetThreadId(void) { return 1; }
+/* No core meter on the PC: its threads are never made. */
+SceUID sceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int initPriority,
+                             int stackSize, unsigned attr, int cpuAffinityMask, const void *option)
+{
+	(void)name; (void)entry; (void)initPriority; (void)stackSize; (void)attr;
+	(void)cpuAffinityMask; (void)option;
+	return -1;
+}
+int sceKernelStartThread(SceUID thid, SceSize arglen, void *argp) { (void)thid; (void)arglen; (void)argp; return -1; }
+int sceKernelWaitThreadEnd(SceUID thid, int *stat, unsigned *timeout) { (void)thid; (void)stat; (void)timeout; return 0; }
+int sceKernelDeleteThread(SceUID thid) { (void)thid; return 0; }
+int sceKernelDelayThread(unsigned us) { usleep(us); return 0; }
 int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info)
 {
 	struct timespec t;

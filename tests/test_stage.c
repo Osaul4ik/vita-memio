@@ -1555,6 +1555,9 @@ static void test_offload(void)
 			if (n >= OFFLOAD_MIN_SECTORS) {
 				CHECK(copies_here == 0 && copies_elsewhere >= 1);    /* all on the copier */
 				CHECK(fake_usermap_calls == maps + 1 && fake_usermap_live == 0);   /* one, unmapped */
+				/* mapped and unmapped by the copier, not the caller's thread */
+				CHECK(!pthread_equal(fake_usermap_thread, test_thread));
+				CHECK(!pthread_equal(fake_unmap_thread, test_thread));
 			} else {
 				/* under 64 KiB: copied by the caller, nothing mapped */
 				CHECK(copies_here >= 1 && copies_elsewhere == 0);

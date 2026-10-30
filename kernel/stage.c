@@ -156,8 +156,10 @@ typedef struct Dev {
 	uint32_t      job_fail;               /* 0, or 1 + the part that failed    */
 	uint32_t      job_io_us, job_last_us, job_big_us, job_big_n;   /* timings */
 	/* the copier's job (the plan above) and its result */
-	uint8_t      *cjob_dst;               /* the caller's buffer, mapped       */
-	int           cjob_clean, cjob_ret;
+	struct OffMap *cjob_map;              /* the caller's buffer, mapped by the
+	                                       * copier on the request's first chunk */
+	uint32_t      cjob_off;               /* this chunk's offset in it, bytes  */
+	int           cjob_clean, cjob_last, cjob_ret, cjob_nomap;
 	uint32_t      cjob_done, cjob_cp_us;
 	uint32_t      est_io_ns;              /* per sector, for the split        */
 	uint32_t      est_cp_ns[2];           /* the copy: [0] plain, [1] + clean */
@@ -417,6 +419,20 @@ static int          g_offload_logged;      /* the state the worker last logged *
 static uint32_t     g_offload_type;        /* the first mapping's memblock type */
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
+
+/* The caller's buffer for one request, mapped for the copier (see the top of
+ * "copy on the system core"). */
+typedef struct OffMap {
+	SceUID   pid;
+	SceUID   uid;              /* the mapping, or < 0                        */
+	uint8_t *user;             /* the request's buffer in the caller's space */
+	uint8_t *kern;             /* the same bytes through the mapping         */
+	uint32_t len;
+	int      tried;
+	int      mt;               /* the buffer's memory type at both ends (read by
+	                            * the caller: an address of its own space), or -1 */
+} OffMap;
+static void off_map(OffMap *m);
 
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
@@ -753,7 +769,27 @@ static int pipe_copier(SceSize args, void *argp)
 		if (d->pipe_quit)
 			break;
 		__sync_synchronize();               /* the job before its fields */
-		r = copy_parts(d, d->cjob_dst, d->cjob_clean, &done, &cp);
+		{
+			struct OffMap *m = d->cjob_map;
+
+			/* the mapping on the request's first chunk, here on the system
+			 * core rather than on the caller's; none usable: the caller
+			 * copies (nothing of the job has been taken yet) */
+			if (!m->tried)
+				off_map(m);
+			if (m->uid < 0) {
+				d->cjob_nomap = 1;
+				__sync_synchronize();
+				ksceKernelSignalSema(d->sem_fin, 1);
+				continue;
+			}
+			d->cjob_nomap = 0;
+			r = copy_parts(d, m->kern + d->cjob_off, d->cjob_clean, &done, &cp);
+			if (d->cjob_last) {
+				ksceKernelUserUnmap(m->uid);      /* the request's last chunk */
+				m->uid = -1;
+			}
+		}
 		if (done && LD(g_log_diag))
 			__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
 		d->cjob_ret = r;
@@ -991,16 +1027,6 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	return 0;
 }
 
-/* The caller's buffer for one request, mapped for the copier (see the top of
- * "copy on the system core"). */
-typedef struct OffMap {
-	SceUID   pid;
-	SceUID   uid;              /* the mapping, or < 0                        */
-	uint8_t *user;             /* the request's buffer in the caller's space */
-	uint8_t *kern;             /* the same bytes through the mapping         */
-	uint32_t len;
-	int      tried;
-} OffMap;
 
 /* Refuse copy on the system core until the setting is switched again (a
  * refusal always wins over a concurrent "usable"). */
@@ -1044,9 +1070,8 @@ static void off_map(OffMap *m)
 		return;
 	}
 	kern = (uint8_t *)page + off;
-	mt = ksceKernelGetMemBlockMemtypeByAddr(m->user);
-	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(m->user + m->len - 1) != mt ||
-	    ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
+	mt = m->mt;
+	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
 	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != mt) {
 		ksceKernelUserUnmap(uid);
 		off_refuse(-2, -2, 0);
@@ -1082,7 +1107,7 @@ static void off_map(OffMap *m)
  * *done: as pipe_run. */
 static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                        uint8_t *p, const uint32_t *sz, uint32_t k, int clean, int stats,
-                       OffMap *m, uint32_t *done, uint32_t *own)
+                       OffMap *m, int last, uint32_t *done, uint32_t *own)
 {
 	uint32_t cp_us = 0, n = 0;
 	int ret;
@@ -1101,15 +1126,25 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
 	__sync_synchronize();
 	ksceKernelSignalSema(d->sem_go, 1);       /* the card starts at once */
-	if (!m->tried)
-		off_map(m);                           /* meanwhile */
-	if (m->uid >= 0) {
-		d->cjob_dst = m->kern + (p - m->user);
+	int nomap = 1;
+
+	if (!m->tried || m->uid >= 0) {
+		/* the copier maps the buffer (first chunk), copies, and on the
+		 * last chunk unmaps it: this thread only waits */
+		d->cjob_map = m;
+		d->cjob_off = (uint32_t)(p - m->user);
 		d->cjob_clean = clean;
+		d->cjob_last = last;
 		__sync_synchronize();
 		ksceKernelSignalSema(d->sem_cgo, 1);
 		ksceKernelWaitSema(d->sem_fin, 1, NULL);
 		__sync_synchronize();
+		nomap = d->cjob_nomap;
+	}
+	if (nomap) {
+		ret = copy_parts(d, p, clean, done, &cp_us);   /* no usable mapping */
+		*own = *done;
+	} else {
 		ret = d->cjob_ret;
 		*done = d->cjob_done;
 		cp_us = d->cjob_cp_us;
@@ -1118,10 +1153,8 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 			__atomic_fetch_add(&g_off_reads, 1, __ATOMIC_RELAXED);
 			__atomic_fetch_add(&g_off_kib, n / 2, __ATOMIC_RELAXED);
 		}
-	} else {
-		ret = copy_parts(d, p, clean, done, &cp_us);
-		*own = *done;
 	}
+	d->cjob_map = NULL;
 	if (ret < 0)
 		return ret;
 	if (LD(g_pipeline) == VM_PIPE_AUTO) {
@@ -1187,7 +1220,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int offload = LD(g_offload);
 	/* copy on the system core: a game's read (a system thread's buffers
 	 * need no mapping, and copy where they are), as the setting says */
-	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
 	                (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
@@ -1229,8 +1262,16 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				k = 1;
 				sz[0] = n;
 			}
+			if (!om.tried && om.mt == -2) {
+				/* the buffer's memory type, read here: the copier, which
+				 * maps it, is not in this process */
+				const int mt = ksceKernelGetMemBlockMemtypeByAddr(om.user);
+
+				om.mt = mt >= 0 &&
+				        ksceKernelGetMemBlockMemtypeByAddr(om.user + om.len - 1) == mt ? mt : -1;
+			}
 			ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &om,
-			                  &done, &mine_n);
+			                  left == n, &done, &mine_n);
 			own += mine_n;
 			if (ret < 0) {
 				p += (size_t)done * 512;    /* the parts already copied stay */

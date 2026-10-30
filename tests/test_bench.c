@@ -286,7 +286,7 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_progress, f_cancelled, NULL, NULL, NULL };
+	               f_get, f_progress, f_cancelled, NULL, NULL, NULL, NULL, NULL };
 	return e;
 }
 
@@ -677,8 +677,9 @@ static void test_small_files(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "GPU-safe reads: on");
 	CHECK(found);
-	CHECK(strstr(lines[n - 3], "files delete"));      /* then the two NC reads */
-	CHECK(strstr(lines[n - 1], "NC read 128K"));
+	CHECK(strstr(lines[n - 5], "files delete"));      /* then the NC reads */
+	CHECK(strstr(lines[n - 3], "NC read 128K"));
+	CHECK(strstr(lines[n - 1], "CDRAM read 1M"));    /* DIAGNOSTIC: the other kinds */
 
 	/* a small file that reads back wrong fails the data check */
 	fake_init(&f, 1);
@@ -1231,6 +1232,48 @@ static void test_cpu_time(void)
 	free(r);
 }
 
+/* DIAGNOSTIC: the reads into the other kinds of non-cacheable memory, when
+ * the platform gives it; each block given back. */
+static int g_mem_allocs, g_mem_frees;
+static void *f_mem_alloc(void *c, uint32_t size, int kind)
+{
+	(void)c;
+	if (kind == BENCH_MEM_CDRAM)
+		return NULL;                     /* not given: that one is skipped */
+	g_mem_allocs++;
+	return malloc(size);
+}
+
+static void f_mem_free(void *c, void *p, int kind)
+{
+	(void)c; (void)kind;
+	g_mem_frees++;
+	free(p);
+}
+
+static void test_other_memory(void)
+{
+	Fake f = { 0 };
+	BenchEnv e;
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchResult *r = new_result();
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.mem_alloc = f_mem_alloc;
+	e.mem_free = f_mem_free;
+	e.cpu_us = f_cpu;
+	g_mem_allocs = g_mem_frees = 0;
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_integrity_ok(r));
+	CHECK(g_mem_allocs == 1 && g_mem_frees == 1);
+	CHECK(bench_metric_measured(r, BM_NCPC_R_1M) && !bench_metric_measured(r, BM_CDRAM_R_1M));
+	CHECK(r->runs[0].ops[BM_NCPC_R_1M] == 2 && r->runs[0].value[BM_NCPC_R_1M] > 0);
+	CHECK(!strcmp(bench_metric_name[BM_NCPC_R_1M], "NCphy read 1M"));
+	CHECK_UNTOUCHED(f);
+	free(f.data);
+	free(r);
+}
+
 int main(void)
 {
 	RUN(test_full_run_on);
@@ -1257,6 +1300,7 @@ int main(void)
 	RUN(test_results_file);
 	RUN(test_pattern);
 	RUN(test_cpu_time);
+	RUN(test_other_memory);
 
 	printf(vm_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

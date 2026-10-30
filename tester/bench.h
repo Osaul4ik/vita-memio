@@ -51,6 +51,7 @@ enum bench_metric {
 	BM_RW_4K, BM_RW_32K, BM_RW_128K, BM_RW_1M,
 	BM_SF_CREATE, BM_SF_READ, BM_SF_DELETE,
 	BM_NC_R_1M, BM_NC_R_128K,
+	BM_NCPC_R_1M, BM_CDRAM_R_1M,   /* DIAGNOSTIC (branch ncdirect): games' GPU memory */
 	BM_COUNT
 };
 
@@ -131,7 +132,13 @@ typedef struct BenchEnv {
 	 * a read costs the thread that asks for it - a game's own thread - as
 	 * opposed to how long it waits). NULL: not measured. */
 	uint64_t (*cpu_us)(void *ctx);
+	/* DIAGNOSTIC, optional: 1 MiB of non-cacheable memory of another kind
+	 * (BENCH_MEM_*), as games use for graphics data, and its release. */
+	void *(*mem_alloc)(void *ctx, uint32_t size, int kind);
+	void (*mem_free)(void *ctx, void *p, int kind);
 } BenchEnv;
+
+enum { BENCH_MEM_NC_PHYCONT = 1, BENCH_MEM_CDRAM = 2 };
 
 /* ---- configuration and results ---------------------------------------------- */
 

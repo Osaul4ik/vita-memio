@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
@@ -312,6 +313,24 @@ void fakes_tmpdir_remove(void)
  * or fails with fake_usermap_err for the permissions in fake_usermap_deny. */
 int fake_pid = 0x10005;
 int fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
+SceUID ksceKernelGetThreadId(void)
+{
+	return 0x40010001;
+}
+
+/* The calling thread's run time: its CPU time on this host. */
+int ksceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info)
+{
+	struct timespec t;
+
+	(void)thid;
+	if (info->size != sizeof(*info))
+		return -1;
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	info->runClocks = (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+	return 0;
+}
+
 SceUID ksceKernelGetProcessId(void)
 {
 	return fake_pid;

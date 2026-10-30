@@ -17,9 +17,10 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"rnd write 4K", "rnd write 32K", "rnd write 128K", "rnd write 1M",
 	"files create", "files read", "files delete",
 	"NC read 1M", "NC read 128K",
+	"NCphy read 1M", "CDRAM read 1M",
 };
 
-typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R } Kind;
+typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R } Kind;
 
 #define SF_BYTES 4096u          /* one small file */
 
@@ -40,6 +41,8 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_SF_DELETE] = { K_SF, 0 },
 	[BM_NC_R_1M]   = { K_NC_R, MIB },
 	[BM_NC_R_128K] = { K_NC_R, 128 * 1024 },
+	[BM_NCPC_R_1M] = { K_NCPC_R, MIB },
+	[BM_CDRAM_R_1M] = { K_CDRAM_R, MIB },
 };
 
 const BenchProfile bench_profile_quick = {
@@ -100,6 +103,7 @@ typedef struct Ctx {
 	BenchResult       *res;
 	uint8_t           *buf;       /* 1 MiB I/O buffer                          */
 	uint8_t           *nc;        /* 1 MiB non-cacheable buffer, or NULL       */
+	uint8_t           *ncpc, *cdram;   /* DIAGNOSTIC: the other kinds, or NULL */
 	uint32_t          *lat;       /* per-call times of the current metric, us  */
 	uint32_t           lat_cap;
 	char               file[BENCH_PATH_MAX + 16];
@@ -169,7 +173,8 @@ static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
 	const BenchEnv *e = c->env;
 	const int write = k_def[m].kind == K_SEQ_W;
 	const uint32_t io = k_def[m].io, S = c->cfg->profile->file_mib * MIB, n = S / io;
-	uint8_t *buf = k_def[m].kind == K_NC_R ? c->nc : c->buf;
+	uint8_t *buf = k_def[m].kind == K_NC_R ? c->nc : k_def[m].kind == K_NCPC_R ? c->ncpc
+	             : k_def[m].kind == K_CDRAM_R ? c->cdram : c->buf;
 	uint64_t total = 0;
 
 	for (uint32_t i = 0; i < n; i++) {
@@ -438,6 +443,8 @@ static int do_run(Ctx *c, int round)
 		switch (k_def[m].kind) {
 		case K_SEQ_R: rc = run_seq(c, r, m, &h); break;
 		case K_NC_R:  rc = c->nc ? run_seq(c, r, m, &h) : BR_OK; break;
+		case K_NCPC_R: rc = c->ncpc ? run_seq(c, r, m, &h) : BR_OK; break;
+		case K_CDRAM_R: rc = c->cdram ? run_seq(c, r, m, &h) : BR_OK; break;
 		case K_RR:
 		case K_RW:    rc = run_rand(c, r, m, h); break;
 		default:      break;
@@ -514,6 +521,10 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 	}
 	if (env->nc_alloc && env->nc_free)
 		c.nc = env->nc_alloc(env->ctx, MIB);   /* none: the NC reads are skipped */
+	if (env->mem_alloc && env->mem_free) {
+		c.ncpc = env->mem_alloc(env->ctx, MIB, BENCH_MEM_NC_PHYCONT);
+		c.cdram = env->mem_alloc(env->ctx, MIB, BENCH_MEM_CDRAM);
+	}
 	if (env->mkdirs(env->ctx, cfg->dir) != 0) {
 		fail(&c, "cannot create the test folder");
 		rc = BR_FAIL;
@@ -539,6 +550,10 @@ out:
 	free(c.lat);
 	if (c.nc)
 		env->nc_free(env->ctx, c.nc);
+	if (c.ncpc)
+		env->mem_free(env->ctx, c.ncpc, BENCH_MEM_NC_PHYCONT);
+	if (c.cdram)
+		env->mem_free(env->ctx, c.cdram, BENCH_MEM_CDRAM);
 	if (rc == BR_CANCEL)
 		res->cancelled = 1;
 	return rc;

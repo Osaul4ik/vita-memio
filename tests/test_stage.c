@@ -104,6 +104,13 @@ static void reset(void)
 	g_ncd_state = g_ncd_logged = g_ncd_err = 0;
 	g_ncd_type = 0;
 	g_ncd_reads = g_ncd_kib = g_ncd_maperr = g_ncd_busy = g_ncd_fail = 0;
+	memset(g_dg_cpu_us, 0, sizeof(g_dg_cpu_us));
+	memset(g_dg_wall_us, 0, sizeof(g_dg_wall_us));
+	memset(g_dg_calls, 0, sizeof(g_dg_calls));
+	memset(g_dg_kib, 0, sizeof(g_dg_kib));
+	memset(g_dg_hist, 0, sizeof(g_dg_hist));
+	g_dg_offmap_us = g_dg_ncdmap_us = 0;
+	g_dg_offmap_n = g_dg_ncdmap_n = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_cp_sys_kib = g_cp_game_kib = 0;
@@ -1659,6 +1666,39 @@ static void test_ncd(void)
 	free(other);
 }
 
+/* DIAGNOSTIC: with the log on, a game's reads are counted by kind and size,
+ * with the caller's time inside the plugin; system threads and writes not. */
+static void test_diag(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	int saved_live = g_live;
+
+	reset();
+	offload_on(&s, 0, VM_OFFLOAD_ALL, 1);
+	fake_pid = 0x42;
+	g_log_diag = 1;
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	CHECK(ncd_rd(u, 1, 256) == 0 && memcmp(u, disk + 512, 256 * 512) == 0);   /* direct */
+	CHECK(ncd_rd(u, 3, 64) == 0);                                               /* standard */
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0x1020D006;
+	CHECK(rd(u, 5, 512) == 0 && memcmp(u, disk + 5 * 512, 512 * 512) == 0);    /* cached */
+	CHECK(wr(u, 7, 128, REF_RD) == 0);                                          /* a write */
+	fake_pid = KERNEL_PID;
+	CHECK(rd(u, 9, 256) == 0);                                                  /* the system */
+	CHECK(g_dg_calls[DG_NC_DIRECT] == 1 && g_dg_calls[DG_NC_STD] == 1 && g_dg_calls[DG_CACHED] == 1);
+	CHECK(g_dg_kib[DG_NC_DIRECT] == 128 && g_dg_kib[DG_NC_STD] == 32 && g_dg_kib[DG_CACHED] == 256);
+	CHECK(g_dg_hist[1][2] == 1 && g_dg_hist[1][0] == 1 && g_dg_hist[0][3] == 1);
+	CHECK(g_dg_hist[0][0] + g_dg_hist[0][1] + g_dg_hist[0][2] == 0);
+	CHECK(g_dg_ncdmap_n == 1 && g_dg_offmap_n == 1);
+	vm_stage_worker_tick();                       /* the lines are written */
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
 static void test_offload(void)
 {
 	static const uint32_t sizes[] = { 1, 8, 32, 64, 100, 128, 256, 300, 512, 777, 1100 };
@@ -2044,6 +2084,7 @@ int main(void)
 	RUN(test_plan_quick_check);
 	RUN(test_copy_diagnostics);
 	RUN(test_ncd);
+	RUN(test_diag);
 	RUN(test_offload);
 	RUN(test_pipe_retire_bounded);
 	RUN(test_stress_concurrency);

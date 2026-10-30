@@ -179,6 +179,42 @@ static void *v_nc_alloc(void *ctx, uint32_t size)
 	return base;
 }
 
+/* DIAGNOSTIC: non-cacheable memory as games use for graphics data -
+ * physically contiguous main memory, or CDRAM (the graphics memory). */
+static void *v_mem_alloc(void *ctx, uint32_t size, int kind)
+{
+	VitaEnv *v = ctx;
+	void *base = NULL;
+	SceUID uid;
+	const unsigned type = kind == BENCH_MEM_NC_PHYCONT ? SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW
+	                    : SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW;
+
+	if (kind < 1 || kind > 2)
+		return NULL;
+	size = (size + 0xFFFFFu) & ~0xFFFFFu;           /* whole MiB: both kinds need it */
+	uid = sceKernelAllocMemBlock(kind == BENCH_MEM_NC_PHYCONT ? "vmtest_ncpc" : "vmtest_cdram",
+	                             type, size, NULL);
+	if (uid < 0)
+		return NULL;
+	if (sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+		sceKernelFreeMemBlock(uid);
+		return NULL;
+	}
+	v->mem_uid[kind] = uid;
+	return base;
+}
+
+static void v_mem_free(void *ctx, void *p, int kind)
+{
+	VitaEnv *v = ctx;
+
+	(void)p;
+	if (kind >= 1 && kind <= 2 && v->mem_uid[kind] >= 0) {
+		sceKernelFreeMemBlock(v->mem_uid[kind]);
+		v->mem_uid[kind] = -1;
+	}
+}
+
 static void v_nc_free(void *ctx, void *p)
 {
 	VitaEnv *v = ctx;
@@ -230,4 +266,7 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->env.nc_alloc = v_nc_alloc;
 	v->env.nc_free = v_nc_free;
 	v->nc_uid = -1;
+	v->env.mem_alloc = v_mem_alloc;
+	v->env.mem_free = v_mem_free;
+	v->mem_uid[0] = v->mem_uid[1] = v->mem_uid[2] = -1;
 }

@@ -15,3 +15,21 @@ SceUID ksceKernelCreateSema(const char *name, SceUInt attr, int initVal, int max
 int ksceKernelDeleteSema(SceUID semaid);
 int ksceKernelSignalSema(SceUID semaid, int signal);
 int ksceKernelWaitSema(SceUID semaid, int signal, SceUInt *timeout);
+/* only the fields the plugin reads, at their places in the real struct */
+typedef struct SceKernelThreadInfo {
+	SceSize  size;
+	SceUID   processId;
+	char     name[32];
+	unsigned attr, status;
+	void    *entry, *stack;
+	int      stackSize, initPriority, currentPriority, initCpuAffinityMask,
+	         currentCpuAffinityMask, currentCpuId, lastExecutedCpuId;
+	unsigned waitType;
+	SceUID   waitId;
+	int      exitStatus;
+	uint64_t runClocks;
+	unsigned intrPreemptCount, threadPreemptCount, threadReleaseCount;
+	int      changeCpuCount, fNotifyCallback, reserved;
+} SceKernelThreadInfo;
+SceUID ksceKernelGetThreadId(void);
+int ksceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info);

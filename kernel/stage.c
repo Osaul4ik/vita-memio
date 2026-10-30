@@ -433,6 +433,28 @@ static uint32_t     g_ncd_type;
 static int          g_ncd_err;
 static uint32_t     g_ncd_reads, g_ncd_kib, g_ncd_maperr, g_ncd_busy, g_ncd_fail;  /* atomics */
 
+/* DIAGNOSTIC (branch ncdirect, log on): what a read costs the caller's thread
+ * inside the plugin, by kind - [0] cached, [1] uncached the standard way,
+ * [2] uncached on the system core - and the sizes the reads arrive in. */
+enum { DG_CACHED, DG_NC_STD, DG_NC_DIRECT, DG_KINDS };
+static uint64_t     g_dg_cpu_us[DG_KINDS], g_dg_wall_us[DG_KINDS];
+static uint32_t     g_dg_calls[DG_KINDS], g_dg_kib[DG_KINDS];
+static uint32_t     g_dg_hist[2][4];       /* [uncached][<64K, <128K, <256K, 256K+] */
+static uint64_t     g_dg_offmap_us, g_dg_ncdmap_us;
+static uint32_t     g_dg_offmap_n, g_dg_ncdmap_n;
+
+/* The current thread's run time so far, us (0 if not known). */
+static uint64_t thread_cpu_us(void)
+{
+	SceKernelThreadInfo info;
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	if (ksceKernelGetThreadInfo(ksceKernelGetThreadId(), &info) < 0)
+		return 0;
+	return info.runClocks;
+}
+
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
  * copy is hidden when it takes no longer than the next part's read:
@@ -1118,8 +1140,15 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
 	__sync_synchronize();
 	ksceKernelSignalSema(d->sem_go, 1);       /* the card starts at once */
-	if (!m->tried)
+	if (!m->tried) {
+		const uint32_t t0 = LD(g_log_diag) ? ksceKernelGetSystemTimeLow() : 0;
+
 		off_map(m);                           /* meanwhile */
+		if (LD(g_log_diag)) {
+			ADD(g_dg_offmap_us, (uint64_t)(ksceKernelGetSystemTimeLow() - t0));
+			ADD(g_dg_offmap_n, 1);
+		}
+	}
 	if (m->uid >= 0) {
 		d->cjob_dst = m->kern + (p - m->user);
 		d->cjob_clean = clean;
@@ -1239,7 +1268,15 @@ static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 		__sync_lock_release(&d->busy);
 		return 0;
 	}
-	ncd_map(&m);
+	{
+		const uint32_t t0 = LD(g_log_diag) ? ksceKernelGetSystemTimeLow() : 0;
+
+		ncd_map(&m);
+		if (LD(g_log_diag)) {
+			ADD(g_dg_ncdmap_us, (uint64_t)(ksceKernelGetSystemTimeLow() - t0));
+			ADD(g_dg_ncdmap_n, 1);
+		}
+	}
 	if (m.uid < 0) {
 		__sync_lock_release(&d->busy);
 		return 0;
@@ -1276,8 +1313,8 @@ static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
-static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                      void *part, uint32_t sector, void *buf, uint32_t nsec)
+static int stage_xfer_body(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                           void *part, uint32_t sector, void *buf, uint32_t nsec, int *kind)
 {
 	uint8_t *p = buf;
 	uint32_t left = nsec;
@@ -1305,8 +1342,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		    nsec >= OFFLOAD_MIN_SECTORS &&
 		    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) >= 0 &&
 		    (pid = ksceKernelGetProcessId()) != KERNEL_PID &&
-		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
+		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r)) {
+			*kind = DG_NC_DIRECT;
 			return r;
+		}
+		*kind = DG_NC_STD;
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
 	}
@@ -1475,6 +1515,34 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 	/* Anything not done on the faster path (error, mismatch) is done stock. */
 	return left ? io(ref, part, sector, p, left) : ret;
+}
+
+/* DIAGNOSTIC wrapper: with the log on, a game's read is timed (the caller's
+ * run time and wall time inside the plugin) and its size noted. */
+static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                      void *part, uint32_t sector, void *buf, uint32_t nsec)
+{
+	int kind = DG_CACHED, r;
+	uint64_t c0;
+	uint32_t w0;
+
+	if (write || !nsec || !LD(g_log_diag) || !on_port(part, d->port) ||
+	    ksceKernelGetProcessId() == KERNEL_PID)
+		return stage_xfer_body(d, write, io, ref, rd_ref, part, sector, buf, nsec, &kind);
+	{
+		const int unc = caller_uncached(buf, nsec * 512);
+		const int b = nsec < 128 ? 0 : nsec < 256 ? 1 : nsec < 512 ? 2 : 3;
+
+		ADD(g_dg_hist[unc ? 1 : 0][b], 1);
+	}
+	c0 = thread_cpu_us();
+	w0 = ksceKernelGetSystemTimeLow();
+	r = stage_xfer_body(d, write, io, ref, rd_ref, part, sector, buf, nsec, &kind);
+	ADD(g_dg_wall_us[kind], (uint64_t)(ksceKernelGetSystemTimeLow() - w0));
+	ADD(g_dg_cpu_us[kind], thread_cpu_us() - c0);
+	ADD(g_dg_calls[kind], 1);
+	ADD(g_dg_kib[kind], nsec / 2);
+	return r;
 }
 
 /* The six hooks: a read and a write per device, SceSdif with a card context,
@@ -1665,8 +1733,9 @@ void vm_stage_on_problem(void (*fn)(void))
 
 void vm_stage_worker_tick(void)
 {
-	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
+	static uint32_t last_log_us, last_cleaned, last_nc, last_max, last_dg;
 	const uint32_t now_us = ksceKernelGetSystemTimeLow();
+	const uint32_t dg = LD(g_dg_calls[0]) + LD(g_dg_calls[1]) + LD(g_dg_calls[2]);
 
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
@@ -1677,8 +1746,9 @@ void vm_stage_worker_tick(void)
 	 * buffers the standard way, and how much GPU-safe reads cleaned. */
 	if (now_us - last_log_us >= 60u * 1000u * 1000u &&
 	    (LD(g_gpu_cleaned_kib) != last_cleaned || LD(g_nc_stock_kib) != last_nc ||
-	     __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED) != last_max)) {
+	     __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED) != last_max || dg != last_dg)) {
 		last_log_us = now_us;
+		last_dg = dg;
 		last_cleaned = LD(g_gpu_cleaned_kib);
 		last_nc = LD(g_nc_stock_kib);
 		last_max = __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED);
@@ -1704,6 +1774,32 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)LD(g_offload_err));
+		if (LD(g_log_diag)) {
+			uint32_t per[DG_KINDS], wper[DG_KINDS];
+
+			for (int k = 0; k < DG_KINDS; k++) {
+				const uint32_t kib = LD(g_dg_kib[k]);
+
+				per[k] = kib ? (uint32_t)(LD(g_dg_cpu_us[k]) * 1024u / kib) : 0;
+				wper[k] = kib ? (uint32_t)(LD(g_dg_wall_us[k]) * 1024u / kib) : 0;
+			}
+			VM_KLOGI("stage: diag read sizes <64K/<128K/<256K/256K+: cached %u/%u/%u/%u, "
+			         "uncached %u/%u/%u/%u",
+			         (unsigned)LD(g_dg_hist[0][0]), (unsigned)LD(g_dg_hist[0][1]),
+			         (unsigned)LD(g_dg_hist[0][2]), (unsigned)LD(g_dg_hist[0][3]),
+			         (unsigned)LD(g_dg_hist[1][0]), (unsigned)LD(g_dg_hist[1][1]),
+			         (unsigned)LD(g_dg_hist[1][2]), (unsigned)LD(g_dg_hist[1][3]));
+			VM_KLOGI("stage: diag caller us per MiB (cpu/wall): cached %u/%u (%u), "
+			         "uncached std %u/%u (%u), direct %u/%u (%u)",
+			         (unsigned)per[0], (unsigned)wper[0], (unsigned)LD(g_dg_calls[0]),
+			         (unsigned)per[1], (unsigned)wper[1], (unsigned)LD(g_dg_calls[1]),
+			         (unsigned)per[2], (unsigned)wper[2], (unsigned)LD(g_dg_calls[2]));
+			VM_KLOGI("stage: diag mapping us per call: copy %u (%u), direct %u (%u)",
+			         (unsigned)(LD(g_dg_offmap_n) ? LD(g_dg_offmap_us) / LD(g_dg_offmap_n) : 0),
+			         (unsigned)LD(g_dg_offmap_n),
+			         (unsigned)(LD(g_dg_ncdmap_n) ? LD(g_dg_ncdmap_us) / LD(g_dg_ncdmap_n) : 0),
+			         (unsigned)LD(g_dg_ncdmap_n));
+		}
 		if (LD(g_offload) == VM_OFFLOAD_ALL || LD(g_ncd_reads))
 			VM_KLOGI("stage: uncached read on the system core %u reads %u MiB, busy %u, "
 			         "failed %u, mapping failed %u (0x%08x)",

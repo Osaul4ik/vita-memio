@@ -269,7 +269,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		/* What the reads and writes cost the thread that asks for them (a
 		 * game's own thread): with the copy on the system core it is lower,
 		 * however long the call itself takes. */
-		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_SEQ_W_1M };
+		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_NCPC_R_1M,
+		                          BM_CDRAM_R_1M, BM_SEQ_W_1M };
 		double v;
 		int any = 0;
 

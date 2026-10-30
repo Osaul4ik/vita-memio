@@ -18,21 +18,5 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
                              SceSize size, void **kernel_page, SceSize *kernel_size,
                              SceUInt32 *kernel_offset);
 int ksceKernelUserUnmap(SceUID uid);
-typedef struct SceKernelMemBlockInfoCore {
-	unsigned int type, guid;
-	const char  *name;
-	void        *mapped_base;
-	SceSize      mapped_size, alloc_map_size;
-	int          extra_low, extra_high;
-	unsigned int paging_type, partition_guid;
-	void        *phy_mem_part;
-} SceKernelMemBlockInfoCore;
-typedef struct SceKernelMemBlockInfoEx {
-	SceSize size;
-	SceKernelMemBlockInfoCore core_info;
-	SceSize physical_range_count, physical_range_count_written;
-	void   *physical_addresses[16];
-	SceSize physical_sizes[16];
-} SceKernelMemBlockInfoEx;
-int ksceKernelMemBlockGetInfoEx(SceUID uid, SceKernelMemBlockInfoEx *info);
+int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type);
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);

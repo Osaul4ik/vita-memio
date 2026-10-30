@@ -962,19 +962,16 @@ static void off_map(OffMap *m)
 	/* writable: the first mapping's memblock type has the kernel's R and W
 	 * (as SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0x1020D006) */
 	if (g_offload_state == 0) {
-		SceKernelMemBlockInfoEx info;
+		unsigned int type = 0;
 
-		memset(&info, 0, sizeof(info));
-		info.size = sizeof(info);
-		if (ksceKernelMemBlockGetInfoEx(uid, &info) < 0 ||
-		    (info.core_info.type & 0x6) != 0x6) {
-			g_offload_type = info.core_info.type;
+		if (ksceKernelGetMemBlockType(uid, &type) < 0 || (type & 0x6) != 0x6) {
+			g_offload_type = type;
 			ksceKernelUserUnmap(uid);
 			g_offload_err = -1;
 			g_offload_state = -1;           /* refused: until switched again */
 			return;
 		}
-		g_offload_type = info.core_info.type;
+		g_offload_type = type;
 		g_offload_state = 1;
 	}
 	m->uid = uid;

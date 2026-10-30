@@ -347,15 +347,13 @@ int fake_meminfo_type = 0x1020D006, fake_meminfo_err, fake_meminfo_calls;
 /* If set, the mapping is not the caller's own page but this buffer (its
  * bytes are not the caller's: for the refused cases only). */
 void *fake_usermap_elsewhere;
-int ksceKernelMemBlockGetInfoEx(SceUID uid, SceKernelMemBlockInfoEx *info)
+int ksceKernelGetMemBlockType(SceUID uid, unsigned int *type)
 {
 	(void)uid;
 	fake_meminfo_calls++;
 	if (fake_meminfo_err)
 		return fake_meminfo_err;
-	if (info->size != sizeof(*info))
-		return -1;
-	info->core_info.type = (unsigned)fake_meminfo_type;
+	*type = (unsigned)fake_meminfo_type;
 	return 0;
 }
 

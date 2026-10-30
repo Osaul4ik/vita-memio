@@ -1591,7 +1591,7 @@ static void test_offload(void)
 	vm_stage_apply(&s);                       /* switched again: checked afresh */
 	CHECK(g_offload_state == 0);
 	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0 && g_offload_state == 1);
-	/* GetInfoEx fails: refused too */
+	/* the type cannot be read: refused too */
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
 	s.offload = VM_OFFLOAD_ALWAYS;

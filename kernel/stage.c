@@ -46,9 +46,7 @@
  *     reads the first into the staging buffer; the device's helper thread (on
  *     the system core) reads the next ones back to back while the caller
  *     copies the one before (pipe_run). The parts are sized from the
- *     measured costs so each copy is hidden behind the next read. On Auto a
- *     request larger than the staging buffer is read as one stream of
- *     parts through both buffers instead (stream_plan). Nothing is
+ *     measured costs so each copy is hidden behind the next read. Nothing is
  *     read ahead or kept: every part belongs to the request, which is
  *     complete when it returns. Any error finishes the whole part stock, as
  *     above;
@@ -128,11 +126,11 @@ typedef struct Dev {
 	volatile int  pipe_ready, pipe_quit;
 	SceUID        uid2, th, sem_go, sem_done, sem_free;
 	void         *buf2;
-	/* the job: parts 1 .. k-1 of job_plan, from job_sector on (see pipe_run) */
+	/* the job: parts 1 .. job_k-1 of job_sz, from job_sector on (pipe_run) */
 	io_fn         job_io;
 	tai_hook_ref_t job_ref;
 	void         *job_part;
-	const struct Stream *job_plan;
+	uint32_t      job_k, job_sz[3];       /* 3: PIPE_MAX_PARTS                 */
 	uint32_t      job_sector;
 	int           job_ret;                /* the failed part's error           */
 	uint32_t      job_fail;               /* 0, or the part that failed        */
@@ -329,8 +327,13 @@ static volatile int g_pipeline;              /* the setting                    *
 static void (*volatile g_on_problem)(void);  /* wakes the worker to log       */
 static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
 static volatile uint32_t g_pipe_reads3;      /* ... of them in three parts      */
-static volatile uint32_t g_stream_reads;     /* streamed requests (Auto, > 256 KiB) */
 static volatile uint32_t g_rd_max;           /* the largest read request, sectors */
+/* How long the helpers waited for a caller to copy a part out before they
+ * could read the next one into its buffer: the card idle because the
+ * caller's thread was late (a busy core). Waits under PIPE_WAIT_US are not
+ * counted (the handoff itself). For the log. */
+#define PIPE_WAIT_US       200u
+static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 min */
 
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
@@ -456,6 +459,11 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 		const uint64_t cp = d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0] : def_cp;
 		const uint64_t cmd = d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS;
 
+		/* any split costs at least one more command and a shortest last
+		 * part: when that already loses to one piece, no plan is worked
+		 * out (it takes 64-bit divisions, on every small read) */
+		if ((uint64_t)n * cp <= cmd + (uint64_t)PIPE_MIN_TAIL * cp + PIPE_HANDOFF_NS)
+			return 0;
 		k = pipe_plan_costs(n, io, cp, cmd, 2, PIPE_MAX_PARTS, out);
 		/* in one piece: one command and the whole copy, nothing to hand off */
 		if (k >= 2 && (uint64_t)k * cmd + (uint64_t)out[k - 1] * cp + PIPE_HANDOFF_NS >=
@@ -463,196 +471,6 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 			k = 0;
 		return k;
 	}
-}
-
-/* ---- streamed overlapped reads (Auto, requests over STAGE_SECTORS) ----------
- *
- * A request larger than the staging buffer is not cut into separate 256 KiB
- * chunks, each with its own short tail; it is read as one stream of parts,
- * alternately into the staging buffer (up to STAGE_SECTORS) and the second
- * buffer (up to PIPE_TAIL_SECTORS), each read by the helper while the caller
- * copies the one before. Only the very last part's copy is not hidden, and
- * the whole request takes about  k * cmd + n * io + last * cp.
- *
- * The plan is built from the end: the last part is x sectors; each part
- * before it as large as it may be while its copy still hides behind the
- * next part's read (the rule above), up to its buffer's size. A few parts
- * grow from x (the ramp); then two sizes repeat (usually both buffers' full
- * sizes), and part 0 takes what is left. Which buffer the last part goes to
- * and x are chosen for the lowest cost. */
-#define STREAM_RAMP_MAX  16   /* the plan lives on the caller's stack */
-
-typedef struct Stream {
-	uint32_t k;                       /* parts                                */
-	uint32_t first;                   /* part 0's size                        */
-	uint32_t ramp_len;                /* the last ramp_len parts: ramp[j] is  */
-	uint32_t ramp[STREAM_RAMP_MAX];   /* the j-th from the end                */
-	uint32_t rep[2];                  /* before the ramp: rep[0], rep[1], ... */
-	int      last_buf;                /* the last part's buffer: 0 staging, 1 the second */
-} Stream;
-
-static inline uint32_t stream_cap(int b)
-{
-	return b ? PIPE_TAIL_SECTORS : STAGE_SECTORS;
-}
-
-/* Part i's buffer (0 staging, 1 second) and size. */
-static inline int stream_buf(const Stream *s, uint32_t i)
-{
-	return s->last_buf ^ (int)((s->k - 1 - i) & 1);
-}
-
-static inline uint32_t stream_part(const Stream *s, uint32_t i)
-{
-	const uint32_t j = s->k - 1 - i;
-
-	if (i == 0)
-		return s->first;
-	return j < s->ramp_len ? s->ramp[j] : s->rep[(j - s->ramp_len) & 1];
-}
-
-/* The plan for a last part of x sectors in buffer lb. 1 if it covers n with
- * at least two parts, every part within its buffer. Each part depends only on
- * the next one and on its buffer, and the buffers alternate: once a size
- * repeats two parts back, the two sizes repeat from there on (often both
- * buffers' full sizes), and the rest is counted, not walked. */
-static int stream_fit(uint32_t n, uint32_t x, int lb, uint64_t io, uint64_t cp, uint64_t cmd,
-                      Stream *o)
-{
-	uint64_t sum = x;
-	uint32_t j = 0;
-
-	if (x < PIPE_MIN_TAIL || x > stream_cap(lb) || !cp)
-		return 0;
-	o->last_buf = lb;
-	o->rep[0] = o->rep[1] = 0;
-	o->ramp[0] = x;
-	for (;;) {
-		uint64_t m;
-		uint32_t c;
-
-		if (sum >= n) {                     /* ends within the ramp */
-			if (!j)
-				return 0;                   /* one part: nothing to overlap */
-			o->k = j + 1;
-			o->ramp_len = j + 1;
-			o->first = (uint32_t)(n - (sum - o->ramp[j]));
-			return 1;
-		}
-		if (j >= 2 && o->ramp[j] == o->ramp[j - 2])
-			break;                          /* repeats from here on */
-		m = (cmd + (uint64_t)o->ramp[j] * io) / cp;
-		c = stream_cap(lb ^ (int)((j + 1) & 1));
-		if (m > c)
-			m = c;
-		if (m < PIPE_MIN_TAIL || j + 1 >= STREAM_RAMP_MAX)
-			return 0;
-		o->ramp[++j] = (uint32_t)m;
-		sum += m;
-	}
-	/* from j + 1 on: ramp[j - 1], ramp[j], ramp[j - 1], ...; part 0 takes the rest */
-	{
-		const uint32_t a = o->ramp[j - 1], b = o->ramp[j];
-		const uint64_t pair = (uint64_t)a + b;
-		uint64_t r = n - sum, pairs = (r - 1) / pair;
-		uint32_t jn = j + 1;
-
-		r -= pairs * pair;
-		jn += (uint32_t)(2 * pairs);
-		while (r > ((jn - j) & 1 ? a : b)) {
-			r -= (jn - j) & 1 ? a : b;
-			jn++;
-		}
-		o->k = jn + 1;
-		o->ramp_len = j + 1;
-		o->first = (uint32_t)r;
-		o->rep[0] = a;
-		o->rep[1] = b;
-	}
-	return 1;
-}
-
-/* The lowest-cost plan for an n-sector read. The earlier parts only grow
- * with x, so the part count only falls as x grows: for each count the
- * smallest x reaching it is found by bisection. 1 if there is a plan. */
-static int stream_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, Stream *out)
-{
-	uint64_t best = ~(uint64_t)0;
-	int found = 0;
-
-	for (int lb = 0; lb <= 1; lb++) {
-		uint32_t hi = stream_cap(lb);
-		Stream t;
-
-		while (hi >= PIPE_MIN_TAIL && stream_fit(n, hi, lb, io, cp, cmd, &t)) {
-			const uint32_t k = t.k;
-			uint32_t lo = PIPE_MIN_TAIL, x = hi;
-			uint64_t cost;
-
-			/* the smallest x in [lo, hi] with at most k parts */
-			while (lo < x) {
-				uint32_t mid = lo + (x - lo) / 2;
-				Stream u;
-
-				if (stream_fit(n, mid, lb, io, cp, cmd, &u) && u.k <= k)
-					x = mid;
-				else
-					lo = mid + 1;
-			}
-			if (!stream_fit(n, x, lb, io, cp, cmd, &t))
-				break;                      /* cannot happen: hi fits */
-			cost = (uint64_t)t.k * cmd + (uint64_t)x * cp;
-			if (cost < best) {
-				best = cost;
-				*out = t;
-				found = 1;
-			}
-			/* more parts cost at least one more command */
-			if (x <= PIPE_MIN_TAIL || (uint64_t)(t.k + 1) * cmd >= best)
-				break;
-			hi = x - 1;
-		}
-	}
-	return found;
-}
-
-/* Every part fits its buffer and the parts add up to n: checked once more
- * before anything is read (a part larger than its buffer would be a DMA past
- * its end). Only the ramp, the two repeated sizes and part 0 are distinct. */
-static int stream_ok(const Stream *s, uint32_t n)
-{
-	uint64_t sum = s->first;
-
-	if (s->k < 2 || s->ramp_len > STREAM_RAMP_MAX || s->ramp_len > s->k || !s->first ||
-	    s->first > stream_cap(stream_buf(s, 0)))
-		return 0;
-	for (uint32_t j = 0; j < s->ramp_len && j < s->k - 1; j++) {
-		if (!s->ramp[j] || s->ramp[j] > stream_cap(s->last_buf ^ (int)(j & 1)))
-			return 0;
-		sum += s->ramp[j];
-	}
-	if (s->k - 1 > s->ramp_len) {           /* parts ramp_len .. k - 2 from the end */
-		const uint64_t reps = s->k - 1 - s->ramp_len;
-		const int b0 = s->last_buf ^ (int)(s->ramp_len & 1);
-
-		if (!s->rep[0] || s->rep[0] > stream_cap(b0) ||
-		    (reps > 1 && (!s->rep[1] || s->rep[1] > stream_cap(b0 ^ 1))))
-			return 0;
-		sum += (reps + 1) / 2 * s->rep[0] + reps / 2 * s->rep[1];
-	}
-	return sum == n;
-}
-
-/* Auto only: the learnt costs (built-in ones until measured). */
-static int stream_plan(const Dev *d, uint32_t n, int clean, Stream *out)
-{
-	const uint64_t def_cp = clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
-
-	return stream_plan_costs(n,
-	                         d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS,
-	                         d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0] : def_cp,
-	                         d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS, out) &&
-	       stream_ok(out, n);
 }
 
 /* From one split read, the card's cost per sector and per command: the head
@@ -697,8 +515,9 @@ static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t de
  * as its buffer is free again (sem_free: the caller has copied the part that
  * used it two parts back), and signals sem_done for each. So the card goes
  * from one part to the next without waiting for the caller's thread to wake
- * up. After a failed part it stops; its sem_free still owed is taken first,
- * so nothing is left over for the next job. */
+ * up. Odd parts go to the second buffer, even ones to the staging buffer.
+ * After a failed part it stops; its sem_free still owed is taken first, so
+ * nothing is left over for the next job. */
 static int pipe_helper(SceSize args, void *argp)
 {
 	Dev *d;
@@ -706,30 +525,35 @@ static int pipe_helper(SceSize args, void *argp)
 	(void)args;
 	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
 	for (;;) {
-		const struct Stream *s;
-		uint32_t sector, k, io_us = 0, big_us = 0, big_n = 0;
+		uint32_t sector, k, sz[PIPE_MAX_PARTS], io_us = 0, big_us = 0, big_n = 0;
 		int timed;
 
 		ksceKernelWaitSema(d->sem_go, 1, NULL);
 		if (d->pipe_quit)
 			break;
 		__sync_synchronize();               /* the job before its fields */
-		s = d->job_plan;
-		k = s->k;
+		k = d->job_k;
+		memcpy(sz, d->job_sz, sizeof(sz));
 		sector = d->job_sector;
 		timed = g_stats || g_pipeline == VM_PIPE_AUTO;   /* see stage_xfer */
-		/* The plan is on the caller's stack: not touched after the last
-		 * signal, when the caller may already have returned. */
 		for (uint32_t i = 1; i < k; i++) {
-			const uint32_t n = stream_part(s, i);
-			void *buf = stream_buf(s, i) ? d->buf2 : d->buf;
+			void *buf = (i & 1) ? d->buf2 : d->buf;
 			uint32_t t0, us;
 			int r;
 
-			if (i >= 2)
+			if (i >= 2) {
+				/* free at once unless the caller is late with its copy */
+				uint32_t w0 = ksceKernelGetSystemTimeLow(), w;
+
 				ksceKernelWaitSema(d->sem_free, 1, NULL);
+				w = ksceKernelGetSystemTimeLow() - w0;
+				if (w >= PIPE_WAIT_US) {
+					__atomic_fetch_add(&g_pipe_waits, 1, __ATOMIC_RELAXED);
+					__atomic_fetch_add(&g_pipe_wait_us, w, __ATOMIC_RELAXED);
+				}
+			}
 			t0 = timed ? ksceKernelGetSystemTimeLow() : 0;
-			r = d->job_io(d->job_ref, d->job_part, sector, buf, n);
+			r = d->job_io(d->job_ref, d->job_part, sector, buf, sz[i]);
 			us = timed ? ksceKernelGetSystemTimeLow() - t0 : 0;
 			if (r < 0) {
 				d->job_ret = r;
@@ -740,11 +564,11 @@ static int pipe_helper(SceSize args, void *argp)
 				break;
 			}
 			io_us += us;
-			if (n > big_n) {
-				big_n = n;
+			if (sz[i] > big_n) {
+				big_n = sz[i];
 				big_us = us;
 			}
-			sector += n;
+			sector += sz[i];
 			if (i + 1 == k) {               /* read by the caller after this signal */
 				d->job_io_us = io_us;
 				d->job_last_us = us;
@@ -852,40 +676,44 @@ static int take_shadow(void)
 	return g_verify && g_shadow && !__sync_lock_test_and_set(&g_shadow_busy, 1);
 }
 
-/* An overlapped read of plan `s` (a chunk's 2-3 parts, or a whole streamed
- * request) into the caller's p. Part 0 is read here; the helper then reads
- * parts 1 .. k-1 back to back while this thread copies (and, GPU-safe,
- * cleans) each part in turn and hands its buffer back (sem_free) for the part
- * two further on. *done: the sectors already in the caller's buffer when it
- * returns, all of them on success; after an error the rest is the caller's
- * to finish stock. */
+/* An overlapped read of one chunk in k parts (sz, from pipe_plan) into the
+ * caller's p. Part 0 is read here into the staging buffer; the helper then
+ * reads parts 1 .. k-1 back to back (odd ones into the second buffer) while
+ * this thread copies (and, GPU-safe, cleans) each part in turn and hands its
+ * buffer back (sem_free) for the part two further on. *done: the sectors
+ * already in the caller's buffer when it returns, all of them on success;
+ * after an error the rest is the caller's to finish stock. */
 static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                    uint8_t *p, const Stream *s, int clean, int stats, uint32_t *done)
+                    uint8_t *p, const uint32_t *sz, uint32_t k, int clean, int stats,
+                    uint32_t *done)
 {
 	/* Auto times itself, whatever Statistics says: the plan learns its
 	 * costs from these few clock reads. Fixed reads the clock only for
 	 * Statistics. */
 	const int timed = stats || g_pipeline == VM_PIPE_AUTO;
-	uint32_t off = 0, n = stream_part(s, 0), cp_us = 0, h0, h1;
-	void *cur = stream_buf(s, 0) ? d->buf2 : d->buf;
+	uint32_t off = 0, cp_us = 0, h0, h1;
 	int ret;
 
 	*done = 0;
 	h0 = timed ? ksceKernelGetSystemTimeLow() : 0;
-	ret = io(ref, part, sector, cur, n);
+	ret = io(ref, part, sector, d->buf, sz[0]);
 	if (ret < 0)
 		return ret;
 	h1 = timed ? ksceKernelGetSystemTimeLow() : 0;
 	d->job_io = io;
 	d->job_ref = ref;
 	d->job_part = part;
-	d->job_plan = s;
-	d->job_sector = sector + n;
+	d->job_k = k;
+	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++)
+		d->job_sz[i] = i < k ? sz[i] : 0;
+	d->job_sector = sector + sz[0];
 	d->job_ret = 0;
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
 	__sync_synchronize();
 	ksceKernelSignalSema(d->sem_go, 1);
-	for (uint32_t i = 1; i <= s->k; i++) {
+	for (uint32_t i = 1; i <= k; i++) {
+		const uint32_t n = sz[i - 1];
+		const void *cur = ((i - 1) & 1) ? d->buf2 : d->buf;
 		uint32_t c0 = timed ? ksceKernelGetSystemTimeLow() : 0;
 
 		vm_copy_from_stage(p + off * 512, cur, n * 512);
@@ -895,9 +723,9 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 			cp_us += ksceKernelGetSystemTimeLow() - c0;
 		off += n;
 		*done = off;
-		if (i + 1 < s->k)                   /* part i+1 reads into this buffer */
+		if (i + 1 < k)                      /* part i+1 reads into this buffer */
 			ksceKernelSignalSema(d->sem_free, 1);
-		if (i < s->k) {
+		if (i < k) {
 			uint32_t f;
 
 			ksceKernelWaitSema(d->sem_done, 1, NULL);
@@ -905,19 +733,17 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 			f = __atomic_load_n(&d->job_fail, __ATOMIC_ACQUIRE);
 			if (f && f <= i)
 				return d->job_ret;          /* this part on is read again stock */
-			n = stream_part(s, i);
-			cur = stream_buf(s, i) ? d->buf2 : d->buf;
 		}
 	}
 	if (g_pipeline == VM_PIPE_AUTO) {
 		/* the largest part against the last one: per sector and per command */
 		uint32_t big_us = d->job_big_us, big_n = d->job_big_n;
 
-		if (stream_part(s, 0) > big_n) {
-			big_n = stream_part(s, 0);
+		if (sz[0] > big_n) {
+			big_n = sz[0];
 			big_us = h1 - h0;
 		}
-		pipe_learn_io(d, big_us, big_n, d->job_last_us, n);
+		pipe_learn_io(d, big_us, big_n, d->job_last_us, sz[k - 1]);
 		pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp_us, off,
 		           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 	}
@@ -927,19 +753,6 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 		d->tm.rd_copy_us += cp_us;
 	}
 	return 0;
-}
-
-/* A chunk's 2-3 parts (pipe_plan) as a plan for pipe_run: part 0 into the
- * staging buffer, then alternating. */
-static void stream_of_parts(Stream *s, const uint32_t *sz, int k)
-{
-	memset(s, 0, sizeof(*s));
-	s->k = (uint32_t)k;
-	s->first = sz[0];
-	s->ramp_len = (uint32_t)k;
-	for (int j = 0; j < k; j++)
-		s->ramp[j] = sz[k - 1 - j];
-	s->last_buf = (k - 1) & 1;
 }
 
 /* One request, either way. `rd_ref` is the read function, used by a write's
@@ -992,24 +805,6 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 
 	if (clean)
 		g_gpu_cleaned_kib += left / 2;
-	/* Auto, a request larger than the staging buffer: one stream of parts
-	 * instead of separate chunks (see stream_plan). */
-	if (pipe && g_pipeline == VM_PIPE_AUTO && left > STAGE_SECTORS) {
-		Stream st;
-		uint32_t done = 0;
-
-		if (stream_plan(d, left, clean, &st)) {
-			ret = pipe_run(d, io, ref, part, sector, p, &st, clean, stats, &done);
-			if (ret >= 0) {
-				g_stream_reads++;
-				if (stats)
-					d->rd_bytes += (uint64_t)done * 512;
-			}
-			p += (size_t)done * 512;
-			sector += done;
-			left -= done;
-		}
-	}
 	while (ret >= 0 && left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
@@ -1035,11 +830,9 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		           n >= (g_pipeline == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
 		           (k = pipe_plan(d, n, clean, sz)) >= 2) {
 			/* Overlapped, this chunk in 2-3 parts (see pipe_run). */
-			Stream st;
 			uint32_t done = 0;
 
-			stream_of_parts(&st, sz, k);
-			ret = pipe_run(d, io, ref, part, sector, p, &st, clean, stats, &done);
+			ret = pipe_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &done);
 			if (ret < 0) {
 				p += (size_t)done * 512;    /* the parts already copied stay */
 				sector += done;
@@ -1302,9 +1095,13 @@ void vm_stage_worker_tick(void)
 		last_nc = g_nc_stock_kib;
 		last_max = __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED);
 		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB, "
-		         "overlapped reads %u (%u in 3 parts), streamed %u, largest read %u KiB",
+		         "overlapped reads %u (%u in 3 parts), helper waited %u times %u ms, "
+		         "largest read %u KiB",
 		         (unsigned)last_nc, (unsigned)last_cleaned, (unsigned)g_pipe_reads,
-		         (unsigned)g_pipe_reads3, (unsigned)g_stream_reads, (unsigned)(last_max / 2));
+		         (unsigned)g_pipe_reads3,
+		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
+		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000),
+		         (unsigned)(last_max / 2));
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)

@@ -22,7 +22,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.2); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define VM_VERSION_STR    "0.6.1"
+#define VM_VERSION_STR    "0.6.2"
 
 /* Everything the plugin writes lives here (created on first use). */
 #define VM_DATA_DIR       "ur0:data/vita-memio"
@@ -66,7 +66,7 @@ enum vm_key {
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
 	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
-	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads (experimental)     */
+	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_COUNT
 };
 

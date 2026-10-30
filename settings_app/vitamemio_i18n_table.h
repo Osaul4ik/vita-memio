@@ -1013,26 +1013,26 @@
 	"Her hızlandırılmış okumadan sonra veriyi işlemci önbelleğinden belleğe, standart yolun bıraktığı gibi yazar; böylece grafik çipi onu her zaman doğru okur. Okuma hızından biraz götürür; test uygulamasıyla karşılaştırın. Oyun oynarken önerilir.",   /* tr */
 },
 [VM_I18N_ROW_PIPELINE] = {
-	"読み込みの並行処理（試験的）",   /* ja */
-	"Overlapped reads (experimental)",   /* en */
-	"Lectures en parallèle (expérimental)",   /* fr */
-	"Lecturas solapadas (experimental)",   /* es */
-	"Überlappendes Lesen (experimentell)",   /* de */
-	"Letture sovrapposte (sperimentale)",   /* it */
-	"Overlappend lezen (experimenteel)",   /* nl */
-	"Leituras sobrepostas (experimental)",   /* pt */
-	"Параллельное чтение (эксперимент)",   /* ru */
-	"겹친 읽기 (실험적)",   /* ko */
-	"重疊讀取（實驗性）",   /* zht */
-	"重叠读取（实验性）",   /* zhs */
-	"Limitetyt luvut (kokeellinen)",   /* fi */
-	"Överlappade läsningar (experimentellt)",   /* sv */
-	"Overlappende læsninger (eksperimentel)",   /* da */
-	"Overlappende lesinger (eksperimentell)",   /* no */
-	"Nakładane odczyty (eksperymentalne)",   /* pl */
-	"Leituras sobrepostas (experimental)",   /* ptbr */
-	"Overlapped reads (experimental)",   /* engb */
-	"Örtüşen okuma (deneysel)",   /* tr */
+	"読み込みの並行処理",   /* ja */
+	"Overlapped reads",   /* en */
+	"Lectures en parallèle",   /* fr */
+	"Lecturas solapadas",   /* es */
+	"Überlappendes Lesen",   /* de */
+	"Letture sovrapposte",   /* it */
+	"Overlappend lezen",   /* nl */
+	"Leituras sobrepostas",   /* pt */
+	"Параллельное чтение",   /* ru */
+	"겹친 읽기",   /* ko */
+	"重疊讀取",   /* zht */
+	"重叠读取",   /* zhs */
+	"Limitetyt luvut",   /* fi */
+	"Överlappade läsningar",   /* sv */
+	"Overlappende læsninger",   /* da */
+	"Overlappende lesinger",   /* no */
+	"Nakładane odczyty",   /* pl */
+	"Leituras sobrepostas",   /* ptbr */
+	"Overlapped reads",   /* engb */
+	"Örtüşen okuma",   /* tr */
 },
 [VM_I18N_HINT_PIPELINE] = {
 	"高速化された読み込みを複数に分け、カードが次の部分を読んでいる間にCPUが前の部分をコピーし、コピー（とGPU対応の書き出し）の時間の大部分を隠します。自動：カードとコピーの実測値から2つまたは3つに分けます。固定：2つ（GPU対応の読み込みでは3つ）、内蔵の大きさで、測定はしません。ストレージごとに2つ目のバッファーと補助スレッドを使います。 「転送を検証」がオンの間は使われません。",   /* ja */

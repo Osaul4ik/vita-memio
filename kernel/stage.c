@@ -40,7 +40,7 @@
  *     setting on, each read's copy is cleaned out of the cache to memory
  *     before the call returns, so the graphics chip (which reads memory, not
  *     the CPU cache) sees exactly what the stock path gives it;
- *   - overlapped reads (experimental, off by default): a faster read of at
+ *   - overlapped reads (Auto by default, see VM_PIPE_*): a faster read of at
  *     least PIPE_MIN_SECTORS is split into two or three parts (pipe_plan).
  *     The caller's thread reads the first into the staging buffer; each next
  *     part is read by the device's helper thread (on the system core) while

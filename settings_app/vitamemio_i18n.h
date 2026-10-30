@@ -56,7 +56,7 @@ enum vm_i18n_id {
 	VM_I18N_HINT_STATS,
 	VM_I18N_ROW_GPUSAFE,        /* Advanced > GPU-safe reads                      */
 	VM_I18N_HINT_GPUSAFE,
-	VM_I18N_ROW_PIPELINE,       /* Advanced > Overlapped reads (experimental)     */
+	VM_I18N_ROW_PIPELINE,       /* Advanced > Overlapped reads                    */
 	VM_I18N_HINT_PIPELINE,
 	VM_I18N_ITEM_PIPE_OFF,      /* its choices, in VM_PIPE_* order                */
 	VM_I18N_ITEM_PIPE_AUTO,

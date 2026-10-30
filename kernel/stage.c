@@ -5,6 +5,10 @@
  * cleans and invalidates the CPU data cache over the whole caller buffer, and
  * that work is not overlapped with the transfer. On the SD2Vita it costs ~13 us
  * of every ~34 us 512-byte block. The driver skips it for non-cacheable memory.
+ * So a caller buffer that is itself non-cacheable (games load data for the
+ * graphics chip into such memory) stays on the standard path: there the
+ * driver has no cache work and no copy is needed (SD2Vita reads, 1 MiB:
+ * 21.0 MiB/s standard vs 16.5 MiB/s through the staging buffer).
  *
  * What this does: for a large transfer on an enabled device, call the system's
  * own, unmodified sector read/write with a physically contiguous non-cacheable
@@ -133,7 +137,7 @@ static volatile int g_count_all;
 static void (*g_dcache_clean)(void *start, unsigned int size);
 static volatile int g_gpu_safe;
 static int g_gpu_safe_logged;
-static volatile uint32_t g_gpu_cleaned_kib, g_gpu_skipped_kib;   /* for the log */
+static volatile uint32_t g_gpu_cleaned_kib, g_nc_stock_kib;   /* for the log */
 
 /* SceSysmemForDriver: the memory type at an address of the current address
  * space, masked with 0xFF00 (0xD000 cached, 0x4000 L1 write-back only,
@@ -142,10 +146,6 @@ int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);
 #define MEMTYPE_NC      0x8000
 #define MEMTYPE_DEVICE  0x0800
 
-/* Whether a read into [p, p + n) has to be cleaned out of the cache for
- * GPU-safe reads: not when the caller's memory is not cacheable at all (the
- * CPU's copy then goes straight to memory, as the DMA would). Both ends are
- * looked at; anything unknown is cleaned. */
 static int is_uncached(const void *a)
 {
 	int m = ksceKernelGetMemBlockMemtypeByAddr(a);
@@ -153,9 +153,11 @@ static int is_uncached(const void *a)
 	return m == MEMTYPE_NC || m == MEMTYPE_DEVICE;
 }
 
-static int needs_clean(const uint8_t *p, uint32_t n)
+/* Whether the caller's [p, p + n) is non-cacheable memory, looked at both
+ * ends; anything unknown counts as cached (and is staged as before). */
+static int caller_uncached(const uint8_t *p, uint32_t n)
 {
-	return !(is_uncached(p) && is_uncached(p + n - 1));
+	return is_uncached(p) && is_uncached(p + n - 1);
 }
 
 /* Write [p, p + n) out of the data cache to memory (whole 32-byte lines). */
@@ -294,6 +296,13 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		else
 			d->all_rd += (uint64_t)nsec * 512;
 	}
+	/* A non-cacheable caller buffer: the standard path is the faster one
+	 * (see the top). Looked at only for transfers that would be staged. */
+	if (mine && d->enabled && !d->fallback && d->buf && nsec && nsec >= g_min_sectors &&
+	    caller_uncached(p, nsec * 512)) {
+		g_nc_stock_kib += nsec / 2;
+		return io(ref, part, sector, buf, nsec);
+	}
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
 	if (!write)
@@ -304,16 +313,10 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		verify = 0;
 	}
 	const int stats = g_stats;
-	int clean = !write && g_gpu_safe && g_dcache_clean;
-	int uncached = 0;               /* GPU-safe, but nothing to clean */
+	const int clean = !write && g_gpu_safe && g_dcache_clean;
 
-	if (clean && !needs_clean(p, left * 512)) {
-		clean = 0;
-		uncached = 1;
-		g_gpu_skipped_kib += left / 2;
-	} else if (clean) {
+	if (clean)
 		g_gpu_cleaned_kib += left / 2;
-	}
 	while (left && !d->fallback) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
@@ -377,13 +380,6 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		p += bytes;
 		sector += n;
 		left -= n;
-	}
-	if (uncached) {                 /* the copy has reached memory */
-#ifdef __arm__
-		__asm__ volatile("dsb" ::: "memory");
-#else
-		__sync_synchronize();
-#endif
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
@@ -554,20 +550,19 @@ void vm_stage_apply(const VmSettings *s)
 
 void vm_stage_worker_tick(void)
 {
-	static uint32_t ticks, last_cleaned, last_skipped;
+	static uint32_t ticks, last_cleaned, last_nc;
 
 	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found");
 	}
-	/* Once a minute, if anything changed: how much of the GPU-safe reads had
-	 * to be cleaned and how much went into memory that is not cached. */
-	if (++ticks % 60 == 0 &&
-	    (g_gpu_cleaned_kib != last_cleaned || g_gpu_skipped_kib != last_skipped)) {
+	/* Once a minute, if anything changed: how much went to non-cacheable
+	 * buffers the standard way, and how much GPU-safe reads cleaned. */
+	if (++ticks % 60 == 0 && (g_gpu_cleaned_kib != last_cleaned || g_nc_stock_kib != last_nc)) {
 		last_cleaned = g_gpu_cleaned_kib;
-		last_skipped = g_gpu_skipped_kib;
-		VM_KLOGI("stage: GPU-safe reads: cleaned %u KiB, not cached (no clean) %u KiB",
-		         (unsigned)last_cleaned, (unsigned)last_skipped);
+		last_nc = g_nc_stock_kib;
+		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB",
+		         (unsigned)last_nc, (unsigned)last_cleaned);
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)

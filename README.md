@@ -8,13 +8,15 @@ vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia
 
 Before and after every transfer, the system's storage driver cleans and invalidates the CPU cache over the whole caller buffer, and that work is not overlapped with the transfer. For large transfers vita-memio hands the system's own, unmodified read and write functions a non-cacheable staging buffer instead (the driver skips the cache work for it) and copies between the two with the CPU. The driver still issues every command, handles every error and runs the DMA.
 
+A caller buffer that is itself non-cacheable (games load data for the graphics chip into such memory) stays on the standard path: the driver has no cache work there, and without the copy it is faster (SD2Vita, 1 MiB reads: 21.0 MiB/s standard vs 16.5 MiB/s through a staging buffer).
+
 - Writes are never cached or deferred: a write has reached the card before the call returns.
 - Small transfers (under 32 KiB, which includes the file system's own bookkeeping) take the standard path, unless **Small transfers too** is switched on.
 - Any error switches that storage back to the standard path for the session and finishes the request the standard way.
 - On an unknown firmware nothing is installed.
 - Game cards, USB storage and Wi-Fi are not touched.
 
-**The one difference from the standard path.** What the CPU reads is always identical, but after a faster read the data can stay in the CPU cache for a while before it reaches memory (the standard driver's DMA writes memory directly). A game that loads a file straight into memory the graphics chip reads, without flushing the cache itself, could in principle draw stale data. **GPU-safe reads** removes the difference: each read's copy is written out to memory before the call returns. Check what it costs with the tester (the *copy* time per block) and switch it on while playing.
+**The one difference from the standard path.** What the CPU reads is always identical, but after a faster read the data can stay in the CPU cache for a while before it reaches memory (the standard driver's DMA writes memory directly). A game that loads a file straight into cached memory the graphics chip reads, without flushing the cache itself, could in principle draw stale data (non-cacheable graphics memory takes the standard path and is not affected). **GPU-safe reads** removes the difference: each read's copy is written out to memory before the call returns. Check what it costs with the tester (the *copy* time per block) and switch it on while playing.
 
 ## Performance
 
@@ -23,6 +25,7 @@ Before and after every transfer, the system's storage driver cleans and invalida
 | SD2Vita (microSD) reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | **17.7 MiB/s** |
 | SD2Vita (microSD) reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | **16.8 MiB/s** |
 | SD2Vita (microSD) writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–16.9 MiB/s** |
+| SD2Vita (microSD) reads into non-cacheable memory, 1 MiB | | | 21.0 MiB/s (standard path, see above) |
 | Sony memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
 | Sony memory card writes, 1 MiB requests | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
 | Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
@@ -97,7 +100,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 
 | Row | What it does | Default |
 |---|---|---|
-| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed; reads into memory that is not cached (such as the graphics memory) need nothing and cost nothing | Off |
+| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed for reads into ordinary memory; non-cacheable memory (such as the graphics memory) takes the standard path anyway | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
@@ -120,7 +123,7 @@ Its main screen shows live, for each storage, what the plugin is doing (state, d
 - the plugin's verify results;
 - how many large transfers went the standard way because the staging buffer was busy.
 
-It also reads the file into non-cacheable memory (*NC read 1M / 128K*), the kind games load data for the graphics chip into. With **GPU-safe reads** on, the ordinary reads show what the cache cleaning costs and the NC reads show the speed a game gets for that memory, so both can be seen without switching it off.
+It also reads the file into non-cacheable memory (*NC read 1M / 128K*), the kind games load data for the graphics chip into. vita-memio leaves such reads to the standard path, so these rows are the same with the plugin on and off; the ordinary rows show what the plugin (and, with **GPU-safe reads** on, the cache cleaning) does for ordinary memory.
 
 To see what **Small transfers too** does, run the test with it off and with it on and compare the *files create / read / delete* rows.
 

@@ -79,7 +79,7 @@ static void reset(void)
 	g_stats = 1;                              /* most tests look at the figures */
 	g_gpu_safe = 0;
 	g_dcache_clean = NULL;
-	g_gpu_cleaned_kib = g_gpu_skipped_kib = 0;
+	g_gpu_cleaned_kib = g_nc_stock_kib = 0;
 	g_count_all = 1;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
@@ -196,6 +196,69 @@ static void fake_clean(void *start, unsigned int size)
 		clean_copy_seen++;
 }
 
+/* A caller buffer in non-cacheable memory (games load data for the graphics
+ * chip into it): the standard path, which has no cache work there and needs no
+ * copy, is the faster one - reads and writes, GPU-safe on or off. Cached,
+ * write-back-L1 or unknown memory, or only one end non-cacheable: staged as
+ * before. Looked up only for a transfer that would be staged. */
+static void test_noncacheable_buffers_go_stock(void)
+{
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+
+	for (int gpu = 0; gpu < 2; gpu++) {
+		static const int stock[] = { 0x8000, 0x0800 };
+		static const int staged[] = { 0xD000, 0x4000, -1 };
+
+		reset();
+		memset(&s, 0, sizeof(s));
+		s.memcard = 1;
+		s.gpusafe = gpu;
+		s.stats = 1;
+		vm_stage_apply(&s);
+		g_dcache_clean = fake_clean;
+		for (int i = 0; i < 2; i++) {
+			fake_memtype = stock[i];
+			fake_memtype_calls = 0;
+			clean_calls = 0;
+			memset(u, 0, 1100 * 512);
+			CHECK(rd(u, 10, 1100) == 0 && last_buf == u && io_calls >= 1);
+			CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+			CHECK(fake_memtype_calls == 2 && clean_calls == 0);   /* both ends */
+			memset(u, 0x3C, 100 * 512);
+			CHECK(wr(u, 50, 100, REF_RD) == 0 && last_buf == u);
+			CHECK(memcmp(disk + 50 * 512, u, 100 * 512) == 0);
+		}
+		CHECK(g_dev[M].st.reads == 0 && g_dev[M].st.writes == 0);
+		CHECK(g_nc_stock_kib == 2 * (550 + 50));
+		CHECK(g_dev[M].all_rd == 2 * 1100 * 512);            /* the HUD still counts */
+		for (int i = 0; i < 3; i++) {
+			fake_memtype = staged[i];
+			CHECK(rd(u, 10, 1100) == 0 && last_buf == staging);
+			CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+		}
+		/* only the start non-cacheable, the end cached: staged */
+		fake_memtype = 0x8000;
+		fake_memtype_from = u + 600 * 512;
+		fake_memtype_above = 0xD000;
+		CHECK(rd(u, 10, 1100) == 0 && last_buf == staging);
+		/* ... and the other way round */
+		fake_memtype = 0xD000;
+		fake_memtype_above = 0x8000;
+		CHECK(rd(u, 10, 1100) == 0 && last_buf == staging);
+		fake_memtype_from = NULL;
+		CHECK(g_dev[M].st.reads == 5);
+	}
+
+	/* nothing looked up for what stays stock anyway */
+	reset();
+	fake_memtype = 0x8000;
+	CHECK(rd(u, 0, 8) == 0 && fake_memtype_calls == 0);           /* small */
+	g_dev[M].enabled = 0;
+	CHECK(rd(u, 0, 100) == 0 && fake_memtype_calls == 0 && last_buf == u);   /* off */
+	free(u);
+}
+
 /* GPU-safe reads: every faster read's copy is cleaned out of the cache, the
  * whole destination in 32-byte lines; writes are not; off (or no clean
  * function on this firmware) changes nothing. */
@@ -224,33 +287,15 @@ static void test_gpu_safe_reads(void)
 	CHECK(clean_calls == 1 && clean_lo <= (uintptr_t)odd &&
 	      clean_hi >= (uintptr_t)odd + 64 * 512 && (clean_lo & 31) == 0);
 
-	/* memory that is not cached (non-cacheable, CDRAM, device): nothing to
-	 * clean, the data is the same; one end cached or unknown: cleaned */
-	{
-		static const int nothing[] = { 0x8000, 0x0800 };
-		static const int clean_it[] = { 0xD000, 0x4000, -1 };
-
-		for (int i = 0; i < 2; i++) {
-			clean_calls = 0;
-			fake_memtype = nothing[i];
-			memset(u, 0, 1100 * 512);
-			CHECK(rd(u, 10, 1100) == 0 && clean_calls == 0);
-			CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
-			CHECK(fake_memtype_calls >= 2);          /* both ends looked at */
-		}
-		for (int i = 0; i < 3; i++) {
-			clean_calls = 0;
-			fake_memtype = clean_it[i];
-			CHECK(rd(u, 10, 1100) == 0 && clean_calls == 3);
-		}
-		CHECK(g_gpu_skipped_kib == 2 * 550 && g_gpu_cleaned_kib >= 3 * 550);
-		fake_memtype = 0xD000;
-	}
+	/* a non-cacheable buffer goes the standard way: nothing to clean */
+	clean_calls = 0;
+	fake_memtype = 0x8000;
+	CHECK(rd(u, 10, 1100) == 0 && clean_calls == 0 && last_buf == u);
+	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+	fake_memtype = 0xD000;
 
 	clean_calls = 0;
-	fake_memtype_calls = 0;
 	CHECK(wr(u, 0, 100, REF_RD) == 0 && clean_calls == 0);   /* writes: nothing to do */
-	CHECK(fake_memtype_calls == 0);                          /* ... and nothing looked up */
 	CHECK(rd(u, 0, 8) == 0 && clean_calls == 0);             /* small, stock: not ours */
 
 	s.gpusafe = 0;
@@ -657,6 +702,7 @@ int main(void)
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);
 	RUN(test_gpu_safe_reads);
+	RUN(test_noncacheable_buffers_go_stock);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

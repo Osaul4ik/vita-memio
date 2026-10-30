@@ -132,14 +132,19 @@ void fakes_reset(void)
 	fake_rename_fail = fake_write_short = 0;
 	fake_memtype = 0xD000;          /* ordinary cached memory */
 	fake_memtype_calls = 0;
+	fake_memtype_from = NULL;
+	fake_memtype_above = 0xD000;
 }
 
 int fake_memtype = 0xD000, fake_memtype_calls;
+const void *fake_memtype_from;
+int fake_memtype_above = 0xD000;
 
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 {
-	(void)addr;
 	fake_memtype_calls++;
+	if (fake_memtype_from && (const char *)addr >= (const char *)fake_memtype_from)
+		return fake_memtype_above;
 	return fake_memtype;
 }
 

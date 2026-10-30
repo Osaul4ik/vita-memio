@@ -11,11 +11,37 @@
  */
 #ifdef VM_INTRDIAG
 #include <stdint.h>
-#include <psp2kern/kernel/intrmgr.h>
 #include <psp2kern/kernel/threadmgr.h>
 
 #include "intrdiag.h"
 #include "klog.h"
+
+/* Looked up at run time (the pinned VitaSDK does not declare the hook calls):
+ * SceKernelIntrMgr, library SceIntrmgrForDriver. */
+typedef int (*SceKernelIntrHookHandler)(int intr_code, void *user_ctx, int intr_priority);
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid, uint32_t funcnid,
+                           uintptr_t *func);
+#define ID_KERNEL_PID   0x10005
+#define ID_LIB          0x9DF04041
+static int (*p_get_target)(int intr_code, int *cpu_target_list);
+static int (*p_hook)(int intr_code, SceKernelIntrHookHandler new_handler,
+                     SceKernelIntrHookHandler *old_handler);
+static int (*p_unhook)(int intr_code);
+
+static int id_resolve(void)
+{
+	uintptr_t a = 0, b = 0, c = 0;
+
+	if (module_get_export_func(ID_KERNEL_PID, "SceKernelIntrMgr", ID_LIB, 0x353CFAAE, &a) < 0 ||
+	    module_get_export_func(ID_KERNEL_PID, "SceKernelIntrMgr", ID_LIB, 0x99048AEC, &b) < 0 ||
+	    module_get_export_func(ID_KERNEL_PID, "SceKernelIntrMgr", ID_LIB, 0xA0B7F44E, &c) < 0 ||
+	    !a || !b || !c)
+		return -1;
+	p_get_target = (int (*)(int, int *))a;
+	p_hook = (int (*)(int, SceKernelIntrHookHandler, SceKernelIntrHookHandler *))b;
+	p_unhook = (int (*)(int))c;
+	return 0;
+}
 
 #define ID_FIRST  32
 #define ID_COUNT  256
@@ -60,12 +86,16 @@ static int id_thread(SceSize args, void *argp)
 
 	(void)args; (void)argp;
 	ksceKernelDelayThread(20 * 1000 * 1000);
+	if (id_resolve() < 0) {
+		VM_KLOGW("intrdiag: interrupt manager calls not found");
+		return 0;
+	}
 	for (int code = ID_FIRST; code < ID_COUNT; code++) {
 		int tgt = 0;
 
-		if (ksceKernelGetIntrTarget(code, &tgt) < 0)
+		if (p_get_target(code, &tgt) < 0)
 			continue;
-		if (ksceKernelRegisterIntrHookHandler(code, id_hook, &g_old[code]) == 0 && g_old[code]) {
+		if (p_hook(code, id_hook, &g_old[code]) == 0 && g_old[code]) {
 			g_hooked[code] = 1;
 			hooked++;
 		}
@@ -104,7 +134,7 @@ static int id_thread(SceSize args, void *argp)
 			const int code = top[k];
 			int tgt = 0;
 
-			ksceKernelGetIntrTarget(code, &tgt);
+			p_get_target(code, &tgt);
 			VM_KLOGI("intrdiag: 0x%02x target 0x%x, %u in the last minute; total by core "
 			         "%u/%u/%u/%u, us %u/%u/%u/%u", code, (unsigned)tgt, (unsigned)d[code],
 			         (unsigned)g_n[code][0], (unsigned)g_n[code][1], (unsigned)g_n[code][2],
@@ -127,9 +157,11 @@ void vm_intrdiag_start(void)
 void vm_intrdiag_stop(void)
 {
 	g_on = 0;
+	if (!p_unhook)
+		return;
 	for (int code = 0; code < ID_COUNT; code++)
 		if (g_hooked[code]) {
-			ksceKernelReleaseIntrHookHandler(code);
+			p_unhook(code);
 			g_hooked[code] = 0;
 		}
 }

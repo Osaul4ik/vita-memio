@@ -20,6 +20,97 @@ static uint64_t v_now_us(void *ctx)
 	return sceKernelGetProcessTimeWide();
 }
 
+/* ---- DIAGNOSTIC: the core meter ----------------------------------------------
+ * One counting thread per game core (0-2) at the lowest priority: it runs only
+ * when nothing else wants that core. Its rate when the core is free is
+ * measured once (300 ms); later, the time a core was busy = time passed - its
+ * count / that rate. */
+static volatile uint32_t g_spin[3];
+static volatile int g_spin_quit;
+static SceUID g_spin_th[3] = { -1, -1, -1 };
+static int g_spin_state;                 /* 0 not started, 1 running, -1 unavailable */
+static uint64_t g_spin_t0;
+static uint32_t g_spin_c0[3];
+static double g_spin_rate[3];            /* counts per us, core free */
+
+static int spinner(SceSize args, void *argp)
+{
+	const int i = *(const int *)argp;
+
+	(void)args;
+	while (!g_spin_quit) {
+		for (volatile int j = 0; j < 64; j++) {
+		}
+		g_spin[i]++;
+	}
+	return 0;
+}
+
+static int cores_start(void)
+{
+	static const int masks[3] = { 0x10000, 0x20000, 0x40000 };   /* user cores 0-2 */
+	uint64_t t;
+
+	g_spin_quit = 0;
+	for (int i = 0; i < 3; i++) {
+		g_spin_th[i] = sceKernelCreateThread("vmtest_core", spinner, 191, 0x1000, 0, masks[i], NULL);
+		if (g_spin_th[i] < 0 || sceKernelStartThread(g_spin_th[i], sizeof(i), &i) < 0) {
+			vita_env_cores_stop();
+			return -1;
+		}
+	}
+	sceKernelDelayThread(20000);             /* all three running */
+	t = sceKernelGetProcessTimeWide();
+	for (int i = 0; i < 3; i++)
+		g_spin_c0[i] = g_spin[i];
+	sceKernelDelayThread(300000);            /* the rate with the cores free */
+	{
+		const uint64_t dt = sceKernelGetProcessTimeWide() - t;
+
+		for (int i = 0; i < 3; i++) {
+			g_spin_rate[i] = dt ? (double)(uint32_t)(g_spin[i] - g_spin_c0[i]) / (double)dt : 0;
+			if (g_spin_rate[i] <= 0) {
+				vita_env_cores_stop();
+				return -1;
+			}
+		}
+	}
+	g_spin_t0 = sceKernelGetProcessTimeWide();
+	for (int i = 0; i < 3; i++)
+		g_spin_c0[i] = g_spin[i];
+	return 0;
+}
+
+void vita_env_cores_stop(void)
+{
+	g_spin_quit = 1;
+	for (int i = 0; i < 3; i++)
+		if (g_spin_th[i] >= 0) {
+			sceKernelWaitThreadEnd(g_spin_th[i], NULL, NULL);
+			sceKernelDeleteThread(g_spin_th[i]);
+			g_spin_th[i] = -1;
+		}
+	g_spin_state = 0;
+}
+
+static int v_core_busy_us(void *ctx, uint64_t out[3])
+{
+	uint64_t now;
+
+	(void)ctx;
+	if (g_spin_state == 0)
+		g_spin_state = cores_start() == 0 ? 1 : -1;
+	if (g_spin_state < 0)
+		return -1;
+	now = sceKernelGetProcessTimeWide() - g_spin_t0;
+	for (int i = 0; i < 3; i++) {
+		const double idle = (double)(uint32_t)(g_spin[i] - g_spin_c0[i]) / g_spin_rate[i];
+
+		out[i] = idle < (double)now ? (uint64_t)((double)now - idle) : 0;
+	}
+	return 0;
+}
+
 /* The calling thread's run time (SceKernelThreadInfo.runClocks, in us). */
 static uint64_t v_cpu_us(void *ctx)
 {
@@ -267,6 +358,7 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->env.nc_free = v_nc_free;
 	v->nc_uid = -1;
 	v->env.mem_alloc = v_mem_alloc;
+	v->env.core_busy_us = v_core_busy_us;
 	v->env.mem_free = v_mem_free;
 	v->mem_uid[0] = v->mem_uid[1] = v->mem_uid[2] = -1;
 }

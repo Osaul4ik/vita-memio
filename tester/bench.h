@@ -136,6 +136,10 @@ typedef struct BenchEnv {
 	 * (BENCH_MEM_*), as games use for graphics data, and its release. */
 	void *(*mem_alloc)(void *ctx, uint32_t size, int kind);
 	void (*mem_free)(void *ctx, void *p, int kind);
+	/* DIAGNOSTIC, optional: how long each of the cores 0-2 has been busy so
+	 * far (with anything: the testing thread, other threads, interrupts), in
+	 * us. Returns 0 when known. */
+	int (*core_busy_us)(void *ctx, uint64_t out[3]);
 } BenchEnv;
 
 enum { BENCH_MEM_NC_PHYCONT = 1, BENCH_MEM_CDRAM = 2 };
@@ -169,6 +173,8 @@ typedef struct BenchRun {
 	uint32_t ops[BM_COUNT];
 	uint64_t cpu_us[BM_COUNT];      /* CPU time of the testing thread in the calls */
 	uint64_t cpu_bytes[BM_COUNT];   /* ... for this many bytes (0: not measured)  */
+	uint64_t core_us[BM_COUNT][3];  /* DIAGNOSTIC: cores 0-2 busy in the calls    */
+	uint64_t core_bytes[BM_COUNT];
 	uint32_t verify_bad;            /* words that differed when read back       */
 	uint32_t final_bad;             /* ... in the read-back of the whole file   */
 	int      final_done;
@@ -238,6 +244,10 @@ void bench_timing(const BenchResult *res, BenchTiming *out);
 /* CPU time the testing thread spent in the calls of metric m, in ms per MiB,
  * over the complete runs. 0 when it was not measured (no BenchEnv.cpu_us). */
 int bench_cpu_ms_per_mib(const BenchResult *res, int m, double *out);
+
+/* DIAGNOSTIC: how long core `core` (0-2) was busy during the calls of metric
+ * m, ms per MiB, over the complete runs. 0 when not measured. */
+int bench_core_ms_per_mib(const BenchResult *res, int m, int core, double *out);
 
 /* Verdicts. */
 int bench_integrity_ok(const BenchResult *res);    /* nothing differed, no I/O error */

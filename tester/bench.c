@@ -166,6 +166,19 @@ static void finish_metric(Ctx *c, BenchRun *r, int m, uint32_t n, uint64_t total
 	r->p99_us[m] = c->lat[(uint64_t)(n - 1) * 99 / 100];
 }
 
+/* DIAGNOSTIC: the cores' busy time over one call (k0: before it). */
+static void core_note(const BenchEnv *e, BenchRun *r, int m, uint32_t io, int k_ok,
+                      const uint64_t k0[3])
+{
+	uint64_t k1[3];
+
+	if (!k_ok || e->core_busy_us(e->ctx, k1) != 0)
+		return;
+	for (int i = 0; i < 3; i++)
+		r->core_us[m][i] += k1[i] > k0[i] ? k1[i] - k0[i] : 0;
+	r->core_bytes[m] += io;
+}
+
 /* ---- the tests --------------------------------------------------------------- */
 
 static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
@@ -178,18 +191,20 @@ static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
 	uint64_t total = 0;
 
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off = (uint64_t)i * io, t0, t1, c0;
-		int got;
+		uint64_t off = (uint64_t)i * io, t0, t1, c0, k0[3];
+		int got, k_ok;
 
 		if (is_cancelled(c))
 			return BR_CANCEL;
 		if (write)
 			tp_fill(buf, off, io);
+		k_ok = e->core_busy_us && e->core_busy_us(e->ctx, k0) == 0;
 		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, *h, buf, io, off)
 		            : e->pread(e->ctx, *h, buf, io, off);
 		t1 = e->now_us(e->ctx);
+		core_note(e, r, m, io, k_ok, k0);
 		if (e->cpu_us) {
 			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
 			r->cpu_bytes[m] += io;
@@ -232,8 +247,8 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 	if (!n || !slots)
 		return BR_OK;
 	for (uint32_t i = 0; i < n; i++) {
-		uint64_t off, t0, t1, c0;
-		int got;
+		uint64_t off, t0, t1, c0, k0[3];
+		int got, k_ok;
 
 		if (is_cancelled(c))
 			return BR_CANCEL;
@@ -243,11 +258,13 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 		off = (uint64_t)(rng % slots) * io;
 		if (write)
 			tp_fill(c->buf, off, io);          /* the pattern, so the file stays valid */
+		k_ok = e->core_busy_us && e->core_busy_us(e->ctx, k0) == 0;
 		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, h, c->buf, io, off)
 		            : e->pread(e->ctx, h, c->buf, io, off);
 		t1 = e->now_us(e->ctx);
+		core_note(e, r, m, io, k_ok, k0);
 		if (e->cpu_us) {
 			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
 			r->cpu_bytes[m] += io;
@@ -655,6 +672,24 @@ int bench_cpu_ms_per_mib(const BenchResult *res, int m, double *out)
 		if (res->runs[i].complete) {
 			us += res->runs[i].cpu_us[m];
 			bytes += res->runs[i].cpu_bytes[m];
+		}
+	if (!bytes)
+		return 0;
+	*out = (double)us / 1000.0 / ((double)bytes / (double)MIB);
+	return 1;
+}
+
+int bench_core_ms_per_mib(const BenchResult *res, int m, int core, double *out)
+{
+	uint64_t us = 0, bytes = 0;
+
+	*out = 0;
+	if (m < 0 || m >= BM_COUNT || core < 0 || core > 2)
+		return 0;
+	for (int i = 0; i < res->nruns; i++)
+		if (res->runs[i].complete) {
+			us += res->runs[i].core_us[m][core];
+			bytes += res->runs[i].core_bytes[m];
 		}
 	if (!bytes)
 		return 0;

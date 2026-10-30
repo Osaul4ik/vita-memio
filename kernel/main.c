@@ -36,6 +36,7 @@
 #include "klog.h"
 #include "settings.h"
 #include "stage.h"
+#include "intrdiag.h"
 #include "hud.h"
 #include "hud_i18n.h"
 
@@ -579,12 +580,18 @@ int module_start(SceSize argc, const void *args)
 		VM_KLOGW("storage hooks NOT installed: storage stays stock");
 	}
 	start_worker();
+#ifdef VM_INTRDIAG
+	vm_intrdiag_start();                  /* DIAGNOSTIC: branch ncdirect */
+#endif
 	return SCE_KERNEL_START_SUCCESS;
 }
 
 int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
+#ifdef VM_INTRDIAG
+	vm_intrdiag_stop();
+#endif
 	/* Every state runs the worker; the rest releases only what was set up. */
 	vm_stage_on_problem(NULL);
 	g_run = 0;

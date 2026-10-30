@@ -18,3 +18,10 @@ typedef struct SceKernelThreadInfo {
 } SceKernelThreadInfo;
 SceUID sceKernelGetThreadId(void);
 int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info);
+typedef int (*SceKernelThreadEntry)(SceSize args, void *argp);
+SceUID sceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int initPriority,
+                             int stackSize, unsigned attr, int cpuAffinityMask, const void *option);
+int sceKernelStartThread(SceUID thid, SceSize arglen, void *argp);
+int sceKernelWaitThreadEnd(SceUID thid, int *stat, unsigned *timeout);
+int sceKernelDeleteThread(SceUID thid);
+int sceKernelDelayThread(unsigned us);

@@ -286,7 +286,7 @@ static void f_progress(void *c, const struct BenchProgress *p)
 static BenchEnv env_for(Fake *f)
 {
 	BenchEnv e = { f, f_now, f_open, f_pread, f_pwrite, f_close, f_remove, f_mkdirs,
-	               f_get, f_progress, f_cancelled, NULL, NULL, NULL, NULL, NULL };
+	               f_get, f_progress, f_cancelled, NULL, NULL, NULL, NULL, NULL, NULL };
 	return e;
 }
 
@@ -1274,6 +1274,52 @@ static void test_other_memory(void)
 	free(r);
 }
 
+/* DIAGNOSTIC: the cores' busy time over the calls, when the platform gives
+ * it: here core 1 is busy 2 ms per MiB read, the others never. */
+static int f_core_busy(void *c, uint64_t out[3])
+{
+	const Fake *f = c;
+
+	out[0] = 0;
+	out[1] = f->cpu * 2;
+	out[2] = 0;
+	return 0;
+}
+
+static void test_core_meter(void)
+{
+	Fake f = { 0 };
+	BenchEnv e;
+	BenchConfig cfg = { VM_DEV_SD2VITA, &tiny, "ux0:data/t/" };
+	BenchResult *r = new_result();
+	char *text = malloc(40000);
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	double v;
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.cpu_us = f_cpu;
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(!bench_core_ms_per_mib(r, BM_SEQ_R_1M, 1, &v));
+	report_format(r, &m, text, 40000);
+	CHECK(!strstr(text, "busy time of cores"));
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.cpu_us = f_cpu;
+	e.core_busy_us = f_core_busy;
+	CHECK(bench_run(&e, &cfg, r) == 0);
+	CHECK(bench_core_ms_per_mib(r, BM_SEQ_R_1M, 1, &v) && v > 1.99 && v < 2.01);
+	CHECK(bench_core_ms_per_mib(r, BM_SEQ_R_1M, 0, &v) && v == 0);
+	CHECK(!bench_core_ms_per_mib(r, BM_SEQ_R_1M, 3, &v));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "busy time of cores 0/1/2 during the calls, ms per MiB:\n"
+	                   "  seq read 1M     0.0 / 2.0 / 0.0\n"));
+	CHECK_UNTOUCHED(f);
+	free(f.data);
+	free(text);
+	free(r);
+}
+
 int main(void)
 {
 	RUN(test_full_run_on);
@@ -1301,6 +1347,7 @@ int main(void)
 	RUN(test_pattern);
 	RUN(test_cpu_time);
 	RUN(test_other_memory);
+	RUN(test_core_meter);
 
 	printf(vm_failures ? "test_bench: %d FAILED\n" : "test_bench: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

@@ -287,6 +287,25 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		}
 		if (any)
 			put(&o, "\n");
+		/* DIAGNOSTIC: how busy each core really was during the calls */
+		any = 0;
+		for (unsigned i = 0; i < sizeof(cm) / sizeof(cm[0]); i++) {
+			char a[3][16];
+			int ok = 1;
+
+			for (int k = 0; k < 3; k++) {
+				ok &= bench_core_ms_per_mib(res, cm[i], k, &v);
+				report_fmt1(a[k], sizeof(a[k]), v);
+			}
+			if (!ok)
+				continue;
+			if (!any)
+				put(&o, "busy time of cores 0/1/2 during the calls, ms per MiB:\n");
+			any = 1;
+			put(&o, "  %-15s %s / %s / %s\n", bench_metric_name[cm[i]], a[0], a[1], a[2]);
+		}
+		if (any)
+			put(&o, "\n");
 	}
 
 	put(&o, "runs (value per metric, in the order of the table above):\n");

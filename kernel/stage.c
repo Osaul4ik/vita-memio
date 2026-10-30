@@ -221,11 +221,27 @@ static int caller_uncached(const uint8_t *p, uint32_t n)
 	return is_uncached(p) && is_uncached(p + n - 1);
 }
 
+/* DIAGNOSTIC (branch cleantime, log on): the clean's wall time per call, by
+ * size (<=4K, <=32K, <=128K, more) and by who calls it (a game's thread, on
+ * its own address, or a kernel thread - the copier - on its mapping). */
+static uint32_t g_ct_n[2][4], g_ct_us[2][4];   /* atomics: [copier][size] */
+static volatile int g_ct_on;
+
 /* Write [p, p + n) out of the data cache to memory (whole 32-byte lines). */
 static inline void clean_out(void *p, uint32_t n)
 {
 	uintptr_t a = (uintptr_t)p & ~(uintptr_t)31, e = ((uintptr_t)p + n + 31) & ~(uintptr_t)31;
 
+	if (__atomic_load_n(&g_ct_on, __ATOMIC_RELAXED)) {
+		const int k = ksceKernelGetProcessId() == 0x10005;   /* a kernel thread: the copier */
+		const int b = n <= 4096 ? 0 : n <= 32768 ? 1 : n <= 131072 ? 2 : 3;
+		const uint32_t t0 = ksceKernelGetSystemTimeLow();
+
+		g_dcache_clean((void *)a, (unsigned int)(e - a));
+		__atomic_fetch_add(&g_ct_us[k][b], ksceKernelGetSystemTimeLow() - t0, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&g_ct_n[k][b], 1, __ATOMIC_RELAXED);
+		return;
+	}
 	g_dcache_clean((void *)a, (unsigned int)(e - a));
 }
 
@@ -1536,6 +1552,7 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_count_all, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
+	__atomic_store_n(&g_ct_on, s->log ? 1 : 0, __ATOMIC_RELAXED);   /* DIAGNOSTIC */
 	if (offload != LD(g_offload)) {
 		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
 		ST(g_offload_logged, 0);
@@ -1590,6 +1607,22 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
+		{
+			uint32_t avg[2][4];
+
+			for (int k = 0; k < 2; k++)
+				for (int b = 0; b < 4; b++) {
+					const uint32_t n = LD(g_ct_n[k][b]);
+
+					avg[k][b] = n ? LD(g_ct_us[k][b]) / n : 0;
+				}
+			VM_KLOGI("stage: diag clean us per call <=4K/<=32K/<=128K/more: game thread "
+			         "%u/%u/%u/%u (%u/%u/%u/%u), copier %u/%u/%u/%u (%u/%u/%u/%u)",
+			         avg[0][0], avg[0][1], avg[0][2], avg[0][3], LD(g_ct_n[0][0]),
+			         LD(g_ct_n[0][1]), LD(g_ct_n[0][2]), LD(g_ct_n[0][3]),
+			         avg[1][0], avg[1][1], avg[1][2], avg[1][3], LD(g_ct_n[1][0]),
+			         LD(g_ct_n[1][1]), LD(g_ct_n[1][2]), LD(g_ct_n[1][3]));
+		}
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),

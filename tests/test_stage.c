@@ -95,7 +95,7 @@ static void reset(void)
 	g_dcache_clean = NULL;
 	g_gpu_cleaned_kib = g_nc_stock_kib = 0;
 	g_pipeline = 0;
-	g_pipe_reads = g_pipe_reads3 = 0;
+	g_pipe_reads = g_pipe_reads3 = g_stream_reads = g_rd_max = 0;
 	memset(io_bufs, 0, sizeof(io_bufs));
 	memset(io_ns, 0, sizeof(io_ns));
 	g_count_all = 1;
@@ -746,6 +746,7 @@ static void test_pipeline_reads(void)
 	pipe_on(&s, 0);
 	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 2);
 	CHECK(fake_thread_last_mask == PIPE_CPU_SYSTEM);   /* on the system core */
+	g_pipeline = VM_PIPE_FIXED;                     /* chunk by chunk (Auto streams) */
 	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76 */
 	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
 	CHECK(io_calls == 5);                           /* split, split, not split */
@@ -755,6 +756,7 @@ static void test_pipeline_reads(void)
 	CHECK(io_bufs[4] == staging && io_ns[4] == 76);
 	CHECK(g_pipe_reads == 2 && d->st.reads == 1 && d->st.errors == 0);
 	CHECK(d->tm.rd_sectors == 1100);                /* all counted */
+	g_pipeline = VM_PIPE_AUTO;
 
 	/* many reads in a row, different sizes and places: always the disk's data */
 	for (int k = 0; k < 200; k++) {
@@ -936,7 +938,8 @@ static void test_pipeline_gpu_safe(void)
 			CHECK(rd(v, at, n) == 0);
 			CHECK(memcmp(v, disk + (size_t)at * 512, (size_t)n * 512) == 0);
 		}
-		CHECK(g_pipe_reads3 > 100 && g_dev[M].st.errors == 0);
+		CHECK(g_pipe_reads3 + g_stream_reads > 100 && g_stream_reads > 10);
+		CHECK(g_dev[M].st.errors == 0);
 		CHECK(g_dev[M].tm.rd_sectors == 512);   /* only the first read, with Statistics on */
 		free(v);
 	}
@@ -1291,6 +1294,286 @@ static void test_problems_wake_the_worker(void)
 	free(u);
 }
 
+/* ---- streamed overlapped reads ---------------------------------------------- */
+
+/* The cost of a plan as the card and the CPU would run it: the helper reads
+ * part i+1 while part i is copied; part i+2 waits for part i's copy (its
+ * buffer). In ns. */
+static uint64_t stream_sim(const Stream *s, uint64_t io, uint64_t cp, uint64_t cmd)
+{
+	uint64_t io_end = 0, cp_end = 0, cp_prev = 0;
+
+	for (uint32_t i = 0; i < s->k; i++) {
+		const uint64_t n = stream_part(s, i);
+		uint64_t st = io_end;
+
+		if (i >= 2 && cp_prev > st)
+			st = cp_prev;                  /* its buffer is copied out */
+		io_end = st + cmd + n * io;
+		cp_prev = cp_end;
+		cp_end = (io_end > cp_end ? io_end : cp_end) + n * cp;
+	}
+	return cp_end;
+}
+
+/* The plan written out part by part from the end, without the shortcut for
+ * the full-size parts: the reference stream_fit is checked against. 0 if no
+ * plan; else the part count and the sizes from the end in r[]. */
+static uint32_t stream_ref(uint32_t n, uint32_t x, int lb, uint64_t io, uint64_t cp, uint64_t cmd,
+                           uint32_t *r, uint32_t rmax)
+{
+	uint64_t sum = x;
+	uint32_t j = 0;
+
+	if (x < PIPE_MIN_TAIL || x > stream_cap(lb))
+		return 0;
+	r[0] = x;
+	while (sum < n) {
+		uint64_t m = (cmd + (uint64_t)r[j] * io) / cp;
+		const uint32_t c = stream_cap(lb ^ (int)((j + 1) & 1));
+
+		if (m > c)
+			m = c;
+		if (m < PIPE_MIN_TAIL || j + 1 >= rmax)
+			return 0;
+		r[++j] = (uint32_t)m;
+		sum += m;
+	}
+	if (!j)
+		return 0;
+	r[j] = (uint32_t)(n - (sum - r[j]));
+	return j + 1;
+}
+
+/* The planner: every plan covers n exactly with every part inside its
+ * buffer, the two buffers alternate, every copy but the last hides behind
+ * the next read, it matches the written-out plan, and no last part and
+ * buffer give a lower cost. */
+static void test_stream_plan(void)
+{
+	static const uint64_t costs[][3] = {   /* io, cp, cmd (ns) */
+		{ 25000, 11100, 600000 },          /* SD2Vita, GPU-safe (built in) */
+		{ 25000, 4200, 600000 },           /* SD2Vita, plain               */
+		{ 27000, 11100, 420000 },          /* SD2Vita as measured          */
+		{ 15000, 11100, 300000 },          /* a faster card, GPU-safe      */
+		{ 12000, 11100, 900000 },          /* copy almost as slow as the card */
+		{ 25000, 4200, 0 },                /* no command cost              */
+	};
+	static uint32_t r[40000];
+	uint32_t checked = 0;
+
+	for (size_t c = 0; c < sizeof(costs) / sizeof(costs[0]); c++) {
+		const uint64_t io = costs[c][0], cp = costs[c][1], cmd = costs[c][2];
+
+		for (uint32_t n = STAGE_SECTORS + 1; n <= 40000; n += (n < 3000 ? 7 : 997)) {
+			Stream s;
+			uint64_t sum = 0, best = ~(uint64_t)0;
+
+			if (!stream_plan_costs(n, io, cp, cmd, &s))
+				continue;
+			checked++;
+			CHECK(s.k >= 2 && s.ramp_len >= 1 && s.ramp_len <= STREAM_RAMP_MAX);
+			for (uint32_t i = 0; i < s.k; i++) {
+				const uint32_t si = stream_part(&s, i);
+
+				sum += si;
+				CHECK(si >= 1 && si <= stream_cap(stream_buf(&s, i)));
+				if (i)
+					CHECK(stream_buf(&s, i) != stream_buf(&s, i - 1));
+				if (i + 1 < s.k)
+					CHECK(si * cp <= cmd + (uint64_t)stream_part(&s, i + 1) * io);
+			}
+			CHECK(sum == n && stream_ok(&s, n));
+			/* a part too large for its buffer, or a wrong total: refused */
+			{
+				Stream b = s;
+
+				b.first = stream_cap(stream_buf(&b, 0)) + 1;
+				CHECK(!stream_ok(&b, n));
+				b = s;
+				b.ramp[0]++;
+				CHECK(!stream_ok(&b, n));
+				CHECK(!stream_ok(&s, n + 1) && !stream_ok(&s, n - 1));
+				if (s.k - 1 > s.ramp_len + 1) {
+					b = s;
+					b.rep[1] = stream_cap(stream_buf(&s, s.k - 2 - s.ramp_len)) + 1;
+					CHECK(!stream_ok(&b, n));
+				}
+			}
+			/* the same as written out, and the cheapest of all x and buffers */
+			{
+				const uint32_t x = s.ramp[0];
+				uint32_t k = stream_ref(n, x, s.last_buf, io, cp, cmd, r, 40000);
+
+				CHECK(k == s.k);
+				for (uint32_t i = 0; k && i < s.k; i++)
+					CHECK(r[s.k - 1 - i] == stream_part(&s, i));
+			}
+			for (int lb = 0; lb <= 1; lb++)
+				for (uint32_t x = PIPE_MIN_TAIL; x <= stream_cap(lb); x++) {
+					uint32_t k = stream_ref(n, x, lb, io, cp, cmd, r, 40000);
+					Stream t;
+
+					if (!k)
+						continue;
+					/* the shortcut finds a plan wherever the written-out one
+					 * does, except when the ramp is very long (a copy almost
+					 * as slow as the card), and then the same plan */
+					if (!stream_fit(n, x, lb, io, cp, cmd, &t)) {
+						CHECK(c >= 4);
+						continue;
+					}
+					if ((uint64_t)k * cmd + (uint64_t)x * cp < best)
+						best = (uint64_t)k * cmd + (uint64_t)x * cp;
+					CHECK(t.k == k && stream_part(&t, 0) == r[k - 1]);
+					if (x % 61 == 0)
+						for (uint32_t i = 0; i < k; i++)
+							CHECK(stream_part(&t, i) == r[k - 1 - i]);
+				}
+			CHECK((uint64_t)s.k * cmd + (uint64_t)s.ramp[0] * cp == best);
+			/* and as the card and the CPU would run it: no copy waited for */
+			CHECK(stream_sim(&s, io, cp, cmd) ==
+			      (uint64_t)s.k * cmd + (uint64_t)n * io + (uint64_t)s.ramp[0] * cp);
+		}
+	}
+	CHECK(checked > 500);
+	/* 1 MiB on the SD2Vita with GPU-safe: far fewer commands than 4 chunks of 3 */
+	{
+		Stream s;
+
+		CHECK(stream_plan_costs(2048, 27000, 11100, 420000, &s));
+		CHECK(s.k <= 7);
+	}
+	/* no plan when nothing can be hidden: the copy slower than the card */
+	{
+		Stream s;
+
+		CHECK(!stream_plan_costs(2048, 4000, 11100, 0, &s));
+	}
+}
+
+/* Auto, a request over 256 KiB: one stream, the parts alternating between
+ * the two buffers as planned, the disk's data, one request counted. */
+static void test_stream_reads(void)
+{
+	uint8_t *u = user_buf(3000);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	for (int gpu = 0; gpu <= 1; gpu++) {
+		Stream want;
+
+		reset();
+		pipe_on(&s, gpu);
+		if (gpu)
+			g_dcache_clean = fake_clean;
+		clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
+		CHECK(stream_plan(d, 2048, gpu, &want) && want.k <= 16);
+		CHECK(rd(u, 7, 2048) == 0);
+		CHECK(memcmp(u, disk + 7 * 512, 2048 * 512) == 0);
+		CHECK((uint32_t)io_calls == want.k);
+		for (uint32_t i = 0; i < want.k; i++) {
+			CHECK(io_ns[i] == stream_part(&want, i));
+			CHECK(io_bufs[i] == (stream_buf(&want, i) ? d->buf2 : staging));
+		}
+		CHECK(g_stream_reads == 1 && g_pipe_reads == 0 && d->st.reads == 1);
+		CHECK(d->st.errors == 0 && !d->fallback);
+		CHECK(d->tm.rd_sectors == 2048 && d->rd_bytes == 2048 * 512);
+		CHECK(g_rd_max == 2048);
+		if (gpu) {
+			CHECK(clean_calls == (int)want.k);
+			CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + 2048 * 512);
+		}
+		/* many sizes and places: always the disk's data */
+		for (int k = 0; k < 120; k++) {
+			uint32_t n = 513 + (uint32_t)(k * 211) % 2480, at = (uint32_t)(k * 89) % 1000;
+
+			d->est_io_ns = 25000; d->est_cmd_ns = 600000;   /* the fake clock's */
+			d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; /* costs are not real */
+			memset(u, 0, n * 512);
+			CHECK(rd(u, at, n) == 0);
+			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
+		}
+		CHECK(g_stream_reads == 121 && d->st.errors == 0);
+		/* exactly 256 KiB is not streamed */
+		CHECK(rd(u, 0, 512) == 0 && g_stream_reads == 121 && g_pipe_reads == 1);
+		vm_stage_fini();
+	}
+	g_live = saved_live;
+	free(u);
+}
+
+/* An error at any part: the parts before it stay copied, the device goes
+ * stock, and the rest is read the standard way: the caller gets the disk's
+ * data. */
+static void test_stream_errors(void)
+{
+	uint8_t *u = user_buf(2048);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+	Stream want;
+	uint32_t k;
+
+	reset();
+	pipe_on(&s, 1);
+	g_dcache_clean = fake_clean;
+	CHECK(stream_plan(d, 2048, 1, &want));
+	k = want.k;
+	vm_stage_fini();
+	for (uint32_t at = 1; at <= k; at++) {
+		uint32_t before = 0;
+
+		for (uint32_t i = 0; i + 1 < at; i++)
+			before += stream_part(&want, i);
+		reset();
+		pipe_on(&s, 1);
+		g_dcache_clean = fake_clean;
+		fail_at_call = (int)at;
+		memset(u, 0, 2048 * 512);
+		CHECK(rd(u, 3, 2048) == 0);
+		CHECK(memcmp(u, disk + 3 * 512, 2048 * 512) == 0);
+		CHECK(d->st.errors == 1 && d->fallback && g_stream_reads == 0);
+		CHECK(last_buf == u + (size_t)before * 512);   /* the rest, stock */
+		CHECK((uint32_t)io_calls == at + 1);
+		vm_stage_fini();
+		CHECK(fake_threads_live == 0);
+	}
+	g_live = saved_live;
+	free(u);
+}
+
+/* Fixed and Off do not stream; Verify does not either. */
+static void test_stream_only_auto(void)
+{
+	uint8_t *u = user_buf(2048);
+	VmSettings s;
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 0);
+	g_pipeline = VM_PIPE_FIXED;
+	CHECK(rd(u, 0, 2048) == 0 && memcmp(u, disk, 2048 * 512) == 0);
+	CHECK(g_stream_reads == 0 && g_pipe_reads == 4 && io_calls == 8);
+	g_pipeline = VM_PIPE_OFF;
+	io_calls = 0;
+	CHECK(rd(u, 0, 2048) == 0 && memcmp(u, disk, 2048 * 512) == 0);
+	CHECK(g_stream_reads == 0 && io_calls == 4);
+	g_pipeline = VM_PIPE_AUTO;
+	g_shadow = malloc(STAGE_BYTES);
+	g_verify = 1;
+	io_calls = 0;
+	CHECK(rd(u, 0, 2048) == 0 && memcmp(u, disk, 2048 * 512) == 0);
+	CHECK(g_stream_reads == 0 && io_calls == 8);           /* read + re-read per chunk */
+	g_verify = 0;
+	free(g_shadow);
+	g_shadow = NULL;
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1301,6 +1584,10 @@ int main(void)
 	RUN(test_gpu_safe_reads);
 	RUN(test_noncacheable_buffers_go_stock);
 	RUN(test_pipeline_reads);
+	RUN(test_stream_plan);
+	RUN(test_stream_reads);
+	RUN(test_stream_errors);
+	RUN(test_stream_only_auto);
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);

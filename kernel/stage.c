@@ -147,6 +147,8 @@ typedef struct Dev {
 	/* the job: parts job_first .. job_k-1 of job_sz, the first of them at
 	 * job_sector (pipe_run: from part 1; offload_run: all of them) */
 	uint32_t      job_first;
+	uint8_t      *job_dst;                /* NULL: the staging buffers; else the
+	                                       * caller's own buffer, mapped (one part) */
 	io_fn         job_io;
 	tai_hook_ref_t job_ref;
 	void         *job_part;
@@ -450,6 +452,19 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
+/* VM_OFFLOAD_ALL ("Always + uncached"): a game's read into
+ * NON-cacheable memory, which otherwise takes the standard path on the game's
+ * own thread, is read by the helper on the system core straight into the
+ * game's buffer through a kernel mapping of it - no staging, no copy - while
+ * the game's thread sleeps. The mapping must be non-cacheable as well (the
+ * driver then has no cache to clean); anything else, and the read stays
+ * standard. */
+static volatile int g_ncd_state;           /* 0 unchecked, 1 usable, < 0 refused */
+static int          g_ncd_logged;
+static uint32_t     g_ncd_type;
+static int          g_ncd_err;
+static uint32_t     g_ncd_reads, g_ncd_kib, g_ncd_maperr, g_ncd_busy, g_ncd_fail;  /* atomics */
+
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
  * copy is hidden when it takes no longer than the next part's read:
@@ -689,7 +704,7 @@ static int pipe_helper(SceSize args, void *argp)
 		sector = d->job_sector;
 		timed = LD(g_stats) || LD(g_pipeline) == VM_PIPE_AUTO;   /* see stage_xfer */
 		for (uint32_t i = d->job_first; i < k; i++) {
-			void *buf = (i & 1) ? d->buf2 : d->buf;
+			void *buf = d->job_dst ? (void *)d->job_dst : (i & 1) ? d->buf2 : d->buf;
 			uint32_t t0, us;
 			int r;
 
@@ -994,6 +1009,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++)
 		d->job_sz[i] = i < k ? sz[i] : 0;
 	d->job_first = 1;
+	d->job_dst = NULL;
 	d->job_sector = sector + sz[0];
 	d->job_ret = 0;
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
@@ -1137,6 +1153,7 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 		n += i < k ? sz[i] : 0;
 	}
 	d->job_first = 0;
+	d->job_dst = NULL;
 	d->job_sector = sector;
 	d->job_ret = 0;
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
@@ -1186,6 +1203,126 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	return 0;
 }
 
+/* EXPERIMENT: map the game's non-cacheable buffer for the helper (see
+ * g_ncd_state). The mapping is used only if it is non-cacheable at both ends,
+ * as the buffer is, and writable. */
+static void ncd_map(OffMap *m)
+{
+	void *page = NULL;
+	SceSize size = 0;
+	SceUInt32 off = 0;
+	SceUID uid;
+	VmMemBlockInfoEx info;
+	uint8_t *kern;
+	int r;
+
+	if (ksceKernelGetMemBlockMemtypeByAddr(m->user) != MEMTYPE_NC ||
+	    ksceKernelGetMemBlockMemtypeByAddr(m->user + m->len - 1) != MEMTYPE_NC)
+		return;                           /* device memory: this one stays standard */
+	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioDirect", VM_USERMAP_RW, m->user, m->len,
+	                            &page, &size, &off);
+	if (uid < 0) {
+		ADD(g_ncd_maperr, 1);
+		ST(g_ncd_err, uid);
+		return;
+	}
+	if (!page || size < off || size - off < m->len) {
+		ksceKernelUserUnmap(uid);
+		ADD(g_ncd_maperr, 1);
+		ST(g_ncd_err, VM_ERR_NOMEM);
+		return;
+	}
+	kern = (uint8_t *)page + off;
+	if (ksceKernelGetMemBlockMemtypeByAddr(kern) != MEMTYPE_NC ||
+	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != MEMTYPE_NC) {
+		/* the mapping is not non-cacheable: the driver would clean a cache
+		 * for it - refused until the setting is switched again */
+		ST(g_ncd_type, (uint32_t)ksceKernelGetMemBlockMemtypeByAddr(kern));
+		ST(g_ncd_err, -2);
+		__atomic_store_n(&g_ncd_state, -2, __ATOMIC_RELEASE);
+		ksceKernelUserUnmap(uid);
+		return;
+	}
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	r = ksceKernelMemBlockGetInfoEx(uid, &info);
+	if (r < 0 || (int)(info.type & 0xFF00) != MEMTYPE_NC || (info.type & 0x6) != 0x6) {
+		ST(g_ncd_type, info.type);
+		ST(g_ncd_err, r < 0 ? r : -1);
+		__atomic_store_n(&g_ncd_state, -1, __ATOMIC_RELEASE);
+		ksceKernelUserUnmap(uid);
+		return;
+	}
+	{
+		int zero = 0;                       /* first usable one: for the log */
+
+		if (__atomic_compare_exchange_n(&g_ncd_state, &zero, 1, 0, __ATOMIC_ACQ_REL,
+		                                __ATOMIC_RELAXED))
+			ST(g_ncd_type, info.type);
+	}
+	if (__atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) < 0) {
+		ksceKernelUserUnmap(uid);           /* refused meanwhile (another request) */
+		return;
+	}
+	m->uid = uid;
+	m->kern = kern;
+}
+
+/* EXPERIMENT: a game's read into non-cacheable memory, by the helper straight
+ * into the game's buffer. 1 if done here (*ret: its result), 0 if it stays
+ * standard (busy device, no helper, no usable mapping). On a failed read the
+ * whole request is read again the standard way, so the caller gets what the
+ * system gives. */
+static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret)
+{
+	OffMap m = { .pid = pid, .uid = -1, .user = p, .len = nsec * 512 };
+	uint32_t f;
+
+	if (__sync_lock_test_and_set(&d->busy, 1)) {
+		ADD(g_ncd_busy, 1);
+		return 0;
+	}
+	__sync_synchronize();                 /* pairs with pipe_retire's fence */
+	if (!LD(d->enabled) || LD(d->fallback) || !__atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE)) {
+		__sync_lock_release(&d->busy);
+		return 0;
+	}
+	ncd_map(&m);
+	if (m.uid < 0) {
+		__sync_lock_release(&d->busy);
+		return 0;
+	}
+	d->job_io = io;
+	d->job_ref = ref;
+	d->job_part = part;
+	d->job_k = 1;
+	d->job_sz[0] = nsec;
+	d->job_sz[1] = d->job_sz[2] = 0;
+	d->job_first = 0;
+	d->job_dst = m.kern;
+	d->job_sector = sector;
+	d->job_ret = 0;
+	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
+	__sync_synchronize();
+	ksceKernelSignalSema(d->sem_go, 1);
+	ksceKernelWaitSema(d->sem_done, 1, NULL);
+	__sync_synchronize();
+	f = __atomic_load_n(&d->job_fail, __ATOMIC_ACQUIRE);
+	d->job_dst = NULL;
+	ksceKernelUserUnmap(m.uid);
+	__sync_lock_release(&d->busy);
+	if (f) {
+		ADD(g_ncd_fail, 1);
+		*ret = io(ref, part, sector, p, nsec);    /* the standard way, all of it */
+		return 1;
+	}
+	ADD(g_ncd_reads, 1);
+	ADD(g_ncd_kib, nsec / 2);
+	*ret = 0;
+	return 1;
+}
+
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
@@ -1209,6 +1346,16 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	 * (see the top). Looked at only for transfers that would be staged. */
 	if (mine && LD(d->enabled) && !LD(d->fallback) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
 	    nsec && nsec >= LD(g_min_sectors) && caller_uncached(p, nsec * 512)) {
+		SceUID pid;
+		int r;
+
+		/* EXPERIMENT: "Always + uncached": read on the system core instead */
+		if (!write && LD(g_offload) == VM_OFFLOAD_ALL && !LD(g_verify) &&
+		    nsec >= OFFLOAD_MIN_SECTORS &&
+		    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) >= 0 &&
+		    (pid = ksceKernelGetProcessId()) != KERNEL_PID &&
+		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
+			return r;
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
 	}
@@ -1239,7 +1386,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
-	                (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
+	                (offload >= VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
 	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
@@ -1526,7 +1673,7 @@ void vm_stage_apply(const VmSettings *s)
 	const int needed = LD(g_pipeline) || LD(g_offload);   /* the helper, before this */
 	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
 	                   ? s->pipeline : VM_PIPE_OFF;
-	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
+	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALL
 	                  ? s->offload : VM_OFFLOAD_OFF;
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -1556,6 +1703,8 @@ void vm_stage_apply(const VmSettings *s)
 	if (offload != LD(g_offload)) {
 		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
 		ST(g_offload_logged, 0);
+		__atomic_store_n(&g_ncd_state, 0, __ATOMIC_RELEASE);
+		ST(g_ncd_logged, 0);
 	}
 	ST(g_offload, offload);
 	/* The helper (and copier) wanted again after neither setting wanted it:
@@ -1629,6 +1778,12 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)LD(g_offload_err));
+		if (LD(g_offload) == VM_OFFLOAD_ALL || LD(g_ncd_reads))
+			VM_KLOGI("stage: uncached read on the system core %u reads %u MiB, busy %u, "
+			         "failed %u, mapping failed %u (0x%08x)",
+			         (unsigned)LD(g_ncd_reads), (unsigned)(LD(g_ncd_kib) / 1024),
+			         (unsigned)LD(g_ncd_busy), (unsigned)LD(g_ncd_fail),
+			         (unsigned)LD(g_ncd_maperr), (unsigned)LD(g_ncd_err));
 	}
 	/* Copy on the system core: whether the mapping was found usable, once. */
 	{
@@ -1646,6 +1801,19 @@ void vm_stage_worker_tick(void)
 			else if (st == -2)
 				VM_KLOGW("stage: copy on the system core refused: the mapping's memory type "
 				         "differs - games copy as before");
+		}
+	}
+	{
+		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
+
+		if (LD(g_offload) == VM_OFFLOAD_ALL && st != LD(g_ncd_logged)) {
+			ST(g_ncd_logged, st);
+			if (st > 0)
+				VM_KLOGI("stage: uncached reads on the system core ready (mapping type 0x%08x)",
+				         (unsigned)LD(g_ncd_type));
+			else if (st < 0)
+				VM_KLOGW("stage: uncached reads on the system core refused (%d, type 0x%08x) - "
+				         "standard path", st, (unsigned)LD(g_ncd_type));
 		}
 	}
 	/* Logged here, not where it happens (that can be a syscall). */

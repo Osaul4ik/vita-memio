@@ -111,18 +111,6 @@ static int v_core_busy_us(void *ctx, uint64_t out[3])
 	return 0;
 }
 
-/* The calling thread's run time (SceKernelThreadInfo.runClocks, in us). */
-static uint64_t v_cpu_us(void *ctx)
-{
-	SceKernelThreadInfo info;
-
-	memset(&info, 0, sizeof(info));
-	info.size = sizeof(info);
-	if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &info) < 0)
-		return 0;
-	return info.runClocks;
-}
-
 static int v_open(void *ctx, const char *path, int create_trunc)
 {
 	int flags = SCE_O_RDWR | (create_trunc ? (SCE_O_CREAT | SCE_O_TRUNC) : 0);
@@ -344,7 +332,9 @@ void vita_env_init(VitaEnv *v, int dev,
 	v->poll_cancel = poll_cancel;
 	v->env.ctx = v;
 	v->env.now_us = v_now_us;
-	v->env.cpu_us = v_cpu_us;
+	/* cpu_us (the thread's run time) is not used: the system counts much of
+	 * the time a thread waits in a read as its run time (the core meter shows
+	 * the cores free meanwhile) */
 	v->env.open = v_open;
 	v->env.pread = v_pread;
 	v->env.pwrite = v_pwrite;

@@ -10,7 +10,7 @@
 
 #include "bench.h"
 
-#define TESTER_VERSION  "1.0.0"
+#define TESTER_VERSION  "1.1.0"
 /* ... and which build of it (the commit, see VM_BUILD_STR) */
 #define TESTER_BUILD    TESTER_VERSION VM_BUILD_SUFFIX
 

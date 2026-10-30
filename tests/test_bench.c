@@ -1221,11 +1221,8 @@ static void test_cpu_time(void)
 	CHECK(!bench_cpu_ms_per_mib(r, BM_SEQ_W_1M, &v) || v < 0.01);   /* writes cost nothing here */
 	CHECK(!bench_cpu_ms_per_mib(r, -1, &v) && !bench_cpu_ms_per_mib(r, BM_COUNT, &v));
 	report_format(r, &m, text, 40000);
-	CHECK(strstr(text, "CPU time of the calling thread, ms per MiB:\n  seq read 1M     1.0\n"));
-	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
-	for (int i = 0; i < n; i++)
-		found |= !strcmp(lines[i], "caller CPU per MiB read: 1.0 ms");
-	CHECK(found);
+	CHECK(!strstr(text, "CPU time of the calling thread"));   /* not shown: see vita_env.c */
+	(void)n; (void)found; (void)lines;
 	CHECK_UNTOUCHED(f);
 	free(f.data);
 	free(text);
@@ -1314,6 +1311,15 @@ static void test_core_meter(void)
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "busy time of cores 0/1/2 during the calls, ms per MiB:\n"
 	                   "  seq read 1M     0.0 / 2.0 / 0.0\n"));
+	{
+		char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+		const int n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+		int found = 0;
+
+		for (int i = 0; i < n; i++)
+			found |= !strcmp(lines[i], "cores busy per MiB read: 0.0/2.0/0.0 ms");
+		CHECK(found);
+	}
 	CHECK_UNTOUCHED(f);
 	free(f.data);
 	free(text);

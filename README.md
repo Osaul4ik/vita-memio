@@ -50,6 +50,7 @@ My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), th
 | Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
 | Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
 
+- **What loading costs the game's own CPU core** (measured with the tester's core meter, SD2Vita, 1 MiB reads, GPU-safe reads on): about 22 ms per MiB read with the copy on the game's core, about **3 ms** with *Copy on the system core* (the default). Reads into non-cacheable memory cost it about 1.5 ms per MiB.
 - These figures are for reads into ordinary (cached) memory. Reads into non-cacheable memory are not changed by the plugin (see *What the plugin does*); on my console the system reads those from the SD2Vita at about 21 MiB/s on its own.
 - The original's figures are from [its README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures): PCH-1000, firmware 3.60, a 128 GB microSD, an official 4 GB memory card, 64 MiB per run.
 - The memory card and internal storage rows were measured with an earlier version; the current one should be a little faster still.
@@ -115,7 +116,8 @@ The tester app ("vita-memio Tester") measures one storage: sequential and random
 
 It never changes the plugin's settings. To compare, change a setting in Settings and run the test again. Each result also shows:
 
-- reads into non-cacheable memory (the **NC** rows), which the plugin leaves as the system does them, next to the ordinary ones;
+- reads into non-cacheable memory (the **NC** rows), which the plugin leaves as the system does them, next to the ordinary ones, also into the kinds of memory games keep graphics data in (*NCphy*, *CDRAM*);
+- how busy each of the game cores (0, 1, 2) really was during the reads and writes, in ms per MiB;
 - where the time goes for every 512-byte block (the card vs. the CPU copy), with *Statistics* on;
 - the plugin's settings during the test (verify, small transfers, overlapped reads);
 - whether the plugin behaved as its settings say.

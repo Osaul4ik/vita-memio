@@ -265,29 +265,14 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	}
 
 	{
-		/* What the reads and writes cost the thread that asks for them (a
-		 * game's own thread): with the copy on the system core it is lower,
-		 * however long the call itself takes. */
+		/* How busy each game core really was during the calls (the testing
+		 * thread runs on one of them, as a game's thread would): what the
+		 * reads and writes cost the game, however long a call takes. */
 		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_NC_R_1M, BM_NCPC_R_1M,
 		                          BM_CDRAM_R_1M, BM_SEQ_W_1M };
 		double v;
 		int any = 0;
 
-		for (unsigned i = 0; i < sizeof(cm) / sizeof(cm[0]); i++) {
-			char a[16];
-
-			if (!bench_cpu_ms_per_mib(res, cm[i], &v))
-				continue;
-			if (!any)
-				put(&o, "CPU time of the calling thread, ms per MiB:\n");
-			any = 1;
-			report_fmt1(a, sizeof(a), v);
-			put(&o, "  %-15s %s\n", bench_metric_name[cm[i]], a);
-		}
-		if (any)
-			put(&o, "\n");
-		/* how busy each core really was during the calls */
-		any = 0;
 		for (unsigned i = 0; i < sizeof(cm) / sizeof(cm[0]); i++) {
 			char a[3][16];
 			int ok = 1;
@@ -426,11 +411,17 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{
-		double v;
+		double c[3];
 
-		if (bench_cpu_ms_per_mib(res, BM_SEQ_R_1M, &v)) {
-			report_fmt1(x, sizeof(x), v);
-			line(&s, "caller CPU per MiB read: %s ms", x);
+		if (bench_core_ms_per_mib(res, BM_SEQ_R_1M, 0, &c[0]) &&
+		    bench_core_ms_per_mib(res, BM_SEQ_R_1M, 1, &c[1]) &&
+		    bench_core_ms_per_mib(res, BM_SEQ_R_1M, 2, &c[2])) {
+			char a[16], b[16];
+
+			report_fmt1(x, sizeof(x), c[0]);
+			report_fmt1(a, sizeof(a), c[1]);
+			report_fmt1(b, sizeof(b), c[2]);
+			line(&s, "cores busy per MiB read: %s/%s/%s ms", x, a, b);
 		}
 	}
 	for (int i = 0; i < res->nruns; i++)

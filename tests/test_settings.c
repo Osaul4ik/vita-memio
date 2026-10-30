@@ -81,7 +81,9 @@ static int all_defaults(const VmSettings *s)
 	return s->sd2vita == VM_DEF_SD2VITA && s->internal == VM_DEF_INTERNAL &&
 	       s->verify == VM_DEF_VERIFY && s->hud == VM_DEF_HUD &&
 	       s->hud_style == VM_DEF_HUD_STYLE && s->log == VM_DEF_LOG &&
-	       s->memcard == VM_DEF_MEMCARD && s->small == VM_DEF_SMALL;
+	       s->memcard == VM_DEF_MEMCARD && s->small == VM_DEF_SMALL &&
+	       s->stats == VM_DEF_STATS && s->gpusafe == VM_DEF_GPUSAFE &&
+	       s->pipeline == VM_DEF_PIPELINE;
 }
 
 /* Build a settings file by hand, with a correct check word. */
@@ -208,6 +210,44 @@ static void test_older_file_with_fewer_keys(void)
 	CHECK(s.sd2vita == 1 && s.hud == 2);
 	CHECK(s.hud_style == VM_DEF_HUD_STYLE);   /* 3: out of range, the default */
 	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
+}
+
+/* GPU-safe reads default to on: a file from before the key had it on; a file
+ * that stored it off keeps it off. Overlapped reads default to off. */
+static void test_gpusafe_default_and_stored_value(void)
+{
+	uint8_t buf[128];
+	int32_t v[VM_KEY_COUNT] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0 };   /* gpusafe stored 0 */
+	VmSettings s;
+	size_t n;
+
+	CHECK(VM_DEF_GPUSAFE == 1 && VM_DEF_PIPELINE == VM_PIPE_OFF);
+	clean();
+	n = make_file(buf, 9, v);                    /* 9 keys: before GPU-safe existed */
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.gpusafe == 1 && s.pipeline == VM_PIPE_OFF);
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);         /* GPU-safe stored off: kept */
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.gpusafe == 0);
+	v[VM_KEY_PIPELINE] = VM_PIPE_FIXED;
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.pipeline == VM_PIPE_FIXED);
+	v[VM_KEY_PIPELINE] = 3;                       /* out of range: the default */
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
 }
 
 /* A file with more keys than this build knows (the experimental build wrote 8):
@@ -337,6 +377,7 @@ int main(void)
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
+	RUN(test_gpusafe_default_and_stored_value);
 	RUN(test_file_with_more_keys);
 	RUN(test_one_bad_value_keeps_the_rest);
 	RUN(test_other_version_gives_defaults);

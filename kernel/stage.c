@@ -365,16 +365,14 @@ static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uin
 	return 0;
 }
 
-static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+/* The plan for k in [kmin, kmax] and the given costs. */
+static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, int kmin, int kmax,
+                           uint32_t out[PIPE_MAX_PARTS])
 {
-	const uint64_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
-	const uint64_t cp = d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0]
-	                  : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
-	const uint64_t cmd = d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS;
 	uint64_t best = ~(uint64_t)0;
 	int best_k = 0;
 
-	for (int k = 2; k <= PIPE_MAX_PARTS; k++) {
+	for (int k = kmin; k <= kmax; k++) {
 		uint32_t s[PIPE_MAX_PARTS], lo = PIPE_MIN_TAIL, hi = n / k, x = 0;
 
 		/* The earlier parts only grow with x, so the x that fit form one
@@ -415,13 +413,35 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 			}
 		}
 	}
-	if (!best_k && n >= 2 * PIPE_MIN_TAIL) {
+	if (!best_k && kmin <= 2 && n >= 2 * PIPE_MIN_TAIL) {
 		/* no part can be hidden (a copy slower than the card): halves */
 		out[1] = n / 2 > PIPE_TAIL_SECTORS ? PIPE_TAIL_SECTORS : n / 2;
 		out[0] = n - out[1];
 		best_k = out[0] <= STAGE_SECTORS ? 2 : 0;
 	}
 	return best_k;
+}
+
+/* Auto: the learnt costs (built-in ones until measured), 2 or 3 parts.
+ * Fixed: the built-in costs, 2 parts, or 3 with GPU-safe reads (2 if 3 do
+ * not fit this size). */
+static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+{
+	const uint64_t def_cp = clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
+	int k;
+
+	if (g_pipeline == VM_PIPE_FIXED) {
+		k = pipe_plan_costs(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, clean ? 3 : 2,
+		                    clean ? 3 : 2, out);
+		if (!k && clean)
+			k = pipe_plan_costs(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, 2, 2, out);
+		return k;
+	}
+	return pipe_plan_costs(n,
+	                       d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS,
+	                       d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0] : def_cp,
+	                       d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS,
+	                       2, PIPE_MAX_PARTS, out);
 }
 
 /* From one split read, the card's cost per sector and per command: the head
@@ -470,15 +490,17 @@ static int pipe_helper(SceSize args, void *argp)
 	(void)args;
 	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
 	for (;;) {
-		uint32_t t0 = 0;
+		uint32_t t0;
+		int timed;
 
 		ksceKernelWaitSema(d->sem_go, 1, NULL);
 		if (d->pipe_quit)
 			break;
 		__sync_synchronize();               /* the job before its fields */
-		t0 = ksceKernelGetSystemTimeLow();   /* the plan learns from it */
+		timed = g_stats || g_pipeline == VM_PIPE_AUTO;   /* see stage_xfer */
+		t0 = timed ? ksceKernelGetSystemTimeLow() : 0;
 		d->job_ret = d->job_io(d->job_ref, d->job_part, d->job_sector, d->job_buf, d->job_n);
-		d->job_us = ksceKernelGetSystemTimeLow() - t0;
+		d->job_us = timed ? ksceKernelGetSystemTimeLow() - t0 : 0;
 		__sync_synchronize();               /* the result before the signal */
 		ksceKernelSignalSema(d->sem_done, 1);
 	}
@@ -630,13 +652,16 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			void *cur = d->buf;
 			int i;
 
-			/* Overlapped reads time themselves, whatever Statistics says:
-			 * the plan learns its costs from these few clock reads. */
-			h0 = stats ? t1 : ksceKernelGetSystemTimeLow();
+			/* Auto times itself, whatever Statistics says: the plan learns
+			 * its costs from these few clock reads. Fixed reads the clock
+			 * only for Statistics. */
+			const int timed = stats || g_pipeline == VM_PIPE_AUTO;
+
+			h0 = stats ? t1 : timed ? ksceKernelGetSystemTimeLow() : 0;
 			ret = io(ref, part, sector, d->buf, sz[0]);
 			if (ret < 0)
 				break;
-			h1 = ksceKernelGetSystemTimeLow();
+			h1 = timed ? ksceKernelGetSystemTimeLow() : 0;
 			for (i = 1; i <= k; i++) {
 				void *next = (i & 1) ? d->buf2 : d->buf;
 				uint32_t c0, c;
@@ -651,11 +676,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 					__sync_synchronize();
 					ksceKernelSignalSema(d->sem_go, 1);
 				}
-				c0 = ksceKernelGetSystemTimeLow();
+				c0 = timed ? ksceKernelGetSystemTimeLow() : 0;
 				vm_copy_from_stage(p + off * 512, cur, sz[i - 1] * 512);
 				if (clean)
 					clean_out(p + off * 512, sz[i - 1] * 512);
-				c = ksceKernelGetSystemTimeLow() - c0;
+				c = timed ? ksceKernelGetSystemTimeLow() - c0 : 0;
 				cp_us += c;
 				if (i == 1)
 					cp0_us = c;
@@ -676,9 +701,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			g_pipe_reads++;
 			if (k > 2)
 				g_pipe_reads3++;
-			pipe_learn_io(d, h1 - h0, sz[0], last_us, sz[k - 1]);
-			pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp0_us, sz[0],
-			           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
+			if (g_pipeline == VM_PIPE_AUTO) {
+				pipe_learn_io(d, h1 - h0, sz[0], last_us, sz[k - 1]);
+				pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp0_us, sz[0],
+				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
+			}
 			if (stats) {                /* the tester's figures */
 				d->tm.rd_sectors += n;
 				d->tm.rd_io_us += (h1 - h0) + io_us;
@@ -896,11 +923,12 @@ void vm_stage_apply(const VmSettings *s)
 	if (s->pipeline != g_pipeline) {
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			g_dev[i].est_cp_ns[0] = g_dev[i].est_cp_ns[1] = 0;   /* measured afresh */
-			if (s->pipeline)
+			if (!g_pipeline)
 				g_dev[i].pipe_failed = 0;   /* switching it on again is a fresh try */
 		}
 	}
-	g_pipeline = s->pipeline ? 1 : 0;
+	g_pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
+	                                                                         : VM_PIPE_OFF;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)

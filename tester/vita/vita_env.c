@@ -111,7 +111,7 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 
 		out->small = s == 0 || s == 1 ? s : -1;
 		s = vmGetSetting(VM_KEY_PIPELINE);
-		out->pipeline = s == 0 || s == 1 ? s : -1;
+		out->pipeline = s >= VM_PIPE_OFF && s <= VM_PIPE_FIXED ? s : -1;
 	}
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;

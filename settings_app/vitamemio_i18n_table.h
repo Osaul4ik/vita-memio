@@ -947,26 +947,26 @@
 	"İstatistikler",   /* tr */
 },
 [VM_I18N_HINT_STATS] = {
-	"テスターアプリ用に、高速化された転送ごとの時間（システムコールとコピー）と転送量を記録します。オフ：これらを行わないため、転送ごとの処理が少し減ります。HUDはオンの間、自分で速度を数えます。 読み込みの並行処理は、分割の大きさを決めるため、この設定に関係なく自分で時間を測ります。",   /* ja */
-	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads time themselves either way, to size their parts.",   /* en */
-	"Chronomètre chaque transfert accéléré (appel système et copie) et compte les données déplacées, pour l'application de test. Désactivé : rien de tout cela, ce qui économise un peu de travail à chaque transfert. Le HUD compte ses propres vitesses tant qu'il est activé. Les lectures en parallèle se chronomètrent de toute façon, pour dimensionner leurs parties.",   /* fr */
-	"Mide el tiempo de cada transferencia acelerada (llamada al sistema y copia) y cuenta los datos movidos, para la aplicación de prueba. Desactivado: no se hace nada de eso, lo que ahorra un poco de trabajo en cada transferencia. El HUD cuenta sus propias velocidades mientras está activado. Las lecturas solapadas se cronometran igualmente, para dimensionar sus partes.",   /* es */
-	"Misst bei jeder beschleunigten Übertragung die Zeit (Systemaufruf und Kopie) und zählt die bewegten Daten, für die Tester-App. Aus: nichts davon, das spart bei jeder Übertragung etwas Arbeit. Das HUD zählt seine eigenen Geschwindigkeiten, solange es an ist. Überlappendes Lesen misst seine Zeiten in jedem Fall selbst, um seine Teile zu bemessen.",   /* de */
-	"Cronometra ogni trasferimento accelerato (chiamata di sistema e copia) e conta i dati spostati, per l'app di test. Disattivato: niente di tutto ciò, risparmiando un po' di lavoro a ogni trasferimento. L'HUD conta le proprie velocità finché è attivo. Le letture sovrapposte si cronometrano comunque, per dimensionare le loro parti.",   /* it */
-	"Meet bij elke versnelde overdracht de tijd (systeemaanroep en kopie) en telt de verplaatste gegevens, voor de test-app. Uit: niets daarvan, wat bij elke overdracht wat werk bespaart. De HUD telt zijn eigen snelheden zolang hij aan staat. Overlappend lezen meet zichzelf hoe dan ook, om de delen te bepalen.",   /* nl */
-	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para a aplicação de teste. Desligado: nada disso é feito, o que poupa um pouco de trabalho em cada transferência. O HUD conta as suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas medem o seu próprio tempo de qualquer forma, para dimensionar as partes.",   /* pt */
-	"Замеряет время каждой ускоренной передачи (системный вызов и копирование) и считает объём данных — для приложения-тестера. Выключено: ничего из этого не делается, на каждой передаче немного меньше работы. HUD, пока включён, сам считает свои скорости. Параллельное чтение в любом случае само замеряет время, чтобы подобрать размер частей.",   /* ru */
-	"테스터 앱을 위해 가속된 전송마다 시간(시스템 호출과 복사)을 재고 옮긴 데이터를 셉니다. 끔: 이런 작업을 하지 않아 전송마다 처리가 조금 줄어듭니다. HUD는 켜져 있는 동안 자체적으로 속도를 셉니다. 겹친 읽기는 부분 크기를 정하기 위해 이 설정과 관계없이 스스로 시간을 잽니다.",   /* ko */
-	"為測試程式記錄每次加速傳輸的時間（系統呼叫與複製）並統計傳輸量。關閉：完全不做這些，每次傳輸可省下一點工作。HUD 開啟時會自行計算速度。 重疊讀取無論如何都會自行計時，以決定各段的大小。",   /* zht */
-	"为测试程序记录每次加速传输的时间（系统调用与复制）并统计传输量。关闭：完全不做这些，每次传输可省下一点工作。HUD 开启时会自行计算速度。 重叠读取无论如何都会自行计时，以决定各段的大小。",   /* zhs */
-	"Ajastaa jokaisen nopeutetun siirron (järjestelmäkutsu ja kopiointi) ja laskee siirretyn datan testisovellusta varten. Pois: mitään tästä ei tehdä, mikä säästää vähän työtä jokaisessa siirrossa. HUD laskee omat nopeutensa, kun se on päällä. Limitetyt luvut ajoittavat itsensä joka tapauksessa osien koon määrittämiseksi.",   /* fi */
-	"Tar tid på varje snabbare överföring (systemanrop och kopiering) och räknar flyttade data, för testappen. Av: inget av det görs, vilket sparar lite arbete vid varje överföring. HUD:en räknar sina egna hastigheter medan den är på. Överlappade läsningar tar tid på sig själva i vilket fall, för att bestämma delarnas storlek.",   /* sv */
-	"Tager tid på hver hurtigere overførsel (systemkald og kopiering) og tæller de flyttede data, til testappen. Fra: intet af det gøres, hvilket sparer lidt arbejde ved hver overførsel. HUD'en tæller sine egne hastigheder, mens den er slået til. Overlappende læsninger tager tid på sig selv under alle omstændigheder for at bestemme delenes størrelse.",   /* da */
-	"Tar tiden på hver raskere overføring (systemkall og kopiering) og teller dataene som flyttes, for testappen. Av: ingenting av det gjøres, noe som sparer litt arbeid ved hver overføring. HUD-en teller sine egne hastigheter mens den er på. Overlappende lesinger tar tiden på seg selv uansett, for å bestemme størrelsen på delene.",   /* no */
-	"Mierzy czas każdego przyspieszonego transferu (wywołanie systemowe i kopiowanie) i liczy przesłane dane, dla aplikacji testowej. Wyłączone: nic z tego, co oszczędza trochę pracy przy każdym transferze. HUD, gdy jest włączony, sam liczy swoje prędkości. Nakładane odczyty i tak mierzą swój czas, aby dobrać rozmiar części.",   /* pl */
-	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para o app de teste. Desligado: nada disso é feito, o que economiza um pouco de trabalho em cada transferência. O HUD conta suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas medem o próprio tempo de qualquer forma, para dimensionar as partes.",   /* ptbr */
-	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads time themselves either way, to size their parts.",   /* engb */
-	"Test uygulaması için hızlandırılmış her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş tasarrufu sağlar. HUD açıkken kendi hızlarını kendisi sayar. Örtüşen okuma, parçalarının boyutunu belirlemek için her durumda kendi süresini ölçer.",   /* tr */
+	"テスターアプリ用に、高速化された転送ごとの時間（システムコールとコピー）と転送量を記録します。オフ：これらを行わないため、転送ごとの処理が少し減ります。HUDはオンの間、自分で速度を数えます。 読み込みの並行処理（自動）は、分割の大きさを決めるため、この設定に関係なく自分で時間を測ります。",   /* ja */
+	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads on Auto time themselves either way, to size their parts.",   /* en */
+	"Chronomètre chaque transfert accéléré (appel système et copie) et compte les données déplacées, pour l'application de test. Désactivé : rien de tout cela, ce qui économise un peu de travail à chaque transfert. Le HUD compte ses propres vitesses tant qu'il est activé. Les lectures en parallèle en mode Auto se chronomètrent de toute façon, pour dimensionner leurs parties.",   /* fr */
+	"Mide el tiempo de cada transferencia acelerada (llamada al sistema y copia) y cuenta los datos movidos, para la aplicación de prueba. Desactivado: no se hace nada de eso, lo que ahorra un poco de trabajo en cada transferencia. El HUD cuenta sus propias velocidades mientras está activado. Las lecturas solapadas en Automático se cronometran igualmente, para dimensionar sus partes.",   /* es */
+	"Misst bei jeder beschleunigten Übertragung die Zeit (Systemaufruf und Kopie) und zählt die bewegten Daten, für die Tester-App. Aus: nichts davon, das spart bei jeder Übertragung etwas Arbeit. Das HUD zählt seine eigenen Geschwindigkeiten, solange es an ist. Überlappendes Lesen im Modus Automatisch misst seine Zeiten in jedem Fall selbst, um seine Teile zu bemessen.",   /* de */
+	"Cronometra ogni trasferimento accelerato (chiamata di sistema e copia) e conta i dati spostati, per l'app di test. Disattivato: niente di tutto ciò, risparmiando un po' di lavoro a ogni trasferimento. L'HUD conta le proprie velocità finché è attivo. Le letture sovrapposte in Automatico si cronometrano comunque, per dimensionare le loro parti.",   /* it */
+	"Meet bij elke versnelde overdracht de tijd (systeemaanroep en kopie) en telt de verplaatste gegevens, voor de test-app. Uit: niets daarvan, wat bij elke overdracht wat werk bespaart. De HUD telt zijn eigen snelheden zolang hij aan staat. Overlappend lezen op Automatisch meet zichzelf hoe dan ook, om de delen te bepalen.",   /* nl */
+	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para a aplicação de teste. Desligado: nada disso é feito, o que poupa um pouco de trabalho em cada transferência. O HUD conta as suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o seu próprio tempo de qualquer forma, para dimensionar as partes.",   /* pt */
+	"Замеряет время каждой ускоренной передачи (системный вызов и копирование) и считает объём данных — для приложения-тестера. Выключено: ничего из этого не делается, на каждой передаче немного меньше работы. HUD, пока включён, сам считает свои скорости. Параллельное чтение в режиме «Авто» в любом случае само замеряет время, чтобы подобрать размер частей.",   /* ru */
+	"테스터 앱을 위해 가속된 전송마다 시간(시스템 호출과 복사)을 재고 옮긴 데이터를 셉니다. 끔: 이런 작업을 하지 않아 전송마다 처리가 조금 줄어듭니다. HUD는 켜져 있는 동안 자체적으로 속도를 셉니다. 자동 모드의 겹친 읽기는 부분 크기를 정하기 위해 이 설정과 관계없이 스스로 시간을 잽니다.",   /* ko */
+	"為測試程式記錄每次加速傳輸的時間（系統呼叫與複製）並統計傳輸量。關閉：完全不做這些，每次傳輸可省下一點工作。HUD 開啟時會自行計算速度。 重疊讀取（自動）無論如何都會自行計時，以決定各段的大小。",   /* zht */
+	"为测试程序记录每次加速传输的时间（系统调用与复制）并统计传输量。关闭：完全不做这些，每次传输可省下一点工作。HUD 开启时会自行计算速度。 重叠读取（自动）无论如何都会自行计时，以决定各段的大小。",   /* zhs */
+	"Ajastaa jokaisen nopeutetun siirron (järjestelmäkutsu ja kopiointi) ja laskee siirretyn datan testisovellusta varten. Pois: mitään tästä ei tehdä, mikä säästää vähän työtä jokaisessa siirrossa. HUD laskee omat nopeutensa, kun se on päällä. Automaattiset limitetyt luvut ajoittavat itsensä joka tapauksessa osien koon määrittämiseksi.",   /* fi */
+	"Tar tid på varje snabbare överföring (systemanrop och kopiering) och räknar flyttade data, för testappen. Av: inget av det görs, vilket sparar lite arbete vid varje överföring. HUD:en räknar sina egna hastigheter medan den är på. Överlappade läsningar på Auto tar tid på sig själva i vilket fall, för att bestämma delarnas storlek.",   /* sv */
+	"Tager tid på hver hurtigere overførsel (systemkald og kopiering) og tæller de flyttede data, til testappen. Fra: intet af det gøres, hvilket sparer lidt arbejde ved hver overførsel. HUD'en tæller sine egne hastigheder, mens den er slået til. Overlappende læsninger på Auto tager tid på sig selv under alle omstændigheder for at bestemme delenes størrelse.",   /* da */
+	"Tar tiden på hver raskere overføring (systemkall og kopiering) og teller dataene som flyttes, for testappen. Av: ingenting av det gjøres, noe som sparer litt arbeid ved hver overføring. HUD-en teller sine egne hastigheter mens den er på. Overlappende lesinger på Auto tar tiden på seg selv uansett, for å bestemme størrelsen på delene.",   /* no */
+	"Mierzy czas każdego przyspieszonego transferu (wywołanie systemowe i kopiowanie) i liczy przesłane dane, dla aplikacji testowej. Wyłączone: nic z tego, co oszczędza trochę pracy przy każdym transferze. HUD, gdy jest włączony, sam liczy swoje prędkości. Nakładane odczyty w trybie Auto i tak mierzą swój czas, aby dobrać rozmiar części.",   /* pl */
+	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para o app de teste. Desligado: nada disso é feito, o que economiza um pouco de trabalho em cada transferência. O HUD conta suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o próprio tempo de qualquer forma, para dimensionar as partes.",   /* ptbr */
+	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads on Auto time themselves either way, to size their parts.",   /* engb */
+	"Test uygulaması için hızlandırılmış her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş tasarrufu sağlar. HUD açıkken kendi hızlarını kendisi sayar. Otomatik moddaki örtüşen okuma, parçalarının boyutunu belirlemek için her durumda kendi süresini ölçer.",   /* tr */
 },
 [VM_I18N_ROW_GPUSAFE] = {
 	"GPU対応の読み込み",   /* ja */
@@ -1035,24 +1035,90 @@
 	"Örtüşen okuma (deneysel)",   /* tr */
 },
 [VM_I18N_HINT_PIPELINE] = {
-	"高速化された読み込みを2つまたは3つに分け、カードが次の部分を読んでいる間にCPUが前の部分をコピーします。コピー（とGPU対応の書き出し）の時間の大部分が隠れます。ストレージごとに2つ目のバッファーと補助スレッドを使います。テスターで比較してください。",   /* ja */
-	"Splits each faster read into two or three parts: while the card reads the next part, the CPU already copies the one before. Hides most of the copy (and of the GPU-safe cleaning). Uses a second buffer and a helper thread per storage. Compare with the tester app.",   /* en */
-	"Coupe chaque lecture accélérée en deux ou trois parties : pendant que la carte lit la suivante, le processeur copie déjà la précédente. Masque l'essentiel de la copie (et du nettoyage GPU). Utilise un second tampon et un fil d'aide par stockage. Comparez avec l'application de test.",   /* fr */
-	"Divide cada lectura acelerada en dos o tres partes: mientras la tarjeta lee la siguiente, la CPU ya copia la anterior. Oculta casi toda la copia (y la limpieza para la GPU). Usa un segundo búfer y un hilo auxiliar por almacenamiento. Compáralo con la aplicación de prueba.",   /* es */
-	"Teilt jedes beschleunigte Lesen in zwei oder drei Teile: Während die Karte den nächsten liest, kopiert die CPU schon den vorigen. Verbirgt den Großteil des Kopierens (und der GPU-Bereinigung). Nutzt pro Speicher einen zweiten Puffer und einen Hilfsthread. Mit der Tester-App vergleichen.",   /* de */
-	"Divide ogni lettura accelerata in due o tre parti: mentre la scheda legge la successiva, la CPU copia già la precedente. Nasconde quasi tutta la copia (e la pulizia per la GPU). Usa un secondo buffer e un thread di supporto per memoria. Confronta con l'app di test.",   /* it */
-	"Splitst elke versnelde leesactie in twee of drie delen: terwijl de kaart het volgende deel leest, kopieert de CPU het vorige al. Verbergt het grootste deel van het kopiëren (en van het GPU-opschonen). Gebruikt per opslag een tweede buffer en een hulpthread. Vergelijk met de test-app.",   /* nl */
-	"Divide cada leitura acelerada em duas ou três partes: enquanto o cartão lê a seguinte, o processador já copia a anterior. Esconde quase toda a cópia (e a limpeza para a GPU). Usa um segundo buffer e uma thread auxiliar por armazenamento. Compare com a aplicação de teste.",   /* pt */
-	"Делит каждое ускоренное чтение на две или три части: пока карта читает следующую, процессор уже копирует предыдущую. Скрывает большую часть копирования (и очистки для GPU). Использует второй буфер и вспомогательный поток на каждое хранилище. Сравните в тестере.",   /* ru */
-	"가속된 읽기를 두세 부분으로 나눕니다. 카드가 다음 부분을 읽는 동안 CPU가 이전 부분을 미리 복사합니다. 복사(와 GPU 안전 정리) 시간의 대부분이 가려집니다. 저장소마다 두 번째 버퍼와 보조 스레드를 씁니다. 테스터 앱으로 비교하세요.",   /* ko */
-	"將每次加速讀取分成兩到三段：記憶卡讀取下一段時，CPU 已在複製上一段。可隱藏大部分複製（與 GPU 安全寫回）時間。每個儲存裝置使用第二個緩衝區與一個輔助執行緒。請用測試程式比較。",   /* zht */
-	"将每次加速读取分成两到三段：存储卡读取下一段时，CPU 已在复制上一段。可隐藏大部分复制（与 GPU 安全写回）时间。每个存储设备使用第二个缓冲区和一个辅助线程。请用测试程序比较。",   /* zhs */
-	"Jakaa jokaisen nopeutetun luvun kahteen tai kolmeen osaan: kun kortti lukee seuraavaa osaa, suoritin kopioi jo edellistä. Piilottaa suurimman osan kopioinnista (ja GPU-siivouksesta). Käyttää jokaiselle tallennustilalle toista puskuria ja apusäiettä. Vertaa testisovelluksella.",   /* fi */
-	"Delar varje snabbare läsning i två eller tre delar: medan kortet läser nästa del kopierar processorn redan den föregående. Döljer det mesta av kopieringen (och GPU-rensningen). Använder en andra buffert och en hjälptråd per lagring. Jämför med testappen.",   /* sv */
-	"Deler hver hurtigere læsning i to eller tre dele: mens kortet læser den næste, kopierer processoren allerede den forrige. Skjuler det meste af kopieringen (og GPU-rensningen). Bruger en ekstra buffer og en hjælpetråd pr. lager. Sammenlign med testappen.",   /* da */
-	"Deler hver raskere lesing i to eller tre deler: mens kortet leser den neste, kopierer prosessoren allerede den forrige. Skjuler det meste av kopieringen (og GPU-rensingen). Bruker en ekstra buffer og en hjelpetråd per lagring. Sammenlign med testappen.",   /* no */
-	"Dzieli każdy przyspieszony odczyt na dwie lub trzy części: gdy karta czyta następną, procesor już kopiuje poprzednią. Ukrywa większość kopiowania (i czyszczenia dla GPU). Używa drugiego bufora i wątku pomocniczego na każdą pamięć. Porównaj w aplikacji testowej.",   /* pl */
-	"Divide cada leitura acelerada em duas ou três partes: enquanto o cartão lê a próxima, a CPU já copia a anterior. Esconde quase toda a cópia (e a limpeza para a GPU). Usa um segundo buffer e uma thread auxiliar por armazenamento. Compare com o app de teste.",   /* ptbr */
-	"Splits each faster read into two or three parts: while the card reads the next part, the CPU already copies the one before. Hides most of the copy (and of the GPU-safe cleaning). Uses a second buffer and a helper thread per storage. Compare with the tester app.",   /* engb */
-	"Her hızlandırılmış okumayı iki ya da üç parçaya böler: kart sonraki parçayı okurken işlemci öncekini kopyalar. Kopyalamanın (ve GPU temizliğinin) çoğunu gizler. Her depolama için ikinci bir tampon ve yardımcı bir iş parçacığı kullanır. Test uygulamasıyla karşılaştırın.",   /* tr */
+	"高速化された読み込みを複数に分け、カードが次の部分を読んでいる間にCPUが前の部分をコピーし、コピー（とGPU対応の書き出し）の時間の大部分を隠します。自動：カードとコピーの実測値から2つまたは3つに分けます。固定：2つ（GPU対応の読み込みでは3つ）、内蔵の大きさで、測定はしません。ストレージごとに2つ目のバッファーと補助スレッドを使います。",   /* ja */
+	"Splits each faster read into parts: while the card reads the next part, the CPU already copies the one before, hiding most of the copy (and of the GPU-safe cleaning). Auto: 2 or 3 parts, sized from the measured costs of the card and the copy. Fixed: 2 parts, 3 with GPU-safe reads, built-in sizes, nothing measured. Uses a second buffer and a helper thread per storage.",   /* en */
+	"Coupe chaque lecture accélérée en parties : pendant que la carte lit la suivante, le processeur copie déjà la précédente, ce qui masque l'essentiel de la copie (et du nettoyage GPU). Auto : 2 ou 3 parties, dimensionnées d'après les coûts mesurés de la carte et de la copie. Fixe : 2 parties, 3 avec les lectures sûres pour le GPU, tailles intégrées, sans mesure. Utilise un second tampon et un fil d'aide par stockage.",   /* fr */
+	"Divide cada lectura acelerada en partes: mientras la tarjeta lee la siguiente, la CPU ya copia la anterior, lo que oculta casi toda la copia (y la limpieza para la GPU). Automático: 2 o 3 partes, según los costes medidos de la tarjeta y de la copia. Fijo: 2 partes, 3 con lecturas seguras para la GPU, tamaños incorporados, sin medir. Usa un segundo búfer y un hilo auxiliar por almacenamiento.",   /* es */
+	"Teilt jedes beschleunigte Lesen in Teile: Während die Karte den nächsten liest, kopiert die CPU schon den vorigen; das verbirgt den Großteil des Kopierens (und der GPU-Bereinigung). Automatisch: 2 oder 3 Teile, bemessen nach den gemessenen Kosten von Karte und Kopie. Fest: 2 Teile, 3 mit GPU-sicherem Lesen, eingebaute Größen, ohne Messung. Nutzt pro Speicher einen zweiten Puffer und einen Hilfsthread.",   /* de */
+	"Divide ogni lettura accelerata in parti: mentre la scheda legge la successiva, la CPU copia già la precedente, nascondendo quasi tutta la copia (e la pulizia per la GPU). Automatico: 2 o 3 parti, in base ai costi misurati della scheda e della copia. Fisso: 2 parti, 3 con letture sicure per la GPU, dimensioni predefinite, nessuna misura. Usa un secondo buffer e un thread di supporto per memoria.",   /* it */
+	"Splitst elke versnelde leesactie in delen: terwijl de kaart het volgende deel leest, kopieert de CPU het vorige al, wat het meeste kopiëren (en GPU-opschonen) verbergt. Automatisch: 2 of 3 delen, afgestemd op de gemeten kosten van kaart en kopie. Vast: 2 delen, 3 met GPU-veilig lezen, ingebouwde groottes, niets gemeten. Gebruikt per opslag een tweede buffer en een hulpthread.",   /* nl */
+	"Divide cada leitura acelerada em partes: enquanto o cartão lê a seguinte, o processador já copia a anterior, escondendo quase toda a cópia (e a limpeza para a GPU). Automático: 2 ou 3 partes, conforme os custos medidos do cartão e da cópia. Fixo: 2 partes, 3 com leituras seguras para a GPU, tamanhos incorporados, sem medição. Usa um segundo buffer e uma thread auxiliar por armazenamento.",   /* pt */
+	"Делит каждое ускоренное чтение на части: пока карта читает следующую, процессор уже копирует предыдущую, что скрывает большую часть копирования (и очистки для GPU). Авто: 2 или 3 части по измеренной стоимости карты и копирования. Фикс.: 2 части, 3 с безопасным чтением для GPU, встроенные размеры, без замеров. Использует второй буфер и вспомогательный поток на каждое хранилище.",   /* ru */
+	"가속된 읽기를 여러 부분으로 나눕니다. 카드가 다음 부분을 읽는 동안 CPU가 이전 부분을 복사해 복사(와 GPU 안전 정리) 시간의 대부분을 가립니다. 자동: 카드와 복사의 측정값으로 2개 또는 3개로 나눕니다. 고정: 2개(GPU 안전 읽기에서는 3개), 내장 크기, 측정 없음. 저장소마다 두 번째 버퍼와 보조 스레드를 씁니다.",   /* ko */
+	"將每次加速讀取分成數段：記憶卡讀取下一段時，CPU 已在複製上一段，可隱藏大部分複製（與 GPU 安全寫回）時間。自動：依實測的記憶卡與複製成本分成 2 或 3 段。固定：2 段（GPU 安全讀取時 3 段），使用內建大小，不量測。每個儲存裝置使用第二個緩衝區與一個輔助執行緒。",   /* zht */
+	"将每次加速读取分成数段：存储卡读取下一段时，CPU 已在复制上一段，可隐藏大部分复制（与 GPU 安全写回）时间。自动：按实测的存储卡与复制成本分成 2 或 3 段。固定：2 段（GPU 安全读取时 3 段），使用内置大小，不测量。每个存储设备使用第二个缓冲区和一个辅助线程。",   /* zhs */
+	"Jakaa jokaisen nopeutetun luvun osiin: kun kortti lukee seuraavaa osaa, suoritin kopioi jo edellistä, mikä piilottaa suurimman osan kopioinnista (ja GPU-siivouksesta). Automaattinen: 2 tai 3 osaa kortin ja kopioinnin mitattujen kustannusten mukaan. Kiinteä: 2 osaa, GPU-turvallisilla luvuilla 3, sisäänrakennetut koot, ei mittausta. Käyttää jokaiselle tallennustilalle toista puskuria ja apusäiettä.",   /* fi */
+	"Delar varje snabbare läsning i delar: medan kortet läser nästa del kopierar processorn redan den föregående, vilket döljer det mesta av kopieringen (och GPU-rensningen). Auto: 2 eller 3 delar efter kortets och kopieringens uppmätta kostnader. Fast: 2 delar, 3 med GPU-säkra läsningar, inbyggda storlekar, inget mäts. Använder en andra buffert och en hjälptråd per lagring.",   /* sv */
+	"Deler hver hurtigere læsning i dele: mens kortet læser den næste, kopierer processoren allerede den forrige, hvilket skjuler det meste af kopieringen (og GPU-rensningen). Auto: 2 eller 3 dele efter kortets og kopieringens målte omkostninger. Fast: 2 dele, 3 med GPU-sikre læsninger, indbyggede størrelser, intet måles. Bruger en ekstra buffer og en hjælpetråd pr. lager.",   /* da */
+	"Deler hver raskere lesing i deler: mens kortet leser den neste, kopierer prosessoren allerede den forrige, noe som skjuler det meste av kopieringen (og GPU-rensingen). Auto: 2 eller 3 deler etter kortets og kopieringens målte kostnader. Fast: 2 deler, 3 med GPU-sikre lesinger, innebygde størrelser, ingenting måles. Bruker en ekstra buffer og en hjelpetråd per lagring.",   /* no */
+	"Dzieli każdy przyspieszony odczyt na części: gdy karta czyta następną, procesor już kopiuje poprzednią, co ukrywa większość kopiowania (i czyszczenia dla GPU). Auto: 2 lub 3 części według zmierzonych kosztów karty i kopiowania. Stały: 2 części, 3 z bezpiecznymi odczytami dla GPU, wbudowane rozmiary, bez pomiarów. Używa drugiego bufora i wątku pomocniczego na każdą pamięć.",   /* pl */
+	"Divide cada leitura acelerada em partes: enquanto o cartão lê a próxima, a CPU já copia a anterior, escondendo quase toda a cópia (e a limpeza para a GPU). Automático: 2 ou 3 partes, conforme os custos medidos do cartão e da cópia. Fixo: 2 partes, 3 com leituras seguras para a GPU, tamanhos embutidos, sem medição. Usa um segundo buffer e uma thread auxiliar por armazenamento.",   /* ptbr */
+	"Splits each faster read into parts: while the card reads the next part, the CPU already copies the one before, hiding most of the copy (and of the GPU-safe cleaning). Auto: 2 or 3 parts, sized from the measured costs of the card and the copy. Fixed: 2 parts, 3 with GPU-safe reads, built-in sizes, nothing measured. Uses a second buffer and a helper thread per storage.",   /* engb */
+	"Her hızlandırılmış okumayı parçalara böler: kart sonraki parçayı okurken işlemci öncekini kopyalar; kopyalamanın (ve GPU temizliğinin) çoğu gizlenir. Otomatik: kartın ve kopyalamanın ölçülen maliyetine göre 2 ya da 3 parça. Sabit: 2 parça, GPU için güvenli okumada 3, yerleşik boyutlar, ölçüm yok. Her depolama için ikinci bir tampon ve yardımcı bir iş parçacığı kullanır.",   /* tr */
+},
+[VM_I18N_ITEM_PIPE_OFF] = {
+	"オフ",   /* ja */
+	"Off",   /* en */
+	"Désactivé",   /* fr */
+	"Desactivado",   /* es */
+	"Aus",   /* de */
+	"Disattivato",   /* it */
+	"Uit",   /* nl */
+	"Desligado",   /* pt */
+	"Выкл.",   /* ru */
+	"끔",   /* ko */
+	"關閉",   /* zht */
+	"关闭",   /* zhs */
+	"Pois",   /* fi */
+	"Av",   /* sv */
+	"Fra",   /* da */
+	"Av",   /* no */
+	"Wyłączony",   /* pl */
+	"Desligado",   /* ptbr */
+	"Off",   /* engb */
+	"Kapalı",   /* tr */
+},
+[VM_I18N_ITEM_PIPE_AUTO] = {
+	"自動",   /* ja */
+	"Auto",   /* en */
+	"Auto",   /* fr */
+	"Automático",   /* es */
+	"Automatisch",   /* de */
+	"Automatico",   /* it */
+	"Automatisch",   /* nl */
+	"Automático",   /* pt */
+	"Авто",   /* ru */
+	"자동",   /* ko */
+	"自動",   /* zht */
+	"自动",   /* zhs */
+	"Automaattinen",   /* fi */
+	"Auto",   /* sv */
+	"Auto",   /* da */
+	"Auto",   /* no */
+	"Auto",   /* pl */
+	"Automático",   /* ptbr */
+	"Auto",   /* engb */
+	"Otomatik",   /* tr */
+},
+[VM_I18N_ITEM_PIPE_FIXED] = {
+	"固定（2、GPU対応 3）",   /* ja */
+	"Fixed (2, GPU-safe 3)",   /* en */
+	"Fixe (2, GPU 3)",   /* fr */
+	"Fijo (2, GPU 3)",   /* es */
+	"Fest (2, GPU 3)",   /* de */
+	"Fisso (2, GPU 3)",   /* it */
+	"Vast (2, GPU 3)",   /* nl */
+	"Fixo (2, GPU 3)",   /* pt */
+	"Фикс. (2, GPU 3)",   /* ru */
+	"고정 (2, GPU 3)",   /* ko */
+	"固定（2，GPU 3）",   /* zht */
+	"固定（2，GPU 3）",   /* zhs */
+	"Kiinteä (2, GPU 3)",   /* fi */
+	"Fast (2, GPU 3)",   /* sv */
+	"Fast (2, GPU 3)",   /* da */
+	"Fast (2, GPU 3)",   /* no */
+	"Stały (2, GPU 3)",   /* pl */
+	"Fixo (2, GPU 3)",   /* ptbr */
+	"Fixed (2, GPU-safe 3)",   /* engb */
+	"Sabit (2, GPU 3)",   /* tr */
 },

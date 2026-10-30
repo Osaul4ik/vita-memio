@@ -1120,6 +1120,64 @@ static void test_pipeline_learns_without_statistics(void)
 	free(u);
 }
 
+/* The three choices: off, auto (learns), fixed (built-in sizes: 2 parts, 3
+ * with GPU-safe; learns nothing and, without Statistics, reads no clock).
+ * 1, which was "on", is auto; anything past fixed is refused. */
+static void test_pipeline_modes(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	uint32_t sz[PIPE_MAX_PARTS], want[PIPE_MAX_PARTS];
+	int saved_live = g_live;
+
+	CHECK(vm_setting_valid(VM_KEY_PIPELINE, VM_PIPE_OFF) && vm_setting_valid(VM_KEY_PIPELINE, VM_PIPE_AUTO));
+	CHECK(vm_setting_valid(VM_KEY_PIPELINE, VM_PIPE_FIXED) && !vm_setting_valid(VM_KEY_PIPELINE, 3));
+	CHECK(!vm_setting_valid(VM_KEY_PIPELINE, -1) && VM_PIPE_AUTO == 1);
+
+	reset();
+	pipe_on(&s, 0);                               /* pipeline = 1: auto */
+	CHECK(g_pipeline == VM_PIPE_AUTO);
+	s.pipeline = VM_PIPE_FIXED;
+	s.stats = 0;
+	vm_stage_apply(&s);
+	CHECK(g_pipeline == VM_PIPE_FIXED && d->pipe_made);   /* the same helper */
+
+	/* fixed ignores whatever was learnt: built-in sizes */
+	d->est_io_ns = 9000; d->est_cp_ns[0] = 9000; d->est_cp_ns[1] = 30000; d->est_cmd_ns = 50000;
+	CHECK(pipe_plan(d, 512, 0, sz) == 2);
+	CHECK(pipe_plan_costs(512, PIPE_DEF_IO_NS, PIPE_DEF_CP_NS, PIPE_DEF_CMD_NS, 2, 2, want) == 2);
+	CHECK(sz[0] == want[0] && sz[1] == want[1]);
+	CHECK(pipe_plan(d, 512, 1, sz) == 3);
+	CHECK(pipe_plan_costs(512, PIPE_DEF_IO_NS, PIPE_DEF_CPCL_NS, PIPE_DEF_CMD_NS, 3, 3, want) == 3);
+	CHECK(sz[0] == want[0] && sz[1] == want[1] && sz[2] == want[2]);
+	for (uint32_t n = 128; n <= 512; n++) {      /* 3 where they fit, else 2 */
+		int k = pipe_plan(d, n, 1, sz);
+
+		CHECK(k == 2 || k == 3);
+		CHECK(k == 3 || !pipe_plan_costs(n, PIPE_DEF_IO_NS, PIPE_DEF_CPCL_NS, PIPE_DEF_CMD_NS, 3, 3, want));
+	}
+
+	/* fixed learns nothing and, with Statistics off, reads no clock at all */
+	d->est_io_ns = d->est_cp_ns[0] = d->est_cp_ns[1] = d->est_cmd_ns = 0;
+	copy_cost_us = 300;
+	fake_time_calls = 0;
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(fake_time_calls == 0);
+	CHECK(d->est_cp_ns[0] == 0 && d->est_io_ns == 0 && d->est_cmd_ns == 0);
+	copy_cost_us = 0;
+
+	/* off: not split */
+	s.pipeline = VM_PIPE_OFF;
+	vm_stage_apply(&s);
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 1);
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1137,6 +1195,7 @@ int main(void)
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
+	RUN(test_pipeline_modes);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

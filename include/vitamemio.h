@@ -66,13 +66,21 @@ enum vm_key {
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
 	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
-	VM_KEY_PIPELINE,       /* 0/1: overlapped reads (experimental)           */
+	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads (experimental)     */
 	VM_KEY_COUNT
 };
 
 #define VM_HUD_OFF        0
 #define VM_HUD_COMPACT    1
 #define VM_HUD_EXTENDED   2
+
+/* Overlapped reads: off; auto (parts sized from the measured costs, 2 or 3
+ * of them, whichever is quicker); fixed (2 parts, 3 with GPU-safe reads,
+ * sized from built-in costs, nothing measured). 1 was "on" before the
+ * choice existed and means auto. */
+#define VM_PIPE_OFF       0
+#define VM_PIPE_AUTO      1
+#define VM_PIPE_FIXED     2
 
 /* The HUD always sits in the top right corner. */
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
@@ -132,8 +140,9 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_STATS:
 	case VM_KEY_GPUSAFE:
-	case VM_KEY_PIPELINE:
 		return v == 0 || v == 1;
+	case VM_KEY_PIPELINE:
+		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

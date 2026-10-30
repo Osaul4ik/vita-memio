@@ -641,7 +641,7 @@ static void test_small_files(void)
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "files create     files/s"));
 	CHECK(strstr(text, "plugin small transfers too: on"));
-	CHECK(strstr(text, "plugin overlapped reads: on\n"));
+	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "small transfers too: on");

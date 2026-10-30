@@ -81,7 +81,9 @@ static const char X_GROUP[] =
 	ROW_TOGGLE("internal")
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">"
 		ROW_TOGGLE("gpusafe")
-		ROW_TOGGLE("pipeline")
+		ROW_LIST("pipeline")
+			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2")
+		"</list>"
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
@@ -295,6 +297,8 @@ static const vm_u16 *vm_text(const char *id)
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
 	if (s_pfx(id, "vm_i_style") && id[10] >= '0' && id[10] <= '1' && !id[11])
 		return fixed_text(VM_I18N_ITEM_STYLE_CLASSIC + (id[10] - '0'));
+	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
+		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	return 0;
 }
 

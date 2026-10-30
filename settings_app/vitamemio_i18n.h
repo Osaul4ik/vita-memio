@@ -61,6 +61,11 @@ enum vm_i18n_id {
 	VM_I18N_ITEM_PIPE_OFF,      /* its choices, in VM_PIPE_* order                */
 	VM_I18N_ITEM_PIPE_AUTO,
 	VM_I18N_ITEM_PIPE_FIXED,
+	VM_I18N_ROW_OFFLOAD,        /* Advanced > Copy on the system core             */
+	VM_I18N_HINT_OFFLOAD,
+	VM_I18N_ITEM_OFF_OFF,       /* its choices, in VM_OFFLOAD_* order             */
+	VM_I18N_ITEM_OFF_GPU,
+	VM_I18N_ITEM_OFF_ALWAYS,
 	VM_I18N_COUNT
 };
 

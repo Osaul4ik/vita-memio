@@ -106,6 +106,12 @@ static const char *pipe_text(int v)
 	     : v == VM_PIPE_FIXED ? "fixed (2 parts, 3 with GPU-safe)" : "unknown";
 }
 
+static const char *offload_text(int v)
+{
+	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_GPU ? "with GPU-safe reads only"
+	     : v == VM_OFFLOAD_ALWAYS ? "always" : "unknown";
+}
+
 /* The same, short enough for the screen. */
 static const char *pipe_short(int v)
 {
@@ -200,6 +206,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin small transfers too: %s\n", small_text(res));
 		put(&o, "plugin overlapped reads: %s%s\n", pipe_text(res->plugin0.pipeline),
 		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
+		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
@@ -366,6 +373,9 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		line(&s, "small transfers too: %s", small_text(res));
 		line(&s, "overlapped reads: %s%s", pipe_short(res->plugin0.pipeline),
 		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
+		if (res->plugin0.offload > 0)
+			line(&s, "copy on the system core: %s",
+			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only" : "always");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	for (int i = 0; i < res->nruns; i++)

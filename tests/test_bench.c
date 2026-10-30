@@ -41,6 +41,7 @@ typedef struct Fake {
 	int      busy_every;         /* every Nth large read finds the buffer busy  */
 	int      small;              /* the plugin's "small transfers too"          */
 	int      pipeline;           /* ... and its "overlapped reads"              */
+	int      offload;            /* ... and its "copy on the system core"       */
 	int      sf_corrupt;         /* small files read back wrong                 */
 	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
@@ -248,6 +249,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->passthru = f->passthru;
 	o->small = f->small;
 	o->pipeline = f->pipeline;
+	o->offload = f->offload;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -641,6 +643,7 @@ static void test_small_files(void)
 	fake_init(&f, 1);
 	f.small = 1;
 	f.pipeline = 1;
+	f.offload = VM_OFFLOAD_GPU;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && bench_integrity_ok(r));
 	for (int k = 0; k < r->nruns; k++)
@@ -653,9 +656,15 @@ static void test_small_files(void)
 	CHECK(strstr(text, "files create     files/s"));
 	CHECK(strstr(text, "plugin small transfers too: on"));
 	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
+	CHECK(strstr(text, "plugin copy on the system core: with GPU-safe reads only\n"));
+	CHECK(r->plugin0.offload == VM_OFFLOAD_GPU);
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "small transfers too: on");
+	CHECK(found);
+	found = 0;
+	for (int i = 0; i < n; i++)
+		found |= !strcmp(lines[i], "copy on the system core: GPU-safe only");
 	CHECK(found);
 	CHECK(strstr(lines[n - 3], "files delete"));      /* then the two NC reads */
 	CHECK(strstr(lines[n - 1], "NC read 128K"));

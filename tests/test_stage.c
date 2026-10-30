@@ -10,14 +10,22 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
 
 /* The staging copy, with a time cost the tests can set (0 by default, so the
  * other tests' timings are io only). */
 extern uint32_t fake_now_us;
 static uint32_t copy_cost_us;
+/* Which thread copied: the test's own (the caller) or another (the copier). */
+static pthread_t test_thread;
+static int copies_here, copies_elsewhere;
 static void *fake_copy(void *d, const void *s, size_t n)
 {
 	__sync_fetch_and_add(&fake_now_us, copy_cost_us);
+	if (pthread_equal(pthread_self(), test_thread))
+		__sync_fetch_and_add(&copies_here, 1);
+	else
+		__sync_fetch_and_add(&copies_elsewhere, 1);
 	return memcpy(d, s, n);
 }
 #define vm_copy_from_stage fake_copy
@@ -87,6 +95,17 @@ static void reset(void)
 	d->port = -1;
 	d->uid = -1;
 	d->uid2 = d->th = d->sem_go = d->sem_done = d->sem_free = -1;
+	d->th2 = d->sem_cgo = d->sem_fin = -1;
+	g_offload = VM_OFFLOAD_OFF;
+	g_offload_state = g_offload_logged = 0;
+	g_offload_type = 0;
+	g_offload_err = 0;
+	g_off_reads = g_off_kib = g_off_maperr = 0;
+	g_log_diag = 0;
+	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
+	g_cp_sys_kib = g_cp_game_kib = 0;
+	test_thread = pthread_self();
+	copies_here = copies_elsewhere = 0;
 	d->buf = staging;
 	d->enabled = 1;
 	g_verify = 0;
@@ -745,7 +764,7 @@ static void test_pipeline_reads(void)
 
 	reset();
 	pipe_on(&s, 0);
-	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 3);
+	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 2 && fake_semas_live == 5);
 	CHECK(fake_thread_last_mask == PIPE_CPU_SYSTEM);   /* on the system core */
 	g_pipeline = VM_PIPE_FIXED;                     /* its 2 parts per chunk */
 	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76 */
@@ -903,7 +922,7 @@ static void test_pipeline_reads(void)
 	vm_stage_apply(&s);
 	io_calls = 0;
 	CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && last_buf == staging);
-	CHECK(d->pipe_made && fake_threads_live == 1);
+	CHECK(d->pipe_made && fake_threads_live == 2);
 	{
 		int frees = fake_free_calls;
 
@@ -916,7 +935,7 @@ static void test_pipeline_reads(void)
 	s.pipeline = VM_PIPE_AUTO;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
-	CHECK(d->pipe_made && fake_threads_live == 1);
+	CHECK(d->pipe_made && fake_threads_live == 2);
 	/* the device switched off: released too, and the staging buffer kept */
 	s.memcard = 0;
 	vm_stage_apply(&s);
@@ -925,7 +944,7 @@ static void test_pipeline_reads(void)
 	s.memcard = 1;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
-	CHECK(d->pipe_made && fake_threads_live == 1);
+	CHECK(d->pipe_made && fake_threads_live == 2);
 	vm_stage_fini();
 	CHECK(!d->pipe_made && fake_threads_live == 0 && fake_semas_live == 0);
 	g_live = saved_live;
@@ -1031,7 +1050,7 @@ static void test_pipeline_any_core(void)
 	reset();
 	fake_thread_fail_masked = 1;
 	pipe_on(&s, 0);
-	CHECK(d->pipe_made && fake_thread_last_mask == 0 && fake_threads_live == 1);
+	CHECK(d->pipe_made && fake_thread_last_mask == 0 && fake_threads_live == 2);
 	CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && memcmp(u, disk, 512 * 512) == 0);
 	vm_stage_fini();
 	g_live = saved_live;
@@ -1068,23 +1087,24 @@ static void test_pipeline_setup_fails(void)
 	Dev *d = &g_dev[M];
 	int saved_live = g_live;
 
-	for (int step = 0; step < 4; step++) {
+	for (int step = 0; step < 8; step++) {
 		reset();
 		if (step == 0) fake_alloc_fail = 1;
-		if (step == 1) fake_sema_fail = 1;
-		if (step == 2) fake_sema_fail = 2;
-		if (step == 3) fake_thread_fail = 1;
+		if (step >= 1 && step <= 5) fake_sema_fail = step;   /* each of the five */
+		if (step == 6) fake_thread_fail = 1;                 /* the helper */
+		if (step == 7) fake_thread_fail_from = 2;            /* the copier (masked, any) */
 		pipe_on(&s, 0);
 		fake_alloc_fail = 0;
 		CHECK(!d->pipe_made && !d->pipe_ready && d->pipe_failed);
 		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
 		CHECK(d->uid2 < 0 && d->th < 0 && d->sem_go < 0 && d->sem_done < 0);
+		CHECK(d->th2 < 0 && d->sem_free < 0 && d->sem_cgo < 0 && d->sem_fin < 0);
 		vm_stage_worker_tick();
 		CHECK(!d->pipe_made);                    /* not retried */
 		io_calls = 0;
 		CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && memcmp(u, disk, 512 * 512) == 0);
 		/* switched off and on again: a fresh try, which now works */
-		fake_thread_fail = fake_sema_fail = 0;
+		fake_thread_fail = fake_sema_fail = fake_thread_fail_from = 0;
 		s.pipeline = 0;
 		vm_stage_apply(&s);
 		s.pipeline = 1;
@@ -1353,6 +1373,7 @@ static void test_helper_runs_ahead(void)
 		d->job_ref = REF_RD;
 		d->job_part = NULL;
 		d->job_k = 3;
+		d->job_first = 1;                       /* part 0: the caller's (pipe_run) */
 		memcpy(d->job_sz, sz, sizeof(sz));
 		d->job_sector = 100 + sz[0];
 		d->job_fail = 0;
@@ -1426,58 +1447,221 @@ static void test_plan_quick_check(void)
 	CHECK(quick > 500 && split > 5000);        /* both cases well covered */
 }
 
-/* Diagnostics for moving the copy off the caller's core (log on only): the
- * KiB copied per core and per kind of caller, and a probe that maps a game's
- * buffer into the kernel with a few permission values, reads it through the
- * mapping, compares and unmaps - never writes. Off with the log off; never
- * for a system caller (nothing to map). */
+/* Where the copy ran (log on only): the KiB per core of the thread that
+ * copied, and per kind of caller (a system thread or a game). Nothing with
+ * the log off. */
 static void test_copy_diagnostics(void)
 {
 	uint8_t *u = user_buf(128);
 
 	reset();
-	g_log_diag = 0;
-	g_probe_runs = 0;
-	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
-	g_cp_sys_kib = g_cp_game_kib = 0;
-	g_probe_want = 1;
 	CHECK(rd(u, 0, 128) == 0);
-	CHECK(g_cp_core_kib[0] == 0 && fake_usermap_calls == 0);     /* log off: nothing */
-
+	CHECK(g_cp_core_kib[0] == 0 && g_cp_sys_kib == 0 && g_cp_game_kib == 0);   /* log off */
 	g_log_diag = 1;
 	CHECK(rd(u, 0, 128) == 0);                                 /* a system caller */
 	CHECK(g_cp_core_kib[0] == 64 && g_cp_sys_kib == 64 && g_cp_game_kib == 0);
-	CHECK(fake_usermap_calls == 0 && g_probe_runs == 0);       /* nothing to map */
-
 	fake_pid = 0x42;                                           /* a game */
-	g_probe_want = 1;
 	CHECK(rd(u, 0, 128) == 0 && memcmp(u, disk, 128 * 512) == 0);
 	CHECK(g_cp_game_kib == 64 && g_cp_core_kib[0] == 128);
-	CHECK(g_probe_runs == 1 && !g_probe_want && g_probe_kib == 64);
-	CHECK(fake_usermap_calls == PROBE_PERMS && fake_usermap_live == 0);   /* all unmapped */
-	for (int i = 0; i < PROBE_PERMS; i++)
-		CHECK(g_probe_ret[i] == 0 && g_probe_same[i] == 1);
-	CHECK(rd(u, 0, 128) == 0 && g_probe_runs == 1);            /* once per request */
+	CHECK(fake_usermap_calls == 0);                            /* nothing mapped */
+	free(u);
+}
 
-	/* refused for some permissions: their error kept, nothing read */
+/* Copy on the system core: a game's read is copied by the copier thread
+ * through a kernel mapping of the game's buffer; the game's thread copies
+ * nothing. As the setting says (with GPU-safe only, or always); never for a
+ * system thread. The mapping is checked once for write access and every
+ * time for its memory type; refused, failed or not, the caller still gets
+ * the disk's data. */
+static void offload_on(VmSettings *s, int gpu, int mode, int pipeline)
+{
+	memset(s, 0, sizeof(*s));
+	s->memcard = 1;
+	s->stats = 1;
+	s->gpusafe = gpu;
+	s->pipeline = pipeline;
+	s->offload = mode;
+	vm_stage_apply(s);
+	g_live = 1;
+	vm_stage_worker_tick();               /* helper and copier made by the worker */
+	if (gpu)
+		g_dcache_clean = fake_clean;
+}
+
+static int sems_empty(const Dev *d)
+{
+	return fake_sema_count(d->sem_go) == 0 && fake_sema_count(d->sem_done) == 0 &&
+	       fake_sema_count(d->sem_free) == 0 && fake_sema_count(d->sem_cgo) == 0 &&
+	       fake_sema_count(d->sem_fin) == 0;
+}
+
+static void test_offload(void)
+{
+	static const uint32_t sizes[] = { 1, 8, 32, 64, 100, 128, 256, 300, 512, 777, 1100 };
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	/* made with overlapped reads off too: the helper reads, the copier copies */
+	for (int pipeline = 0; pipeline <= 1; pipeline++) {
+		reset();
+		offload_on(&s, 1, VM_OFFLOAD_GPU, pipeline);
+		CHECK(d->pipe_made && fake_threads_live == 2 && fake_semas_live == 5);
+		fake_pid = 0x42;
+		g_log_diag = 1;
+		g_min_sectors = 1;                      /* small transfers too */
+		for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+			const uint32_t n = sizes[i], at = (uint32_t)(i * 97) % 2000;
+			const int maps = fake_usermap_calls;
+
+			d->est_io_ns = 25000; d->est_cmd_ns = 420000;
+			d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100;
+			memset(u, 0, n * 512);
+			copies_here = copies_elsewhere = 0;
+			clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
+			CHECK(rd(u, at, n) == 0);
+			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
+			CHECK(copies_here == 0 && copies_elsewhere >= 1);    /* all on the copier */
+			CHECK(fake_usermap_calls == maps + 1 && fake_usermap_live == 0);   /* one, unmapped */
+			CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + (size_t)n * 512);
+			CHECK(sems_empty(d));
+		}
+		CHECK(g_offload_state == 1 && fake_meminfo_calls == 1);   /* checked once */
+		CHECK(g_off_reads >= sizeof(sizes) / sizeof(sizes[0]) && d->st.errors == 0);
+		CHECK(g_cp_game_kib > 0 && g_cp_core_kib[0] > 0);       /* noted by the copier */
+		if (pipeline)
+			CHECK(g_pipe_reads > 0);                            /* parts, overlapped */
+		vm_stage_fini();
+		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+	}
+
+	/* "with GPU-safe only": a plain read stays with the caller; "always" not */
+	reset();
+	offload_on(&s, 0, VM_OFFLOAD_GPU, 1);
+	fake_pid = 0x42;
+	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
+	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 0 && g_off_reads == 0);
+	s.offload = VM_OFFLOAD_ALWAYS;
+	vm_stage_apply(&s);
+	copies_here = copies_elsewhere = 0;
+	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
+	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads == 1);
+	/* a system thread's read: copied where it is, nothing mapped */
+	fake_pid = KERNEL_PID;
+	copies_here = copies_elsewhere = 0;
+	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
+	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 1);
+	/* off: as before */
+	fake_pid = 0x42;
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);
+	copies_here = copies_elsewhere = 0;
+	CHECK(rd(u, 0, 256) == 0 && copies_elsewhere == 0 && fake_usermap_calls == 1);
+	vm_stage_fini();
+
+	/* the mapping fails: the caller copies; tried again on the next request */
+	reset();
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	fake_pid = 0x42;
 	fake_usermap_err = (int)0x80020001;
-	fake_usermap_deny = (1 << 1) | (1 << 6);
-	g_probe_want = 1;
-	CHECK(rd(u, 0, 128) == 0 && g_probe_runs == 2 && fake_usermap_live == 0);
-	CHECK(g_probe_ret[0] == (int)0x80020001 && g_probe_same[0] == 0);
-	CHECK(g_probe_ret[1] == 0 && g_probe_same[1] == 1);
-	CHECK(g_probe_ret[3] == (int)0x80020001 && g_probe_same[3] == 0);
+	fake_usermap_deny = 1 << VM_USERMAP_RW;
+	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
+	CHECK(copies_elsewhere == 0 && g_off_maperr == 1 && g_offload_state == 0);
+	CHECK(g_offload_err == (int)0x80020001 && sems_empty(d) && g_off_reads == 0);
+	fake_usermap_err = 0;
+	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
+	CHECK(g_off_reads >= 1 && g_offload_state == 1);
+	vm_stage_fini();
 
-	/* the worker asks for a probe each tick while the log is on, up to 10 */
-	g_probe_want = 0;
+	/* not writable: refused until switched again; the caller copies */
+	reset();
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	fake_pid = 0x42;
+	fake_meminfo_type = 0x1020D004;           /* kernel read-only */
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(g_offload_state == -1 && copies_elsewhere == 0 && fake_usermap_live == 0);
+	CHECK(rd(u, 0, 512) == 0 && fake_usermap_calls == 1);  /* not tried again */
 	vm_stage_worker_tick();
-	CHECK(g_probe_want == 1);
-	g_probe_want = 0;
-	g_probe_runs = 10;
-	vm_stage_worker_tick();
-	CHECK(g_probe_want == 0);
-	g_log_diag = 0;
-	g_probe_runs = 0;
+	CHECK(g_offload_logged == -1);
+	fake_meminfo_type = 0x1020D006;
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);
+	s.offload = VM_OFFLOAD_ALWAYS;
+	vm_stage_apply(&s);                       /* switched again: checked afresh */
+	CHECK(g_offload_state == 0);
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0 && g_offload_state == 1);
+	/* GetInfoEx fails: refused too */
+	s.offload = VM_OFFLOAD_OFF;
+	vm_stage_apply(&s);
+	s.offload = VM_OFFLOAD_ALWAYS;
+	vm_stage_apply(&s);
+	fake_meminfo_err = -5;
+	copies_elsewhere = 0;
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(g_offload_state == -1 && copies_elsewhere == 0);
+	vm_stage_fini();
+
+	/* a mapping of another memory type than the game's buffer: refused */
+	{
+		static uint8_t elsewhere[600 * 512];
+
+		reset();
+		offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+		fake_pid = 0x42;
+		fake_usermap_elsewhere = elsewhere;
+		fake_memtype_from = elsewhere;        /* the mapping: non-cacheable */
+		fake_memtype_to = elsewhere + sizeof(elsewhere);
+		fake_memtype_above = 0x8000;
+		fake_memtype = 0xD000;                /* the game's buffer: cached */
+		memset(elsewhere, 0x5A, sizeof(elsewhere));
+		CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
+		CHECK(g_offload_state == -2 && copies_elsewhere == 0 && fake_usermap_live == 0);
+		CHECK(elsewhere[0] == 0x5A && elsewhere[sizeof(elsewhere) - 1] == 0x5A);
+		vm_stage_worker_tick();
+		CHECK(g_offload_logged == -2);
+		fake_memtype_from = fake_memtype_to = NULL;
+		vm_stage_fini();
+	}
+
+	/* an error at any part: the parts before it copied, the rest stock;
+	 * nothing left in the semaphores, the mapping removed */
+	for (int at = 1; at <= 3; at++) {
+		uint32_t before = 0;
+
+		reset();
+		offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+		fake_pid = 0x42;
+		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
+		d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100;
+		fail_at_call = at;
+		memset(u, 0, 512 * 512);
+		CHECK(rd(u, 0, 512) == 0);
+		CHECK(memcmp(u, disk, 512 * 512) == 0);
+		CHECK(d->st.errors == 1 && d->fallback);
+		for (int i = 0; i + 1 < at; i++)
+			before += io_ns[i];
+		CHECK(last_buf == u + (size_t)before * 512);
+		CHECK(io_calls == at + 1 && sems_empty(d) && fake_usermap_live == 0);
+		vm_stage_fini();
+		CHECK(fake_threads_live == 0);
+	}
+
+	/* with Verify: copied on the system core in one piece, then compared */
+	reset();
+	offload_on(&s, 0, VM_OFFLOAD_ALWAYS, 1);
+	fake_pid = 0x42;
+	g_shadow = malloc(STAGE_BYTES);
+	g_verify = 1;
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(io_calls == 2 && io_bufs[1] == g_shadow && copies_elsewhere == 1);
+	CHECK(d->st.verified == 1 && d->st.mismatches == 0 && g_pipe_reads == 0);
+	g_verify = 0;
+	free(g_shadow);
+	g_shadow = NULL;
+	vm_stage_fini();
+
+	g_live = saved_live;
 	free(u);
 }
 
@@ -1494,6 +1678,7 @@ int main(void)
 	RUN(test_helper_runs_ahead);
 	RUN(test_plan_quick_check);
 	RUN(test_copy_diagnostics);
+	RUN(test_offload);
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);

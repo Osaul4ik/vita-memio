@@ -1122,3 +1122,113 @@
 	"Fixed (2, GPU-safe 3)",   /* engb */
 	"Sabit (2, GPU 3)",   /* tr */
 },
+[VM_I18N_ROW_OFFLOAD] = {
+	"システムコアでコピー",   /* ja */
+	"Copy on the system core",   /* en */
+	"Copie sur le cœur système",   /* fr */
+	"Copiar en el núcleo del sistema",   /* es */
+	"Kopieren auf dem Systemkern",   /* de */
+	"Copia sul core di sistema",   /* it */
+	"Kopiëren op de systeemkern",   /* nl */
+	"Copiar no núcleo do sistema",   /* pt */
+	"Копирование на системном ядре",   /* ru */
+	"시스템 코어에서 복사",   /* ko */
+	"在系統核心複製",   /* zht */
+	"在系统核心复制",   /* zhs */
+	"Kopiointi järjestelmäytimellä",   /* fi */
+	"Kopiera på systemkärnan",   /* sv */
+	"Kopiér på systemkernen",   /* da */
+	"Kopier på systemkjernen",   /* no */
+	"Kopiowanie na rdzeniu systemowym",   /* pl */
+	"Copiar no núcleo do sistema",   /* ptbr */
+	"Copy on the system core",   /* engb */
+	"Sistem çekirdeğinde kopyala",   /* tr */
+},
+[VM_I18N_HINT_OFFLOAD] = {
+	"試験的機能。ゲームが読み込んだデータのコピーを、ゲーム自身のコアではなく本体のシステムコアで行います。読み込み中のゲームのコアが早く空き、読み込み速度は変わりません。GPU対応時のみ：コピーの負担が最も大きいGPU対応読み込みがオンのときだけ。常に：ゲームの高速化されたすべての読み込み。本体が許可しない場合、ゲームは従来どおりコピーします（ログを参照）。",   /* ja */
+	"Experimental. Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. GPU-safe only: just while GPU-safe reads are on, where the copy costs the most. Always: every faster read of a game. If the console does not allow it, games copy as before (see the log).",   /* en */
+	"Expérimental. Copie ce qu'un jeu lit sur le cœur système de la console au lieu du cœur du jeu, qui se libère plus vite pendant le chargement ; la vitesse de lecture ne change pas. GPU seulement : uniquement avec les lectures sûres pour le GPU, où la copie coûte le plus. Toujours : chaque lecture accélérée d'un jeu. Si la console ne le permet pas, les jeux copient comme avant (voir le journal).",   /* fr */
+	"Experimental. Copia lo que lee un juego en el núcleo del sistema de la consola en lugar del núcleo del propio juego, que queda libre antes durante la carga; la velocidad de lectura no cambia. Solo con GPU: solo con las lecturas seguras para la GPU activadas, donde la copia cuesta más. Siempre: cada lectura acelerada de un juego. Si la consola no lo permite, los juegos copian como antes (ver el registro).",   /* es */
+	"Experimentell. Kopiert, was ein Spiel liest, auf dem Systemkern der Konsole statt auf dem Kern des Spiels, der beim Laden so früher frei wird; die Lesegeschwindigkeit bleibt gleich. Nur mit GPU: nur bei GPU-sicherem Lesen, wo das Kopieren am meisten kostet. Immer: jedes beschleunigte Lesen eines Spiels. Erlaubt die Konsole es nicht, kopieren Spiele wie bisher (siehe Protokoll).",   /* de */
+	"Sperimentale. Copia ciò che un gioco legge sul core di sistema della console invece che sul core del gioco, che si libera prima durante il caricamento; la velocità di lettura non cambia. Solo GPU: solo con le letture sicure per la GPU attive, dove la copia costa di più. Sempre: ogni lettura accelerata di un gioco. Se la console non lo consente, i giochi copiano come prima (vedi il registro).",   /* it */
+	"Experimenteel. Kopieert wat een game leest op de systeemkern van de console in plaats van op de kern van de game, die zo eerder vrij is tijdens het laden; de leessnelheid blijft gelijk. Alleen GPU: alleen met GPU-veilig lezen aan, waar het kopiëren het meest kost. Altijd: elke versnelde leesactie van een game. Staat de console het niet toe, dan kopiëren games zoals vroeger (zie het logboek).",   /* nl */
+	"Experimental. Copia o que um jogo lê no núcleo do sistema da consola em vez do núcleo do próprio jogo, que fica livre mais cedo durante o carregamento; a velocidade de leitura não muda. Só com GPU: só com as leituras seguras para a GPU ligadas, onde a cópia custa mais. Sempre: cada leitura acelerada de um jogo. Se a consola não o permitir, os jogos copiam como antes (ver o registo).",   /* pt */
+	"Экспериментально. Копирует прочитанное игрой на системном ядре консоли, а не на ядре самой игры, которое так раньше освобождается во время загрузки; скорость чтения не меняется. Только с GPU: только при включённом безопасном для GPU чтении, где копирование обходится дороже всего. Всегда: каждое ускоренное чтение игры. Если консоль этого не позволяет, игры копируют как раньше (см. журнал).",   /* ru */
+	"실험적 기능. 게임이 읽은 데이터를 게임 자신의 코어 대신 본체의 시스템 코어에서 복사하므로 로딩 중 게임 코어가 더 빨리 비며, 읽기 속도는 그대로입니다. GPU 안전 시에만: 복사 부담이 가장 큰 GPU 안전 읽기가 켜져 있을 때만. 항상: 게임의 모든 가속 읽기. 본체가 허용하지 않으면 게임은 이전처럼 복사합니다(로그 참조).",   /* ko */
+	"實驗性功能。將遊戲讀取的資料改在主機的系統核心複製，而非遊戲自己的核心，讓遊戲核心在載入時更早空出；讀取速度不變。僅 GPU 安全時：只在開啟 GPU 安全讀取時（複製負擔最大）。一律：遊戲的每次加速讀取。若主機不允許，遊戲會照舊複製（請見記錄）。",   /* zht */
+	"实验性功能。将游戏读取的数据改在主机的系统核心复制，而不是游戏自己的核心，让游戏核心在加载时更早空出；读取速度不变。仅 GPU 安全时：只在开启 GPU 安全读取时（复制负担最大）。始终：游戏的每次加速读取。若主机不允许，游戏会照旧复制（见日志）。",   /* zhs */
+	"Kokeellinen. Kopioi pelin lukemat tiedot konsolin järjestelmäytimellä pelin oman ytimen sijaan, joten pelin ydin vapautuu latauksen aikana aiemmin; lukunopeus pysyy samana. Vain GPU: vain kun GPU-turvalliset luvut ovat päällä, jolloin kopiointi maksaa eniten. Aina: pelin jokainen nopeutettu luku. Jos konsoli ei salli sitä, pelit kopioivat kuten ennenkin (katso loki).",   /* fi */
+	"Experimentell. Kopierar det ett spel läser på konsolens systemkärna i stället för spelets egen kärna, som då blir ledig tidigare under laddningen; läshastigheten är densamma. Endast GPU: bara när GPU-säkra läsningar är på, där kopieringen kostar mest. Alltid: varje snabbare läsning av ett spel. Tillåter konsolen det inte kopierar spelen som förut (se loggen).",   /* sv */
+	"Eksperimentel. Kopierer det, et spil læser, på konsollens systemkerne i stedet for spillets egen kerne, så spillets kerne bliver ledig før under indlæsning; læsehastigheden er den samme. Kun GPU: kun når GPU-sikre læsninger er slået til, hvor kopieringen koster mest. Altid: hver hurtigere læsning af et spil. Tillader konsollen det ikke, kopierer spil som før (se loggen).",   /* da */
+	"Eksperimentell. Kopierer det et spill leser på konsollens systemkjerne i stedet for spillets egen kjerne, så spillets kjerne blir ledig tidligere under lasting; lesehastigheten er den samme. Kun GPU: bare når GPU-sikre lesinger er på, der kopieringen koster mest. Alltid: hver raskere lesing av et spill. Tillater ikke konsollen det, kopierer spill som før (se loggen).",   /* no */
+	"Eksperymentalne. Kopiuje to, co czyta gra, na rdzeniu systemowym konsoli zamiast na rdzeniu samej gry, który dzięki temu szybciej się zwalnia podczas wczytywania; prędkość odczytu się nie zmienia. Tylko z GPU: tylko przy włączonych bezpiecznych odczytach dla GPU, gdzie kopiowanie kosztuje najwięcej. Zawsze: każdy przyspieszony odczyt gry. Jeśli konsola na to nie pozwala, gry kopiują jak dotąd (zob. dziennik).",   /* pl */
+	"Experimental. Copia o que um jogo lê no núcleo do sistema do console em vez do núcleo do próprio jogo, que fica livre mais cedo durante o carregamento; a velocidade de leitura não muda. Só com GPU: só com as leituras seguras para a GPU ligadas, onde a cópia custa mais. Sempre: cada leitura acelerada de um jogo. Se o console não permitir, os jogos copiam como antes (veja o log).",   /* ptbr */
+	"Experimental. Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. GPU-safe only: just while GPU-safe reads are on, where the copy costs the most. Always: every faster read of a game. If the console does not allow it, games copy as before (see the log).",   /* engb */
+	"Deneysel. Bir oyunun okuduğunu oyunun kendi çekirdeği yerine konsolun sistem çekirdeğinde kopyalar; böylece yükleme sırasında oyunun çekirdeği daha erken boşalır, okuma hızı aynı kalır. Yalnızca GPU: yalnızca GPU için güvenli okuma açıkken, kopyalamanın en pahalı olduğu yerde. Her zaman: bir oyunun her hızlandırılmış okuması. Konsol izin vermezse oyunlar eskisi gibi kopyalar (günlüğe bakın).",   /* tr */
+},
+[VM_I18N_ITEM_OFF_OFF] = {
+	"オフ",   /* ja */
+	"Off",   /* en */
+	"Désactivé",   /* fr */
+	"Desactivado",   /* es */
+	"Aus",   /* de */
+	"Disattivato",   /* it */
+	"Uit",   /* nl */
+	"Desligado",   /* pt */
+	"Выкл.",   /* ru */
+	"끔",   /* ko */
+	"關閉",   /* zht */
+	"关闭",   /* zhs */
+	"Pois",   /* fi */
+	"Av",   /* sv */
+	"Fra",   /* da */
+	"Av",   /* no */
+	"Wyłączony",   /* pl */
+	"Desligado",   /* ptbr */
+	"Off",   /* engb */
+	"Kapalı",   /* tr */
+},
+[VM_I18N_ITEM_OFF_GPU] = {
+	"GPU対応時のみ",   /* ja */
+	"GPU-safe only",   /* en */
+	"GPU seulement",   /* fr */
+	"Solo con GPU",   /* es */
+	"Nur mit GPU",   /* de */
+	"Solo GPU",   /* it */
+	"Alleen GPU",   /* nl */
+	"Só com GPU",   /* pt */
+	"Только с GPU",   /* ru */
+	"GPU 안전 시에만",   /* ko */
+	"僅 GPU 安全時",   /* zht */
+	"仅 GPU 安全时",   /* zhs */
+	"Vain GPU",   /* fi */
+	"Endast GPU",   /* sv */
+	"Kun GPU",   /* da */
+	"Kun GPU",   /* no */
+	"Tylko z GPU",   /* pl */
+	"Só com GPU",   /* ptbr */
+	"GPU-safe only",   /* engb */
+	"Yalnızca GPU",   /* tr */
+},
+[VM_I18N_ITEM_OFF_ALWAYS] = {
+	"常に",   /* ja */
+	"Always",   /* en */
+	"Toujours",   /* fr */
+	"Siempre",   /* es */
+	"Immer",   /* de */
+	"Sempre",   /* it */
+	"Altijd",   /* nl */
+	"Sempre",   /* pt */
+	"Всегда",   /* ru */
+	"항상",   /* ko */
+	"一律",   /* zht */
+	"始终",   /* zhs */
+	"Aina",   /* fi */
+	"Alltid",   /* sv */
+	"Altid",   /* da */
+	"Alltid",   /* no */
+	"Zawsze",   /* pl */
+	"Sempre",   /* ptbr */
+	"Always",   /* engb */
+	"Her zaman",   /* tr */
+},

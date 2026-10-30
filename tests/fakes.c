@@ -44,6 +44,7 @@ uint32_t ksceKernelGetSystemTimeLow(void)
  * another thread is tested with real concurrency. */
 int fake_thread_fail, fake_sema_fail, fake_threads_live, fake_semas_live;
 int fake_thread_fail_masked, fake_thread_last_mask;
+int fake_thread_fail_from;   /* from the n-th creation on, every one fails */
 
 typedef struct { int used; pthread_mutex_t m; pthread_cond_t c; int count, max; } FakeSema;
 static FakeSema g_semas[32];
@@ -155,6 +156,10 @@ SceUID ksceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int 
 	(void)name; (void)initPriority; (void)stackSize; (void)attr; (void)option;
 	if (fake_thread_fail)
 		return -0x30;
+	if (fake_thread_fail_from && --fake_thread_fail_from <= 0) {
+		fake_thread_fail_from = 1;          /* and every one after it */
+		return -0x33;
+	}
 	if (fake_thread_fail_masked && cpuAffinityMask)
 		return -0x32;                        /* that core is refused */
 	fake_thread_last_mask = cpuAffinityMask;
@@ -322,11 +327,36 @@ SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const
 	if (fake_usermap_err && permission >= 0 && permission < 32 &&
 	    (fake_usermap_deny & (1 << permission)))
 		return fake_usermap_err;
+	if (fake_usermap_elsewhere) {
+		*kernel_page = fake_usermap_elsewhere;
+		*kernel_offset = 0;
+		*kernel_size = size;
+		fake_usermap_live++;
+		return 0x4000 + permission;
+	}
 	*kernel_page = (void *)page;
 	*kernel_offset = (SceUInt32)(a - page);
 	*kernel_size = (SceSize)((a - page + size + 4095) & ~(uintptr_t)4095);
 	fake_usermap_live++;
 	return 0x4000 + permission;
+}
+
+/* The mapping's memblock type (as SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW by
+ * default) or a failure. */
+int fake_meminfo_type = 0x1020D006, fake_meminfo_err, fake_meminfo_calls;
+/* If set, the mapping is not the caller's own page but this buffer (its
+ * bytes are not the caller's: for the refused cases only). */
+void *fake_usermap_elsewhere;
+int ksceKernelMemBlockGetInfoEx(SceUID uid, SceKernelMemBlockInfoEx *info)
+{
+	(void)uid;
+	fake_meminfo_calls++;
+	if (fake_meminfo_err)
+		return fake_meminfo_err;
+	if (info->size != sizeof(*info))
+		return -1;
+	info->core_info.type = (unsigned)fake_meminfo_type;
+	return 0;
 }
 
 int ksceKernelUserUnmap(SceUID uid)
@@ -340,6 +370,9 @@ void fakes_reset(void)
 {
 	fake_pid = 0x10005;
 	fake_usermap_err = fake_usermap_deny = fake_usermap_calls = fake_usermap_live = 0;
+	fake_meminfo_type = 0x1020D006;
+	fake_meminfo_err = fake_meminfo_calls = 0;
+	fake_usermap_elsewhere = NULL;
 	fake_now_us = 0;
 	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
@@ -347,20 +380,22 @@ void fakes_reset(void)
 	fake_rename_fail = fake_write_short = 0;
 	fake_memtype = 0xD000;          /* ordinary cached memory */
 	fake_memtype_calls = 0;
-	fake_memtype_from = NULL;
+	fake_memtype_from = fake_memtype_to = NULL;
 	fake_memtype_above = 0xD000;
 	fake_thread_fail = fake_sema_fail = 0;
 	fake_thread_fail_masked = fake_thread_last_mask = 0;
+	fake_thread_fail_from = 0;
 }
 
 int fake_memtype = 0xD000, fake_memtype_calls;
-const void *fake_memtype_from;
+const void *fake_memtype_from, *fake_memtype_to;
 int fake_memtype_above = 0xD000;
 
 int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 {
 	fake_memtype_calls++;
-	if (fake_memtype_from && (const char *)addr >= (const char *)fake_memtype_from)
+	if (fake_memtype_from && (const char *)addr >= (const char *)fake_memtype_from &&
+	    (!fake_memtype_to || (const char *)addr < (const char *)fake_memtype_to))
 		return fake_memtype_above;
 	return fake_memtype;
 }

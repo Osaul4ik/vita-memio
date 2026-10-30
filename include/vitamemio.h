@@ -67,6 +67,7 @@ enum vm_key {
 	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
+	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
 	VM_KEY_COUNT
 };
 
@@ -81,6 +82,14 @@ enum vm_key {
 #define VM_PIPE_OFF       0
 #define VM_PIPE_AUTO      1
 #define VM_PIPE_FIXED     2
+
+/* Copy on the system core: a game's read is copied out of the staging
+ * buffers by a thread on the system core instead of the game's own thread
+ * (whose core is then free sooner): off; only with GPU-safe reads (where the
+ * copy costs the most); always. */
+#define VM_OFFLOAD_OFF     0
+#define VM_OFFLOAD_GPU     1
+#define VM_OFFLOAD_ALWAYS  2
 
 /* The HUD always sits in the top right corner. */
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
@@ -99,6 +108,7 @@ enum vm_key {
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
+#define VM_DEF_OFFLOAD   0   /* VM_OFFLOAD_OFF: experimental, opt-in           */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -113,6 +123,7 @@ typedef struct VmSettings {
 	int32_t stats;
 	int32_t gpusafe;
 	int32_t pipeline;
+	int32_t offload;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -143,6 +154,8 @@ static inline int vm_setting_valid(int key, int v)
 		return v == 0 || v == 1;
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
+	case VM_KEY_OFFLOAD:
+		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_ALWAYS;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

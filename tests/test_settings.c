@@ -248,6 +248,32 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
+	/* copy on the system core: off by default, also for a file from before it
+	 * existed (11 keys); stored values kept; out of range: the default */
+	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_OFF && VM_KEY_OFFLOAD == 11);
+	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALWAYS) && !vm_setting_valid(VM_KEY_OFFLOAD, 3));
+	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
+	v[VM_KEY_PIPELINE] = VM_PIPE_AUTO;
+	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_ALWAYS;
+	clean();
+	n = make_file(buf, 11, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.offload == VM_OFFLOAD_OFF && s.pipeline == VM_PIPE_AUTO);
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.offload == VM_OFFLOAD_ALWAYS);
+	v[VM_KEY_OFFLOAD] = 7;
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.offload == VM_DEF_OFFLOAD);
 }
 
 /* A save to do keeps the worker waking: pending after a change, not after a

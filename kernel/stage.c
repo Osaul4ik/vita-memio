@@ -125,25 +125,35 @@ typedef struct Dev {
 	int           pipe_made, pipe_failed;
 	volatile int  pipe_ready, pipe_quit;
 	SceUID        uid2, th, sem_go, sem_done, sem_free;
+	SceUID        th2, sem_cgo, sem_fin;  /* the copier (copy on the system core) */
 	void         *buf2;
-	/* the job: parts 1 .. job_k-1 of job_sz, from job_sector on (pipe_run) */
+	/* the job: parts job_first .. job_k-1 of job_sz, the first of them at
+	 * job_sector (pipe_run: from part 1; offload_run: all of them) */
+	uint32_t      job_first;
 	io_fn         job_io;
 	tai_hook_ref_t job_ref;
 	void         *job_part;
 	uint32_t      job_k, job_sz[3];       /* 3: PIPE_MAX_PARTS                 */
 	uint32_t      job_sector;
 	int           job_ret;                /* the failed part's error           */
-	uint32_t      job_fail;               /* 0, or the part that failed        */
+	uint32_t      job_fail;               /* 0, or 1 + the part that failed    */
 	uint32_t      job_io_us, job_last_us, job_big_us, job_big_n;   /* timings */
+	/* the copier's job (the plan above) and its result */
+	uint8_t      *cjob_dst;               /* the caller's buffer, mapped       */
+	int           cjob_clean, cjob_ret;
+	uint32_t      cjob_done, cjob_cp_us;
 	uint32_t      est_io_ns;              /* per sector, for the split        */
 	uint32_t      est_cp_ns[2];           /* the copy: [0] plain, [1] + clean */
 	uint32_t      est_cmd_ns;             /* the fixed cost of one card read   */
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
-	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1 },
-	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1 },
-	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1 },
+	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
+	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
+	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
 };
 
 /* Set by vm_stage_init: from then on a device switched on gets its buffer.
@@ -335,24 +345,13 @@ static volatile uint32_t g_rd_max;           /* the largest read request, sector
 #define PIPE_WAIT_US       200u
 static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 min */
 
-/* ---- diagnostics: where the copy runs, and can a helper reach the buffer --
+/* ---- where the copy runs (log) ---------------------------------------------
  *
- * For moving the copy off the caller's core: which core the caller's thread
- * ran the copy on, and whether it belonged to the system (kernel process:
- * its buffers are reachable from any kernel thread) or to a game (a user
- * buffer, reachable from another thread only through a kernel mapping of
- * it). Once a minute with the log on, a read's user buffer is mapped
- * (ksceKernelProcUserMap) with a few permission values and unmapped again:
- * only read through the mapping and compared, never written. */
+ * Which core ran each staged read's copy (the caller's thread, or the copier
+ * on the system core), and whether the caller was a system thread (kernel
+ * process) or a game (a user process). */
 static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
-#define PROBE_PERMS 4
-static const int k_probe_perm[PROBE_PERMS] = { 1, 2, 3, 6 };
-static volatile int g_probe_want;          /* the worker asks for one probe */
-static volatile int g_log_diag;            /* the log is on: count and probe  */
-static int      g_probe_runs;              /* probes done (by reads)        */
-static int      g_probe_ret[PROBE_PERMS];  /* the last probe, per permission */
-static uint32_t g_probe_us[PROBE_PERMS], g_probe_kib;
-static int      g_probe_same[PROBE_PERMS]; /* the mapping showed the same bytes */
+static volatile int g_log_diag;            /* the log is on: count            */
 
 static inline uint32_t cpu_id(void)
 {
@@ -366,48 +365,36 @@ static inline uint32_t cpu_id(void)
 #endif
 }
 
-/* A staged read finished in the caller's thread: note where its copy ran. */
-static void diag_note(uint32_t nsec)
+/* A staged read finished: note who the caller was and, for the part its own
+ * thread copied, on which core (the copier notes its own). */
+static void diag_note(uint32_t nsec, uint32_t own)
 {
-	const uint32_t kib = nsec / 2;
-
-	__atomic_fetch_add(&g_cp_core_kib[cpu_id()], kib, __ATOMIC_RELAXED);
+	if (own)
+		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
 	if (ksceKernelGetProcessId() == KERNEL_PID)
-		__atomic_fetch_add(&g_cp_sys_kib, kib, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&g_cp_sys_kib, nsec / 2, __ATOMIC_RELAXED);
 	else
-		__atomic_fetch_add(&g_cp_game_kib, kib, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&g_cp_game_kib, nsec / 2, __ATOMIC_RELAXED);
 }
 
-/* Map the caller's (user) buffer into the kernel, read it through the
- * mapping, unmap. Nothing is written. */
-static void diag_probe(const void *buf, uint32_t bytes)
-{
-	const SceUID pid = ksceKernelGetProcessId();
-
-	if (pid == KERNEL_PID)
-		return;                             /* not a user buffer: nothing to map */
-	g_probe_kib = bytes / 1024;
-	for (int i = 0; i < PROBE_PERMS; i++) {
-		void *page = NULL;
-		SceSize size = 0;
-		SceUInt32 off = 0;
-		const uint32_t t0 = ksceKernelGetSystemTimeLow();
-		const SceUID uid = ksceKernelProcUserMap(pid, "SceVitaMemioProbe", k_probe_perm[i], buf,
-		                                         bytes, &page, &size, &off);
-
-		g_probe_ret[i] = uid < 0 ? uid : 0;
-		g_probe_same[i] = 0;
-		if (uid >= 0) {
-			const uint32_t n = bytes < 4096 ? bytes : 4096;
-
-			if (page && size >= off && size - off >= bytes)
-				g_probe_same[i] = memcmp((const uint8_t *)page + off, buf, n) == 0 ? 1 : 2;
-			ksceKernelUserUnmap(uid);
-		}
-		g_probe_us[i] = ksceKernelGetSystemTimeLow() - t0;   /* map + read + unmap */
-	}
-	g_probe_runs++;
-}
+/* ---- copy on the system core (VM_KEY_OFFLOAD) -------------------------------
+ *
+ * A game's read is copied out of the staging buffers by the copier thread on
+ * the system core instead of the game's own thread, which only maps its
+ * buffer, hands the work over and sleeps. The buffer is in the game's own
+ * address space; the copier reaches it through a kernel mapping of it
+ * (ksceKernelProcUserMap, made by the game's thread for the request, removed
+ * at its end). The mapping is used only if it is writable (checked on the
+ * first one) and of the same memory type as the game's buffer (cached: one
+ * coherent copy of the data for every core; checked on every one). Anything
+ * else, and the caller copies as before. */
+#define VM_USERMAP_RW      3          /* read | write (1: read, 2: write)  */
+static volatile int g_offload;             /* the setting, VM_OFFLOAD_*       */
+static volatile int g_offload_state;       /* 0 unchecked, 1 usable, < 0 refused */
+static int          g_offload_logged;      /* the state the worker last logged */
+static uint32_t     g_offload_type;        /* the first mapping's memblock type */
+static int          g_offload_err;         /* why refused / the last map error */
+static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
 
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
@@ -585,7 +572,7 @@ static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t de
 	*est = *est - (*est >> 3) + (ns >> 3);
 }
 
-/* The helper: reads parts 1 .. k-1 of a job one after another, each as soon
+/* The helper: reads parts first .. k-1 of a job one after another, each as soon
  * as its buffer is free again (sem_free: the caller has copied the part that
  * used it two parts back), and signals sem_done for each. So the card goes
  * from one part to the next without waiting for the caller's thread to wake
@@ -610,13 +597,13 @@ static int pipe_helper(SceSize args, void *argp)
 		memcpy(sz, d->job_sz, sizeof(sz));
 		sector = d->job_sector;
 		timed = g_stats || g_pipeline == VM_PIPE_AUTO;   /* see stage_xfer */
-		for (uint32_t i = 1; i < k; i++) {
+		for (uint32_t i = d->job_first; i < k; i++) {
 			void *buf = (i & 1) ? d->buf2 : d->buf;
 			uint32_t t0, us;
 			int r;
 
 			if (i >= 2) {
-				/* free at once unless the caller is late with its copy */
+				/* free at once unless the copy is late (a busy caller) */
 				uint32_t w0 = ksceKernelGetSystemTimeLow(), w;
 
 				ksceKernelWaitSema(d->sem_free, 1, NULL);
@@ -631,8 +618,8 @@ static int pipe_helper(SceSize args, void *argp)
 			us = timed ? ksceKernelGetSystemTimeLow() - t0 : 0;
 			if (r < 0) {
 				d->job_ret = r;
-				__atomic_store_n(&d->job_fail, i, __ATOMIC_RELEASE);
-				if (i + 1 < k)              /* the caller frees this one first */
+				__atomic_store_n(&d->job_fail, i + 1, __ATOMIC_RELEASE);
+				if (i >= 1 && i + 1 < k)    /* the copier frees this one first */
 					ksceKernelWaitSema(d->sem_free, 1, NULL);
 				ksceKernelSignalSema(d->sem_done, 1);
 				break;
@@ -656,6 +643,69 @@ static int pipe_helper(SceSize args, void *argp)
 	return 0;
 }
 
+/* Copy the parts of the current job into dst as each one arrives (sem_done),
+ * handing each buffer back (sem_free) for the part two further on. Run by the
+ * copier, or by the caller when its buffer could not be mapped. *done: the
+ * sectors copied; the failed part's error, or 0. */
+static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t *cp_us)
+{
+	const uint32_t k = d->job_k;
+	const int timed = g_stats || g_pipeline == VM_PIPE_AUTO;
+	uint32_t sz[PIPE_MAX_PARTS], off = 0;
+
+	memcpy(sz, d->job_sz, sizeof(sz));
+	*done = *cp_us = 0;
+	for (uint32_t i = 0; i < k; i++) {
+		const void *cur = (i & 1) ? d->buf2 : d->buf;
+		uint32_t f, c0;
+
+		ksceKernelWaitSema(d->sem_done, 1, NULL);
+		__sync_synchronize();
+		f = __atomic_load_n(&d->job_fail, __ATOMIC_ACQUIRE);
+		if (f && f - 1 <= i)
+			return d->job_ret;              /* this part on is read again stock */
+		c0 = timed ? ksceKernelGetSystemTimeLow() : 0;
+		vm_copy_from_stage(dst + off * 512, cur, sz[i] * 512);
+		if (clean)
+			clean_out(dst + off * 512, sz[i] * 512);
+		if (timed)
+			*cp_us += ksceKernelGetSystemTimeLow() - c0;
+		off += sz[i];
+		*done = off;
+		if (i + 2 < k)                      /* part i+2 reads into this buffer */
+			ksceKernelSignalSema(d->sem_free, 1);
+	}
+	return 0;
+}
+
+/* The copier: one job at a time (sem_cgo), copy_parts into the caller's
+ * mapped buffer, then the result (sem_fin). */
+static int pipe_copier(SceSize args, void *argp)
+{
+	Dev *d;
+
+	(void)args;
+	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
+	for (;;) {
+		uint32_t done = 0, cp = 0;
+		int r;
+
+		ksceKernelWaitSema(d->sem_cgo, 1, NULL);
+		if (d->pipe_quit)
+			break;
+		__sync_synchronize();               /* the job before its fields */
+		r = copy_parts(d, d->cjob_dst, d->cjob_clean, &done, &cp);
+		if (done && g_log_diag)
+			__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
+		d->cjob_ret = r;
+		d->cjob_done = done;
+		d->cjob_cp_us = cp;
+		__sync_synchronize();               /* the result before the signal */
+		ksceKernelSignalSema(d->sem_fin, 1);
+	}
+	return 0;
+}
+
 static void pipe_release(Dev *d)
 {
 	if (d->th >= 0) {
@@ -665,6 +715,17 @@ static void pipe_release(Dev *d)
 		ksceKernelWaitThreadEnd(d->th, NULL, NULL);
 		ksceKernelDeleteThread(d->th);
 	}
+	if (d->th2 >= 0) {
+		d->pipe_quit = 1;
+		__sync_synchronize();
+		ksceKernelSignalSema(d->sem_cgo, 1);
+		ksceKernelWaitThreadEnd(d->th2, NULL, NULL);
+		ksceKernelDeleteThread(d->th2);
+	}
+	if (d->sem_cgo >= 0)
+		ksceKernelDeleteSema(d->sem_cgo);
+	if (d->sem_fin >= 0)
+		ksceKernelDeleteSema(d->sem_fin);
 	if (d->sem_go >= 0)
 		ksceKernelDeleteSema(d->sem_go);
 	if (d->sem_done >= 0)
@@ -674,6 +735,7 @@ static void pipe_release(Dev *d)
 	if (d->uid2 >= 0)
 		ksceKernelFreeMemBlock(d->uid2);
 	d->th = d->sem_go = d->sem_done = d->sem_free = d->uid2 = -1;
+	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->buf2 = NULL;
 	d->pipe_made = 0;
 }
@@ -701,6 +763,7 @@ static int pipe_setup(Dev *d)
 	int r;
 
 	d->th = d->sem_go = d->sem_done = d->sem_free = d->uid2 = -1;
+	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->buf2 = NULL;
 	d->pipe_quit = 0;
 	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2);
@@ -713,8 +776,12 @@ static int pipe_setup(Dev *d)
 	d->sem_go = ksceKernelCreateSema("SceVitaMemioPipeGo", 0, 0, 1, NULL);
 	d->sem_done = ksceKernelCreateSema("SceVitaMemioPipeDone", 0, 0, 4, NULL);
 	d->sem_free = ksceKernelCreateSema("SceVitaMemioPipeFree", 0, 0, 4, NULL);
-	if (d->sem_go < 0 || d->sem_done < 0 || d->sem_free < 0) {
-		r = d->sem_go < 0 ? d->sem_go : d->sem_done < 0 ? d->sem_done : d->sem_free;
+	d->sem_cgo = ksceKernelCreateSema("SceVitaMemioCopyGo", 0, 0, 1, NULL);
+	d->sem_fin = ksceKernelCreateSema("SceVitaMemioCopyFin", 0, 0, 1, NULL);
+	if (d->sem_go < 0 || d->sem_done < 0 || d->sem_free < 0 || d->sem_cgo < 0 ||
+	    d->sem_fin < 0) {
+		r = d->sem_go < 0 ? d->sem_go : d->sem_done < 0 ? d->sem_done
+		  : d->sem_free < 0 ? d->sem_free : d->sem_cgo < 0 ? d->sem_cgo : d->sem_fin;
 		pipe_release(d);
 		return r;
 	}
@@ -736,6 +803,26 @@ static int pipe_setup(Dev *d)
 	if (r < 0) {
 		ksceKernelDeleteThread(d->th);
 		d->th = -1;
+		pipe_release(d);
+		return r;
+	}
+	/* The copier: also on the system core, one step below the helper, so
+	 * the helper starts the next read at once even while a copy runs. */
+	d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, 0x2000, 0,
+	                                PIPE_CPU_SYSTEM, NULL);
+	if (d->th2 < 0)
+		d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, 0x2000, 0, 0,
+		                                NULL);
+	if (d->th2 < 0) {
+		r = d->th2;
+		d->th2 = -1;
+		pipe_release(d);
+		return r;
+	}
+	r = ksceKernelStartThread(d->th2, sizeof(arg), &arg);
+	if (r < 0) {
+		ksceKernelDeleteThread(d->th2);
+		d->th2 = -1;
 		pipe_release(d);
 		return r;
 	}
@@ -780,6 +867,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	d->job_k = k;
 	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++)
 		d->job_sz[i] = i < k ? sz[i] : 0;
+	d->job_first = 1;
 	d->job_sector = sector + sz[0];
 	d->job_ret = 0;
 	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
@@ -805,7 +893,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 			ksceKernelWaitSema(d->sem_done, 1, NULL);
 			__sync_synchronize();
 			f = __atomic_load_n(&d->job_fail, __ATOMIC_ACQUIRE);
-			if (f && f <= i)
+			if (f && f - 1 <= i)
 				return d->job_ret;          /* this part on is read again stock */
 		}
 	}
@@ -824,6 +912,132 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	if (stats) {                            /* the tester's figures */
 		d->tm.rd_sectors += off;
 		d->tm.rd_io_us += (h1 - h0) + d->job_io_us;
+		d->tm.rd_copy_us += cp_us;
+	}
+	return 0;
+}
+
+/* The caller's buffer for one request, mapped for the copier (see the top of
+ * "copy on the system core"). */
+typedef struct OffMap {
+	SceUID   pid;
+	SceUID   uid;              /* the mapping, or < 0                        */
+	uint8_t *user;             /* the request's buffer in the caller's space */
+	uint8_t *kern;             /* the same bytes through the mapping         */
+	uint32_t len;
+	int      tried;
+} OffMap;
+
+/* Map m->user for the copier. Leaves m->uid < 0 (the caller copies) unless
+ * the mapping is usable. */
+static void off_map(OffMap *m)
+{
+	void *page = NULL;
+	SceSize size = 0;
+	SceUInt32 off = 0;
+	SceUID uid;
+
+	m->tried = 1;
+	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioCopy", VM_USERMAP_RW, m->user, m->len, &page,
+	                            &size, &off);
+	if (uid < 0) {
+		__atomic_fetch_add(&g_off_maperr, 1, __ATOMIC_RELAXED);
+		g_offload_err = uid;
+		return;
+	}
+	if (!page || size < off || size - off < m->len) {
+		ksceKernelUserUnmap(uid);
+		g_offload_err = VM_ERR_NOMEM;
+		__atomic_fetch_add(&g_off_maperr, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	/* the same memory type as the caller's buffer (cached: coherent) */
+	if (ksceKernelGetMemBlockMemtypeByAddr((uint8_t *)page + off) !=
+	    ksceKernelGetMemBlockMemtypeByAddr(m->user)) {
+		ksceKernelUserUnmap(uid);
+		g_offload_err = -2;
+		g_offload_state = -2;               /* refused: until switched again */
+		return;
+	}
+	/* writable: the first mapping's memblock type has the kernel's R and W
+	 * (as SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0x1020D006) */
+	if (g_offload_state == 0) {
+		SceKernelMemBlockInfoEx info;
+
+		memset(&info, 0, sizeof(info));
+		info.size = sizeof(info);
+		if (ksceKernelMemBlockGetInfoEx(uid, &info) < 0 ||
+		    (info.core_info.type & 0x6) != 0x6) {
+			g_offload_type = info.core_info.type;
+			ksceKernelUserUnmap(uid);
+			g_offload_err = -1;
+			g_offload_state = -1;           /* refused: until switched again */
+			return;
+		}
+		g_offload_type = info.core_info.type;
+		g_offload_state = 1;
+	}
+	m->uid = uid;
+	m->kern = (uint8_t *)page + off;
+}
+
+/* One chunk (plan sz/k) of a game's read, copied on the system core: the
+ * helper reads every part, the copier copies each into the mapped buffer,
+ * and this thread only maps the buffer (while part 0 is being read) and
+ * waits. Without a usable mapping this thread copies, as pipe_run does.
+ * *done: as pipe_run. */
+static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                       uint8_t *p, const uint32_t *sz, uint32_t k, int clean, int stats,
+                       OffMap *m, uint32_t *done, uint32_t *own)
+{
+	uint32_t cp_us = 0, n = 0;
+	int ret;
+
+	d->job_io = io;
+	d->job_ref = ref;
+	d->job_part = part;
+	d->job_k = k;
+	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++) {
+		d->job_sz[i] = i < k ? sz[i] : 0;
+		n += i < k ? sz[i] : 0;
+	}
+	d->job_first = 0;
+	d->job_sector = sector;
+	d->job_ret = 0;
+	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
+	__sync_synchronize();
+	ksceKernelSignalSema(d->sem_go, 1);       /* the card starts at once */
+	if (!m->tried)
+		off_map(m);                           /* meanwhile */
+	if (m->uid >= 0) {
+		d->cjob_dst = m->kern + (p - m->user);
+		d->cjob_clean = clean;
+		__sync_synchronize();
+		ksceKernelSignalSema(d->sem_cgo, 1);
+		ksceKernelWaitSema(d->sem_fin, 1, NULL);
+		__sync_synchronize();
+		ret = d->cjob_ret;
+		*done = d->cjob_done;
+		cp_us = d->cjob_cp_us;
+		*own = 0;
+		if (ret >= 0) {
+			__atomic_fetch_add(&g_off_reads, 1, __ATOMIC_RELAXED);
+			__atomic_fetch_add(&g_off_kib, n / 2, __ATOMIC_RELAXED);
+		}
+	} else {
+		ret = copy_parts(d, p, clean, done, &cp_us);
+		*own = *done;
+	}
+	if (ret < 0)
+		return ret;
+	if (g_pipeline == VM_PIPE_AUTO) {
+		pipe_learn_io(d, d->job_big_us, d->job_big_n, d->job_last_us, sz[k - 1]);
+		pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp_us, n,
+		           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
+	}
+	if (stats) {
+		d->tm.rd_sectors += n;
+		d->tm.rd_io_us += d->job_io_us;
 		d->tm.rd_copy_us += cp_us;
 	}
 	return 0;
@@ -872,9 +1086,15 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int stats = g_stats;
 	int problem = 0;                    /* an error or a mismatch: wake the worker */
 	const int clean = !write && g_gpu_safe && g_dcache_clean;
-	const int pipe = !write && !verify && g_pipeline &&
-	                 __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
-	uint32_t sz[PIPE_MAX_PARTS];
+	const int ready = !write && __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
+	const int pipe = ready && !verify && g_pipeline;
+	/* copy on the system core: a game's read (a system thread's buffers
+	 * need no mapping, and copy where they are), as the setting says */
+	const int off = ready && g_offload_state >= 0 &&
+	                (g_offload == VM_OFFLOAD_ALWAYS || (g_offload == VM_OFFLOAD_GPU && clean)) &&
+	                ksceKernelGetProcessId() != KERNEL_PID;
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512 };
+	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
 
 	if (clean)
@@ -900,6 +1120,32 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				d->tm.wr_copy_us += t2 - t1;
 				d->tm.wr_io_us += t3 - t2;
 			}
+		} else if (off) {
+			/* Copied on the system core, in parts as pipe_plan says (one
+			 * without overlapped reads). */
+			uint32_t done = 0, mine_n = 0;
+
+			if (!(pipe &&
+			      n >= (g_pipeline == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
+			      (k = pipe_plan(d, n, clean, sz)) >= 2)) {
+				k = 1;
+				sz[0] = n;
+			}
+			if (!om.pid)
+				om.pid = ksceKernelGetProcessId();
+			ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &om,
+			                  &done, &mine_n);
+			own += mine_n;
+			if (ret < 0) {
+				p += (size_t)done * 512;    /* the parts already copied stay */
+				sector += done;
+				left -= done;
+				break;
+			}
+			if (k >= 2)
+				g_pipe_reads++;
+			if (k > 2)
+				g_pipe_reads3++;
 		} else if (pipe &&
 		           n >= (g_pipeline == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
 		           (k = pipe_plan(d, n, clean, sz)) >= 2) {
@@ -907,6 +1153,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			uint32_t done = 0;
 
 			ret = pipe_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &done);
+			own += done;
 			if (ret < 0) {
 				p += (size_t)done * 512;    /* the parts already copied stay */
 				sector += done;
@@ -925,6 +1172,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			vm_copy_from_stage(p, d->buf, bytes);
 			if (clean)
 				clean_out(p, bytes);   /* counted as copy time */
+			own += n;
 			if (stats) {
 				t3 = ksceKernelGetSystemTimeLow();
 				d->tm.rd_sectors += n;
@@ -960,6 +1208,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		sector += n;
 		left -= n;
 	}
+	if (om.uid >= 0)
+		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
 	__sync_lock_release(&d->busy);
@@ -971,11 +1221,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		d->st.writes++;
 	} else {
 		d->st.reads++;
-		if (g_log_diag && !left) {
-			diag_note(nsec);
-			if (g_probe_want && __atomic_exchange_n(&g_probe_want, 0, __ATOMIC_RELAXED))
-				diag_probe(buf, nsec * 512);
-		}
+		if (g_log_diag && !left)
+			diag_note(nsec, own);
 	}
 	if (problem && g_on_problem)
 		g_on_problem();
@@ -1137,7 +1384,7 @@ void vm_stage_apply(const VmSettings *s)
 	if (s->pipeline != g_pipeline) {
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			g_dev[i].est_cp_ns[0] = g_dev[i].est_cp_ns[1] = 0;   /* measured afresh */
-			if (!g_pipeline)
+			if (!g_pipeline && !g_offload)
 				g_dev[i].pipe_failed = 0;   /* switching it on again is a fresh try */
 		}
 	}
@@ -1146,6 +1393,19 @@ void vm_stage_apply(const VmSettings *s)
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
 	g_log_diag = s->log ? 1 : 0;
+	{
+		const int o = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
+		            ? s->offload : VM_OFFLOAD_OFF;
+
+		if (o != g_offload) {
+			g_offload_state = 0;              /* switched: checked afresh */
+			g_offload_logged = 0;
+			if (!o && !g_pipeline)
+				for (int i = 0; i < VM_DEV_COUNT; i++)
+					g_dev[i].pipe_failed = 0;
+		}
+		g_offload = o;
+	}
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
 }
@@ -1190,18 +1450,26 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
-		if (g_probe_runs) {
-			VM_KLOGI("stage: user map probe %d (%u KiB): p1 0x%08x %uus %d, p2 0x%08x %uus %d, "
-			         "p3 0x%08x %uus %d, p6 0x%08x %uus %d", g_probe_runs, (unsigned)g_probe_kib,
-			         (unsigned)g_probe_ret[0], (unsigned)g_probe_us[0], g_probe_same[0],
-			         (unsigned)g_probe_ret[1], (unsigned)g_probe_us[1], g_probe_same[1],
-			         (unsigned)g_probe_ret[2], (unsigned)g_probe_us[2], g_probe_same[2],
-			         (unsigned)g_probe_ret[3], (unsigned)g_probe_us[3], g_probe_same[3]);
-		}
+		if (g_offload || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
+			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u times "
+			         "(last 0x%08x)", (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),
+			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
+			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
+			         (unsigned)g_offload_err);
 	}
-	/* a probe at the next large read, a few times (log on only) */
-	if (g_log_diag && g_probe_runs < 10)
-		g_probe_want = 1;
+	/* Copy on the system core: whether the mapping was found usable, once. */
+	if (g_offload && g_offload_state != g_offload_logged) {
+		g_offload_logged = g_offload_state;
+		if (g_offload_state > 0)
+			VM_KLOGI("stage: copy on the system core ready (mapping type 0x%08x)",
+			         (unsigned)g_offload_type);
+		else if (g_offload_state == -1)
+			VM_KLOGW("stage: copy on the system core refused: the mapping is not writable "
+			         "(type 0x%08x) - games copy as before", (unsigned)g_offload_type);
+		else if (g_offload_state == -2)
+			VM_KLOGW("stage: copy on the system core refused: the mapping's memory type differs "
+			         "- games copy as before");
+	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].alloc_err && !g_dev[i].alloc_logged) {
@@ -1214,7 +1482,8 @@ void vm_stage_worker_tick(void)
 	 * while the setting is on, and given back once either is switched off. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
-		const int wanted = g_pipeline && g_live && d->enabled && d->buf && !d->unusable;
+		const int wanted = (g_pipeline || g_offload) && g_live && d->enabled && d->buf &&
+		                   !d->unusable;
 
 		if (wanted && !d->pipe_made && !d->pipe_failed) {
 			int r = pipe_setup(d);
@@ -1224,12 +1493,12 @@ void vm_stage_worker_tick(void)
 				VM_KLOGW("stage: dev %d overlapped reads not set up (0x%08x) - reads as before",
 				         i, (unsigned)r);
 			} else {
-				VM_KLOGI("stage: dev %d overlapped reads ready (helper thread, %u KiB buffer)",
+				VM_KLOGI("stage: dev %d overlapped reads ready (helper and copier, %u KiB buffer)",
 				         i, (unsigned)(PIPE_TAIL_SECTORS / 2));
 			}
 		} else if (!wanted && d->pipe_made) {
 			pipe_retire(d);
-			VM_KLOGI("stage: dev %d overlapped reads off - helper and buffer released", i);
+			VM_KLOGI("stage: dev %d overlapped reads off - helper, copier and buffer released", i);
 		}
 	}
 	/* The verify buffer is only allocated once verify mode is first turned on. */

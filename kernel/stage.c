@@ -1367,6 +1367,140 @@ static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 	         : VM_IO_ERROR;
 }
 
+#ifdef VM_CLEANEXP   /* set by CMakeLists.txt (console build only; host tests do not run it) */
+/* ---- EXPERIMENT (branch cleanexp, not for release): what the cache clean
+ * of GPU-safe reads costs with each of the system's clean functions ------- */
+
+#define CE_BYTES   (256u * 1024u)
+#define CE_REPS    5
+enum { CE_S_MEMSET, CE_S_COPY, CE_S_COPY64K, CE_S_AGAIN, CE_S_TOUCH, CE_S_COUNT };
+static const char *const k_ce_scen[CE_S_COUNT] = { "memset", "copy", "copy-64K", "again", "touch" };
+static const struct { const char *name; uint32_t nid; } k_ce_fn[] = {
+	{ "CleanRange",               0x103872A5 },   /* what GPU-safe reads use      */
+	{ "CleanInvalidateRange",     0x364E68A4 },   /* does more: also correct      */
+	{ "CleanRangeForL1WBWA",      0x9CB9F0CE },   /* L1 only: reference, not usable */
+	{ "CleanInvRangeForL1WBWA",   0xE551F99B },   /* L1 only: reference           */
+};
+
+static uint32_t ce_once(void (*fn)(void *, unsigned int), int scen, uint8_t *dst, const uint8_t *src)
+{
+	uint32_t t0, t1;
+
+	switch (scen) {
+	case CE_S_MEMSET:
+		memset(dst, 0x5A, CE_BYTES);
+		break;
+	case CE_S_COPY:
+	case CE_S_COPY64K:
+		vm_fast_copy(dst, src, CE_BYTES);
+		break;
+	case CE_S_AGAIN:
+		vm_fast_copy(dst, src, CE_BYTES);
+		fn(dst, CE_BYTES);                     /* the timed call finds it clean */
+		break;
+	case CE_S_TOUCH:
+		for (uint32_t i = 0; i < CE_BYTES; i += 32)
+			dst[i]++;                          /* one byte per line: dirty in L1 */
+		break;
+	}
+	t0 = ksceKernelGetSystemTimeLow();
+	if (scen == CE_S_COPY64K)
+		for (uint32_t o = 0; o < CE_BYTES; o += 65536)
+			fn(dst + o, 65536);
+	else
+		fn(dst, CE_BYTES);
+	t1 = ksceKernelGetSystemTimeLow();
+	return t1 - t0;
+}
+
+/* tenths of a us per 512-byte block, as "6.9" */
+static void ce_fmt(char *out, size_t cap, uint32_t us)
+{
+	const uint32_t t = (uint32_t)(((uint64_t)us * 10u * 512u + CE_BYTES / 2) / CE_BYTES);
+
+	snprintf(out, cap, "%u.%u", (unsigned)(t / 10), (unsigned)(t % 10));
+}
+
+static int ce_thread(SceSize args, void *argp)
+{
+	SceUID u_dst = -1, u_src = -1;
+	uint8_t *dst = NULL, *src = NULL;
+	uint32_t cp_min = ~0u;
+
+	(void)args; (void)argp;
+	ksceKernelDelayThread(25 * 1000 * 1000);    /* after the boot's own loading */
+	if (alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, CE_BYTES, &u_dst, (void **)&dst) < 0 ||
+	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, CE_BYTES, &u_src, (void **)&src) < 0) {
+		VM_KLOGW("cleanexp: no memory for the test");
+		goto out;
+	}
+	memset(src, 0xA5, CE_BYTES);
+	for (int r = 0; r < CE_REPS; r++) {
+		const uint32_t t0 = ksceKernelGetSystemTimeLow();
+		uint32_t t;
+
+		vm_fast_copy(dst, src, CE_BYTES);
+		t = ksceKernelGetSystemTimeLow() - t0;
+		if (t < cp_min)
+			cp_min = t;
+		if (g_dcache_clean)
+			g_dcache_clean(dst, CE_BYTES);
+	}
+	{
+		char a[12];
+
+		ce_fmt(a, sizeof(a), cp_min);
+		VM_KLOGI("cleanexp: core %u, 256 KiB, best of %d, us per 512-byte block; copy from NC %s",
+		         (unsigned)cpu_id(), CE_REPS, a);
+	}
+	for (unsigned f = 0; f < sizeof(k_ce_fn) / sizeof(k_ce_fn[0]); f++) {
+		uintptr_t fp = 0;
+		void (*fn)(void *, unsigned int);
+		uint32_t best[CE_S_COUNT];
+		char v[CE_S_COUNT][12];
+
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, k_ce_fn[f].nid, &fp) < 0 ||
+		    !fp) {
+			VM_KLOGW("cleanexp: %s not found", k_ce_fn[f].name);
+			continue;
+		}
+		fn = (void (*)(void *, unsigned int))fp;
+		for (int sc = 0; sc < CE_S_COUNT; sc++) {
+			best[sc] = ~0u;
+			for (int r = 0; r < CE_REPS; r++) {
+				uint32_t t = ce_once(fn, sc, dst, src);
+
+				if (t < best[sc])
+					best[sc] = t;
+			}
+			ce_fmt(v[sc], sizeof(v[sc]), best[sc]);
+		}
+		VM_KLOGI("cleanexp: %-22s %s %s, %s %s, %s %s, %s %s, %s %s", k_ce_fn[f].name,
+		         k_ce_scen[0], v[0], k_ce_scen[1], v[1], k_ce_scen[2], v[2],
+		         k_ce_scen[3], v[3], k_ce_scen[4], v[4]);
+		ksceKernelDelayThread(1000);
+	}
+	VM_KLOGI("cleanexp: done");
+out:
+	if (u_dst >= 0)
+		ksceKernelFreeMemBlock(u_dst);
+	if (u_src >= 0)
+		ksceKernelFreeMemBlock(u_src);
+	return ksceKernelExitDeleteThread(0);
+}
+
+static void ce_start(void)
+{
+	SceUID th = ksceKernelCreateThread("SceVitaMemioCleanExp", ce_thread, 0x60, 0x2000, 0,
+	                                   PIPE_CPU_SYSTEM, NULL);
+
+	if (th >= 0)
+		ksceKernelStartThread(th, 0, NULL);
+	else
+		VM_KLOGW("cleanexp: thread not created (0x%08x)", (unsigned)th);
+}
+#endif
+
 int vm_stage_init(void)
 {
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
@@ -1427,6 +1561,9 @@ int vm_stage_init(void)
 			break;
 		}
 	}
+#ifdef VM_CLEANEXP
+	ce_start();                          /* EXPERIMENT: branch cleanexp */
+#endif
 	return VM_OK;
 }
 

@@ -55,6 +55,10 @@ if(NOT VM_GIT_HASH)
     set(VM_GIT_HASH "")
   endif()
 endif()
+# EXPERIMENT (branch cleanexp): the kernel module measures the cache clean
+# functions once, 25 s after start, and logs the result.
+add_definitions(-DVM_CLEANEXP)
+
 if(VM_GIT_HASH)
   add_definitions(-DVM_BUILD_SUFFIX=\"+${VM_GIT_HASH}\")
   message(STATUS "vita-memio build +${VM_GIT_HASH}")

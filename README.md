@@ -1,79 +1,54 @@
 # vita-memio
 
-Faster SD2Vita, memory card and internal storage on the PS Vita, as a taiHEN plugin for HENkaku/Ensō on firmware **3.60–3.74**.
+Makes the PS Vita read and write its storage faster: a microSD in an SD2Vita, the Sony memory card and the internal storage. It is a taiHEN plugin for HENkaku/Ensō on firmware **3.60–3.74**.
 
-vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). The technique, the research behind it and the original implementation are his; see the original repository for the full documentation.
+On my console a microSD in an SD2Vita reads **19.6 MiB/s instead of 13.5** (+45%) and writes about 15–17 MiB/s. Games load faster, VitaShell copies faster, and nothing about your files changes: the data on the card is exactly what it would be without the plugin.
+
+vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). The idea, the research and the original implementation are his. This fork adds a few speed-ups of its own, a Settings page, a HUD and a tester app.
 
 ## How it works
 
-Before and after every transfer, the system's storage driver cleans and invalidates the CPU cache over the whole caller buffer, and that work is not overlapped with the transfer. For large transfers vita-memio hands the system's own, unmodified read and write functions a non-cacheable staging buffer instead (the driver skips the cache work for it) and copies between the two with the CPU. The driver still issues every command, handles every error and runs the DMA.
+Every time the Vita reads or writes, its storage driver spends a large part of the transfer on housekeeping around the CPU cache. vita-memio arranges each transfer so the driver can skip most of that work, using the original project's staging-buffer technique plus a few improvements of its own. The system's driver itself is never modified: it still sends every command, handles every error and moves the data.
 
-A caller buffer that is itself non-cacheable (games load data for the graphics chip into such memory) stays on the standard path: the driver has no cache work there, and without the copy it is faster (SD2Vita, 1 MiB reads: 21.0 MiB/s standard vs 16.5 MiB/s through a staging buffer).
+- **Writes are never cached or delayed.** When a write returns, the data is on the card, just like without the plugin.
+- **Anything unusual falls back to normal.** An error switches that storage back to the standard path for the rest of the session and finishes the request the standard way. On a firmware it does not know, the plugin installs nothing at all.
+- Game cards, USB storage and Wi-Fi are never touched.
 
-- Writes are never cached or deferred: a write has reached the card before the call returns.
-- Small transfers (under 32 KiB, which includes the file system's own bookkeeping) take the standard path, unless **Small transfers too** is switched on.
-- Any error switches that storage back to the standard path for the session and finishes the request the standard way.
-- On an unknown firmware nothing is installed.
-- Game cards, USB storage and Wi-Fi are not touched.
-
-**The one difference from the standard path.** What the CPU reads is always identical, but after a faster read the data can stay in the CPU cache for a while before it reaches memory (the standard driver's DMA writes memory directly). A game that loads a file straight into cached memory the graphics chip reads, without flushing the cache itself, could in principle draw stale data (non-cacheable graphics memory takes the standard path and is not affected). **GPU-safe reads** removes the difference: each read's copy is written out to memory before the call returns. Check what it costs with the tester (the *copy* time per block) and switch it on while playing.
+**About GPU-safe reads.** What your program reads is always identical to the normal way. With **GPU-safe reads** on, the data also ends up in memory exactly as the normal way leaves it, so the graphics chip always sees it correctly. It costs a little speed (see below) and is the recommended choice while playing.
 
 ## Performance
 
+My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), the official Sony memory card (`uma0:`) and the internal storage (`ur0:`). Measured with the included tester (quick profile: a 16 MiB file, three runs, every byte checked), with *Overlapped reads* on *Auto*.
+
+**SD2Vita (microSD) reads**
+
+| Request size | Without plugin | GPU-safe reads off | GPU-safe reads on |
+|---|---:|---:|---:|
+| 1 MiB | 13.5 MiB/s | **19.6 MiB/s** | **18.5 MiB/s** |
+| 128 KiB | 12.9 MiB/s | **18.1 MiB/s** | **16.8 MiB/s** |
+
+**Compared with the original project's published figures**
+
 | Test | Original: stock | Original: Turbo Storage | vita-memio (my console) |
 |---|---:|---:|---:|
-| SD2Vita (microSD) reads, 1 MiB requests | 13.3 MB/s | 16.8 MB/s | **17.7 MiB/s** |
-| SD2Vita (microSD) reads, 128 KiB requests | 12.4 MB/s | 15.7 MB/s | **16.8 MiB/s** |
-| SD2Vita (microSD) writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–16.9 MiB/s** |
-| SD2Vita (microSD) reads into non-cacheable memory, 1 MiB | | | 21.0 MiB/s (standard path, see above) |
-| Sony memory card reads, 1 MiB requests | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
-| Sony memory card writes, 1 MiB requests | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
+| SD2Vita reads, 1 MiB | 13.3 MB/s | 16.8 MB/s | **19.6 MiB/s** |
+| SD2Vita reads, 128 KiB | 12.4 MB/s | 15.7 MB/s | **18.1 MiB/s** |
+| SD2Vita writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–17.5 MiB/s** |
+| Sony memory card reads, 1 MiB | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
+| Sony memory card writes, 1 MiB | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
 | Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
 | Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
 
-- **Original:** the figures published in the [original README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures). PCH-1000, firmware 3.60, a 128 GB microSD in an SD2Vita, an official 4 GB memory card; 64 MiB per run, stock and Turbo Storage alternated.
-- **vita-memio:** my console on firmware 3.65, with the plugin on, measured with the included tester: my microSD in an SD2Vita (`ux0:`), the official Sony memory card (`uma0:`) and the internal storage (`ur0:`). Quick profile: a 16 MiB file and three runs, every byte checked; a range means the averages of separate sessions. For comparison, the stock SD2Vita on the same console reads 1 MiB requests at 13.6 MiB/s.
-
-Different microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Results depend on the console, the card and the workload.
-
-## Compared with the original
-
-Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://github.com/juanjsebgarcia/vita-turbo-storage/commit/e48f309)).
-
-**Added**
-
-- **Tester app** (`vitamemio_tester.vpk`): sequential, random and small-file tests on one storage, every byte checked. It shows where the time goes per block (system call vs. CPU copy), the plugin's live counters, verify results and buffer-busy counts, and saves every run to `results.txt`.
-- **Driver status row** at the top of the Settings page: active, not loaded, safe mode, firmware not supported, or could not start. The page also appears, and says so, when the kernel module is missing.
-- **GPU-safe reads**: an option that writes read data out of the CPU cache to memory, removing the one difference the original lists under its limitations.
-- **Small transfers too**: an option to speed up transfers under 32 KiB (the file system's own bookkeeping) as well.
-- **Verify transfers** as a Settings switch (in the original it is set over the command port only).
-- **Statistics** switch: the per-transfer timers and data counters can be turned off.
-- **PSVshell-style HUD**: a black panel with coloured values in the Terminus font, sized for the game's resolution, next to the original look (*HUD style*).
-- **Host tests** for the storage path, settings, HUD drawing and tester engine, run with sanitizers and an ARM build under QEMU on every push.
-
-**Changed**
-
-- The Settings page is under **Settings > Devices** (the original: Settings > System), with an **Advanced** sub-page.
-- Only the kernel module and the Settings app load the plugin: no `*main` line in `config.txt`.
-- Reads copy out of the staging buffer with 8-word burst loads instead of `memcpy` (SD2Vita: 4.5 to 4.2 µs per 512-byte block).
-- Staging buffers are allocated only for the storages that are switched on (the original always allocates 768 KiB).
-- Logging is off unless **Enable log** is on, and then it records one line per start plus problems.
-- The HUD panel is composed once per text change and only copied each frame.
-
-**Removed**
-
-- Developer mode and its TCP command port (1340).
-
-**In the original but not here**
-
-- The HUD's corner choice (here always top right), *In-game HUD* and *HUD recent activity only*.
+- The original's figures are from [its README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures): PCH-1000, firmware 3.60, a 128 GB microSD, an official 4 GB memory card, 64 MiB per run.
+- The memory card and internal storage rows were measured with an earlier version; the current one should be a little faster still.
+- microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Your numbers will depend on your console, card and game.
 
 ## Install
 
-Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester `vitamemio_tester.vpk`.
+Download the latest release (or build it yourself, see below): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester `vitamemio_tester.vpk`.
 
-1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`. Always install the two together.
-2. Add to `ur0:tai/config.txt` (`make config` prints these lines):
+1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`. Always update the two together.
+2. Add these lines to `ur0:tai/config.txt`:
 
    ```
    *KERNEL
@@ -82,89 +57,116 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Restart the console. Everything is switched off until you switch it on in Settings.
-4. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own storage.
+3. Restart the console. Everything starts switched off.
+4. Go to **Settings > Devices > vita-memio** and switch on the storage you use.
+5. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card.
+
+**Suggested settings for playing:** your storage on, **GPU-safe reads** on, **Overlapped reads** on *Auto*.
 
 ## Settings
 
-**Settings > Devices > vita-memio**
+Everything is in **Settings > Devices > vita-memio** and takes effect immediately, no restart needed.
 
-| Row | What it does | Default |
+| Setting | What it does | Default |
 |---|---|---|
-| Driver: … | Whether the kernel module runs: active, not loaded, safe mode, firmware not supported, or could not start. Select it for the details | |
-| Faster SD2Vita | The faster path for a microSD in an SD2Vita adapter | Off |
-| Faster memory card | The faster path for the official PS Vita memory card | Off |
-| Faster internal storage | The faster path for the console's own storage | Off |
+| Driver: … | Shows whether the plugin is running (active, not loaded, safe mode, firmware not supported, could not start). Select it for details | |
+| Faster SD2Vita | Speeds up a microSD in an SD2Vita adapter | Off |
+| Faster memory card | Speeds up the official Sony memory card | Off |
+| Faster internal storage | Speeds up the console's own storage | Off |
 
 **Advanced**
 
-| Row | What it does | Default |
+| Setting | What it does | Default |
 |---|---|---|
-| GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed for reads into ordinary memory; non-cacheable memory (such as the graphics memory) takes the standard path anyway | Off |
-| Overlapped reads (experimental) | Splits each faster read into parts: while the card reads the next part, the CPU already copies the one before, hiding most of the copy (and of the GPU-safe cleaning). The first part is read by the caller's thread, the next ones by a helper thread on the system core, which games do not use. **Auto**: two or three parts, sized from the measured costs of the card, the copy and each card command (two, three with GPU-safe reads, until something is measured). **Fixed**: two parts, three with GPU-safe reads, built-in sizes, nothing measured. Uses a second 128 KiB buffer and the helper per storage, made when first switched on and kept until the console restarts | Off |
-| Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
-| Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
+| GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). Recommended while playing | Off |
+| Overlapped reads (experimental) | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Uses a little extra memory and a helper thread per storage, kept until the console restarts | Off |
+| Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
+| Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
-| Statistics | Times every faster transfer (system call vs. copy) and counts the data moved, for the tester. Off saves that work on every transfer; the HUD counts its own speeds while it is on, and overlapped reads on Auto time themselves either way to size their parts | On |
-| Storage HUD | Live speed of each storage in use, in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
-| HUD style | Classic (white text) or PSVshell (a black panel with coloured values) | PSVshell |
-| Reset safe mode | Ends safe mode; vita-memio starts normally after the next restart | |
+| Statistics | Collects timings and data counts for the tester app. Overlapped reads on *Auto* measure what they need either way | On |
+| Storage HUD | Live speed of each storage in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
+| HUD style | Classic (white text) or PSVshell (black panel, coloured values) | PSVshell |
+| Reset safe mode | Ends safe mode; the plugin starts normally after the next restart | |
 
-Settings apply at once, with no restart (in safe mode or on an unsupported firmware they are saved and take effect at the next normal start). They are kept in `ur0:data/vita-memio/`, together with the logs and the tester's results.
+Settings, logs and tester results live in `ur0:data/vita-memio/`.
 
-**Safe mode.** If a start does not reach the home screen and stay up there for 30 seconds, the next start installs nothing, so a broken setup cannot loop (restarting by hand within those 30 seconds also leads to safe mode once). The Driver row then shows safe mode. Settings can still be changed in safe mode: switch off the option that caused it, then **Reset safe mode** and restart. Holding L while the console starts skips all plugins.
+**Safe mode.** If the console does not reach the home screen and stay there for 30 seconds, the next start installs nothing, so a bad setting cannot trap you in a reboot loop. The *Driver* row then says *safe mode*. You can still change settings: switch off whatever caused it, select **Reset safe mode** and restart. (Restarting by hand within 30 seconds of the home screen also counts, once.) Holding **L** while the console starts skips all plugins.
 
 ## Tester
 
-The tester (`vitamemio_tester.vpk`, "vita-memio Tester") runs reads and writes of several sizes on one storage, then creates, reads and deletes many small files (files per second: mostly the file system's own small transfers). It checks every byte and appends the result to `ur0:data/vita-memio/results.txt`. It never changes the plugin: switch a storage on or off in Settings, then run the test again to compare.
+The tester app ("vita-memio Tester") measures one storage: sequential and random reads and writes of several sizes and many small files. It checks every byte and adds each result to `ur0:data/vita-memio/results.txt`.
 
-Its main screen shows live, for each storage, what the plugin is doing (state, data moved, errors, verified transfers, mismatches). Each result also shows:
+It never changes the plugin's settings. To compare, change a setting in Settings and run the test again. Each result also shows:
 
-- where the time goes per 512-byte block (the system call vs. the CPU copy), with **Statistics** on;
-- the plugin's verify results;
-- how many large transfers went the standard way because the staging buffer was busy.
+- where the time goes for every 512-byte block (the card vs. the CPU copy), with *Statistics* on;
+- the plugin's settings during the test (verify, small transfers, overlapped reads);
+- whether the plugin behaved as its settings say.
 
-It also reads the file into non-cacheable memory (*NC read 1M / 128K*), the kind games load data for the graphics chip into. vita-memio leaves such reads to the standard path, so these rows are the same with the plugin on and off; the ordinary rows show what the plugin (and, with **GPU-safe reads** on, the cache cleaning) does for ordinary memory.
+Pick the storage the test folder is on. On most setups both the SD2Vita and the memory card are `ux0:`; if the storage and folder don't match, the test tells you.
 
-To see what **Small transfers too** does, run the test with it off and with it on and compare the *files create / read / delete* rows.
+## Compared with the original
 
-Pick the storage that the test folder is on: on most setups both the SD2Vita and the memory card are `ux0:`. If the storage and folder don't match, the test says so.
+Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://github.com/juanjsebgarcia/vita-turbo-storage/commit/e48f309)).
+
+**Added**
+
+- **Faster reads**: SD2Vita 1 MiB reads 19.6 MiB/s (the original: 16.8), and 18.5 MiB/s even with GPU-safe reads on.
+- **GPU-safe reads**, removing the one difference the original lists under its limitations.
+- **Tester app** with per-block timings, live plugin counters and every byte checked.
+- **Driver status row** in Settings, also shown when the kernel module is missing.
+- **Overlapped reads**, **Small transfers too**, **Verify transfers** and **Statistics** as Settings options.
+- **PSVshell-style HUD** next to the original look.
+- **Safe mode you can recover from**: settings can be changed in safe mode, and a start only counts as good after 30 seconds on the home screen.
+- **Host tests** for the storage path, settings, HUD and tester, run on every push.
+
+**Changed**
+
+- The page is under **Settings > Devices** (the original: Settings > System), with an **Advanced** sub-page.
+- No `*main` line in `config.txt`: only the kernel module and the Settings app load the plugin.
+- Buffers are allocated only for the storages you switch on.
+- Logging is off unless *Enable log* is on.
+
+**Removed**
+
+- Developer mode and its TCP command port (1340).
+
+**In the original but not here**
+
+- The HUD corner choice (here always top right), *In-game HUD* and *HUD recent activity only*.
 
 ## Build
 
 ```sh
 make build        # the modules and the tester, in the pinned VitaSDK Docker image
 make test         # host tests (no VitaSDK needed)
-make config       # the config.txt lines
+make config       # prints the config.txt lines
 ```
 
 `make deploy`, `make log` and `make results` talk to vitacompanion on the console (`VITA_IP=...`). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Credits and projects used
+## Credits
 
-All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage): the technique, the research, the original implementation, testing and documentation.
+All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage): the technique, the research, the original implementation, its testing and documentation.
 
 **Built on**
 
-- [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu: the hooking framework both modules use.
-- [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW: the homebrew environment. How the Settings page is added and how its buttons are handled follows HENkaku's own Settings plugin ([`plugin/user.c`](https://github.com/henkaku/henkaku/blob/master/plugin/user.c)).
-- [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers): the toolchain.
+- [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu: the hooking framework.
+- [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW. The Settings page is added the way HENkaku's own Settings plugin does it ([`plugin/user.c`](https://github.com/henkaku/henkaku/blob/master/plugin/user.c)).
+- [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers).
 
-**References and ideas**
+**Ideas and references**
 
 - [IOStaging](https://github.com/bythos14) by bythos14: the staging-buffer idea the original project credits as its inspiration.
-- [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: the layout names of the Devices page in Settings. No YAMT code is used.
+- [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: the layout names of the Devices page. No YAMT code is used.
 - [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester and of the PSVshell-style HUD. No PSVshell code is used.
 
 **Included**
 
-- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: a subset is used by the tester and the PSVshell-style HUD, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
+- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: a subset for the tester and the HUD, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
 
 **Tools**
 
-- [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120 for `make deploy` / `log` / `results`.
-- [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW to install the tester.
-- [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) and GCC's sanitizers for the tests on GitHub Actions.
+- [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120, [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW, [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) and GCC's sanitizers.
 
 ## License
 

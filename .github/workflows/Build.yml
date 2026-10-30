@@ -8,6 +8,7 @@ name: build
 on:
   push:
     branches: [main, master, Dev_lifecycle]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -77,3 +78,30 @@ jobs:
             build/SHA256SUMS
             include/OFL-Terminus.txt
           if-no-files-found: error
+
+  # A pushed tag v* publishes a GitHub release with the built files, once the
+  # tests, cppcheck and the build have passed. Its text is
+  # .github/release-notes/<tag>.md.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, cppcheck, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vita-memio-${{ github.sha }}
+          path: dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes=".github/release-notes/${TAG}.md"
+          test -f "$notes" || { echo "missing $notes"; exit 1; }
+          gh release create "$TAG" --title "vita-memio ${TAG#v}" --notes-file "$notes" \
+            dist/build/vitamemio_kernel.skprx dist/build/vitamemio.suprx \
+            dist/build/vitamemio_tester.vpk dist/build/SHA256SUMS

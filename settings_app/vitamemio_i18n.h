@@ -66,7 +66,7 @@ enum vm_i18n_id {
 	VM_I18N_ITEM_OFF_OFF,       /* its choices, in VM_OFFLOAD_* order             */
 	VM_I18N_ITEM_OFF_GPU,
 	VM_I18N_ITEM_OFF_ALWAYS,
-	VM_I18N_ITEM_OFF_ALL,       /* EXPERIMENT: Always + uncached                  */
+	VM_I18N_ITEM_OFF_ALL,       /* EXPERIMENT: Always + NC                         */
 	VM_I18N_COUNT
 };
 

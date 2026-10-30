@@ -35,7 +35,7 @@ My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), th
 
 | Request size | Without plugin | GPU-safe reads off | GPU-safe reads on |
 |---|---:|---:|---:|
-| 1 MiB | 13.5 MiB/s | **19.6 MiB/s** | **18.5 MiB/s** |
+| 1 MiB | 13.5 MiB/s | **19.6 MiB/s** | **18.8 MiB/s** |
 | 128 KiB | 12.9 MiB/s | **18.1 MiB/s** | **16.8 MiB/s** |
 
 **Compared with the original project's published figures**
@@ -50,7 +50,16 @@ My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), th
 | Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
 | Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
 
-- **What loading costs the game's own CPU core** (measured with the tester's core meter, SD2Vita, 1 MiB reads, GPU-safe reads on): about 22 ms per MiB read with the copy on the game's core, about **3 ms** with *Copy on the system core* (the default). Reads into non-cacheable memory cost it about 1.5 ms per MiB.
+- **What loading costs the game's own CPU core** (measured with the tester's core meter, SD2Vita, GPU-safe reads on), in ms of its time per MiB read:
+
+  | Reads of | Copy on the game's core | *Copy on the system core*: Always (default) |
+  |---|---:|---:|
+  | 1 MiB | 22 | **3** |
+  | 128 KiB | 25 | **5** |
+  | 32 KiB | 37 | **16** |
+  | 4 KiB (the system reads 32 KiB from the card) | 276 | **105** |
+
+  Reads into non-cacheable memory cost it about 1.5 ms per MiB. Small reads are about 4% slower with the copy on the system core (387 → 371 reads per second at 4 KiB); big reads are as fast as before.
 - These figures are for reads into ordinary (cached) memory. Reads into non-cacheable memory are not changed by the plugin (see *What the plugin does*); on my console the system reads those from the SD2Vita at about 21 MiB/s on its own.
 - The original's figures are from [its README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures): PCH-1000, firmware 3.60, a 128 GB microSD, an official 4 GB memory card, 64 MiB per run.
 - The memory card and internal storage rows were measured with an earlier version; the current one should be a little faster still.
@@ -97,7 +106,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 |---|---|---|
 | GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). If the firmware cannot do this, reads simply take the normal way | On |
 | Overlapped reads | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and two helper threads per storage in use; all are given back when this and *Copy on the system core* are off, or the storage is switched off. Not used while *Verify transfers* is on | Auto |
-| Copy on the system core | Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads; the reading speed stays the same. **GPU-safe only**: just while *GPU-safe reads* are on, where the copy costs the most. **Always**: every faster read of a game or app of 16 KiB or more, into ordinary memory (recommended, also with *GPU-safe reads* off). **Always + uncached** (experimental): also reads into non-cacheable memory, read by the system core straight into the game's buffer; in my tests it did not help. If the console does not allow it, games copy as before (the log says why) | Always |
+| Copy on the system core | Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads. **Off**: the game's own core copies, as without the plugin. **GPU-safe only**: only while *GPU-safe reads* are on, where the copy costs the most. **Always** (recommended): every faster read of a game or app of 16 KiB or more into ordinary memory, with or without *GPU-safe reads*. **Always + NC** (experimental): as *Always*, and reads into non-cacheable memory (64 KiB or more) are also done on the system core, straight into the game's buffer. In my tests that did not help: about 1.5% slower, and the game's core was no less busy. Big reads stay as fast as before; reads of 16–32 KiB are about 4% slower, for less than half the work on the game's core. If the console does not allow it, games copy as before (the log says why) | Always |
 | Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
 | Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only. Overlapped reads are not used while it is on | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
@@ -149,7 +158,7 @@ Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://git
 
 **Added**
 
-- **Faster reads**: SD2Vita 1 MiB reads 19.6 MiB/s (the original: 16.8), and 18.5 MiB/s even with GPU-safe reads on.
+- **Faster reads**: SD2Vita 1 MiB reads 19.6 MiB/s (the original: 16.8), and 18.8 MiB/s even with GPU-safe reads on.
 - **GPU-safe reads**, removing the one difference the original lists under its limitations.
 - **Tester app** with per-block timings, live plugin counters and every byte checked.
 - **Driver status row** in Settings, also shown when the kernel module is missing.

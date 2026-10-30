@@ -22,7 +22,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.2); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define VM_VERSION_STR    "1.1.0"
+#define VM_VERSION_STR    "1.2.0"
 
 /* Which build: "+" and the commit it was built from (CMakeLists.txt sets it
  * at configure time; empty when built outside a git checkout). The version
@@ -98,7 +98,7 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_GPU     1
 #define VM_OFFLOAD_ALWAYS  2
-#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: Always, and uncached reads too */
+#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: "Always + NC", non-cacheable reads too */
 
 /* The HUD always sits in the top right corner. */
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */

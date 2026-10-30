@@ -418,7 +418,7 @@ static void diag_note(uint32_t nsec, uint32_t own)
  * system reads in 32 KiB pieces, so this covers most of a game's small reads.
  * Under 16 KiB the copy is too short to be worth a hand-off. */
 #define OFFLOAD_MIN_SECTORS 32
-/* "Always + uncached": the game's thread maps its own buffer for the helper,
+/* "Always + NC": the game's thread maps its own buffer for the helper,
  * so only reads of 64 KiB and up. */
 #define NCD_MIN_SECTORS     128
 static volatile int g_offload;             /* the setting, VM_OFFLOAD_*       */
@@ -442,7 +442,7 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
-/* VM_OFFLOAD_ALL ("Always + uncached"): a game's read into
+/* VM_OFFLOAD_ALL ("Always + NC"): a game's read into
  * NON-cacheable memory, which otherwise takes the standard path on the game's
  * own thread, is read by the helper on the system core straight into the
  * game's buffer through a kernel mapping of it - no staging, no copy - while
@@ -1339,7 +1339,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		SceUID pid;
 		int r;
 
-		/* EXPERIMENT: "Always + uncached": read on the system core instead */
+		/* EXPERIMENT: "Always + NC": read on the system core instead */
 		if (!write && LD(g_offload) == VM_OFFLOAD_ALL && !LD(g_verify) &&
 		    nsec >= NCD_MIN_SECTORS &&
 		    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) >= 0 &&

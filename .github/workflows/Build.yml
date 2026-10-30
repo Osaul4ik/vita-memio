@@ -11,6 +11,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release with this tag (e.g. v0.3.0); empty: build only'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -79,11 +84,12 @@ jobs:
             include/OFL-Terminus.txt
           if-no-files-found: error
 
-  # A pushed tag v* publishes a GitHub release with the built files, once the
-  # tests, cppcheck and the build have passed. Its text is
+  # A pushed tag v*, or a manual run with "release" set, publishes a GitHub
+  # release with the built files once the tests, cppcheck and the build have
+  # passed (a manual run creates the tag on the commit it built). Its text is
   # .github/release-notes/<tag>.md.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     needs: [test, cppcheck, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -98,10 +104,11 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release || github.ref_name }}
         run: |
           notes=".github/release-notes/${TAG}.md"
           test -f "$notes" || { echo "missing $notes"; exit 1; }
-          gh release create "$TAG" --title "vita-memio ${TAG#v}" --notes-file "$notes" \
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \
+            --notes-file "$notes" \
             dist/build/vitamemio_kernel.skprx dist/build/vitamemio.suprx \
             dist/build/vitamemio_tester.vpk dist/build/SHA256SUMS

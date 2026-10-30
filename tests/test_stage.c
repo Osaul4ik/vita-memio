@@ -768,21 +768,28 @@ static void test_pipeline_reads(void)
 	{
 		uint32_t e = 0, sz[PIPE_MAX_PARTS];
 
-		d->est_io_ns = 25000; d->est_cp_ns = 4200; d->est_cmd_ns = 600000;
+		d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 600000;
 		CHECK(pipe_plan(d, 512, 0, sz) == 2);
 		CHECK(sz[0] + sz[1] == 512 && sz[1] >= 50 && sz[1] <= 56);        /* ~54 */
-		d->est_cp_ns = 11100;
+		d->est_cp_ns[1] = 11100;
 		CHECK(pipe_plan(d, 512, 1, sz) == 3);
 		CHECK(sz[0] + sz[1] + sz[2] == 512 && sz[2] >= 30 && sz[2] <= 40); /* ~35 */
 		CHECK(sz[1] <= PIPE_TAIL_SECTORS);
 		d->est_cmd_ns = 5000000;                       /* commands dear: fewer parts */
 		CHECK(pipe_plan(d, 512, 1, sz) == 2);
 		d->est_cmd_ns = 600000;
-		d->est_cp_ns = 40000;                          /* a copy slower than the card */
+		d->est_cp_ns[0] = 40000;                       /* a copy slower than the card */
 		CHECK(pipe_plan(d, 512, 0, sz) == 2 && sz[0] == 256 && sz[1] == 256);
-		d->est_io_ns = d->est_cp_ns = d->est_cmd_ns = 0;   /* nothing learnt: defaults */
+		d->est_io_ns = d->est_cp_ns[0] = d->est_cp_ns[1] = d->est_cmd_ns = 0;   /* nothing learnt: defaults */
 		CHECK(pipe_plan(d, 512, 0, sz) == 2 && pipe_plan(d, 512, 1, sz) == 3);
 		CHECK(pipe_plan(d, 128, 0, sz) >= 2 && pipe_plan(d, 256, 1, sz) >= 2);
+		/* the two copy costs are kept apart: switching GPU-safe needs no relearning */
+		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
+		d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100;
+		pipe_learn(&d->est_cp_ns[1], 1110, 100, PIPE_DEF_CPCL_NS);   /* a clean read learnt */
+		CHECK(d->est_cp_ns[0] == 4200);                              /* the plain one untouched */
+		CHECK(pipe_plan(d, 512, 0, sz) == 2 && pipe_plan(d, 512, 1, sz) == 3);
+		d->est_io_ns = d->est_cp_ns[0] = d->est_cp_ns[1] = d->est_cmd_ns = 0;
 
 		/* any costs and sizes: the parts cover n, fit their buffers, every
 		 * part's copy is hidden by the next read, and no x or k is cheaper */
@@ -793,7 +800,7 @@ static void test_pipeline_reads(void)
 			uint64_t io = 5000 + (r * 104729u) % 40000, cp = 1000 + (r * 1299709u) % 30000;
 			uint64_t cmd = (r * 15485863u) % 2000000, best = ~(uint64_t)0, sum = 0, cost;
 
-			d->est_io_ns = (uint32_t)io; d->est_cp_ns = (uint32_t)cp; d->est_cmd_ns = (uint32_t)(cmd ? cmd : 1);
+			d->est_io_ns = (uint32_t)io; d->est_cp_ns[0] = (uint32_t)cp; d->est_cmd_ns = (uint32_t)(cmd ? cmd : 1);
 			cmd = d->est_cmd_ns;
 			k = (uint32_t)pipe_plan(d, n, 0, sz);
 			CHECK(k == 0 || k == 2 || k == 3);
@@ -821,7 +828,7 @@ static void test_pipeline_reads(void)
 			CHECK(cost == best);
 		}
 		CHECK(planned > 1000 && three > 100 && planned - three > 100);   /* both kinds seen */
-		d->est_io_ns = 25000; d->est_cp_ns = 4200; d->est_cmd_ns = 600000;
+		d->est_io_ns = 25000; d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100; d->est_cmd_ns = 600000;
 		/* learning both from one split read: 25 us per sector, 600 us per command */
 		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
 		for (int k = 0; k < 60; k++)
@@ -839,7 +846,7 @@ static void test_pipeline_reads(void)
 			pipe_learn_io(d, 9000, 70, 100, 62);           /* too close to tell */
 			CHECK(d->est_io_ns == io && d->est_cmd_ns == cmd);
 		}
-		d->est_io_ns = d->est_cp_ns = d->est_cmd_ns = 0;
+		d->est_io_ns = d->est_cp_ns[0] = d->est_cp_ns[1] = d->est_cmd_ns = 0;
 		pipe_learn(&e, 0, 0, 5000);
 		CHECK(e == 0);                                             /* nothing to learn from */
 		pipe_learn(&e, 8, 1, 5000);                                /* 8000 ns: 5000 + 3000/8 */

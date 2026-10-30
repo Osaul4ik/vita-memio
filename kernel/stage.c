@@ -131,7 +131,8 @@ typedef struct Dev {
 	void         *job_part;
 	uint32_t      job_sector, job_n, job_us;
 	volatile int  job_ret;
-	uint32_t      est_io_ns, est_cp_ns;   /* per sector, for the split        */
+	uint32_t      est_io_ns;              /* per sector, for the split        */
+	uint32_t      est_cp_ns[2];           /* the copy: [0] plain, [1] + clean */
 	uint32_t      est_cmd_ns;             /* the fixed cost of one card read   */
 } Dev;
 
@@ -367,7 +368,8 @@ static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uin
 static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
 {
 	const uint64_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
-	const uint64_t cp = d->est_cp_ns ? d->est_cp_ns : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
+	const uint64_t cp = d->est_cp_ns[clean ? 1 : 0] ? d->est_cp_ns[clean ? 1 : 0]
+	                  : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
 	const uint64_t cmd = d->est_cmd_ns ? d->est_cmd_ns : PIPE_DEF_CMD_NS;
 	uint64_t best = ~(uint64_t)0;
 	int best_k = 0;
@@ -682,7 +684,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				d->tm.rd_io_us += (t2 - t1) + io_us;
 				d->tm.rd_copy_us += cp_us;
 				pipe_learn_io(d, t2 - t1, sz[0], last_us, sz[k - 1]);
-				pipe_learn(&d->est_cp_ns, cp0_us, sz[0],
+				pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp0_us, sz[0],
 				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 			}
 		} else {
@@ -896,7 +898,7 @@ void vm_stage_apply(const VmSettings *s)
 	g_gpu_safe = s->gpusafe ? 1 : 0;
 	if (s->pipeline != g_pipeline) {
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
-			g_dev[i].est_cp_ns = 0;   /* measured afresh */
+			g_dev[i].est_cp_ns[0] = g_dev[i].est_cp_ns[1] = 0;   /* measured afresh */
 			if (s->pipeline)
 				g_dev[i].pipe_failed = 0;   /* switching it on again is a fresh try */
 		}

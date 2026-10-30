@@ -75,6 +75,7 @@ typedef struct BenchPluginState {
 	int      small;          /* "small transfers too": 1 on, 0 off, -1 unknown */
 	int      pipeline;       /* "overlapped reads": VM_PIPE_*, -1 unknown      */
 	int      offload;        /* "copy on the system core": VM_OFFLOAD_*, -1 unknown */
+	int      gpusafe;        /* "GPU-safe reads": 1 on, 0 off, -1 unknown       */
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 	int      verify_ready;   /* ... and its check buffer is allocated           */

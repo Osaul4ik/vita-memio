@@ -11,6 +11,8 @@ extern int fake_rename_fail;          /* ksceIoRename fails (power cut after rem
 extern int fake_write_short;          /* ksceIoWrite writes only part of the data    */
 extern int fake_memtype;              /* ksceKernelGetMemBlockMemtypeByAddr()        */
 extern int fake_memtype_calls;
+extern int fake_thread_fail, fake_sema_fail;  /* thread / the n-th semaphore fails */
+extern int fake_threads_live, fake_semas_live;
 extern const void *fake_memtype_from; /* from this address on (if set) ...          */
 extern int fake_memtype_above;        /* ... the memory type is this one             */
 

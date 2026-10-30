@@ -73,6 +73,7 @@ typedef struct BenchPluginState {
 	uint32_t errors, mismatches;
 	uint32_t passthru;       /* large transfers left stock: the buffer was busy */
 	int      small;          /* "small transfers too": 1 on, 0 off, -1 unknown */
+	int      pipeline;       /* "overlapped reads": 1 on, 0 off, -1 unknown    */
 	uint32_t fingerprint;    /* storage driver fingerprint                      */
 	int      verify;         /* the plugin's verify mode is on (slows transfers) */
 	int      verify_ready;   /* ... and its check buffer is allocated           */

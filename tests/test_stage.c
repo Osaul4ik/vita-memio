@@ -17,7 +17,7 @@ extern uint32_t fake_now_us;
 static uint32_t copy_cost_us;
 static void *fake_copy(void *d, const void *s, size_t n)
 {
-	fake_now_us += copy_cost_us;
+	__sync_fetch_and_add(&fake_now_us, copy_cost_us);
 	return memcpy(d, s, n);
 }
 #define vm_copy_from_stage fake_copy
@@ -40,15 +40,22 @@ static uint8_t *staging;
 
 static int io_calls, fail_at_call, corrupt_staged;
 static void *last_buf;
+static void *io_bufs[16];                 /* the buffer and size of each call */
+static uint32_t io_ns[16];
 
 /* The "system driver": ref says whether this is the read or the write function. */
 static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
 {
 	(void)part;
-	io_calls++;
+	int call = __sync_add_and_fetch(&io_calls, 1);
+
 	last_buf = buf;
-	fake_now_us += 2500;
-	if (fail_at_call && io_calls == fail_at_call)
+	if (call <= (int)(sizeof(io_bufs) / sizeof(io_bufs[0]))) {
+		io_bufs[call - 1] = buf;
+		io_ns[call - 1] = n;
+	}
+	__sync_fetch_and_add(&fake_now_us, 2500);
+	if (fail_at_call && call == fail_at_call)
 		return -5;
 	if (ref == REF_RD) {
 		memcpy(buf, disk + (size_t)sector * 512, (size_t)n * 512);
@@ -66,12 +73,16 @@ static void reset(void)
 {
 	Dev *d = &g_dev[M];
 
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		if (g_dev[i].pipe_made)
+			pipe_release(&g_dev[i]);       /* a test that left its helper */
 	fakes_reset();
 	for (size_t i = 0; i < sizeof(disk); i++)
 		disk[i] = (uint8_t)(i * 31 + (i >> 9));
 	memset(d, 0, sizeof(*d));
 	d->port = -1;
 	d->uid = -1;
+	d->uid2 = d->th = d->sem_go = d->sem_done = -1;
 	d->buf = staging;
 	d->enabled = 1;
 	g_verify = 0;
@@ -80,6 +91,10 @@ static void reset(void)
 	g_gpu_safe = 0;
 	g_dcache_clean = NULL;
 	g_gpu_cleaned_kib = g_nc_stock_kib = 0;
+	g_pipeline = 0;
+	g_pipe_reads = 0;
+	memset(io_bufs, 0, sizeof(io_bufs));
+	memset(io_ns, 0, sizeof(io_ns));
 	g_count_all = 1;
 	g_shadow = NULL;
 	g_shadow_uid = -1;
@@ -694,6 +709,192 @@ static void test_buffers_on_demand(void)
 	CHECK(fake_free_calls == 3);
 }
 
+/* ---- overlapped reads ------------------------------------------------------ */
+
+static void pipe_on(VmSettings *s, int gpu)
+{
+	memset(s, 0, sizeof(*s));
+	s->memcard = 1;
+	s->stats = 1;
+	s->gpusafe = gpu;
+	s->pipeline = 1;
+	vm_stage_apply(s);
+	g_live = 1;
+	vm_stage_worker_tick();               /* the helper is made by the worker */
+}
+
+/* A large read is split: the head into the staging buffer by the caller, the
+ * tail into the second buffer by the helper; the data is exactly the disk's,
+ * and nothing is split below 64 KiB. */
+static void test_pipeline_reads(void)
+{
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 0);
+	CHECK(d->pipe_made && d->pipe_ready && fake_threads_live == 1 && fake_semas_live == 2);
+	CHECK(rd(u, 10, 1100) == 0);                    /* 512 + 512 + 76 */
+	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+	CHECK(io_calls == 5);                           /* split, split, not split */
+	CHECK(io_bufs[0] == staging && io_bufs[1] == d->buf2);
+	CHECK(io_ns[0] + io_ns[1] == 512 && io_ns[1] >= PIPE_MIN_TAIL && io_ns[1] <= 256);
+	CHECK(io_bufs[2] == staging && io_bufs[3] == d->buf2 && io_ns[2] + io_ns[3] == 512);
+	CHECK(io_bufs[4] == staging && io_ns[4] == 76);
+	CHECK(g_pipe_reads == 2 && d->st.reads == 1 && d->st.errors == 0);
+	CHECK(d->tm.rd_sectors == 1100);                /* all counted */
+
+	/* many reads in a row, different sizes and places: always the disk's data */
+	for (int k = 0; k < 200; k++) {
+		uint32_t n = 128 + (uint32_t)(k * 37) % 900, at = (uint32_t)(k * 101) % 2000;
+
+		memset(u, 0, n * 512);
+		CHECK(rd(u, at, n) == 0);
+		CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
+	}
+	CHECK(d->st.errors == 0 && !d->fallback);
+
+	/* 64 KiB and up are split, smaller is not */
+	io_calls = 0;
+	CHECK(rd(u, 0, 127) == 0 && io_calls == 1);
+	io_calls = 0;
+	CHECK(rd(u, 0, 128) == 0 && io_calls == 2);
+
+	/* the split: head copy time = tail read time, within its bounds, and the
+	 * costs are learnt as a running average */
+	{
+		uint32_t e = 0;
+
+		d->est_io_ns = 25000; d->est_cp_ns = 4200;
+		CHECK(pipe_tail(d, 512, 0) == 512u * 4200 / 29200);       /* 73 */
+		d->est_cp_ns = 11100;
+		CHECK(pipe_tail(d, 512, 1) == 512u * 11100 / 36100);      /* 157 */
+		d->est_cp_ns = 100000;                                     /* dearer than the read */
+		CHECK(pipe_tail(d, 512, 0) == 256);                        /* at most half */
+		d->est_cp_ns = 1;
+		CHECK(pipe_tail(d, 512, 0) == PIPE_MIN_TAIL);
+		d->est_io_ns = d->est_cp_ns = 0;                           /* nothing learnt yet */
+		CHECK(pipe_tail(d, 512, 0) == 512u * PIPE_DEF_CP_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CP_NS));
+		CHECK(pipe_tail(d, 512, 1) == 512u * PIPE_DEF_CPCL_NS / (PIPE_DEF_IO_NS + PIPE_DEF_CPCL_NS));
+		pipe_learn(&e, 0, 0, 5000);
+		CHECK(e == 0);                                             /* nothing to learn from */
+		pipe_learn(&e, 8, 1, 5000);                                /* 8000 ns: 5000 + 3000/8 */
+		CHECK(e == 5000 - 625 + 1000);
+		for (int k = 0; k < 100; k++)
+			pipe_learn(&e, 8, 1, 5000);
+		CHECK(e > 7900 && e <= 8000);                              /* converges */
+	}
+
+	/* off again: not split, the helper stays (until the module stops) */
+	s.pipeline = 0;
+	vm_stage_apply(&s);
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && last_buf == staging);
+	vm_stage_fini();
+	CHECK(!d->pipe_made && fake_threads_live == 0 && fake_semas_live == 0);
+	g_live = saved_live;
+	free(u);
+}
+
+/* GPU-safe with overlapped reads: both parts cleaned, after their copy. */
+static void test_pipeline_gpu_safe(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 1);
+	g_dcache_clean = fake_clean;
+	clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2);
+	CHECK(memcmp(u, disk, 512 * 512) == 0);
+	CHECK(clean_calls == 2);
+	CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + 512 * 512);
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
+/* An error in either part: the device goes back to stock and the whole part
+ * is read again the standard way, so the caller still gets the disk's data. */
+static void test_pipeline_errors(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	for (int at = 1; at <= 2; at++) {          /* 1: the head, 2: the tail */
+		reset();
+		pipe_on(&s, 0);
+		fail_at_call = at;
+		memset(u, 0, 512 * 512);
+		CHECK(rd(u, 0, 512) == 0);
+		CHECK(memcmp(u, disk, 512 * 512) == 0);
+		CHECK(d->st.errors == 1 && d->fallback);
+		CHECK(last_buf == u);                    /* finished stock */
+		CHECK(g_pipe_reads == 0);
+		vm_stage_fini();
+		CHECK(fake_threads_live == 0);
+	}
+	g_live = saved_live;
+	free(u);
+}
+
+/* Verify mode keeps the plain path (one read, one re-read per chunk). */
+static void test_pipeline_not_with_verify(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 0);
+	g_shadow = malloc(STAGE_BYTES);
+	g_verify = 1;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && io_bufs[1] == g_shadow);
+	CHECK(g_pipe_reads == 0);
+	g_verify = 0;
+	free(g_shadow);
+	g_shadow = NULL;
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
+/* Setting it up can fail at every step: nothing is kept, reads go as before,
+ * and it is not tried again every second. */
+static void test_pipeline_setup_fails(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	for (int step = 0; step < 4; step++) {
+		reset();
+		if (step == 0) fake_alloc_fail = 1;
+		if (step == 1) fake_sema_fail = 1;
+		if (step == 2) fake_sema_fail = 2;
+		if (step == 3) fake_thread_fail = 1;
+		pipe_on(&s, 0);
+		fake_alloc_fail = 0;
+		CHECK(!d->pipe_made && !d->pipe_ready && d->pipe_failed);
+		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+		CHECK(d->uid2 < 0 && d->th < 0 && d->sem_go < 0 && d->sem_done < 0);
+		vm_stage_worker_tick();
+		CHECK(!d->pipe_made);                    /* not retried */
+		io_calls = 0;
+		CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && memcmp(u, disk, 512 * 512) == 0);
+		vm_stage_fini();
+	}
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -703,6 +904,11 @@ int main(void)
 	RUN(test_statistics_switch);
 	RUN(test_gpu_safe_reads);
 	RUN(test_noncacheable_buffers_go_stock);
+	RUN(test_pipeline_reads);
+	RUN(test_pipeline_gpu_safe);
+	RUN(test_pipeline_errors);
+	RUN(test_pipeline_not_with_verify);
+	RUN(test_pipeline_setup_fails);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

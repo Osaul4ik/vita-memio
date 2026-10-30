@@ -9,7 +9,7 @@ CC      ?= gcc
 CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fsanitize=address,undefined -fno-sanitize-recover=undefined \
            -fno-omit-frame-pointer
-CFLAGS  += -Istubs
+CFLAGS  += -Istubs -pthread
 
 TESTS := test_stage test_settings test_hud test_util test_i18n test_bench test_fastcopy
 

@@ -40,6 +40,14 @@
  *     setting on, each read's copy is cleaned out of the cache to memory
  *     before the call returns, so the graphics chip (which reads memory, not
  *     the CPU cache) sees exactly what the stock path gives it;
+ *   - overlapped reads (experimental, off by default): a faster read of at
+ *     least PIPE_MIN_SECTORS is split in two. The caller's thread reads the
+ *     head into the staging buffer, hands the tail to the device's helper
+ *     thread (read into a second buffer) and copies the head while the card
+ *     reads the tail; then it copies the tail. The split is sized so the head's
+ *     copy takes about as long as the tail's read. Nothing is read ahead or
+ *     kept: both parts belong to the request, which is complete when it
+ *     returns. Any error finishes the whole part stock, as above;
  *   - verify mode re-reads every faster transfer the stock way and compares;
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
@@ -91,6 +99,10 @@ void *ksceSdifGetSdContextGlobal(int port);
 int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);   /* taiHEN */
 
+/* Calling the original: SceSdif takes the card context first, SceMsif has a
+ * single slot and no context. `part` is NULL for the memory card. */
+typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n);
+
 typedef struct Dev {
 	int           port;          /* SDIF port, or -1: the memory card          */
 	SceUID        uid;
@@ -106,12 +118,24 @@ typedef struct Dev {
 	uint64_t      all_rd, all_wr;       /* every transfer on this device (HUD) */
 	VmTimingDev   tm;                   /* io vs copy time (wraps; see the API)  */
 	VmDevState    st;            /* counters (status filled in by stage_get)   */
+	/* Overlapped reads: the helper thread, its buffer and the one job it runs.
+	 * All valid while pipe_made; pipe_ready publishes them to the hooks. */
+	int           pipe_made, pipe_failed;
+	volatile int  pipe_ready, pipe_quit;
+	SceUID        uid2, th, sem_go, sem_done;
+	void         *buf2;
+	io_fn         job_io;
+	tai_hook_ref_t job_ref;
+	void         *job_part;
+	uint32_t      job_sector, job_n, job_us;
+	volatile int  job_ret;
+	uint32_t      est_io_ns, est_cp_ns;   /* per sector, for the split        */
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
-	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1 },
-	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1 },
-	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1 },
+	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1 },
+	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1 },
+	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1 },
 };
 
 /* Set by vm_stage_init: from then on a device switched on gets its buffer.
@@ -184,10 +208,6 @@ enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_RD_MS, H_WR_MS, H_COUNT };
 static volatile tai_hook_ref_t g_ref[H_COUNT];
 static SceUID g_hook[H_COUNT] = { -1, -1, -1, -1, -1, -1 };
 
-/* Calling the original: SceSdif takes the card context first, SceMsif has a
- * single slot and no context. `part` is NULL for the memory card. */
-typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n);
-
 static int io_sdif(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
 {
 	return TAI_CONTINUE(int, ref, part, sector, buf, n);
@@ -216,7 +236,7 @@ static int on_port(void *part, int port)
 	return part && *(void **)part == ksceSdifGetSdContextGlobal(port);
 }
 
-static int alloc_buf(unsigned type, int phycont, SceUID *uid, void **base)
+static int alloc_buf(unsigned type, int phycont, SceSize size, SceUID *uid, void **base)
 {
 	SceKernelAllocMemBlockKernelOpt opt;
 
@@ -224,7 +244,7 @@ static int alloc_buf(unsigned type, int phycont, SceUID *uid, void **base)
 	opt.size = sizeof(opt);
 	if (phycont)
 		opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_PHYCONT;
-	*uid = ksceKernelAllocMemBlock("SceVitaMemio", type, STAGE_BYTES, &opt);
+	*uid = ksceKernelAllocMemBlock("SceVitaMemio", type, size, &opt);
 	if (*uid < 0)
 		return *uid;
 	if (ksceKernelGetMemBlockBase(*uid, base) < 0) {
@@ -245,7 +265,7 @@ static void ensure_buf(Dev *d)
 
 	if (!g_live || d->buf || d->unusable || d->alloc_err)
 		return;
-	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, &uid, &base);
+	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, STAGE_BYTES, &uid, &base);
 	if (r < 0) {
 		d->alloc_err = r;
 		d->alloc_logged = 0;            /* the worker logs it */
@@ -274,6 +294,138 @@ static int take(Dev *d, int mine, uint32_t nsec)
 		return 0;
 	}
 	return 1;
+}
+
+/* ---- overlapped reads ------------------------------------------------------ */
+
+#define PIPE_MIN_SECTORS   128        /* 64 KiB: smaller reads are not split    */
+#define PIPE_MIN_TAIL      8
+#define PIPE_TAIL_SECTORS  (STAGE_SECTORS / 2)   /* the second buffer's size    */
+/* Per-sector costs before anything is measured (SD2Vita): the card read, and
+ * the copy without and with the GPU-safe clean. */
+#define PIPE_DEF_IO_NS     25000u
+#define PIPE_DEF_CP_NS     4200u
+#define PIPE_DEF_CPCL_NS   11100u
+
+static volatile int g_pipeline;              /* the setting                    */
+static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
+
+/* The tail of an n-sector read: its card read should take about as long as
+ * the head's copy, so neither side waits much. head * cp = tail * io. */
+static uint32_t pipe_tail(const Dev *d, uint32_t n, int clean)
+{
+	uint32_t io = d->est_io_ns ? d->est_io_ns : PIPE_DEF_IO_NS;
+	uint32_t cp = d->est_cp_ns ? d->est_cp_ns : clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
+	uint32_t t = (uint32_t)((uint64_t)n * cp / ((uint64_t)io + cp));
+
+	if (t < PIPE_MIN_TAIL)
+		t = PIPE_MIN_TAIL;
+	if (t > n / 2)
+		t = n / 2;
+	if (t > PIPE_TAIL_SECTORS)
+		t = PIPE_TAIL_SECTORS;
+	return t;
+}
+
+/* A running average (1/8 weight) of a per-sector cost in ns. */
+static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t def)
+{
+	uint32_t ns;
+
+	if (!sectors)
+		return;
+	ns = (uint32_t)((uint64_t)us * 1000u / sectors);
+	if (!*est)
+		*est = def;
+	*est = *est - (*est >> 3) + (ns >> 3);
+}
+
+/* The helper: runs one card read at a time for its device, into buf2. */
+static int pipe_helper(SceSize args, void *argp)
+{
+	Dev *d;
+
+	(void)args;
+	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
+	for (;;) {
+		uint32_t t0 = 0;
+
+		ksceKernelWaitSema(d->sem_go, 1, NULL);
+		if (d->pipe_quit)
+			break;
+		__sync_synchronize();               /* the job before its fields */
+		if (g_stats)
+			t0 = ksceKernelGetSystemTimeLow();
+		d->job_ret = d->job_io(d->job_ref, d->job_part, d->job_sector, d->buf2, d->job_n);
+		d->job_us = g_stats ? ksceKernelGetSystemTimeLow() - t0 : 0;
+		__sync_synchronize();               /* the result before the signal */
+		ksceKernelSignalSema(d->sem_done, 1);
+	}
+	return 0;
+}
+
+static void pipe_release(Dev *d)
+{
+	if (d->th >= 0) {
+		d->pipe_quit = 1;
+		__sync_synchronize();
+		ksceKernelSignalSema(d->sem_go, 1);
+		ksceKernelWaitThreadEnd(d->th, NULL, NULL);
+		ksceKernelDeleteThread(d->th);
+	}
+	if (d->sem_go >= 0)
+		ksceKernelDeleteSema(d->sem_go);
+	if (d->sem_done >= 0)
+		ksceKernelDeleteSema(d->sem_done);
+	if (d->uid2 >= 0)
+		ksceKernelFreeMemBlock(d->uid2);
+	d->th = d->sem_go = d->sem_done = d->uid2 = -1;
+	d->buf2 = NULL;
+	d->pipe_made = 0;
+}
+
+/* Worker thread: everything the overlapped reads of device `d` need. On any
+ * failure nothing is kept and the device reads as before. Returns 0 or the
+ * error. */
+static int pipe_setup(Dev *d)
+{
+	Dev *arg = d;
+	int r;
+
+	d->th = d->sem_go = d->sem_done = d->uid2 = -1;
+	d->buf2 = NULL;
+	d->pipe_quit = 0;
+	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2);
+	if (r < 0) {
+		d->uid2 = -1;
+		d->buf2 = NULL;
+		return r;
+	}
+	d->sem_go = ksceKernelCreateSema("SceVitaMemioPipeGo", 0, 0, 1, NULL);
+	d->sem_done = ksceKernelCreateSema("SceVitaMemioPipeDone", 0, 0, 1, NULL);
+	if (d->sem_go < 0 || d->sem_done < 0) {
+		r = d->sem_go < 0 ? d->sem_go : d->sem_done;
+		pipe_release(d);
+		return r;
+	}
+	d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0, 0, NULL);
+	if (d->th < 0) {
+		r = d->th;
+		d->th = -1;
+		pipe_release(d);
+		return r;
+	}
+	r = ksceKernelStartThread(d->th, sizeof(arg), &arg);
+	if (r < 0) {
+		ksceKernelDeleteThread(d->th);
+		d->th = -1;
+		pipe_release(d);
+		return r;
+	}
+	d->pipe_made = 1;
+	__sync_synchronize();
+	d->pipe_ready = 1;                    /* the hooks may use it from now on */
+	return 0;
 }
 
 static int take_shadow(void)
@@ -314,6 +466,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 	const int stats = g_stats;
 	const int clean = !write && g_gpu_safe && g_dcache_clean;
+	const int pipe = !write && !verify && g_pipeline && d->pipe_ready;
 
 	if (clean)
 		g_gpu_cleaned_kib += left / 2;
@@ -337,6 +490,48 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				d->tm.wr_sectors += n;
 				d->tm.wr_copy_us += t2 - t1;
 				d->tm.wr_io_us += t3 - t2;
+			}
+		} else if (pipe && n >= PIPE_MIN_SECTORS) {
+			/* Overlapped: the head here, the tail on the helper meanwhile. */
+			const uint32_t t = pipe_tail(d, n, clean), a = n - t;
+			uint32_t t4 = 0, t5 = 0;
+
+			ret = io(ref, part, sector, d->buf, a);
+			if (ret < 0)
+				break;
+			if (stats)
+				t2 = ksceKernelGetSystemTimeLow();
+			d->job_io = io;
+			d->job_ref = ref;
+			d->job_part = part;
+			d->job_sector = sector + a;
+			d->job_n = t;
+			__sync_synchronize();
+			ksceKernelSignalSema(d->sem_go, 1);
+			vm_copy_from_stage(p, d->buf, a * 512);
+			if (clean)
+				clean_out(p, a * 512);
+			if (stats)
+				t3 = ksceKernelGetSystemTimeLow();
+			ksceKernelWaitSema(d->sem_done, 1, NULL);
+			__sync_synchronize();
+			ret = d->job_ret;
+			if (ret < 0)
+				break;                  /* the whole part is read again stock */
+			if (stats)
+				t4 = ksceKernelGetSystemTimeLow();
+			vm_copy_from_stage(p + a * 512, d->buf2, t * 512);
+			if (clean)
+				clean_out(p + a * 512, t * 512);
+			g_pipe_reads++;
+			if (stats) {
+				t5 = ksceKernelGetSystemTimeLow();
+				d->tm.rd_sectors += n;
+				d->tm.rd_io_us += (t2 - t1) + d->job_us;
+				d->tm.rd_copy_us += (t3 - t2) + (t5 - t4);
+				pipe_learn(&d->est_io_ns, t2 - t1, a, PIPE_DEF_IO_NS);
+				pipe_learn(&d->est_cp_ns, t3 - t2, a,
+				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 			}
 		} else {
 			ret = io(ref, part, sector, d->buf, n);
@@ -506,6 +701,11 @@ void vm_stage_fini(void)
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		while (g_dev[i].busy)
 			ksceKernelDelayThread(1000);
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		g_dev[i].pipe_ready = 0;          /* no transfer is in flight now */
+		if (g_dev[i].pipe_made)
+			pipe_release(&g_dev[i]);
+	}
 	for (int i = H_COUNT - 1; i >= 0; i--)
 		if (g_hook[i] >= 0) {
 			taiHookReleaseForKernel(g_hook[i], g_ref[i]);
@@ -542,6 +742,11 @@ void vm_stage_apply(const VmSettings *s)
 	g_min_sectors = s->small ? 1 : MIN_SECTORS;
 	g_stats = s->stats ? 1 : 0;
 	g_gpu_safe = s->gpusafe ? 1 : 0;
+	if (s->pipeline != g_pipeline) {
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			g_dev[i].est_cp_ns = 0;   /* measured afresh */
+	}
+	g_pipeline = s->pipeline ? 1 : 0;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
@@ -561,8 +766,9 @@ void vm_stage_worker_tick(void)
 	if (++ticks % 60 == 0 && (g_gpu_cleaned_kib != last_cleaned || g_nc_stock_kib != last_nc)) {
 		last_cleaned = g_gpu_cleaned_kib;
 		last_nc = g_nc_stock_kib;
-		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB",
-		         (unsigned)last_nc, (unsigned)last_cleaned);
+		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB, "
+		         "overlapped reads %u", (unsigned)last_nc, (unsigned)last_cleaned,
+		         (unsigned)g_pipe_reads);
 	}
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
@@ -571,9 +777,26 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
 			         (unsigned)g_dev[i].alloc_err);
 		}
+	/* Overlapped reads: the helper and its buffer for every device switched on,
+	 * made here (never in a transfer) and then kept. */
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		Dev *d = &g_dev[i];
+
+		if (g_pipeline && g_live && d->enabled && d->buf && !d->unusable &&
+		    !d->pipe_made && !d->pipe_failed) {
+			int r = pipe_setup(d);
+
+			if (r < 0) {
+				d->pipe_failed = 1;
+				VM_KLOGW("stage: dev %d overlapped reads not set up (0x%08x) - reads as before",
+				         i, (unsigned)r);
+			}
+		}
+	}
 	/* The verify buffer is only allocated once verify mode is first turned on. */
 	if (g_verify && !g_shadow && g_shadow_uid < 0 && !g_shadow_failed) {
-		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, &g_shadow_uid, &g_shadow);
+		int r = alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, STAGE_BYTES, &g_shadow_uid,
+		                  &g_shadow);
 
 		if (r < 0) {
 			g_shadow = NULL;

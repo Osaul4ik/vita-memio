@@ -101,6 +101,7 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 | Row | What it does | Default |
 |---|---|---|
 | GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed for reads into ordinary memory; non-cacheable memory (such as the graphics memory) takes the standard path anyway | Off |
+| Overlapped reads (experimental) | Splits each faster read in two: while the card reads the second part, the CPU already copies the first, hiding most of the copy (and of the GPU-safe cleaning). Uses a second 128 KiB buffer and a helper thread per storage, made when it is first switched on and kept until the console restarts | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |

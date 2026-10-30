@@ -4,6 +4,7 @@
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -33,7 +34,168 @@ void vm_log(const char *fmt, ...) { (void)fmt; }
 /* ---- time / threads -------------------------------------------------------- */
 int ksceKernelDelayThread(unsigned us) { (void)us; return 0; }
 int fake_time_calls;
-uint32_t ksceKernelGetSystemTimeLow(void) { fake_time_calls++; return fake_now_us; }
+uint32_t ksceKernelGetSystemTimeLow(void)
+{
+	__sync_fetch_and_add(&fake_time_calls, 1);
+	return __sync_fetch_and_add(&fake_now_us, 0);
+}
+
+/* Real threads and counting semaphores (pthreads), so code that hands work to
+ * another thread is tested with real concurrency. */
+int fake_thread_fail, fake_sema_fail, fake_threads_live, fake_semas_live;
+
+typedef struct { int used; pthread_mutex_t m; pthread_cond_t c; int count, max; } FakeSema;
+static FakeSema g_semas[32];
+
+SceUID ksceKernelCreateSema(const char *name, SceUInt attr, int initVal, int maxVal, void *option)
+{
+	(void)name; (void)attr; (void)option;
+	if (fake_sema_fail && --fake_sema_fail == 0)
+		return -0x20;
+	for (int i = 1; i < 32; i++)
+		if (!g_semas[i].used) {
+			g_semas[i].used = 1;
+			pthread_mutex_init(&g_semas[i].m, NULL);
+			pthread_cond_init(&g_semas[i].c, NULL);
+			g_semas[i].count = initVal;
+			g_semas[i].max = maxVal;
+			fake_semas_live++;
+			return 0x100 + i;
+		}
+	return -0x21;
+}
+
+static FakeSema *sema_of(SceUID id)
+{
+	int i = id - 0x100;
+
+	return i > 0 && i < 32 && g_semas[i].used ? &g_semas[i] : NULL;
+}
+
+int ksceKernelDeleteSema(SceUID id)
+{
+	FakeSema *s = sema_of(id);
+
+	if (!s)
+		return -1;
+	pthread_mutex_destroy(&s->m);
+	pthread_cond_destroy(&s->c);
+	s->used = 0;
+	fake_semas_live--;
+	return 0;
+}
+
+int ksceKernelSignalSema(SceUID id, int signal)
+{
+	FakeSema *s = sema_of(id);
+
+	if (!s)
+		return -1;
+	pthread_mutex_lock(&s->m);
+	if (s->count + signal > s->max) {
+		pthread_mutex_unlock(&s->m);
+		return -2;                          /* as the kernel: over the maximum */
+	}
+	s->count += signal;
+	pthread_cond_broadcast(&s->c);
+	pthread_mutex_unlock(&s->m);
+	return 0;
+}
+
+int ksceKernelWaitSema(SceUID id, int signal, SceUInt *timeout)
+{
+	FakeSema *s = sema_of(id);
+
+	(void)timeout;
+	if (!s)
+		return -1;
+	pthread_mutex_lock(&s->m);
+	while (s->count < signal)
+		pthread_cond_wait(&s->c, &s->m);
+	s->count -= signal;
+	pthread_mutex_unlock(&s->m);
+	return 0;
+}
+
+typedef struct {
+	int used, started;
+	pthread_t t;
+	SceKernelThreadEntry entry;
+	SceSize arglen;
+	unsigned char args[64] __attribute__((aligned(16)));
+} FakeThread;
+static FakeThread g_threads[16];
+
+static void *thread_main(void *p)
+{
+	FakeThread *t = p;
+
+	t->entry(t->arglen, t->args);
+	return NULL;
+}
+
+SceUID ksceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int initPriority,
+                              SceSize stackSize, SceUInt attr, int cpuAffinityMask,
+                              const void *option)
+{
+	(void)name; (void)initPriority; (void)stackSize; (void)attr; (void)cpuAffinityMask;
+	(void)option;
+	if (fake_thread_fail)
+		return -0x30;
+	for (int i = 1; i < 16; i++)
+		if (!g_threads[i].used) {
+			memset(&g_threads[i], 0, sizeof(g_threads[i]));
+			g_threads[i].used = 1;
+			g_threads[i].entry = entry;
+			return 0x200 + i;
+		}
+	return -0x31;
+}
+
+static FakeThread *thread_of(SceUID id)
+{
+	int i = id - 0x200;
+
+	return i > 0 && i < 16 && g_threads[i].used ? &g_threads[i] : NULL;
+}
+
+int ksceKernelStartThread(SceUID id, SceSize arglen, void *argp)
+{
+	FakeThread *t = thread_of(id);
+
+	if (!t || t->started || arglen > sizeof(t->args))
+		return -1;
+	memcpy(t->args, argp, arglen);           /* copied, as the kernel does */
+	t->arglen = arglen;
+	if (pthread_create(&t->t, NULL, thread_main, t) != 0)
+		return -2;
+	t->started = 1;
+	fake_threads_live++;
+	return 0;
+}
+
+int ksceKernelWaitThreadEnd(SceUID id, int *stat, SceUInt *timeout)
+{
+	FakeThread *t = thread_of(id);
+
+	(void)stat; (void)timeout;
+	if (!t || !t->started)
+		return -1;
+	pthread_join(t->t, NULL);
+	t->started = 0;
+	fake_threads_live--;
+	return 0;
+}
+
+int ksceKernelDeleteThread(SceUID id)
+{
+	FakeThread *t = thread_of(id);
+
+	if (!t || t->started)
+		return -1;                          /* only an ended thread */
+	t->used = 0;
+	return 0;
+}
 
 /* ---- memory blocks --------------------------------------------------------- */
 static void *g_blocks[64];
@@ -134,6 +296,7 @@ void fakes_reset(void)
 	fake_memtype_calls = 0;
 	fake_memtype_from = NULL;
 	fake_memtype_above = 0xD000;
+	fake_thread_fail = fake_sema_fail = 0;
 }
 
 int fake_memtype = 0xD000, fake_memtype_calls;

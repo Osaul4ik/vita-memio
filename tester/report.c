@@ -95,9 +95,14 @@ static void plugin_text(const BenchResult *r, char *out, size_t cap)
 }
 
 /* "Small transfers too" when the test started. */
+static const char *onoff(int v)
+{
+	return v == 1 ? "on" : v == 0 ? "off" : "unknown";
+}
+
 static const char *small_text(const BenchResult *r)
 {
-	return r->plugin0.small == 1 ? "on" : r->plugin0.small == 0 ? "off" : "unknown";
+	return onoff(r->plugin0.small);
 }
 
 /* The plugin's verify mode in one line; empty when it does not apply. */
@@ -178,8 +183,10 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 	verify_text(res, vt, sizeof(vt));
 	if (vt[0])
 		put(&o, "%s\n", vt);
-	if (res->plugin_mode == BPM_ON)
+	if (res->plugin_mode == BPM_ON) {
 		put(&o, "plugin small transfers too: %s\n", small_text(res));
+		put(&o, "plugin overlapped reads: %s\n", onoff(res->plugin0.pipeline));
+	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
 	    (unsigned)res->profile.file_mib, (unsigned)res->profile.rounds);
@@ -343,6 +350,7 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		line(&s, "%s", vt);
 	if (res->plugin_mode == BPM_ON) {
 		line(&s, "small transfers too: %s", small_text(res));
+		line(&s, "overlapped reads: %s", onoff(res->plugin0.pipeline));
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	for (int i = 0; i < res->nruns; i++)

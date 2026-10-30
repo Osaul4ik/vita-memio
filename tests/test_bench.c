@@ -40,6 +40,7 @@ typedef struct Fake {
 	uint32_t passthru;           /* faster path declined: buffer busy           */
 	int      busy_every;         /* every Nth large read finds the buffer busy  */
 	int      small;              /* the plugin's "small transfers too"          */
+	int      pipeline;           /* ... and its "overlapped reads"              */
 	int      sf_corrupt;         /* small files read back wrong                 */
 	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
@@ -246,6 +247,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->mismatches = f->mismatches;
 	o->passthru = f->passthru;
 	o->small = f->small;
+	o->pipeline = f->pipeline;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -627,6 +629,7 @@ static void test_small_files(void)
 	/* all three measured, checked, and nothing left behind */
 	fake_init(&f, 1);
 	f.small = 1;
+	f.pipeline = 1;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && bench_integrity_ok(r));
 	for (int k = 0; k < r->nruns; k++)
@@ -638,6 +641,7 @@ static void test_small_files(void)
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "files create     files/s"));
 	CHECK(strstr(text, "plugin small transfers too: on"));
+	CHECK(strstr(text, "plugin overlapped reads: on\n"));
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "small transfers too: on");
@@ -1013,9 +1017,10 @@ static void test_screen_lines(void)
 	CHECK(strcmp(lines[3], "plugin as expected: PASS") == 0);
 	CHECK(strcmp(lines[4], "plugin verify: off") == 0);
 	CHECK(strcmp(lines[5], "small transfers too: off") == 0);
-	CHECK(strcmp(lines[6], "buffer busy: 0 large transfers went stock") == 0);
-	CHECK(strcmp(lines[7], "read  us/block: io 20.0  copy 4.0") == 0);
-	CHECK(strcmp(lines[8], "write us/block: io 30.0  copy 2.0") == 0);
+	CHECK(strcmp(lines[6], "overlapped reads: off") == 0);
+	CHECK(strcmp(lines[7], "buffer busy: 0 large transfers went stock") == 0);
+	CHECK(strcmp(lines[8], "read  us/block: io 20.0  copy 4.0") == 0);
+	CHECK(strcmp(lines[9], "write us/block: io 30.0  copy 2.0") == 0);
 	for (int i = 0; i < n; i++)
 		CHECK(strlen(lines[i]) < 60);                /* fits the screen */
 	for (int max = 0; max < 6; max++) {              /* a short array is never overrun */

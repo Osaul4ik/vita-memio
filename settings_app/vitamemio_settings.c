@@ -57,6 +57,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
  * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
 	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard", "small", "stats", "gpusafe",
+	"pipeline",
 };
 
 #define ROW_LIST(k) \
@@ -80,6 +81,7 @@ static const char X_GROUP[] =
 	ROW_TOGGLE("internal")
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">"
 		ROW_TOGGLE("gpusafe")
+		ROW_TOGGLE("pipeline")
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
@@ -228,6 +230,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_HUD_STYLE] = VM_I18N_ROW_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
+	[VM_KEY_PIPELINE] = VM_I18N_ROW_PIPELINE,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
@@ -235,6 +238,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_HUD_STYLE] = VM_I18N_HINT_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
+	[VM_KEY_PIPELINE] = VM_I18N_HINT_PIPELINE,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */

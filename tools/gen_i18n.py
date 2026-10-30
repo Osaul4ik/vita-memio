@@ -533,10 +533,52 @@ s("VM_I18N_HINT_GPUSAFE",
   no="Skriver etter hver raskere lesing dataene ut av prosessorens hurtigbuffer til minnet, slik den vanlige veien etterlater dem, så grafikkbrikken alltid leser dem riktig. Koster litt lesehastighet; sammenlign med testappen. Anbefales mens du spiller.",
   pl="Po każdym przyspieszonym odczycie zapisuje dane z pamięci podręcznej procesora do pamięci, tak jak zostawia je zwykła ścieżka, aby układ graficzny zawsze czytał je poprawnie. Kosztuje trochę prędkości odczytu; porównaj w aplikacji testowej. Zalecane podczas gry.",
   tr="Her hızlandırılmış okumadan sonra veriyi işlemci önbelleğinden belleğe, standart yolun bıraktığı gibi yazar; böylece grafik çipi onu her zaman doğru okur. Okuma hızından biraz götürür; test uygulamasıyla karşılaştırın. Oyun oynarken önerilir.")
+s("VM_I18N_ROW_PIPELINE",
+  en="Overlapped reads (experimental)",
+  engb="Overlapped reads (experimental)",
+  ja="読み込みの並行処理（試験的）",
+  fr="Lectures en parallèle (expérimental)",
+  es="Lecturas solapadas (experimental)",
+  de="Überlappendes Lesen (experimentell)",
+  it="Letture sovrapposte (sperimentale)",
+  nl="Overlappend lezen (experimenteel)",
+  pt="Leituras sobrepostas (experimental)",
+  ptbr="Leituras sobrepostas (experimental)",
+  ru="Параллельное чтение (эксперимент)",
+  ko="겹친 읽기 (실험적)",
+  zht="重疊讀取（實驗性）",
+  zhs="重叠读取（实验性）",
+  fi="Limitetyt luvut (kokeellinen)",
+  sv="Överlappade läsningar (experimentellt)",
+  da="Overlappende læsninger (eksperimentel)",
+  no="Overlappende lesinger (eksperimentell)",
+  pl="Nakładane odczyty (eksperymentalne)",
+  tr="Örtüşen okuma (deneysel)")
+s("VM_I18N_HINT_PIPELINE",
+  en="Splits each faster read in two: while the card reads the second part, the CPU already copies the first. Hides most of the copy (and of the GPU-safe cleaning). Uses a second buffer and a helper thread per storage. Compare with the tester app.",
+  ja="高速化された読み込みを2つに分け、カードが後半を読んでいる間にCPUが前半をコピーします。コピー（とGPU対応の書き出し）の時間の大部分が隠れます。ストレージごとに2つ目のバッファーと補助スレッドを使います。テスターで比較してください。",
+  fr="Coupe chaque lecture accélérée en deux : pendant que la carte lit la seconde partie, le processeur copie déjà la première. Masque l'essentiel de la copie (et du nettoyage GPU). Utilise un second tampon et un fil d'aide par stockage. Comparez avec l'application de test.",
+  es="Divide cada lectura acelerada en dos: mientras la tarjeta lee la segunda parte, la CPU ya copia la primera. Oculta casi toda la copia (y la limpieza para la GPU). Usa un segundo búfer y un hilo auxiliar por almacenamiento. Compáralo con la aplicación de prueba.",
+  de="Teilt jedes beschleunigte Lesen in zwei Teile: Während die Karte den zweiten liest, kopiert die CPU schon den ersten. Verbirgt den Großteil des Kopierens (und der GPU-Bereinigung). Nutzt pro Speicher einen zweiten Puffer und einen Hilfsthread. Mit der Tester-App vergleichen.",
+  it="Divide ogni lettura accelerata in due: mentre la scheda legge la seconda parte, la CPU copia già la prima. Nasconde quasi tutta la copia (e la pulizia per la GPU). Usa un secondo buffer e un thread di supporto per memoria. Confronta con l'app di test.",
+  nl="Splitst elke versnelde leesactie in tweeën: terwijl de kaart het tweede deel leest, kopieert de CPU het eerste al. Verbergt het grootste deel van het kopiëren (en van het GPU-opschonen). Gebruikt per opslag een tweede buffer en een hulpthread. Vergelijk met de test-app.",
+  pt="Divide cada leitura acelerada em duas: enquanto o cartão lê a segunda parte, o processador já copia a primeira. Esconde quase toda a cópia (e a limpeza para a GPU). Usa um segundo buffer e uma thread auxiliar por armazenamento. Compare com a aplicação de teste.",
+  ptbr="Divide cada leitura acelerada em duas: enquanto o cartão lê a segunda parte, a CPU já copia a primeira. Esconde quase toda a cópia (e a limpeza para a GPU). Usa um segundo buffer e uma thread auxiliar por armazenamento. Compare com o app de teste.",
+  ru="Делит каждое ускоренное чтение на две части: пока карта читает вторую, процессор уже копирует первую. Скрывает большую часть копирования (и очистки для GPU). Использует второй буфер и вспомогательный поток на каждое хранилище. Сравните в тестере.",
+  ko="가속된 읽기를 둘로 나눕니다. 카드가 뒷부분을 읽는 동안 CPU가 앞부분을 미리 복사합니다. 복사(와 GPU 안전 정리) 시간의 대부분이 가려집니다. 저장소마다 두 번째 버퍼와 보조 스레드를 씁니다. 테스터 앱으로 비교하세요.",
+  zht="將每次加速讀取分成兩段：記憶卡讀取後段時，CPU 已在複製前段。可隱藏大部分複製（與 GPU 安全寫回）時間。每個儲存裝置使用第二個緩衝區與一個輔助執行緒。請用測試程式比較。",
+  zhs="将每次加速读取分成两段：存储卡读取后段时，CPU 已在复制前段。可隐藏大部分复制（与 GPU 安全写回）时间。每个存储设备使用第二个缓冲区和一个辅助线程。请用测试程序比较。",
+  fi="Jakaa jokaisen nopeutetun luvun kahteen osaan: kun kortti lukee jälkimmäistä, suoritin kopioi jo ensimmäistä. Piilottaa suurimman osan kopioinnista (ja GPU-siivouksesta). Käyttää jokaiselle tallennustilalle toista puskuria ja apusäiettä. Vertaa testisovelluksella.",
+  sv="Delar varje snabbare läsning i två: medan kortet läser den andra delen kopierar processorn redan den första. Döljer det mesta av kopieringen (och GPU-rensningen). Använder en andra buffert och en hjälptråd per lagring. Jämför med testappen.",
+  da="Deler hver hurtigere læsning i to: mens kortet læser anden del, kopierer processoren allerede den første. Skjuler det meste af kopieringen (og GPU-rensningen). Bruger en ekstra buffer og en hjælpetråd pr. lager. Sammenlign med testappen.",
+  no="Deler hver raskere lesing i to: mens kortet leser den andre delen, kopierer prosessoren allerede den første. Skjuler det meste av kopieringen (og GPU-rensingen). Bruker en ekstra buffer og en hjelpetråd per lagring. Sammenlign med testappen.",
+  pl="Dzieli każdy przyspieszony odczyt na dwie części: gdy karta czyta drugą, procesor już kopiuje pierwszą. Ukrywa większość kopiowania (i czyszczenia dla GPU). Używa drugiego bufora i wątku pomocniczego na każdą pamięć. Porównaj w aplikacji testowej.",
+  tr="Her hızlandırılmış okumayı ikiye böler: kart ikinci kısmı okurken işlemci ilkini kopyalar. Kopyalamanın (ve GPU temizliğinin) çoğunu gizler. Her depolama için ikinci bir tampon ve yardımcı bir iş parçacığı kullanır. Test uygulamasıyla karşılaştırın.",
+  engb="Splits each faster read in two: while the card reads the second part, the CPU already copies the first. Hides most of the copy (and of the GPU-safe cleaning). Uses a second buffer and a helper thread per storage. Compare with the tester app.")
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE', 'VM_I18N_ROW_PIPELINE', 'VM_I18N_HINT_PIPELINE']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

@@ -18,6 +18,11 @@ void vm_stage_apply(const VmSettings *s);
 /* Called once a second by the worker (allocates the verify buffer on demand). */
 void vm_stage_worker_tick(void);
 
+/* Called (from the hook, after the request is done with the buffers) when a
+ * device has an error or a verify mismatch, so the worker can log it at once
+ * instead of polling. NULL: nothing is called. */
+void vm_stage_on_problem(void (*fn)(void));
+
 int  vm_stage_verify_ready(void);
 
 /* Memory card slow mode: 1 on, 0 off, -1 unknown. Read only. */

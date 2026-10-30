@@ -1258,6 +1258,39 @@ static void test_pipeline_released_while_reading(void)
 	free(u);
 }
 
+/* An error or a verify mismatch wakes the worker (to log it at once); a
+ * transfer that went well does not. */
+static int g_problem_calls;
+static void count_problem(void) { g_problem_calls++; }
+
+static void test_problems_wake_the_worker(void)
+{
+	uint8_t *u = user_buf(100);
+
+	reset();
+	g_problem_calls = 0;
+	vm_stage_on_problem(count_problem);
+	CHECK(rd(u, 0, 100) == 0 && wr(u, 0, 100, REF_RD) == 0 && g_problem_calls == 0);
+	fail_at_call = io_calls + 1;                     /* the next read fails */
+	CHECK(rd(u, 0, 100) == 0 && g_problem_calls == 1 && g_dev[M].fallback);
+	reset();
+	g_problem_calls = 0;
+	vm_stage_on_problem(count_problem);
+	g_shadow = malloc(STAGE_BYTES);
+	g_verify = 1;
+	corrupt_staged = 1;                              /* a mismatch */
+	CHECK(rd(u, 0, 100) == 0 && g_dev[M].st.mismatches == 1 && g_problem_calls == 1);
+	corrupt_staged = 0;
+	g_verify = 0;
+	free(g_shadow);
+	g_shadow = NULL;
+	vm_stage_on_problem(NULL);                       /* none: nothing called */
+	fail_at_call = io_calls + 1;
+	g_dev[M].fallback = 0;
+	CHECK(rd(u, 0, 100) == 0 && g_problem_calls == 1);
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1277,6 +1310,7 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
+	RUN(test_problems_wake_the_worker);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

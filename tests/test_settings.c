@@ -250,6 +250,29 @@ static void test_gpusafe_default_and_stored_value(void)
 	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
 }
 
+/* A save to do keeps the worker waking: pending after a change, not after a
+ * save, pending again while a failed save is retried, not once it gives up. */
+static void test_pending(void)
+{
+	clean();
+	vm_settings_init();
+	vm_settings_flush();
+	CHECK(!vm_settings_pending());
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK && vm_settings_pending());
+	vm_settings_flush();
+	CHECK(!vm_settings_pending());
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK && !vm_settings_pending());   /* no change */
+	fake_write_short = 1;
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 0) == VM_OK);
+	for (int i = 0; i < 5; i++) {
+		vm_settings_flush();
+		CHECK(vm_settings_pending());                /* retried, five times */
+	}
+	vm_settings_flush();
+	CHECK(!vm_settings_pending());                   /* gave up until the next change */
+	fake_write_short = 0;
+}
+
 /* A file with more keys than this build knows (the experimental build wrote 8):
  * the check covers all of them, the known ones load, the rest is ignored. */
 static void test_file_with_more_keys(void)
@@ -378,6 +401,7 @@ int main(void)
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
 	RUN(test_gpusafe_default_and_stored_value);
+	RUN(test_pending);
 	RUN(test_file_with_more_keys);
 	RUN(test_one_bad_value_keeps_the_rest);
 	RUN(test_other_version_gives_defaults);

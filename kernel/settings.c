@@ -133,6 +133,11 @@ void vm_settings_copy(VmSettings *out)
 	memcpy(out, (const void *)&g_vm_settings, sizeof(*out));
 }
 
+int vm_settings_pending(void)
+{
+	return g_dirty;
+}
+
 void vm_settings_flush(void)
 {
 	if (!g_dirty)

@@ -316,6 +316,7 @@ static int take(Dev *d, int mine, uint32_t nsec)
 #define PIPE_CPU_SYSTEM    0x00080000 /* SCE_KERNEL_CPU_MASK_SYSTEM: core 3      */
 
 static volatile int g_pipeline;              /* the setting                    */
+static void (*volatile g_on_problem)(void);  /* wakes the worker to log       */
 static volatile uint32_t g_pipe_reads;       /* split reads, for the log       */
 static volatile uint32_t g_pipe_reads3;      /* ... of them in three parts      */
 
@@ -634,6 +635,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		verify = 0;
 	}
 	const int stats = g_stats;
+	int problem = 0;                    /* an error or a mismatch: wake the worker */
 	const int clean = !write && g_gpu_safe && g_dcache_clean;
 	const int pipe = !write && !verify && g_pipeline &&
 	                 __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
@@ -752,6 +754,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			if (memcmp(p, g_shadow, bytes) != 0) {
 				d->st.mismatches++;
 				d->fallback = 1;
+				problem = 1;
 				if (write) {
 					/* rewrite this chunk the stock way, from the caller's data */
 					ret = io(ref, part, sector, p, n);
@@ -780,11 +783,14 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	if (ret < 0) {
 		d->st.errors++;
 		d->fallback = 1;
+		problem = 1;
 	} else if (write) {
 		d->st.writes++;
 	} else {
 		d->st.reads++;
 	}
+	if (problem && g_on_problem)
+		g_on_problem();
 	/* Anything not done on the faster path (error, mismatch) is done stock. */
 	return left ? io(ref, part, sector, p, left) : ret;
 }
@@ -953,6 +959,11 @@ void vm_stage_apply(const VmSettings *s)
 	g_verify = s->verify ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
+}
+
+void vm_stage_on_problem(void (*fn)(void))
+{
+	g_on_problem = fn;
 }
 
 void vm_stage_worker_tick(void)

@@ -10,7 +10,7 @@
  *   - allocate the staging buffers and install the I/O hooks (stage.c), then
  *     load and apply the saved settings (settings.c);
  *   - run the worker (every second while the HUD is on or the boot guard
- *     waits, otherwise every 30 s, and at once when a setting changes):
+ *     waits, otherwise only when there is something to do, see g_wake):
  *     saves settings, allocates the verify buffer on demand, feeds the HUD
  *     (hud.c, installed only once the HUD is first switched on), logs
  *     problems, follows the logging switch, and clears the boot guard once
@@ -78,12 +78,17 @@ static volatile int g_run = 1;
 static volatile uint32_t g_uptime;   /* seconds since the module started */
 static uint64_t g_t0_us;             /* ... from this system time          */
 
-/* The worker sleeps on g_wake: 1 s while it has something to do every second
- * (the HUD shows live speeds, the boot guard waits for the home screen),
- * otherwise 30 s. A changed setting wakes it at once, so it is saved and
- * applied (buffers, helper threads) without waiting. */
+/* The worker sleeps on g_wake until it has something to do:
+ *   - every second while the HUD is on (live speeds) or the boot guard waits
+ *     for the home screen;
+ *   - every 5 s while a failed settings save is to be retried;
+ *   - once a minute while the log is on (the stage's statistics line);
+ *   - otherwise not at all, until it is woken: by a changed setting (saved
+ *     and applied at once: buffers, helper threads) or by a device error or
+ *     verify mismatch (logged at once). */
 #define VM_WORKER_FAST_US   (1000u * 1000u)
-#define VM_WORKER_IDLE_US   (30u * 1000u * 1000u)
+#define VM_WORKER_RETRY_US  (5u * 1000u * 1000u)
+#define VM_WORKER_LOG_US    (60u * 1000u * 1000u)
 static SceUID g_wake = -1;
 static volatile int g_guard_done;    /* the boot guard is settled            */
 
@@ -367,13 +372,17 @@ static int worker(SceSize args, void *argp)
 	memset(prev, 0, sizeof(prev));
 	while (g_run) {
 		VmDevState now[VM_DEV_COUNT];
-		/* Every second only while the HUD is on or the boot guard waits. */
-		SceUInt wait = (g_disabled == VM_DIS_NONE || g_disabled == VM_DIS_HOOKS) &&
-		               (!g_guard_done || g_vm_settings.hud != VM_HUD_OFF)
-		               ? VM_WORKER_FAST_US : VM_WORKER_IDLE_US;
+		const int running = g_disabled == VM_DIS_NONE || g_disabled == VM_DIS_HOOKS;
+		SceUInt wait = 0;
 
+		if (running && (!g_guard_done || g_vm_settings.hud != VM_HUD_OFF))
+			wait = VM_WORKER_FAST_US;
+		else if (vm_settings_pending())
+			wait = VM_WORKER_RETRY_US;
+		else if (g_vm_settings.log && running)
+			wait = VM_WORKER_LOG_US;
 		if (g_wake >= 0)
-			ksceKernelWaitSema(g_wake, 1, &wait);   /* woken early, or timed out */
+			ksceKernelWaitSema(g_wake, 1, wait ? &wait : NULL);   /* 0: until woken */
 		else
 			ksceKernelDelayThread(VM_WORKER_FAST_US);
 		if (!g_run)
@@ -496,6 +505,7 @@ static void start_worker(void)
 	g_wake = ksceKernelCreateSema("SceVitaMemioWake", 0, 0, 1, NULL);
 	if (g_wake < 0)
 		g_wake = -1;                      /* then the worker wakes every second */
+	vm_stage_on_problem(worker_wake);     /* errors wake it (no-op without g_wake) */
 	/* On the system core, like the overlapped-read helper, so no thread of
 	 * the plugin runs on a game's cores; any core if that is refused. */
 	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0,
@@ -558,6 +568,7 @@ int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 	/* Every state runs the worker; the rest releases only what was set up. */
+	vm_stage_on_problem(NULL);
 	g_run = 0;
 	worker_wake();
 	if (g_worker >= 0)

@@ -20,5 +20,6 @@ void vm_settings_init(void);                 /* defaults, then the saved file  *
 int  vm_settings_set(int key, int value);    /* validate + apply; VM_ERR_ARG   */
 void vm_settings_copy(VmSettings *out);
 void vm_settings_flush(void);                /* save if changed (worker only)  */
+int  vm_settings_pending(void);              /* a save still to do or retry    */
 
 #endif /* VITAMEMIO_SETTINGS_H */

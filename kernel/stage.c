@@ -476,10 +476,9 @@ static int pipe_helper(SceSize args, void *argp)
 		if (d->pipe_quit)
 			break;
 		__sync_synchronize();               /* the job before its fields */
-		if (g_stats)
-			t0 = ksceKernelGetSystemTimeLow();
+		t0 = ksceKernelGetSystemTimeLow();   /* the plan learns from it */
 		d->job_ret = d->job_io(d->job_ref, d->job_part, d->job_sector, d->job_buf, d->job_n);
-		d->job_us = g_stats ? ksceKernelGetSystemTimeLow() - t0 : 0;
+		d->job_us = ksceKernelGetSystemTimeLow() - t0;
 		__sync_synchronize();               /* the result before the signal */
 		ksceKernelSignalSema(d->sem_done, 1);
 	}
@@ -627,18 +626,20 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			 * while this thread copies the one before. Odd parts land in
 			 * the second buffer, even ones in the staging buffer, which is
 			 * free again once part 0 (or 2) is copied. */
-			uint32_t off = 0, io_us = 0, cp_us = 0, cp0_us = 0, last_us = 0;
+			uint32_t off = 0, io_us = 0, cp_us = 0, cp0_us = 0, last_us = 0, h0, h1;
 			void *cur = d->buf;
 			int i;
 
+			/* Overlapped reads time themselves, whatever Statistics says:
+			 * the plan learns its costs from these few clock reads. */
+			h0 = stats ? t1 : ksceKernelGetSystemTimeLow();
 			ret = io(ref, part, sector, d->buf, sz[0]);
 			if (ret < 0)
 				break;
-			if (stats)
-				t2 = ksceKernelGetSystemTimeLow();
+			h1 = ksceKernelGetSystemTimeLow();
 			for (i = 1; i <= k; i++) {
 				void *next = (i & 1) ? d->buf2 : d->buf;
-				uint32_t c0 = 0;
+				uint32_t c0, c;
 
 				if (i < k) {
 					d->job_io = io;
@@ -650,18 +651,14 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 					__sync_synchronize();
 					ksceKernelSignalSema(d->sem_go, 1);
 				}
-				if (stats)
-					c0 = ksceKernelGetSystemTimeLow();
+				c0 = ksceKernelGetSystemTimeLow();
 				vm_copy_from_stage(p + off * 512, cur, sz[i - 1] * 512);
 				if (clean)
 					clean_out(p + off * 512, sz[i - 1] * 512);
-				if (stats) {
-					uint32_t c = ksceKernelGetSystemTimeLow() - c0;
-
-					cp_us += c;
-					if (i == 1)
-						cp0_us = c;
-				}
+				c = ksceKernelGetSystemTimeLow() - c0;
+				cp_us += c;
+				if (i == 1)
+					cp0_us = c;
 				off += sz[i - 1];
 				if (i < k) {
 					ksceKernelWaitSema(d->sem_done, 1, NULL);
@@ -679,13 +676,13 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			g_pipe_reads++;
 			if (k > 2)
 				g_pipe_reads3++;
-			if (stats) {
+			pipe_learn_io(d, h1 - h0, sz[0], last_us, sz[k - 1]);
+			pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp0_us, sz[0],
+			           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
+			if (stats) {                /* the tester's figures */
 				d->tm.rd_sectors += n;
-				d->tm.rd_io_us += (t2 - t1) + io_us;
+				d->tm.rd_io_us += (h1 - h0) + io_us;
 				d->tm.rd_copy_us += cp_us;
-				pipe_learn_io(d, t2 - t1, sz[0], last_us, sz[k - 1]);
-				pipe_learn(&d->est_cp_ns[clean ? 1 : 0], cp0_us, sz[0],
-				           clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS);
 			}
 		} else {
 			ret = io(ref, part, sector, d->buf, n);

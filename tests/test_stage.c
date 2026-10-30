@@ -890,15 +890,22 @@ static void test_pipeline_gpu_safe(void)
 	{
 		uint8_t *v = user_buf(1100);
 
-		g_stats = 0;                            /* the fake timings teach nothing useful */
+		g_stats = 0;                            /* the tester's figures off ... */
 		for (int k = 0; k < 150; k++) {
 			uint32_t n = 128 + (uint32_t)(k * 53) % 900, at = (uint32_t)(k * 97) % 2000;
+			Dev *dm = &g_dev[M];
+
+			/* ... the plan still learns, from the fake clock: put the
+			 * console's costs back before each read */
+			dm->est_io_ns = 25000; dm->est_cmd_ns = 600000;
+			dm->est_cp_ns[0] = 4200; dm->est_cp_ns[1] = 11100;
 
 			memset(v, 0, n * 512);
 			CHECK(rd(v, at, n) == 0);
 			CHECK(memcmp(v, disk + (size_t)at * 512, (size_t)n * 512) == 0);
 		}
 		CHECK(g_pipe_reads3 > 100 && g_dev[M].st.errors == 0);
+		CHECK(g_dev[M].tm.rd_sectors == 512);   /* only the first read, with Statistics on */
 		free(v);
 	}
 	vm_stage_fini();
@@ -1086,6 +1093,33 @@ static void test_every_switch_on_the_fly(void)
 	free(u);
 }
 
+/* Overlapped reads learn their costs with Statistics off too (they read the
+ * clock themselves); Statistics only adds the tester's figures. Before
+ * anything is learnt the defaults give 2 parts without GPU-safe, 3 with. */
+static void test_pipeline_learns_without_statistics(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	uint32_t sz[PIPE_MAX_PARTS];
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 0);
+	s.stats = 0;
+	vm_stage_apply(&s);
+	CHECK(d->est_cp_ns[0] == 0 && d->est_cp_ns[1] == 0 && d->est_cmd_ns == 0);
+	CHECK(pipe_plan(d, 512, 0, sz) == 2 && pipe_plan(d, 512, 1, sz) == 3);
+	copy_cost_us = 300;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && memcmp(u, disk, 512 * 512) == 0);
+	CHECK(d->est_cp_ns[0] != 0 && d->est_cp_ns[1] == 0);   /* learnt, the plain one only */
+	CHECK(d->tm.rd_sectors == 0 && d->rd_bytes == 0);        /* no tester figures */
+	copy_cost_us = 0;
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1102,6 +1136,7 @@ int main(void)
 	RUN(test_pipeline_any_core);
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
+	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

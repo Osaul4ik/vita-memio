@@ -101,11 +101,11 @@ Build artifacts (GitHub Actions, or `make build`): `vitamemio_kernel.skprx`, `vi
 | Row | What it does | Default |
 |---|---|---|
 | GPU-safe reads | After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it (see below). Costs some read speed for reads into ordinary memory; non-cacheable memory (such as the graphics memory) takes the standard path anyway | Off |
-| Overlapped reads (experimental) | Splits each faster read into two or three parts: while the card reads the next part, the CPU already copies the one before, hiding most of the copy (and of the GPU-safe cleaning). The number and sizes of the parts follow the measured costs of the card, the copy and each card command. Uses a second 128 KiB buffer and a helper thread per storage (on the system core, which games do not use), made when it is first switched on and kept until the console restarts | Off |
+| Overlapped reads (experimental) | Splits each faster read into two or three parts: while the card reads the next part, the CPU already copies the one before, hiding most of the copy (and of the GPU-safe cleaning). The number and sizes of the parts follow the measured costs of the card, the copy and each card command. Before anything is measured: two parts, three with GPU-safe reads. Uses a second 128 KiB buffer and a helper thread per storage (on the system core, which games do not use), made when it is first switched on and kept until the console restarts | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test it with Verify transfers | Off |
 | Verify transfers | Reads every faster transfer again the standard way and compares. Slower; for checking | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
-| Statistics | Times every faster transfer (system call vs. copy) and counts the data moved, for the tester. Off saves that work on every transfer; the HUD counts its own speeds while it is on | On |
+| Statistics | Times every faster transfer (system call vs. copy) and counts the data moved, for the tester. Off saves that work on every transfer; the HUD counts its own speeds while it is on, and overlapped reads time themselves either way to size their parts | On |
 | Storage HUD | Live speed of each storage in use, in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
 | HUD style | Classic (white text) or PSVshell (a black panel with coloured values) | PSVshell |
 | Reset safe mode | Ends safe mode; vita-memio starts normally after the next restart | |

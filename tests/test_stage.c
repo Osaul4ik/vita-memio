@@ -100,7 +100,7 @@ static void reset(void)
 	g_offload_state = g_offload_logged = 0;
 	g_offload_type = 0;
 	g_offload_err = 0;
-	g_off_reads = g_off_kib = g_off_maperr = 0;
+	g_off_reads = g_off_kib = g_off_maperr = g_off_same = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_cp_sys_kib = g_cp_game_kib = 0;
@@ -1522,13 +1522,19 @@ static void test_offload(void)
 			clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
 			CHECK(rd(u, at, n) == 0);
 			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
-			CHECK(copies_here == 0 && copies_elsewhere >= 1);    /* all on the copier */
-			CHECK(fake_usermap_calls == maps + 1 && fake_usermap_live == 0);   /* one, unmapped */
+			if (n >= OFFLOAD_MIN_SECTORS) {
+				CHECK(copies_here == 0 && copies_elsewhere >= 1);    /* all on the copier */
+				CHECK(fake_usermap_calls == maps + 1 && fake_usermap_live == 0);   /* one, unmapped */
+			} else {
+				/* under 64 KiB: copied by the caller, nothing mapped */
+				CHECK(copies_here >= 1 && copies_elsewhere == 0);
+				CHECK(fake_usermap_calls == maps);
+			}
 			CHECK(clean_lo <= (uintptr_t)u && clean_hi >= (uintptr_t)u + (size_t)n * 512);
 			CHECK(sems_empty(d));
 		}
 		CHECK(g_offload_state == 1 && fake_meminfo_calls == 1);   /* checked once */
-		CHECK(g_off_reads >= sizeof(sizes) / sizeof(sizes[0]) && d->st.errors == 0);
+		CHECK(g_off_reads >= 6 && d->st.errors == 0);           /* the six of 64 KiB and up */
 		CHECK(g_cp_game_kib > 0 && g_cp_core_kib[0] > 0);       /* noted by the copier */
 		if (pipeline)
 			CHECK(g_pipe_reads > 0);                            /* parts, overlapped */
@@ -1547,17 +1553,22 @@ static void test_offload(void)
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads == 1);
+	/* the same buffer again (inside the last one): counted, for the log */
+	CHECK(g_off_same == 0);
+	CHECK(rd(u + 512, 1, 128) == 0 && memcmp(u + 512, disk + 512, 128 * 512) == 0);
+	CHECK(g_off_same == 1);
+	CHECK(rd(u, 0, 300) == 0 && g_off_same == 1);   /* larger than the last one */
 	/* a system thread's read: copied where it is, nothing mapped */
 	fake_pid = KERNEL_PID;
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
-	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 1);
+	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 3);
 	/* off: as before */
 	fake_pid = 0x42;
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
 	copies_here = copies_elsewhere = 0;
-	CHECK(rd(u, 0, 256) == 0 && copies_elsewhere == 0 && fake_usermap_calls == 1);
+	CHECK(rd(u, 0, 256) == 0 && copies_elsewhere == 0 && fake_usermap_calls == 3);
 	vm_stage_fini();
 
 	/* the mapping fails: the caller copies; tried again on the next request */

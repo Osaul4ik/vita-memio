@@ -889,8 +889,88 @@ static void test_pipeline_setup_fails(void)
 		CHECK(!d->pipe_made);                    /* not retried */
 		io_calls = 0;
 		CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && memcmp(u, disk, 512 * 512) == 0);
+		/* switched off and on again: a fresh try, which now works */
+		fake_thread_fail = fake_sema_fail = 0;
+		s.pipeline = 0;
+		vm_stage_apply(&s);
+		s.pipeline = 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(d->pipe_made && d->pipe_ready && !d->pipe_failed);
+		io_calls = 0;
+		CHECK(rd(u, 0, 512) == 0 && io_calls == 2 && memcmp(u, disk, 512 * 512) == 0);
 		vm_stage_fini();
+		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
 	}
+	g_live = saved_live;
+	free(u);
+}
+
+/* Every setting takes effect on the next transfer, in both directions, with
+ * no restart: the devices, small transfers, statistics, GPU-safe reads,
+ * verify (its buffer within a worker tick) and overlapped reads (its helper
+ * within a worker tick). */
+static void test_every_switch_on_the_fly(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	reset();
+	g_live = 1;
+	memset(&s, 0, sizeof(s));
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && last_buf == u);                     /* device off */
+	s.memcard = 1; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && last_buf == staging);               /* on */
+	s.memcard = 0; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && last_buf == u);                     /* off again */
+	s.memcard = 1; vm_stage_apply(&s);
+
+	CHECK(rd(u, 0, 8) == 0 && last_buf == u);                       /* small: stock */
+	s.small = 1; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 8) == 0 && last_buf == staging);
+	s.small = 0; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 8) == 0 && last_buf == u);
+
+	fake_time_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && fake_time_calls == 0);              /* stats off */
+	s.stats = 1; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && fake_time_calls > 0);
+	s.stats = 0; vm_stage_apply(&s);
+	fake_time_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && fake_time_calls == 0);
+
+	g_dcache_clean = fake_clean;
+	clean_calls = 0; clean_user = NULL;
+	CHECK(rd(u, 0, 512) == 0 && clean_calls == 0);                  /* GPU-safe off */
+	s.gpusafe = 1; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && clean_calls == 1);
+	s.gpusafe = 0; vm_stage_apply(&s);
+	CHECK(rd(u, 0, 512) == 0 && clean_calls == 1);
+
+	s.verify = 1; vm_stage_apply(&s);
+	vm_stage_worker_tick();                                         /* its buffer */
+	io_calls = 0;
+	CHECK(g_shadow && rd(u, 0, 512) == 0 && io_calls == 2 && d->st.verified == 1);
+	s.verify = 0; vm_stage_apply(&s);
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 1);
+
+	s.pipeline = 1; vm_stage_apply(&s);
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 1);                     /* no helper yet */
+	vm_stage_worker_tick();
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 2);                     /* split */
+	s.pipeline = 0; vm_stage_apply(&s);
+	io_calls = 0;
+	CHECK(rd(u, 0, 512) == 0 && io_calls == 1);
+	CHECK(memcmp(u, disk, 512 * 512) == 0 && d->st.errors == 0);
+
+	vm_stage_fini();
+	CHECK(fake_threads_live == 0 && g_shadow == NULL);
 	g_live = saved_live;
 	free(u);
 }
@@ -909,6 +989,7 @@ int main(void)
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);
 	RUN(test_pipeline_setup_fails);
+	RUN(test_every_switch_on_the_fly);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

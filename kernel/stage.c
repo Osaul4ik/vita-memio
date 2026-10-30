@@ -743,8 +743,11 @@ void vm_stage_apply(const VmSettings *s)
 	g_stats = s->stats ? 1 : 0;
 	g_gpu_safe = s->gpusafe ? 1 : 0;
 	if (s->pipeline != g_pipeline) {
-		for (int i = 0; i < VM_DEV_COUNT; i++)
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			g_dev[i].est_cp_ns = 0;   /* measured afresh */
+			if (s->pipeline)
+				g_dev[i].pipe_failed = 0;   /* switching it on again is a fresh try */
+		}
 	}
 	g_pipeline = s->pipeline ? 1 : 0;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;

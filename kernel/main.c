@@ -438,9 +438,18 @@ int module_start(SceSize argc, const void *args);
 /* Entry symbol for the linker; taiHEN itself enters through module_start. */
 int _start(SceSize argc, const void *args) __attribute__ ((weak, alias("module_start")));
 
+/* SCE_KERNEL_CPU_MASK_SYSTEM: the fourth core, which games do not run on. */
+#define VM_CPU_SYSTEM  0x00080000
+
 static void start_worker(void)
 {
-	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0, NULL);
+	/* On the system core, like the overlapped-read helper, so no thread of
+	 * the plugin runs on a game's cores; any core if that is refused. */
+	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0,
+	                                  VM_CPU_SYSTEM, NULL);
+	if (g_worker < 0)
+		g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0,
+		                                  NULL);
 	if (g_worker >= 0)
 		ksceKernelStartThread(g_worker, 0, NULL);
 	else

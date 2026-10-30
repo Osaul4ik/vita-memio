@@ -1232,3 +1232,25 @@
 	"Always",   /* engb */
 	"Her zaman",   /* tr */
 },
+[VM_I18N_ITEM_OFF_ALL] = {
+	"常に+非キャッシュ",   /* ja */
+	"Always + uncached",   /* en */
+	"Toujours + non caché",   /* fr */
+	"Siempre + sin caché",   /* es */
+	"Immer + ungecacht",   /* de */
+	"Sempre + non in cache",   /* it */
+	"Altijd + ongecachet",   /* nl */
+	"Sempre + sem cache",   /* pt */
+	"Всегда + некэшируемые",   /* ru */
+	"항상 + 비캐시",   /* ko */
+	"一律 + 非快取",   /* zht */
+	"始终 + 非缓存",   /* zhs */
+	"Aina + välimuistiton",   /* fi */
+	"Alltid + ocachat",   /* sv */
+	"Altid + ucachet",   /* da */
+	"Alltid + ubufret",   /* no */
+	"Zawsze + bez cache",   /* pl */
+	"Sempre + sem cache",   /* ptbr */
+	"Always + uncached",   /* engb */
+	"Her zaman + önbelleksiz",   /* tr */
+},

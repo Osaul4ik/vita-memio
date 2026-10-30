@@ -109,7 +109,8 @@ static const char *pipe_text(int v)
 static const char *offload_text(int v)
 {
 	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_GPU ? "with GPU-safe reads only"
-	     : v == VM_OFFLOAD_ALWAYS ? "always" : "unknown";
+	     : v == VM_OFFLOAD_ALWAYS ? "always"
+	     : v == VM_OFFLOAD_ALL ? "always, uncached reads too" : "unknown";
 }
 
 /* The same, short enough for the screen. */
@@ -402,7 +403,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
-			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only" : "always");
+			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only"
+			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "always + uncached" : "always");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{

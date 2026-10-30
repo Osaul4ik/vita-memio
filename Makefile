@@ -21,6 +21,14 @@ CMAKE_ARGS ?=
 # Pinned so every build uses the same toolchain (VitaSDK 2026.08, GCC 15.2).
 VITASDK_IMAGE ?= vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
 
+# Which commit is built (VM_BUILD_STR), read here, outside the Docker image
+# (which may have no git, or not trust the mounted checkout).
+GIT_HASH := $(shell h=$$(git rev-parse --short=7 HEAD 2>/dev/null) && \
+              { git diff --quiet HEAD 2>/dev/null && echo $$h || echo $$h-dirty; })
+ifneq ($(GIT_HASH),)
+CMAKE_ARGS += -DVM_GIT_HASH=$(GIT_HASH)
+endif
+
 MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio.suprx
 TESTER_VPK := $(BUILD)/vitamemio_tester.vpk
 FTP      = ftp://$(VITA_IP):1337

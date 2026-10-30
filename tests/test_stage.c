@@ -1426,6 +1426,61 @@ static void test_plan_quick_check(void)
 	CHECK(quick > 500 && split > 5000);        /* both cases well covered */
 }
 
+/* Diagnostics for moving the copy off the caller's core (log on only): the
+ * KiB copied per core and per kind of caller, and a probe that maps a game's
+ * buffer into the kernel with a few permission values, reads it through the
+ * mapping, compares and unmaps - never writes. Off with the log off; never
+ * for a system caller (nothing to map). */
+static void test_copy_diagnostics(void)
+{
+	uint8_t *u = user_buf(128);
+
+	reset();
+	g_log_diag = 0;
+	g_probe_runs = 0;
+	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
+	g_cp_sys_kib = g_cp_game_kib = 0;
+	g_probe_want = 1;
+	CHECK(rd(u, 0, 128) == 0);
+	CHECK(g_cp_core_kib[0] == 0 && fake_usermap_calls == 0);     /* log off: nothing */
+
+	g_log_diag = 1;
+	CHECK(rd(u, 0, 128) == 0);                                 /* a system caller */
+	CHECK(g_cp_core_kib[0] == 64 && g_cp_sys_kib == 64 && g_cp_game_kib == 0);
+	CHECK(fake_usermap_calls == 0 && g_probe_runs == 0);       /* nothing to map */
+
+	fake_pid = 0x42;                                           /* a game */
+	g_probe_want = 1;
+	CHECK(rd(u, 0, 128) == 0 && memcmp(u, disk, 128 * 512) == 0);
+	CHECK(g_cp_game_kib == 64 && g_cp_core_kib[0] == 128);
+	CHECK(g_probe_runs == 1 && !g_probe_want && g_probe_kib == 64);
+	CHECK(fake_usermap_calls == PROBE_PERMS && fake_usermap_live == 0);   /* all unmapped */
+	for (int i = 0; i < PROBE_PERMS; i++)
+		CHECK(g_probe_ret[i] == 0 && g_probe_same[i] == 1);
+	CHECK(rd(u, 0, 128) == 0 && g_probe_runs == 1);            /* once per request */
+
+	/* refused for some permissions: their error kept, nothing read */
+	fake_usermap_err = (int)0x80020001;
+	fake_usermap_deny = (1 << 1) | (1 << 6);
+	g_probe_want = 1;
+	CHECK(rd(u, 0, 128) == 0 && g_probe_runs == 2 && fake_usermap_live == 0);
+	CHECK(g_probe_ret[0] == (int)0x80020001 && g_probe_same[0] == 0);
+	CHECK(g_probe_ret[1] == 0 && g_probe_same[1] == 1);
+	CHECK(g_probe_ret[3] == (int)0x80020001 && g_probe_same[3] == 0);
+
+	/* the worker asks for a probe each tick while the log is on, up to 10 */
+	g_probe_want = 0;
+	vm_stage_worker_tick();
+	CHECK(g_probe_want == 1);
+	g_probe_want = 0;
+	g_probe_runs = 10;
+	vm_stage_worker_tick();
+	CHECK(g_probe_want == 0);
+	g_log_diag = 0;
+	g_probe_runs = 0;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1438,6 +1493,7 @@ int main(void)
 	RUN(test_pipeline_reads);
 	RUN(test_helper_runs_ahead);
 	RUN(test_plan_quick_check);
+	RUN(test_copy_diagnostics);
 	RUN(test_pipeline_gpu_safe);
 	RUN(test_pipeline_errors);
 	RUN(test_pipeline_not_with_verify);

@@ -13,7 +13,8 @@ extern int fake_memtype;              /* ksceKernelGetMemBlockMemtypeByAddr()   
 extern int fake_memtype_calls;
 extern int fake_thread_fail, fake_sema_fail;  /* thread / the n-th semaphore fails */
 extern int fake_threads_live, fake_semas_live;
-int fake_sema_count(int id);       /* a semaphore's count now, or -1 */
+int fake_sema_count(int id);
+extern int fake_pid, fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;       /* a semaphore's count now, or -1 */
 extern int fake_thread_fail_masked, fake_thread_last_mask;  /* a core mask refused / used */
 extern const void *fake_memtype_from; /* from this address on (if set) ...          */
 extern int fake_memtype_above;        /* ... the memory type is this one             */

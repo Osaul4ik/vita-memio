@@ -301,8 +301,45 @@ void fakes_tmpdir_remove(void)
 	}
 }
 
+/* The caller's process (KERNEL_PID: a system thread) and the user map: a
+ * mapping is the buffer itself (page = its 4 KiB page, offset inside it),
+ * or fails with fake_usermap_err for the permissions in fake_usermap_deny. */
+int fake_pid = 0x10005;
+int fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
+SceUID ksceKernelGetProcessId(void)
+{
+	return fake_pid;
+}
+
+SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const void *user_buf,
+                             SceSize size, void **kernel_page, SceSize *kernel_size,
+                             SceUInt32 *kernel_offset)
+{
+	uintptr_t a = (uintptr_t)user_buf, page = a & ~(uintptr_t)4095;
+
+	(void)pid; (void)name;
+	fake_usermap_calls++;
+	if (fake_usermap_err && permission >= 0 && permission < 32 &&
+	    (fake_usermap_deny & (1 << permission)))
+		return fake_usermap_err;
+	*kernel_page = (void *)page;
+	*kernel_offset = (SceUInt32)(a - page);
+	*kernel_size = (SceSize)((a - page + size + 4095) & ~(uintptr_t)4095);
+	fake_usermap_live++;
+	return 0x4000 + permission;
+}
+
+int ksceKernelUserUnmap(SceUID uid)
+{
+	(void)uid;
+	fake_usermap_live--;
+	return 0;
+}
+
 void fakes_reset(void)
 {
+	fake_pid = 0x10005;
+	fake_usermap_err = fake_usermap_deny = fake_usermap_calls = fake_usermap_live = 0;
 	fake_now_us = 0;
 	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;

@@ -335,6 +335,80 @@ static volatile uint32_t g_rd_max;           /* the largest read request, sector
 #define PIPE_WAIT_US       200u
 static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 min */
 
+/* ---- diagnostics: where the copy runs, and can a helper reach the buffer --
+ *
+ * For moving the copy off the caller's core: which core the caller's thread
+ * ran the copy on, and whether it belonged to the system (kernel process:
+ * its buffers are reachable from any kernel thread) or to a game (a user
+ * buffer, reachable from another thread only through a kernel mapping of
+ * it). Once a minute with the log on, a read's user buffer is mapped
+ * (ksceKernelProcUserMap) with a few permission values and unmapped again:
+ * only read through the mapping and compared, never written. */
+static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
+#define PROBE_PERMS 4
+static const int k_probe_perm[PROBE_PERMS] = { 1, 2, 3, 6 };
+static volatile int g_probe_want;          /* the worker asks for one probe */
+static volatile int g_log_diag;            /* the log is on: count and probe  */
+static int      g_probe_runs;              /* probes done (by reads)        */
+static int      g_probe_ret[PROBE_PERMS];  /* the last probe, per permission */
+static uint32_t g_probe_us[PROBE_PERMS], g_probe_kib;
+static int      g_probe_same[PROBE_PERMS]; /* the mapping showed the same bytes */
+
+static inline uint32_t cpu_id(void)
+{
+#if defined(__arm__)
+	uint32_t m;
+
+	__asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(m));   /* MPIDR */
+	return m & 3;
+#else
+	return 0;
+#endif
+}
+
+/* A staged read finished in the caller's thread: note where its copy ran. */
+static void diag_note(uint32_t nsec)
+{
+	const uint32_t kib = nsec / 2;
+
+	__atomic_fetch_add(&g_cp_core_kib[cpu_id()], kib, __ATOMIC_RELAXED);
+	if (ksceKernelGetProcessId() == KERNEL_PID)
+		__atomic_fetch_add(&g_cp_sys_kib, kib, __ATOMIC_RELAXED);
+	else
+		__atomic_fetch_add(&g_cp_game_kib, kib, __ATOMIC_RELAXED);
+}
+
+/* Map the caller's (user) buffer into the kernel, read it through the
+ * mapping, unmap. Nothing is written. */
+static void diag_probe(const void *buf, uint32_t bytes)
+{
+	const SceUID pid = ksceKernelGetProcessId();
+
+	if (pid == KERNEL_PID)
+		return;                             /* not a user buffer: nothing to map */
+	g_probe_kib = bytes / 1024;
+	for (int i = 0; i < PROBE_PERMS; i++) {
+		void *page = NULL;
+		SceSize size = 0;
+		SceUInt32 off = 0;
+		const uint32_t t0 = ksceKernelGetSystemTimeLow();
+		const SceUID uid = ksceKernelProcUserMap(pid, "SceVitaMemioProbe", k_probe_perm[i], buf,
+		                                         bytes, &page, &size, &off);
+
+		g_probe_ret[i] = uid < 0 ? uid : 0;
+		g_probe_same[i] = 0;
+		if (uid >= 0) {
+			const uint32_t n = bytes < 4096 ? bytes : 4096;
+
+			if (page && size >= off && size - off >= bytes)
+				g_probe_same[i] = memcmp((const uint8_t *)page + off, buf, n) == 0 ? 1 : 2;
+			ksceKernelUserUnmap(uid);
+		}
+		g_probe_us[i] = ksceKernelGetSystemTimeLow() - t0;   /* map + read + unmap */
+	}
+	g_probe_runs++;
+}
+
 /* How to split an n-sector read: into 2 or 3 parts, read one after another,
  * part i+1 (by the helper) while part i is copied (by the caller). A part's
  * copy is hidden when it takes no longer than the next part's read:
@@ -897,6 +971,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		d->st.writes++;
 	} else {
 		d->st.reads++;
+		if (g_log_diag && !left) {
+			diag_note(nsec);
+			if (g_probe_want && __atomic_exchange_n(&g_probe_want, 0, __ATOMIC_RELAXED))
+				diag_probe(buf, nsec * 512);
+		}
 	}
 	if (problem && g_on_problem)
 		g_on_problem();
@@ -1066,6 +1145,7 @@ void vm_stage_apply(const VmSettings *s)
 	                                                                         : VM_PIPE_OFF;
 	g_count_all = s->stats || s->hud != VM_HUD_OFF;
 	g_verify = s->verify ? 1 : 0;
+	g_log_diag = s->log ? 1 : 0;
 	if (!g_verify)
 		g_shadow_failed = 0;      /* turning verify off and on again retries the buffer */
 }
@@ -1094,15 +1174,34 @@ void vm_stage_worker_tick(void)
 		last_cleaned = g_gpu_cleaned_kib;
 		last_nc = g_nc_stock_kib;
 		last_max = __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED);
-		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB, "
-		         "overlapped reads %u (%u in 3 parts), helper waited %u times %u ms, "
-		         "largest read %u KiB",
-		         (unsigned)last_nc, (unsigned)last_cleaned, (unsigned)g_pipe_reads,
-		         (unsigned)g_pipe_reads3,
-		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
-		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000),
+		/* each line under the log's 192 characters */
+		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB, "
+		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
 		         (unsigned)(last_max / 2));
+		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
+		         (unsigned)g_pipe_reads, (unsigned)g_pipe_reads3,
+		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
+		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000));
+		VM_KLOGI("stage: copied on core 0/1/2/3: %u/%u/%u/%u MiB; caller system %u MiB, "
+		         "game %u MiB",
+		         (unsigned)(__atomic_load_n(&g_cp_core_kib[0], __ATOMIC_RELAXED) / 1024),
+		         (unsigned)(__atomic_load_n(&g_cp_core_kib[1], __ATOMIC_RELAXED) / 1024),
+		         (unsigned)(__atomic_load_n(&g_cp_core_kib[2], __ATOMIC_RELAXED) / 1024),
+		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
+		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
+		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
+		if (g_probe_runs) {
+			VM_KLOGI("stage: user map probe %d (%u KiB): p1 0x%08x %uus %d, p2 0x%08x %uus %d, "
+			         "p3 0x%08x %uus %d, p6 0x%08x %uus %d", g_probe_runs, (unsigned)g_probe_kib,
+			         (unsigned)g_probe_ret[0], (unsigned)g_probe_us[0], g_probe_same[0],
+			         (unsigned)g_probe_ret[1], (unsigned)g_probe_us[1], g_probe_same[1],
+			         (unsigned)g_probe_ret[2], (unsigned)g_probe_us[2], g_probe_same[2],
+			         (unsigned)g_probe_ret[3], (unsigned)g_probe_us[3], g_probe_same[3]);
+		}
 	}
+	/* a probe at the next large read, a few times (log on only) */
+	if (g_log_diag && g_probe_runs < 10)
+		g_probe_want = 1;
 	/* Logged here, not where it happens (that can be a syscall). */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].alloc_err && !g_dev[i].alloc_logged) {

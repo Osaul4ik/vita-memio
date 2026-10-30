@@ -59,11 +59,11 @@ Download the latest release (or build it yourself, see below): `vitamemio_kernel
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Restart the console. Everything starts switched off.
+3. Restart the console. Every storage starts switched off.
 4. Go to **Settings > Devices > vita-memio** and switch on the storage you use.
 5. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card.
 
-**Suggested settings for playing:** your storage on, **GPU-safe reads** on (the default), **Overlapped reads** on *Auto*.
+**Suggested settings for playing:** just switch your storage on. The defaults, **GPU-safe reads** on and **Overlapped reads** on *Auto*, are the recommended ones.
 
 ## Settings
 
@@ -81,7 +81,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 | Setting | What it does | Default |
 |---|---|---|
 | GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). If the firmware cannot do this, reads simply take the normal way | On |
-| Overlapped reads (experimental) | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and a helper thread per storage in use; both are given back when this or the storage is switched off. Not used while *Verify transfers* is on | Off |
+| Overlapped reads (experimental) | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and a helper thread per storage in use; both are given back when this or the storage is switched off. Not used while *Verify transfers* is on | Auto |
 | Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
 | Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only. Overlapped reads are not used while it is on | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |

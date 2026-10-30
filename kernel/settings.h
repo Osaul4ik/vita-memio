@@ -1,7 +1,7 @@
 /*
  * settings.h - the kernel module owns vita-memio's settings: loaded from
  * ur0:data/vita-memio/settings.bin at boot, changed through vmSetSetting(),
- * written back by the 1 Hz worker. See settings.c.
+ * written back by the worker. See settings.c.
  */
 #ifndef VITAMEMIO_SETTINGS_H
 #define VITAMEMIO_SETTINGS_H

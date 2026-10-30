@@ -3,7 +3,7 @@
  *
  * Drawn by hooking SceDisplay's set-framebuffer path, so it appears over
  * whatever is on screen in any app, always in the top right corner. It draws
- * only text the 1 Hz worker hands it (vm_hud_set_text); the frame hook itself
+ * only text the worker hands it (vm_hud_set_text); the frame hook itself
  * formats nothing.
  *
  * Two looks (VM_HUD_STYLE_*):

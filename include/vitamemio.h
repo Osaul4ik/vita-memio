@@ -8,7 +8,7 @@
  *
  * Layout of the project:
  *   kernel/        vitamemio_kernel.skprx - the storage I/O hooks (staging),
- *                  settings persistence, the 1 Hz worker, the boot guard, and
+ *                  settings persistence, the worker, the boot guard, and
  *                  the user-callable "SceVitaMemio" syscall library.
  *   user/          vitamemio.suprx entry point (loaded only in the Settings
  *                  app, *NPXS10015).

@@ -13,7 +13,7 @@
  * Nothing at all is written unless logging is switched on in the settings.
  *
  * HOT-PATH RULE: the storage I/O hooks (kernel/stage.c) must NOT call
- * these. They only bump counters; the 1 Hz worker (kernel/main.c) does the
+ * these. They only bump counters; the worker (kernel/main.c) does the
  * logging.
  *
  * The self-contained formatter means no libc (%s %d %i %u %x %X %c %p %%,

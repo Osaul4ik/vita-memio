@@ -9,10 +9,12 @@
  *     nothing (safe mode);
  *   - allocate the staging buffers and install the I/O hooks (stage.c), then
  *     load and apply the saved settings (settings.c);
- *   - run the 1 Hz worker: saves settings, allocates the verify buffer on
- *     demand, feeds the HUD (hud.c, installed only once the HUD is first
- *     switched on), logs problems, follows the logging switch, and clears the
- *     boot guard once the home screen (SceShell) has been up for 30 s;
+ *   - run the worker (every second while the HUD is on or the boot guard
+ *     waits, otherwise every 30 s, and at once when a setting changes):
+ *     saves settings, allocates the verify buffer on demand, feeds the HUD
+ *     (hud.c, installed only once the HUD is first switched on), logs
+ *     problems, follows the logging switch, and clears the boot guard once
+ *     the home screen (SceShell) has been up for 30 s;
  *   - publish the user-callable "SceVitaMemio" syscall library (see
  *     include/vitamemio_kernel_api.h and vitamemio_kernel.yml).
  *
@@ -39,7 +41,7 @@
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
 /* The start counts as good once the home screen (SceShell) has been up for
- * this many worker ticks (seconds), not as soon as it appears: a setting that
+ * this many seconds, not as soon as it appears: a setting that
  * makes the console restart shortly after the home screen (the GPU-mapping
  * watch once did, about 10 s in) must also end in safe mode, not in a loop.
  * The price: restarting by hand within this time after the home screen also
@@ -73,7 +75,28 @@ static int      g_disabled = VM_DIS_NONE;
 static uint32_t g_fingerprint;
 static SceUID   g_worker = -1;
 static volatile int g_run = 1;
-static volatile uint32_t g_uptime;
+static volatile uint32_t g_uptime;   /* seconds since the module started */
+static uint64_t g_t0_us;             /* ... from this system time          */
+
+/* The worker sleeps on g_wake: 1 s while it has something to do every second
+ * (the HUD shows live speeds, the boot guard waits for the home screen),
+ * otherwise 30 s. A changed setting wakes it at once, so it is saved and
+ * applied (buffers, helper threads) without waiting. */
+#define VM_WORKER_FAST_US   (1000u * 1000u)
+#define VM_WORKER_IDLE_US   (30u * 1000u * 1000u)
+static SceUID g_wake = -1;
+static volatile int g_guard_done;    /* the boot guard is settled            */
+
+static void worker_wake(void)
+{
+	if (g_wake >= 0)
+		ksceKernelSignalSema(g_wake, 1);   /* already pending: refused, fine */
+}
+
+static uint32_t uptime_s(void)
+{
+	return (uint32_t)(((uint64_t)ksceKernelGetSystemTimeWide() - g_t0_us) / 1000000u);
+}
 
 static char g_guard_txt[48];   /* last content read, for the log */
 
@@ -140,24 +163,30 @@ static int shell_up(void)
 	return taiGetModuleInfoForKernel(pid, "SceShell", &info) >= 0;
 }
 
-/* Called once a second until the guard is cleared. */
+/* Called by the worker (every second) until the guard is cleared. */
 static void guard_tick(void)
 {
-	static int done, ticks;
+	static int seen;                 /* the home screen is up ...              */
+	static uint32_t since;           /* ... since this uptime                  */
 	int up;
 
-	if (done)
+	if (g_guard_done)
 		return;
 	up = shell_up();
-	ticks = up > 0 ? ticks + 1 : 0;
-	if (ticks >= VM_GUARD_SHELL_TICKS) {
+	if (up <= 0) {
+		seen = 0;
+	} else if (!seen) {
+		seen = 1;
+		since = g_uptime;
+	}
+	if (seen && g_uptime - since >= VM_GUARD_SHELL_TICKS) {
 		guard_write('0', "shell");
-		done = 1;
+		g_guard_done = 1;
 	} else if (up < 0 && g_uptime >= VM_GUARD_FALLBACK_SECS) {
 		guard_write('0', "timer");
 		VM_KLOGW("boot guard: the home screen cannot be detected here, cleared after %us",
 		         (unsigned)VM_GUARD_FALLBACK_SECS);
-		done = 1;
+		g_guard_done = 1;
 	}
 }
 
@@ -176,7 +205,7 @@ static int firmware_known(void)
 	return 0;
 }
 
-/* ---- 1 Hz worker ------------------------------------------------------------ */
+/* ---- the worker ------------------------------------------------------------- */
 
 static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "INT ", "MC  " };   /* compact */
 static const char *const k_dev_log[VM_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
@@ -203,9 +232,12 @@ static void read_lang(void)
 }
 
 /* "12.3" from bytes per second. */
-static void mbps(char *o, int n, uint64_t bytes)
+/* `bytes` moved in `ms` milliseconds, as MiB/s with one decimal. The worker
+ * does not always wake exactly a second apart (a changed setting wakes it
+ * early, and it sleeps longer while the HUD is off), so the time is measured. */
+static void mbps(char *o, int n, uint64_t bytes, uint32_t ms)
 {
-	uint32_t t = (uint32_t)((bytes * 10) >> 20);   /* tenths of a MiB/s */
+	uint32_t t = ms ? (uint32_t)(((bytes * 10000u) / ms) >> 20) : 0;   /* tenths */
 	snprintf(o, n, "%u.%u", (unsigned)(t / 10), (unsigned)(t % 10));
 }
 
@@ -244,11 +276,15 @@ static const char *state_color(const VmDevState *d, int slow)
 
 static void hud_feed(const VmDevState *now)
 {
-	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT];
+	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
 	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
 	static int hud_failed;           /* tried once and failed: do not retry */
+	const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
+	const uint32_t ms = last_us ? (uint32_t)((now_us - last_us) / 1000u) : 1000u;
 	VmSettings s;
 	int n = 0;
+
+	last_us = now_us;
 
 	vm_settings_copy(&s);
 	if (s.hud != VM_HUD_OFF)
@@ -272,8 +308,8 @@ static void hud_feed(const VmDevState *now)
 		char r[12], w[12], rp[12], wp[12], np[16];
 
 		vm_stage_bytes(i, &rd, &wr);
-		mbps(r, sizeof(r), rd - last_rd[i]);
-		mbps(w, sizeof(w), wr - last_wr[i]);
+		mbps(r, sizeof(r), rd - last_rd[i], ms);
+		mbps(w, sizeof(w), wr - last_wr[i], ms);
 		last_rd[i] = rd;
 		last_wr[i] = wr;
 		seen[i] |= rd | wr;
@@ -331,9 +367,18 @@ static int worker(SceSize args, void *argp)
 	memset(prev, 0, sizeof(prev));
 	while (g_run) {
 		VmDevState now[VM_DEV_COUNT];
+		/* Every second only while the HUD is on or the boot guard waits. */
+		SceUInt wait = (g_disabled == VM_DIS_NONE || g_disabled == VM_DIS_HOOKS) &&
+		               (!g_guard_done || g_vm_settings.hud != VM_HUD_OFF)
+		               ? VM_WORKER_FAST_US : VM_WORKER_IDLE_US;
 
-		ksceKernelDelayThread(1000 * 1000);
-		g_uptime++;
+		if (g_wake >= 0)
+			ksceKernelWaitSema(g_wake, 1, &wait);   /* woken early, or timed out */
+		else
+			ksceKernelDelayThread(VM_WORKER_FAST_US);
+		if (!g_run)
+			break;
+		g_uptime = uptime_s();
 		/* Always, also in safe mode or on an unknown firmware: settings can
 		 * still be changed there (to switch off what broke the last start),
 		 * so they are saved, and the log follows its switch. */
@@ -379,7 +424,7 @@ int vmGetState(VmState *out)
 	k.disabled = g_disabled;
 	k.fingerprint = g_fingerprint;
 	k.verify_ready = vm_stage_verify_ready();
-	k.uptime_s = g_uptime;
+	k.uptime_s = uptime_s();
 	k.memcard_slow = vm_stage_memcard_slow();
 	vm_stage_get(k.dev, g_disabled == VM_DIS_NONE);
 	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
@@ -392,9 +437,14 @@ int vmGetState(VmState *out)
  * only takes effect at the next start. */
 int vmSetSetting(int key, int value)
 {
+	int r;
+
 	if (!vm_setting_valid(key, value))
 		return VM_ERR_ARG;
-	return vm_settings_set(key, value);   /* applies now; worker saves + logs */
+	r = vm_settings_set(key, value);
+	if (r == VM_OK)
+		worker_wake();                    /* save and apply it now */
+	return r;   /* applies now; worker saves + logs */
 }
 
 int vmGetTiming(VmTiming *out)
@@ -443,6 +493,9 @@ int _start(SceSize argc, const void *args) __attribute__ ((weak, alias("module_s
 
 static void start_worker(void)
 {
+	g_wake = ksceKernelCreateSema("SceVitaMemioWake", 0, 0, 1, NULL);
+	if (g_wake < 0)
+		g_wake = -1;                      /* then the worker wakes every second */
 	/* On the system core, like the overlapped-read helper, so no thread of
 	 * the plugin runs on a game's cores; any core if that is refused. */
 	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0,
@@ -461,6 +514,7 @@ int module_start(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 
+	g_t0_us = (uint64_t)ksceKernelGetSystemTimeWide();
 	vm_klog_init();   /* FIRST, so the whole bring-up is captured */
 	/* The settings next: they say whether anything is logged at all. Applying
 	 * them before the hooks exist only sets the per-device switches. */
@@ -505,8 +559,13 @@ int module_stop(SceSize argc, const void *args)
 	(void)argc; (void)args;
 	/* Every state runs the worker; the rest releases only what was set up. */
 	g_run = 0;
+	worker_wake();
 	if (g_worker >= 0)
 		ksceKernelWaitThreadEnd(g_worker, NULL, NULL);
+	if (g_wake >= 0) {
+		ksceKernelDeleteSema(g_wake);
+		g_wake = -1;
+	}
 	vm_hud_fini();
 	vm_stage_fini();
 	vm_settings_flush();

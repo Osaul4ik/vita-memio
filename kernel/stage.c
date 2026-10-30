@@ -53,7 +53,7 @@
  *     on a mismatch the caller gets stock data (reads) or the chunk is
  *     rewritten the stock way (writes), and the device falls back.
  *
- * HOT PATH: no logging here, only counters (the 1 Hz worker logs).
+ * HOT PATH: no logging here, only counters (the worker logs).
  */
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/sysclib.h>
@@ -957,7 +957,8 @@ void vm_stage_apply(const VmSettings *s)
 
 void vm_stage_worker_tick(void)
 {
-	static uint32_t ticks, last_cleaned, last_nc;
+	static uint32_t last_log_us, last_cleaned, last_nc;
+	const uint32_t now_us = ksceKernelGetSystemTimeLow();
 
 	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
@@ -966,7 +967,9 @@ void vm_stage_worker_tick(void)
 	}
 	/* Once a minute, if anything changed: how much went to non-cacheable
 	 * buffers the standard way, and how much GPU-safe reads cleaned. */
-	if (++ticks % 60 == 0 && (g_gpu_cleaned_kib != last_cleaned || g_nc_stock_kib != last_nc)) {
+	if (now_us - last_log_us >= 60u * 1000u * 1000u &&
+	    (g_gpu_cleaned_kib != last_cleaned || g_nc_stock_kib != last_nc)) {
+		last_log_us = now_us;
 		last_cleaned = g_gpu_cleaned_kib;
 		last_nc = g_nc_stock_kib;
 		VM_KLOGI("stage: non-cacheable buffers (standard path) %u KiB, GPU-safe cleaned %u KiB, "

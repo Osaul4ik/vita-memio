@@ -7,7 +7,7 @@
  * text into the same buffer before the display controller scans it out.
  *
  * Strictly read + overdraw: no storage state is touched here. The text comes
- * from the 1 Hz worker (main.c) through vm_hud_set_text(), double-buffered so
+ * from the worker (main.c, every second while the HUD is on) through vm_hud_set_text(), double-buffered so
  * the frame hook never reads a half-written line. The drawing itself is in
  * hud_draw.h (top right corner, classic or PSVshell style).
  *

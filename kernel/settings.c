@@ -11,7 +11,7 @@
  * its own, so one bad field falls back to its default without losing the rest.
  *
  * vm_settings_set() runs in the caller's syscall context, so it only updates
- * memory (and the staging switches) and marks the settings dirty; the 1 Hz
+ * memory (and the staging switches) and marks the settings dirty; the
  * worker (main.c) does the file write from its own kernel thread.
  */
 #include <psp2kern/kernel/sysclib.h>   /* memcpy/memset                        */

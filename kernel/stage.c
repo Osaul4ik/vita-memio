@@ -527,6 +527,20 @@ static void pipe_release(Dev *d)
 	d->pipe_made = 0;
 }
 
+/* Worker thread: stop the hooks from starting overlapped reads on `d`, wait
+ * for the request in flight (if any) to finish, then free the helper and its
+ * buffer. A request decides on overlapping only after taking `busy`, so once
+ * `busy` drops after pipe_ready went to 0, nothing can use them. */
+static void pipe_retire(Dev *d)
+{
+	__atomic_store_n(&d->pipe_ready, 0, __ATOMIC_SEQ_CST);
+	__sync_synchronize();                 /* pairs with the fence in take() */
+	/* an acquire load: the request's last use of the buffers comes first */
+	while (__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE))
+		ksceKernelDelayThread(1000);
+	pipe_release(d);
+}
+
 /* Worker thread: everything the overlapped reads of device `d` need. On any
  * failure nothing is kept and the device reads as before. Returns 0 or the
  * error. */
@@ -573,8 +587,8 @@ static int pipe_setup(Dev *d)
 		return r;
 	}
 	d->pipe_made = 1;
-	__sync_synchronize();
-	d->pipe_ready = 1;                    /* the hooks may use it from now on */
+	/* the hooks may use it from now on; everything above is seen first */
+	__atomic_store_n(&d->pipe_ready, 1, __ATOMIC_RELEASE);
 	return 0;
 }
 
@@ -605,6 +619,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		g_nc_stock_kib += nsec / 2;
 		return io(ref, part, sector, buf, nsec);
 	}
+	/* GPU-safe reads asked for, but this firmware has no cache clean to
+	 * keep that promise: such reads take the standard path, which leaves
+	 * the data in memory as promised. */
+	if (!write && g_gpu_safe && !g_dcache_clean)
+		return io(ref, part, sector, buf, nsec);
 	if (!take(d, mine, nsec))
 		return io(ref, part, sector, buf, nsec);
 	if (!write)
@@ -616,7 +635,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 	const int stats = g_stats;
 	const int clean = !write && g_gpu_safe && g_dcache_clean;
-	const int pipe = !write && !verify && g_pipeline && d->pipe_ready;
+	const int pipe = !write && !verify && g_pipeline &&
+	                 __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
 	uint32_t sz[PIPE_MAX_PARTS];
 	int k = 0;
 
@@ -877,10 +897,10 @@ void vm_stage_fini(void)
 		g_dev[i].unusable = 1;          /* and never allocate again */
 	}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		while (g_dev[i].busy)
+		while (__atomic_load_n(&g_dev[i].busy, __ATOMIC_ACQUIRE))
 			ksceKernelDelayThread(1000);
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		g_dev[i].pipe_ready = 0;          /* no transfer is in flight now */
+		__atomic_store_n(&g_dev[i].pipe_ready, 0, __ATOMIC_SEQ_CST);   /* nothing in flight now */
 		if (g_dev[i].pipe_made)
 			pipe_release(&g_dev[i]);
 	}
@@ -941,7 +961,8 @@ void vm_stage_worker_tick(void)
 
 	if (g_gpu_safe && !g_dcache_clean && g_live && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
-		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found");
+		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
+		         "reads take the standard path");
 	}
 	/* Once a minute, if anything changed: how much went to non-cacheable
 	 * buffers the standard way, and how much GPU-safe reads cleaned. */
@@ -959,20 +980,27 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
 			         (unsigned)g_dev[i].alloc_err);
 		}
-	/* Overlapped reads: the helper and its buffer for every device switched on,
-	 * made here (never in a transfer) and then kept. */
+	/* Overlapped reads: the helper and its buffer exist only while they can
+	 * be used - made here (never in a transfer) for every device switched on
+	 * while the setting is on, and given back once either is switched off. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
+		const int wanted = g_pipeline && g_live && d->enabled && d->buf && !d->unusable;
 
-		if (g_pipeline && g_live && d->enabled && d->buf && !d->unusable &&
-		    !d->pipe_made && !d->pipe_failed) {
+		if (wanted && !d->pipe_made && !d->pipe_failed) {
 			int r = pipe_setup(d);
 
 			if (r < 0) {
 				d->pipe_failed = 1;
 				VM_KLOGW("stage: dev %d overlapped reads not set up (0x%08x) - reads as before",
 				         i, (unsigned)r);
+			} else {
+				VM_KLOGI("stage: dev %d overlapped reads ready (helper thread, %u KiB buffer)",
+				         i, (unsigned)(PIPE_TAIL_SECTORS / 2));
 			}
+		} else if (!wanted && d->pipe_made) {
+			pipe_retire(d);
+			VM_KLOGI("stage: dev %d overlapped reads off - helper and buffer released", i);
 		}
 	}
 	/* The verify buffer is only allocated once verify mode is first turned on. */

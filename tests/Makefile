@@ -53,8 +53,15 @@ arm: test_fastcopy.c vm_test.h ../kernel/fastcopy.h
 	  printf '%s %s: ' $$m $$o; qemu-arm ./test_fastcopy_arm; \
 	done; done
 
+# The storage path with its helper threads under ThreadSanitizer (see tsan.supp).
+.PHONY: tsan
+tsan: test_stage.c fakes.c fakes.h vm_test.h ../kernel/stage.c ../kernel/stage.h tsan.supp
+	$(CC) -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter -fsanitize=thread -Istubs -pthread \
+	  -o test_stage_tsan test_stage.c fakes.c
+	TSAN_OPTIONS="suppressions=$(CURDIR)/tsan.supp halt_on_error=1" ./test_stage_tsan
+
 clean:
-	rm -f test_fastcopy_arm $(TESTS) sim_app sim_main.o
+	rm -f test_fastcopy_arm test_stage_tsan $(TESTS) sim_app sim_main.o
 
 # Syntax-only check of the console-only tester code against stub psp2 headers
 # (the real build needs VitaSDK). Catches typos and wrong signatures; it cannot

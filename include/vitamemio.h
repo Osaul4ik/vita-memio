@@ -97,7 +97,7 @@ enum vm_key {
 #define VM_DEF_MEMCARD   0
 #define VM_DEF_SMALL     0   /* opt-in: small transfers are file-system bookkeeping */
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
-#define VM_DEF_GPUSAFE   0   /* off until its cost is measured                 */
+#define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  0   /* experimental: opt-in                           */
 
 /* One int per key, in enum vm_key order. */

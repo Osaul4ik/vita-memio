@@ -26,6 +26,8 @@ static void *fake_copy(void *d, const void *s, size_t n)
 #include "../kernel/stage.c"
 
 #include <stdio.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdlib.h>
 
 #include "fakes.h"
@@ -318,10 +320,16 @@ static void test_gpu_safe_reads(void)
 	vm_stage_apply(&s);
 	CHECK(rd(u, 0, 100) == 0 && clean_calls == 0);
 
-	s.gpusafe = 1;                                  /* on, but no clean function */
+	s.gpusafe = 1;                                  /* on, but no clean function: */
 	vm_stage_apply(&s);
 	g_dcache_clean = NULL;
+	memset(u, 0, 100 * 512);
 	CHECK(rd(u, 0, 100) == 0 && memcmp(u, disk, 100 * 512) == 0);
+	CHECK(last_buf == u);                           /* the standard path, not staged */
+	CHECK(wr(u, 0, 100, REF_RD) == 0 && last_buf == staging);   /* writes as usual */
+	s.gpusafe = 0;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 100) == 0 && last_buf == staging);           /* off: staged again */
 	free(u);
 }
 
@@ -856,11 +864,35 @@ static void test_pipeline_reads(void)
 		CHECK(e > 7900 && e <= 8000);                              /* converges */
 	}
 
-	/* off again: not split, the helper stays (until the module stops) */
+	/* off again: not split at once; the next worker tick gives the helper,
+	 * its semaphores and its buffer back */
 	s.pipeline = 0;
 	vm_stage_apply(&s);
 	io_calls = 0;
 	CHECK(rd(u, 0, 512) == 0 && io_calls == 1 && last_buf == staging);
+	CHECK(d->pipe_made && fake_threads_live == 1);
+	{
+		int frees = fake_free_calls;
+
+		vm_stage_worker_tick();
+		CHECK(!d->pipe_made && !d->pipe_ready && fake_threads_live == 0 && fake_semas_live == 0);
+		CHECK(fake_free_calls == frees + 1 && d->buf2 == NULL && d->uid2 < 0);
+	}
+	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);   /* reads as before */
+	/* on again: made again at the next tick */
+	s.pipeline = VM_PIPE_AUTO;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && fake_threads_live == 1);
+	/* the device switched off: released too, and the staging buffer kept */
+	s.memcard = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!d->pipe_made && fake_threads_live == 0 && d->buf == staging);
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && fake_threads_live == 1);
 	vm_stage_fini();
 	CHECK(!d->pipe_made && fake_threads_live == 0 && fake_semas_live == 0);
 	g_live = saved_live;
@@ -1178,6 +1210,54 @@ static void test_pipeline_modes(void)
 	free(u);
 }
 
+/* The helper given back and made again while another thread keeps reading:
+ * every read still gets the disk's data, nothing is used after it is freed
+ * (AddressSanitizer), and the hand-over is race-free (ThreadSanitizer). */
+static volatile int g_reader_stop, g_reader_bad, g_reader_reads;
+
+static void *reader_main(void *arg)
+{
+	uint8_t *u = arg;
+
+	for (int k = 0; !__atomic_load_n(&g_reader_stop, __ATOMIC_ACQUIRE); k++) {
+		uint32_t n = 128 + (uint32_t)(k * 61) % 380, at = (uint32_t)(k * 89) % 2000;
+
+		if (rd(u, at, n) != 0 || memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) != 0)
+			__sync_fetch_and_add(&g_reader_bad, 1);
+		__atomic_fetch_add(&g_reader_reads, 1, __ATOMIC_RELEASE);
+	}
+	return NULL;
+}
+
+static void test_pipeline_released_while_reading(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	pthread_t th;
+	int saved_live = g_live;
+
+	reset();
+	pipe_on(&s, 0);
+	g_stats = 0;
+	g_reader_stop = g_reader_bad = g_reader_reads = 0;
+	CHECK(pthread_create(&th, NULL, reader_main, u) == 0);
+	for (int i = 0; i < 300; i++) {
+		s.pipeline = (i & 1) ? VM_PIPE_AUTO : VM_PIPE_OFF;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();               /* releases or makes the helper */
+		while (__atomic_load_n(&g_reader_reads, __ATOMIC_ACQUIRE) < i)
+			sched_yield();
+	}
+	__atomic_store_n(&g_reader_stop, 1, __ATOMIC_RELEASE);
+	pthread_join(th, NULL);
+	CHECK(g_reader_bad == 0 && g_reader_reads >= 300);
+	CHECK(g_dev[M].st.errors == 0);
+	vm_stage_fini();
+	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1196,6 +1276,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_pipeline_modes);
+	RUN(test_pipeline_released_while_reading);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

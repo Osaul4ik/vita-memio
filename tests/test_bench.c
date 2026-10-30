@@ -531,8 +531,19 @@ static void test_plugin_verify(void)
 	/* on and working: every faster transfer checked, PASS */
 	fake_init(&f, 1);
 	f.verify = f.verify_ready = 1;
+	f.pipeline = 1;                    /* overlapped reads set, but verify wins */
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && bench_plugin_ok(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin overlapped reads: auto (not used: verify is on)\n"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	found = 0;
+	for (int i = 0; i < n; i++) {
+		found |= !strcmp(lines[i], "overlapped reads: auto (off: verify on)");
+		CHECK(strlen(lines[i]) < 60);
+	}
+	CHECK(found);
+	f.pipeline = 0;
 	bench_verify(r, &v);
 	CHECK(v.on && v.ready && v.checked > 0 && v.mismatches == 0);
 	CHECK(v.checked == (r->runs[0].after.reads - r->runs[0].before.reads) +

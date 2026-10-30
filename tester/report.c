@@ -106,6 +106,13 @@ static const char *pipe_text(int v)
 	     : v == VM_PIPE_FIXED ? "fixed (2 parts, 3 with GPU-safe)" : "unknown";
 }
 
+/* The same, short enough for the screen. */
+static const char *pipe_short(int v)
+{
+	return v == VM_PIPE_OFF ? "off" : v == VM_PIPE_AUTO ? "auto" : v == VM_PIPE_FIXED ? "fixed"
+	     : "unknown";
+}
+
 static const char *small_text(const BenchResult *r)
 {
 	return onoff(r->plugin0.small);
@@ -191,7 +198,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "%s\n", vt);
 	if (res->plugin_mode == BPM_ON) {
 		put(&o, "plugin small transfers too: %s\n", small_text(res));
-		put(&o, "plugin overlapped reads: %s\n", pipe_text(res->plugin0.pipeline));
+		put(&o, "plugin overlapped reads: %s%s\n", pipe_text(res->plugin0.pipeline),
+		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
@@ -356,7 +364,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		line(&s, "%s", vt);
 	if (res->plugin_mode == BPM_ON) {
 		line(&s, "small transfers too: %s", small_text(res));
-		line(&s, "overlapped reads: %s", pipe_text(res->plugin0.pipeline));
+		line(&s, "overlapped reads: %s%s", pipe_short(res->plugin0.pipeline),
+		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	for (int i = 0; i < res->nruns; i++)

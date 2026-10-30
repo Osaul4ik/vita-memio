@@ -117,7 +117,7 @@ enum vm_key {
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
-#define VM_DEF_OFFLOAD   1   /* VM_OFFLOAD_GPU: where the copy costs the most  */
+#define VM_DEF_OFFLOAD   2   /* VM_OFFLOAD_ALWAYS: with GPU-safe reads or not  */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {

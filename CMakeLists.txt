@@ -165,7 +165,7 @@ if(VM_BUILD_TESTER)
   # The tester's bitmap font is a subset of Terminus Font (SIL OFL 1.1): its
   # license travels with it.
   set(TESTER_VPK_FILES FILE ${CMAKE_SOURCE_DIR}/include/OFL-Terminus.txt OFL-Terminus.txt)
-  # The bubble and the LiveArea (drawn by tools/gen_livearea.py).
+  # The bubble and the LiveArea (drawn by tools/gen_art.py).
   set(TESTER_LA ${CMAKE_SOURCE_DIR}/tester/sce_sys)
   list(APPEND TESTER_VPK_FILES
     FILE ${TESTER_LA}/icon0.png sce_sys/icon0.png

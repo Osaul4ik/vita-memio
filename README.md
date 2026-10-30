@@ -1,5 +1,7 @@
 # vita-memio
 
+<p align="center"><img src="assets/logo.png" alt="vita-memio: faster storage for PS Vita" width="720"></p>
+
 Makes the PS Vita read and write its storage faster: a microSD in an SD2Vita, the Sony memory card and the internal storage. It is a taiHEN plugin for HENkaku/Ensō on firmware **3.60–3.74**.
 
 On my console a microSD in an SD2Vita reads **19.6 MiB/s instead of 13.5** (+45%) and writes about 15–17 MiB/s. Games load faster, VitaShell copies faster, and nothing about your files changes: the data on the card is exactly what it would be without the plugin.
@@ -163,6 +165,10 @@ All credit for the original project goes to **[Juan Garcia Alvite](https://githu
 **Included**
 
 - [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: a subset for the tester and the HUD, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
+
+**Artwork**
+
+- The logo, the tester's icon and its LiveArea are original artwork drawn by `tools/gen_art.py`; their lettering is set in [Inter](https://rsms.me/inter/) by Rasmus Andersson (SIL Open Font License 1.1).
 
 **Tools**
 

@@ -57,7 +57,6 @@
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/kernel/threadmgr.h>
-#include <psp2kern/io/fcntl.h>
 #include <taihen.h>
 
 #include "stage.h"
@@ -70,12 +69,8 @@
  *   into staging (writes): the system memcpy. The burst copy made it slower
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
-/* Experimental: the copy variant that keeps a load in flight, chosen while the
- * file ur0:data/vita-memio/copy2.on exists (looked for by the worker), so the
- * two can be compared with the tester on the same build. */
-static volatile int g_copy2;
 #ifndef vm_copy_from_stage
-#define vm_copy_from_stage(d, s, n) (g_copy2 ? vm_fast_copy_pipe(d, s, n) : vm_fast_copy(d, s, n))
+#define vm_copy_from_stage vm_fast_copy
 #endif
 #ifndef vm_copy_to_stage
 #define vm_copy_to_stage memcpy
@@ -822,18 +817,6 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: dev %d staging buffer not allocated (0x%08x) - stock", i,
 			         (unsigned)g_dev[i].alloc_err);
 		}
-	/* The experimental copy variant, by its flag file (every 5 s). */
-	if (ticks % 5 == 0) {
-		SceUID fd = ksceIoOpen(VM_DATA_DIR "/copy2.on", SCE_O_RDONLY, 0);
-		int on = fd >= 0;
-
-		if (fd >= 0)
-			ksceIoClose(fd);
-		if (on != g_copy2) {
-			g_copy2 = on;
-			VM_KLOGI("stage: copy variant %s", on ? "2 (load in flight) on" : "1 (default)");
-		}
-	}
 	/* Overlapped reads: the helper and its buffer for every device switched on,
 	 * made here (never in a transfer) and then kept. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {

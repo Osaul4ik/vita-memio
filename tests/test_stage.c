@@ -1018,32 +1018,6 @@ static void test_every_switch_on_the_fly(void)
 	free(u);
 }
 
-/* The experimental copy variant follows its flag file, looked for every 5 s. */
-static void test_copy_variant_flag(void)
-{
-	char path[512];
-	FILE *f;
-
-	reset();
-	g_copy2 = 0;
-	snprintf(path, sizeof(path), "%s/copy2.on", fakes_tmpdir_new());
-	for (int i = 0; i < 5; i++)
-		vm_stage_worker_tick();
-	CHECK(g_copy2 == 0);                            /* no file */
-	f = fopen(path, "w");
-	CHECK(f != NULL);
-	if (f)
-		fclose(f);
-	for (int i = 0; i < 5; i++)
-		vm_stage_worker_tick();
-	CHECK(g_copy2 == 1);
-	remove(path);
-	for (int i = 0; i < 5; i++)
-		vm_stage_worker_tick();
-	CHECK(g_copy2 == 0);
-	fakes_tmpdir_remove();
-}
-
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -1060,7 +1034,6 @@ int main(void)
 	RUN(test_pipeline_any_core);
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
-	RUN(test_copy_variant_flag);
 	RUN(test_staged_read);
 	RUN(test_large_read_is_split);
 	RUN(test_read_error_finishes_stock);

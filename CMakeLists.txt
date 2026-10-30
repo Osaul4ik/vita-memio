@@ -40,12 +40,12 @@ set(CMAKE_C_STANDARD 99)
 # Makefile passes it (-DVM_GIT_HASH=...); otherwise it is read here, when CMake
 # configures (a fresh configure always has the right one).
 if(NOT VM_GIT_HASH)
-  execute_process(COMMAND git rev-parse --short=7 HEAD
+  execute_process(COMMAND git -c safe.directory=${CMAKE_SOURCE_DIR} rev-parse --short=7 HEAD
                   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                   OUTPUT_VARIABLE VM_GIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE
                   RESULT_VARIABLE VM_GIT_RC ERROR_QUIET)
   if(VM_GIT_RC EQUAL 0 AND VM_GIT_HASH)
-    execute_process(COMMAND git diff --quiet HEAD
+    execute_process(COMMAND git -c safe.directory=${CMAKE_SOURCE_DIR} diff --quiet HEAD
                     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                     RESULT_VARIABLE VM_GIT_DIRTY ERROR_QUIET)
     if(NOT VM_GIT_DIRTY EQUAL 0)

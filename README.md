@@ -118,6 +118,7 @@ Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://git
 - **Tester app** with per-block timings, live plugin counters and every byte checked.
 - **Driver status row** in Settings, also shown when the kernel module is missing.
 - **Overlapped reads**, **Small transfers too**, **Verify transfers** and **Statistics** as Settings options.
+- **Copy on the system core** (experimental): games' reads can be copied on the console's spare core instead of the game's own.
 - **PSVshell-style HUD** next to the original look.
 - **Safe mode you can recover from**: settings can be changed in safe mode, and a start only counts as good after 30 seconds on the home screen.
 - **Host tests** for the storage path, settings, HUD and tester, run on every push.

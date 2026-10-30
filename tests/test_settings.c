@@ -248,9 +248,9 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
-	/* copy on the system core: off by default, also for a file from before it
+	/* copy on the system core: GPU-safe only by default, also for a file from before it
 	 * existed (11 keys); stored values kept; out of range: the default */
-	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_OFF && VM_KEY_OFFLOAD == 11);
+	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_GPU && VM_KEY_OFFLOAD == 11);
 	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALWAYS) && !vm_setting_valid(VM_KEY_OFFLOAD, 3));
 	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
 	v[VM_KEY_PIPELINE] = VM_PIPE_AUTO;
@@ -260,7 +260,7 @@ static void test_gpusafe_default_and_stored_value(void)
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.offload == VM_OFFLOAD_OFF && s.pipeline == VM_PIPE_AUTO);
+	CHECK(s.offload == VM_DEF_OFFLOAD && s.pipeline == VM_PIPE_AUTO);
 	clean();
 	n = make_file(buf, VM_KEY_COUNT, v);
 	put_file("settings.bin", buf, n);

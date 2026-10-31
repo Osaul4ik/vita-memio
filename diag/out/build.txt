@@ -1,0 +1,44 @@
+[  3%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/main.c.obj
+[  6%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/settings.c.obj
+[ 13%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/klog.c.obj
+[ 13%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/stage.c.obj
+[ 17%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/hud.c.obj
+[ 20%] Building C object CMakeFiles/vitamemio_kernel.dir/kernel/hud_i18n.c.obj
+[ 24%] Linking C executable vitamemio_kernel
+[ 24%] Built target vitamemio_kernel
+[ 27%] Converting to Sony ELF vitamemio_kernel.velf
+[ 31%] Generating imports YAML for vitamemio_kernel
+[ 34%] Building stubs vitamemio-stubs
+[ 34%] Built target vitamemio_kernel-velf
+make[3]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+[ 37%] Creating SELF vitamemio_kernel.skprx
+[ 37%] Built target vitamemio_kernel.skprx-self
+[ 37%] Built target vitamemio-stubs
+[ 41%] Building C object CMakeFiles/vitamemio.dir/user/main.c.obj
+[ 41%] Built target libvitamemio_kernel_stub.a
+[ 44%] Built target libvitamemio_kernel_stub_weak.a
+[ 44%] Building C object CMakeFiles/vitamemio_tester.dir/tester/main.c.obj
+[ 48%] Building C object CMakeFiles/vitamemio_tester.dir/tester/bench.c.obj
+[ 51%] Building C object CMakeFiles/vitamemio.dir/settings_app/vitamemio_settings.c.obj
+[ 55%] Building C object CMakeFiles/vitamemio.dir/settings_app/vitamemio_i18n.c.obj
+[ 58%] Building C object CMakeFiles/vitamemio_tester.dir/tester/report.c.obj
+[ 62%] Building C object CMakeFiles/vitamemio.dir/settings_app/vmlog.c.obj
+[ 65%] Building C object CMakeFiles/vitamemio_tester.dir/tester/results.c.obj
+[ 68%] Building C object CMakeFiles/vitamemio_tester.dir/tester/vita/ui.c.obj
+[ 72%] Building C object CMakeFiles/vitamemio_tester.dir/tester/vita/vita_env.c.obj
+[ 75%] Linking C executable vitamemio
+[ 75%] Built target vitamemio
+[ 79%] Converting to Sony ELF vitamemio.velf
+[ 79%] Built target vitamemio-velf
+[ 82%] Creating SELF vitamemio.suprx
+[ 82%] Built target vitamemio.suprx-self
+[ 86%] Linking C executable vitamemio_tester
+[ 86%] Built target vitamemio_tester
+[ 89%] Converting to Sony ELF vitamemio_tester.velf
+[ 89%] Built target vitamemio_tester-velf
+[ 93%] Creating SELF vitamemio_tester.self
+[ 93%] Built target vitamemio_tester.self-self
+[ 96%] Generating param.sfo for vitamemio_tester.vpk
+[100%] Building vpk vitamemio_tester.vpk
+[100%] Built target vitamemio_tester.vpk-vpk
+rc=0

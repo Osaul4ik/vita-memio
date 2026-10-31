@@ -202,6 +202,7 @@ typedef struct Dev {
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
 	void         *ra_last_part;
+	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
@@ -1297,6 +1298,10 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  * start nor break one, and while pieces are kept they go the standard way, so
  * they do not drop them (see stage_xfer_one). */
 #define RA_MIN_SECTORS  128
+/* ... but only while the stream is live (read within this long): pieces left
+ * behind by a stream that has ended are dropped by the next staged transfer,
+ * which then goes the faster way as usual. */
+#define RA_LIVE_US      30000u
 #define RA_MAX_AGE_US   500000u
 #define RA_RETIRE_MS    50
 
@@ -1572,17 +1577,21 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	return cov;
 }
 
-/* A staged read [sector, sector + n) has completed: the stream so far. */
-static void ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
+/* A read [sector, sector + n) has completed: the stream so far. 1 if it
+ * counts (then the pieces may be refilled after it). */
+static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
 {
 	if (n < RA_MIN_SECTORS)
-		return;                             /* neither part of a stream nor a break */
+		return 0;                           /* neither part of a stream nor a break */
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak)
 		d->ra_streak += d->ra_streak < 1000;
 	else
 		d->ra_streak = 1;
 	d->ra_last_part = part;
 	d->ra_last_end = sector + n;
+	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))     /* no clock read otherwise */
+		__atomic_store_n(&d->ra_last_us, ksceKernelGetSystemTimeLow(), __ATOMIC_RELAXED);
+	return 1;
 }
 
 /* Queue the free pieces after the stream (after the last piece queued, or
@@ -1798,10 +1807,8 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		__sync_lock_release(&g_shadow_busy);
 	if (got)
 		ADD(g_ra_nc_kib, got / 2);
-	if (ret >= 0 && !bad) {
-		ra_note(d, part, sector, nsec);
+	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec))
 		ra_refill(d, io, ref, part);
-	}
 	if (LD(g_log_diag) && own)
 		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
 	__sync_lock_release(&d->busy);
@@ -1849,7 +1856,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
 	 * waits for the card either way; a write still makes them unusable). */
-	if (mine && nsec < RA_MIN_SECTORS && ra_any(d))
+	if (mine && nsec < RA_MIN_SECTORS && ra_any(d) &&
+	    ksceKernelGetSystemTimeLow() - __atomic_load_n(&d->ra_last_us, __ATOMIC_RELAXED) <
+	    RA_LIVE_US)
 		return io(ref, part, sector, buf, nsec);
 	/* GPU-safe reads asked for, but this firmware has no cache clean to
 	 * keep that promise: such reads take the standard path, which leaves
@@ -2017,8 +2026,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
 	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem) {
-		ra_note(d, part, sector0, nsec);
-		if (ra)
+		if (ra_note(d, part, sector0, nsec) && ra)
 			ra_refill(d, io, ref, part);
 	}
 	if (verify)

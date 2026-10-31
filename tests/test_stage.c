@@ -2003,6 +2003,16 @@ static void test_readahead(void)
 		CHECK((int)d->st.reads == st0 && g_ra_drops == 0 && !ra_idle(d));
 	}
 	CHECK(rd_ok(u, 5 * 256, 256) && g_ra_hits == 1 && g_ra_bad == 0);
+	/* the stream over (nothing read for a while): what it left behind is
+	 * dropped by the next staged transfer, which goes the faster way */
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	CHECK(!ra_idle(d));
+	fake_now_us += RA_LIVE_US;
+	g_min_sectors = MIN_SECTORS;
+	CHECK(rd_ok(u, 3000, 64) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == staging);
+	CHECK(ra_idle(d) && g_ra_drops == 1);
+	CHECK(rd_ok(u, 3100, 64) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == staging);
 	vm_stage_fini();
 
 	/* copy on the system core: a game's stream is copied by the copier from

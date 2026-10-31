@@ -107,6 +107,9 @@ static void reset(void)
 	d->ra_th = d->ra_go = d->ra_done = -1;
 	g_readahead = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
+	g_ra_nc_kib = 0;
+	g_nc_off_refused = 0;
+	g_nc_off_type = 0;
 	g_offload = VM_OFFLOAD_OFF;
 	g_offload_state = g_offload_logged = 0;
 	g_offload_type = 0;
@@ -1902,6 +1905,83 @@ static void test_readahead(void)
 		}
 	}
 
+	/* a stream into non-cacheable memory (a game's graphics data): the first
+	 * reads straight into the buffer as before, then from the pieces, copied
+	 * by the copier through its non-cacheable mapping, nothing cleaned */
+	for (int offl = 0; offl <= 1; offl++) {
+		reset();
+		ra_settings(&s, 1, offl ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+		fake_pid = 0x42;
+		fake_memtype = MEMTYPE_NC;
+		fake_meminfo_type = 0x10208006;           /* the mapping: non-cacheable, RW */
+		for (uint32_t i = 0; i < 12; i++) {
+			const int here = __atomic_load_n(&io_here, __ATOMIC_RELAXED);
+
+			copies_here = copies_elsewhere = 0;
+			clean_calls = 0;
+			CHECK(rd_ok(u, i * 256, 256));
+			CHECK(clean_calls == 0 && fake_usermap_live == 0);
+			if (i < 5) {
+				CHECK(copies_here == 0 && copies_elsewhere == 0);
+			} else {
+				CHECK(__atomic_load_n(&io_here, __ATOMIC_RELAXED) == here);
+				CHECK(offl ? copies_here == 0 && copies_elsewhere >= 1
+				           : copies_here >= 1 && copies_elsewhere == 0);
+			}
+		}
+		CHECK(g_ra_hits >= 7 && g_ra_nc_kib >= 7 * 128 && g_nc_stock_kib == 5 * 128);
+		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
+		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
+		/* elsewhere: dropped, straight in */
+		CHECK(rd_ok(u, 3500, 300) && ra_idle(d) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
+		vm_stage_fini();
+	}
+
+	/* the non-cacheable mapping does not fit (here: cached): only those are
+	 * refused - the caller copies them; a cached read still goes to the copier */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	fake_pid = 0x42;
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x1020D006;
+	for (uint32_t i = 0; i < 8; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(g_ra_hits >= 2 && g_nc_off_refused == 1 && g_offload_state == 0);
+	CHECK(fake_usermap_live == 0 && sems_empty(d));
+	fake_memtype = 0xD000;
+	copies_here = copies_elsewhere = 0;
+	CHECK(rd_ok(u, 3000, 256) && copies_here == 0 && copies_elsewhere >= 1);
+	CHECK(g_offload_state == 1);
+	vm_stage_fini();
+
+	/* device memory, verify on, small reads, read ahead off: straight in as
+	 * before, nothing read ahead */
+	{
+		static const int kinds[] = { MEMTYPE_DEVICE, MEMTYPE_NC, MEMTYPE_NC, MEMTYPE_NC };
+
+		for (int k = 0; k < 4; k++) {
+			reset();
+			ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+			fake_memtype = kinds[k];
+			if (k == 1) {
+				g_verify = 1;
+			} else if (k == 3) {
+				s.readahead = 0;
+				vm_stage_apply(&s);
+				vm_stage_worker_tick();
+			}
+			for (uint32_t i = 0; i < 10; i++) {
+				const uint32_t n = k == 2 ? 64 : 256;
+
+				g_min_sectors = 1;
+				CHECK(rd_ok(u, i * n, n) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
+			}
+			CHECK(ra_idle(d) && g_ra_hits == 0 && g_nc_stock_kib == (k == 2 ? 10 * 32 : 10 * 128));
+			g_verify = 0;
+			vm_stage_fini();
+		}
+	}
+
 	/* small transfers too (as the tester's small files): reads under 64 KiB
 	 * never start a stream ... */
 	reset();
@@ -1920,7 +2000,7 @@ static void test_readahead(void)
 	{
 		const int st0 = d->st.reads;
 
-		CHECK(rd_ok(u, 3000, 8) && last_buf == u);       /* stock, into the caller's buffer */
+		CHECK(rd_ok(u, 3000, 8) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);       /* stock, into the caller's buffer */
 		memset(w, 0x3C, 8 * 512);
 		CHECK(wr(w, 3500, 8, REF_RD) == 0);              /* a small write: stock too */
 		CHECK((int)d->st.reads == st0 && g_ra_drops == 0 && !ra_idle(d));

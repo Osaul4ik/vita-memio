@@ -465,6 +465,11 @@ static int          g_offload_logged;      /* the state the worker last logged *
 static uint32_t     g_offload_type;        /* the first mapping's memblock type */
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
+/* Read ahead into non-cacheable buffers: their mapping did not fit (memory
+ * type or access) - the caller copies those from then on; cached ones are not
+ * affected. */
+static volatile int g_nc_off_refused;
+static uint32_t     g_nc_off_type;
 
 /* The caller's buffer for one request, mapped for the copier (see the top of
  * "copy on the system core"). */
@@ -477,6 +482,8 @@ typedef struct OffMap {
 	int      tried;
 	int      mt;               /* the buffer's memory type at both ends (read by
 	                            * the caller: an address of its own space), or -1 */
+	int      nc;               /* a non-cacheable buffer (read ahead): a mapping
+	                            * that does not fit refuses only those */
 } OffMap;
 static void off_map(OffMap *m);
 
@@ -764,6 +771,18 @@ static int pipe_helper(SceSize args, void *argp)
 	return 0;
 }
 
+/* Wait until this core's writes have reached memory: after a copy into a
+ * non-cacheable buffer, which the graphics chip may read at once (a DMB only
+ * orders them). */
+static inline void vm_dsb(void)
+{
+#if defined(__arm__)
+	__asm__ volatile("dsb" ::: "memory");
+#else
+	__sync_synchronize();
+#endif
+}
+
 /* Copy the parts of the current job into dst as each one arrives (sem_done),
  * handing each buffer back (sem_free) for the part two further on. Run by the
  * copier, or by the caller when its buffer could not be mapped. *done: the
@@ -796,6 +815,8 @@ static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t 
 		if (!d->job_ra && i + 2 < k)        /* part i+2 reads into this buffer */
 			ksceKernelSignalSema(d->sem_free, 1);
 	}
+	if (d->job_ra && !clean)
+		vm_dsb();                           /* non-cacheable: in memory now */
 	return 0;
 }
 
@@ -1127,7 +1148,10 @@ static void off_map(OffMap *m)
 	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
 	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != mt) {
 		ksceKernelUserUnmap(uid);
-		off_refuse(-2, -2, 0);
+		if (m->nc)
+			ST(g_nc_off_refused, 1);
+		else
+			off_refuse(-2, -2, 0);
 		return;
 	}
 	memset(&info, 0, sizeof(info));
@@ -1135,10 +1159,15 @@ static void off_map(OffMap *m)
 	r = ksceKernelMemBlockGetInfoEx(uid, &info);
 	if (r < 0 || (int)(info.type & 0xFF00) != mt || (info.type & 0x6) != 0x6) {
 		ksceKernelUserUnmap(uid);
-		off_refuse(-1, r < 0 ? r : -1, info.type);
+		if (m->nc) {
+			ST(g_nc_off_type, info.type);
+			ST(g_nc_off_refused, 1);
+		} else {
+			off_refuse(-1, r < 0 ? r : -1, info.type);
+		}
 		return;
 	}
-	{
+	if (!m->nc) {
 		int zero = 0;                       /* first usable one: for the log */
 
 		if (__atomic_compare_exchange_n(&g_offload_state, &zero, 1, 0, __ATOMIC_ACQ_REL,
@@ -1517,6 +1546,8 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 				clean_out(p + (size_t)at * 512, sz[j] * 512);
 			at += sz[j];
 		}
+		if (!clean)
+			vm_dsb();
 		*own += cov;
 		if (stats)
 			cp_us = ksceKernelGetSystemTimeLow() - c0;
@@ -1687,6 +1718,56 @@ static int ra_retire(Dev *d)
 	return 1;
 }
 
+/* A read into non-cacheable memory (64 KiB and up) while read ahead is on:
+ * from the pieces where they continue the stream (copied, by the copier as
+ * the setting says; no cache to clean), the rest the standard way straight
+ * into the buffer as before; then the stream noted and the pieces refilled.
+ * The standard read's result is the caller's, as without read ahead. */
+static uint32_t g_ra_nc_kib;              /* atomic: for the log */
+static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                      uint8_t *p, uint32_t nsec)
+{
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2, .nc = 1 };
+	uint32_t got = 0, own = 0;
+	int ret = 0, stats, off, offload;
+
+	if (!take(d, 1, nsec)) {
+		ADD(g_nc_stock_kib, nsec / 2);
+		return io(ref, part, sector, p, nsec);
+	}
+	if (!__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
+		__sync_lock_release(&d->busy);          /* switched off meanwhile */
+		ADD(g_nc_stock_kib, nsec / 2);
+		return io(ref, part, sector, p, nsec);
+	}
+	stats = LD(g_stats);
+	offload = LD(g_offload);
+	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
+	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
+	      offload != VM_OFFLOAD_OFF && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
+	if (ra_any(d)) {
+		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
+		if (got < nsec)
+			ra_drop(d);                         /* elsewhere, or used up */
+	}
+	if (got < nsec) {
+		ret = io(ref, part, sector + got, p + (size_t)got * 512, nsec - got);
+		ADD(g_nc_stock_kib, (nsec - got) / 2);
+	}
+	if (om.uid >= 0)
+		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
+	if (got)
+		ADD(g_ra_nc_kib, got / 2);
+	if (ret >= 0) {
+		ra_note(d, part, sector, nsec);
+		ra_refill(d, io, ref, part);
+	}
+	if (LD(g_log_diag) && own)
+		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
+	__sync_lock_release(&d->busy);
+	return ret;
+}
+
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
 static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
@@ -1710,6 +1791,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	 * (see the top). Looked at only for transfers that would be staged. */
 	if (mine && LD(d->enabled) && !LD(d->fallback) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
 	    nsec && nsec >= LD(g_min_sectors) && caller_uncached(p, nsec * 512)) {
+		/* ... unless read ahead holds it: a stream into non-cacheable
+		 * memory, as games load their graphics data */
+		if (!write && nsec >= RA_MIN_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
+		    !LD(g_verify) && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC &&
+		    ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1) == MEMTYPE_NC)
+			return ra_nc_read(d, io, ref, part, sector, p, nsec);
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
 	}
@@ -2102,6 +2189,8 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_count_all, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
+	if (offload != LD(g_offload) || !s->readahead != !LD(g_readahead))
+		ST(g_nc_off_refused, 0);                  /* checked afresh */
 	if (offload != LD(g_offload)) {
 		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
 		ST(g_offload_logged, 0);
@@ -2161,10 +2250,12 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
 		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
-			VM_KLOGI("stage: read ahead %u reads %u MiB, dropped %u (%u MiB unused), unusable %u",
+			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable), dropped %u "
+			         "(%u MiB unused), unusable %u, NC copier refused %d (0x%08x)",
 			         (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
-			         (unsigned)LD(g_ra_drops), (unsigned)(LD(g_ra_waste_kib) / 1024),
-			         (unsigned)LD(g_ra_bad));
+			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
+			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
+			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),

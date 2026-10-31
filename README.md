@@ -144,7 +144,6 @@ Pick the storage the test folder is on. On most setups both the SD2Vita and the 
 ## Compatibility
 
 - **Console:** PS Vita PCH-1000 on firmware 3.65 tested. PCH-2000 and PS TV use the same storage system and should work, but are untested.
-- **Firmware:** 3.60 to 3.74. On any other firmware the plugin stays inactive.
 - **Storage:** a microSD in an SD2Vita, the official memory card and the internal storage. Game cards and USB storage are not touched.
 - **Languages:** the Settings page follows the system language (all 20 Vita languages). Only English is written by a person; the rest are machine translations, and corrections are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 

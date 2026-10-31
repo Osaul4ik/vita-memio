@@ -133,12 +133,14 @@ typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf,
 typedef struct RaPiece {
 	int            state;             /* RA_*, atomic                         */
 	uint32_t       seq;               /* the order the thread reads them in    */
-	uint32_t       sector, n, off;    /* off: sectors already handed out       */
+	uint32_t       sector, n;         /* atomic: a write looks at them         */
+	uint32_t       off;               /* sectors already handed out            */
 	io_fn          io;
 	tai_hook_ref_t ref;
 	void          *part;
-	uint32_t       gen, epoch, t_done;   /* see ra_valid                       */
-	int            ok;
+	uint32_t       epoch, t_done;     /* see ra_valid                          */
+	int            ok;                /* read, and no write was running then    */
+	int            dirty;             /* a write touched it since it was queued */
 } RaPiece;
 
 typedef struct Dev {
@@ -200,7 +202,7 @@ typedef struct Dev {
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
 	void         *ra_last_part;
-	uint32_t      ra_wgen;                /* + 1 as a write starts, + 1 as it ends */
+	uint32_t      ra_wbusy;               /* writes on the device right now    */
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
 
@@ -1240,10 +1242,14 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  *     a write through the staging buffer, a non-staged read is left alone)
  *     first drops every piece, waiting for the one being read (up to one
  *     piece, ~6 ms: the card cannot stop a read);
- *   - every write on the device counts ra_wgen up as it starts and as it ends,
- *     on every path (staged or not). A piece is handed out only if no write
- *     ran while it was read and none started since (the count is unchanged,
- *     and even), so nothing written since is ever read from a piece;
+ *   - every write on the device, on every path (staged or not), is counted
+ *     in ra_wbusy while it runs and, as it starts, marks the pieces whose
+ *     sectors it touches dirty. A piece read while any write was running, or
+ *     touched by one since it was queued, is not handed out: a write that
+ *     ends before a piece's read starts is on the card, any other one is seen
+ *     (ra_wbusy is read after the piece is marked reading, the pieces after
+ *     ra_wbusy is counted up, both in one order), so nothing written since is
+ *     ever read from a piece; writes elsewhere leave the pieces alone;
  *   - switching the device (off, on, after an error) counts ra_epoch up, and
  *     a piece older than RA_MAX_AGE_US is not used: a swapped card never
  *     answers a read with the old card's data;
@@ -1255,6 +1261,11 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  *     the thread only once no piece is being read and no request is in flight.
  * Nothing is written ahead or kept back: writes are as before. */
 #define RA_STREAK       5               /* staged reads in a row before it starts */
+/* Only reads of 64 KiB and up make or continue a stream; smaller transfers
+ * (file-system bookkeeping, small files, with "small transfers too") neither
+ * start nor break one, and while pieces are kept they go the standard way, so
+ * they do not drop them (see stage_xfer_one). */
+#define RA_MIN_SECTORS  128
 #define RA_MAX_AGE_US   500000u
 #define RA_RETIRE_MS    50
 
@@ -1281,7 +1292,7 @@ static int ra_thread(SceSize args, void *argp)
 	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
 	for (;;) {
 		int best = -1, exp = RA_QUEUED, r;
-		uint32_t g1, g2;
+		int wr;
 		RaPiece *pc;
 
 		ksceKernelWaitSema(d->ra_go, 1, NULL);
@@ -1294,14 +1305,13 @@ static int ra_thread(SceSize args, void *argp)
 		if (best < 0)
 			continue;                       /* dropped meanwhile */
 		pc = &d->ra[best];
-		if (!__atomic_compare_exchange_n(&pc->state, &exp, RA_READING, 0, __ATOMIC_ACQ_REL,
+		/* seq_cst, as the read of ra_wbusy below and a write's own steps */
+		if (!__atomic_compare_exchange_n(&pc->state, &exp, RA_READING, 0, __ATOMIC_SEQ_CST,
 		                                 __ATOMIC_RELAXED))
 			continue;
-		g1 = __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST);
-		r = pc->io(pc->ref, pc->part, pc->sector, ra_ptr(d, best), pc->n);
-		g2 = __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST);
-		pc->gen = g1;
-		pc->ok = r >= 0 && g1 == g2 && !(g1 & 1);
+		wr = __atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST);   /* after READING */
+		r = pc->io(pc->ref, pc->part, LD(pc->sector), ra_ptr(d, best), LD(pc->n));
+		pc->ok = r >= 0 && !wr;
 		pc->t_done = ksceKernelGetSystemTimeLow();
 		__atomic_store_n(&pc->state, r >= 0 ? RA_READY : RA_FAILED, __ATOMIC_SEQ_CST);
 		if (__atomic_exchange_n(&d->ra_waiting, 0, __ATOMIC_SEQ_CST))
@@ -1374,8 +1384,7 @@ static int ra_valid(const Dev *d, int i)
 	const RaPiece *pc = &d->ra[i];
 
 	return __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY && pc->ok &&
-	       pc->gen == __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST) &&
-	       pc->epoch == LD(d->ra_epoch) &&
+	       !__atomic_load_n(&pc->dirty, __ATOMIC_SEQ_CST) && pc->epoch == LD(d->ra_epoch) &&
 	       ksceKernelGetSystemTimeLow() - pc->t_done < RA_MAX_AGE_US;
 }
 
@@ -1533,6 +1542,8 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 /* A staged read [sector, sector + n) has completed: the stream so far. */
 static void ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
 {
+	if (n < RA_MIN_SECTORS)
+		return;                             /* neither part of a stream nor a break */
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak)
 		d->ra_streak += d->ra_streak < 1000;
 	else
@@ -1564,9 +1575,10 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		if (next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
 			return;
 		pc->seq = ++d->ra_seq;
-		pc->sector = next;
-		pc->n = RA_PIECE_SECTORS;
+		ST(pc->sector, next);
+		ST(pc->n, (uint32_t)RA_PIECE_SECTORS);
 		pc->off = 0;
+		__atomic_store_n(&pc->dirty, 0, __ATOMIC_RELAXED);
 		pc->io = io;
 		pc->ref = ref;
 		pc->part = part;
@@ -1701,6 +1713,11 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
 	}
+	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
+	 * the standard way meanwhile, instead of dropping them (a read elsewhere
+	 * waits for the card either way; a write still makes them unusable). */
+	if (mine && nsec < RA_MIN_SECTORS && ra_any(d))
+		return io(ref, part, sector, buf, nsec);
 	/* GPU-safe reads asked for, but this firmware has no cache clean to
 	 * keep that promise: such reads take the standard path, which leaves
 	 * the data in memory as promised. */
@@ -1739,7 +1756,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
-	if (write)
+	if (write && nsec >= RA_MIN_SECTORS)
 		d->ra_streak = 0;
 	if (ra_any(d)) {
 		const uint32_t got = ra ? ra_serve(d, part, io, sector, p, left, clean, stats, off, &om,
@@ -1893,8 +1910,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	return left ? io(ref, part, sector, p, left) : ret;
 }
 
-/* Every write counts the device's ra_wgen up as it starts and as it ends,
- * whichever way it goes (see "read ahead"). */
+/* Every write, whichever way it goes, is counted while it runs and marks the
+ * pieces it touches dirty first (see "read ahead"). */
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
@@ -1902,9 +1919,19 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 
 	if (!write)
 		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec);
-	__atomic_fetch_add(&d->ra_wgen, 1, __ATOMIC_SEQ_CST);
+	__atomic_fetch_add(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
+	for (int i = 0; i < RA_PIECES; i++) {
+		RaPiece *pc = &d->ra[i];
+
+		if (__atomic_load_n(&pc->state, __ATOMIC_SEQ_CST) != RA_FREE) {
+			const uint64_t a = LD(pc->sector), e = a + LD(pc->n);
+
+			if ((uint64_t)sector < e && (uint64_t)sector + nsec > a)
+				__atomic_store_n(&pc->dirty, 1, __ATOMIC_SEQ_CST);
+		}
+	}
 	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec);
-	__atomic_fetch_add(&d->ra_wgen, 1, __ATOMIC_SEQ_CST);
+	__atomic_fetch_sub(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	return r;
 }
 

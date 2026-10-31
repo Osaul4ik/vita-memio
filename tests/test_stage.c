@@ -48,6 +48,7 @@ static void *fake_copy(void *d, const void *s, size_t n)
 #define M            VM_DEV_MEMCARD
 
 static uint8_t disk[DISK_SECTORS * 512];
+static pthread_mutex_t disk_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t *staging;
 
 static int io_calls, fail_at_call, corrupt_staged;
@@ -74,6 +75,7 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 		return -5;
 	if (sector > DISK_SECTORS || n > DISK_SECTORS - sector)
 		return -5;                            /* past the card's end */
+	pthread_mutex_lock(&disk_lock);           /* the stress test writes meanwhile */
 	if (ref == REF_RD) {
 		memcpy(buf, disk + (size_t)sector * 512, (size_t)n * 512);
 		if (corrupt_staged && buf == staging)
@@ -83,6 +85,7 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 		if (corrupt_staged && buf == staging)
 			disk[(size_t)sector * 512] ^= 0xFF;
 	}
+	pthread_mutex_unlock(&disk_lock);
 	return 0;
 }
 
@@ -1883,7 +1886,7 @@ static void test_readahead(void)
 	/* reads of other sizes (64, 300, 1100 sectors) in a stream: still the
 	 * disk's data, partly from the pieces */
 	{
-		static const uint32_t sizes[] = { 64, 300, 600 };
+		static const uint32_t sizes[] = { 128, 300, 600 };
 
 		for (size_t k = 0; k < 3; k++) {
 			uint32_t at = 0;
@@ -1898,6 +1901,32 @@ static void test_readahead(void)
 			vm_stage_fini();
 		}
 	}
+
+	/* small transfers too (as the tester's small files): reads under 64 KiB
+	 * never start a stream ... */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_min_sectors = 1;
+	for (uint32_t i = 0; i < 40; i++)
+		CHECK(rd_ok(u, i * 64, 64));
+	CHECK(ra_idle(d) && g_ra_hits == 0 && g_ra_drops == 0);
+	/* ... nor break one, and go the standard way while pieces are kept,
+	 * which stay (no drop) for the stream's next read */
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(!ra_idle(d));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);                            /* the thread is quiet now */
+	{
+		const int st0 = d->st.reads;
+
+		CHECK(rd_ok(u, 3000, 8) && last_buf == u);       /* stock, into the caller's buffer */
+		memset(w, 0x3C, 8 * 512);
+		CHECK(wr(w, 3500, 8, REF_RD) == 0);              /* a small write: stock too */
+		CHECK((int)d->st.reads == st0 && g_ra_drops == 0 && !ra_idle(d));
+	}
+	CHECK(rd_ok(u, 5 * 256, 256) && g_ra_hits == 1 && g_ra_bad == 0);
+	vm_stage_fini();
 
 	/* copy on the system core: a game's stream is copied by the copier from
 	 * the pieces, through its mapping, unmapped after */
@@ -1936,13 +1965,49 @@ static void test_readahead(void)
 		ra_wait(d, i);                            /* read already */
 	memset(w, 0xA5, 8 * 512);
 	CHECK(wr(w, 6 * 256 + 10, 8, REF_RD) == 0);   /* stock: under 32 KiB */
-	CHECK(d->ra_wgen == 2 && !ra_idle(d));
+	CHECK(d->ra_wbusy == 0 && !ra_idle(d));
 	CHECK(rd_ok(u, 6 * 256, 256) && u[10 * 512] == 0xA5);
 	CHECK(g_ra_bad == 1 && g_ra_hits == 1);           /* the sixth was one */
 	/* ... and the stream goes on */
 	for (uint32_t i = 7; i < 14; i++)
 		CHECK(rd_ok(u, i * 256, 256));
 	CHECK(g_ra_hits >= 4);
+	vm_stage_fini();
+
+	/* a write elsewhere leaves the pieces usable; one into a piece marks
+	 * only that piece (the stream's read then goes the standard way) */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	memset(w, 0x77, 256 * 512);
+	CHECK(wr(w, 3000, 8, REF_RD) == 0);           /* elsewhere, stock */
+	CHECK(wr(w, 3300, 256, REF_RD) == 0);         /* elsewhere, staged: drops them */
+	CHECK(ra_idle(d) && g_ra_drops == 1);
+	for (uint32_t i = 5; i < 10; i++)
+		CHECK(rd_ok(u, i * 256, 256));            /* a stream again from here */
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	CHECK(wr(w, 3900, 8, REF_RD) == 0);           /* elsewhere: nothing marked */
+	{
+		int dirty = 0;
+
+		for (int i = 0; i < RA_PIECES; i++)
+			dirty += d->ra[i].dirty;
+		CHECK(dirty == 0);
+		CHECK(wr(w, 10 * 256 + 300, 8, REF_RD) == 0);   /* into the second piece */
+		for (int i = 0; i < RA_PIECES; i++)
+			dirty += d->ra[i].dirty;
+		CHECK(dirty == 1);
+	}
+	{
+		const uint32_t hits = g_ra_hits;
+
+		CHECK(rd_ok(u, 10 * 256, 256) && g_ra_hits == hits + 1);   /* the clean piece */
+		CHECK(rd_ok(u, 11 * 256, 256) && u[44 * 512] == 0x77 && g_ra_bad == 1);
+	}
 	vm_stage_fini();
 
 	/* a read larger than the pieces hold: their part, then the rest as
@@ -1963,8 +2028,7 @@ static void test_readahead(void)
 		CHECK(rd_ok(u, i * 256, 256));
 	for (int i = 0; i < RA_PIECES; i++)
 		ra_wait(d, i);
-	d->ra[0].gen = 1;                             /* as if a write had been running */
-	d->ra[0].ok = 0;
+	d->ra[0].ok = 0;                              /* as if a write had been running */
 	CHECK(rd_ok(u, 5 * 256, 256) && g_ra_bad == 1 && g_ra_hits == 0);
 	vm_stage_fini();
 
@@ -2111,6 +2175,29 @@ static volatile int g_stress_stop, g_stress_bad;
 static void *g_null_ctx;                          /* the fake SD context's first word */
 
 typedef struct { int dev; int seed; int reads; int seq; int pause; } StressArg;
+/* The readers stay below this; a writer writes above it (into what read
+ * ahead may have read: the pieces it touches are marked). */
+#define STRESS_RD_END  3584
+
+static void *stress_writer(void *argp)
+{
+	uint8_t *w = malloc(256 * 512);
+	uint32_t x = 7;
+
+	(void)argp;
+	while (!__atomic_load_n(&g_stress_stop, __ATOMIC_ACQUIRE)) {
+		uint32_t n, at;
+
+		x = x * 1103515245u + 12345u;
+		n = (x >> 8) & 1 ? 8 : 256;                /* stock or staged */
+		at = STRESS_RD_END + (x >> 4) % (DISK_SECTORS - STRESS_RD_END - n);
+		memset(w, (int)(x >> 24), (size_t)n * 512);
+		stage_xfer(&g_dev[M], 1, fake_io, REF_WR, REF_RD, NULL, at, w, n);
+		sched_yield();
+	}
+	free(w);
+	return NULL;
+}
 
 static void *stress_reader(void *argp)
 {
@@ -2129,12 +2216,12 @@ static void *stress_reader(void *argp)
 
 		x = x * 1103515245u + 12345u;
 		n = 64 + (x >> 8) % 1037;
-		at = (x >> 4) % (DISK_SECTORS - n);
+		at = (x >> 4) % (STRESS_RD_END - n);
 		if (a->seq) {                               /* a stream: read ahead's case */
 			static __thread uint32_t pos;
 
 			n = 256;
-			if (pos + n > DISK_SECTORS)
+			if (pos + n > STRESS_RD_END)
 				pos = 0;
 			at = pos;
 			pos += n;
@@ -2174,7 +2261,7 @@ static void test_stress_concurrency(void)
 	VmSettings s;
 	Dev *in = &g_dev[VM_DEV_INTERNAL];
 	uint8_t *staging2 = calloc(1, STAGE_BYTES);
-	pthread_t th[4];
+	pthread_t th[5];
 	StressArg args[3] = { { M, 1, 0, 1, 0 }, { M, 2, 0, 0, 0 }, { VM_DEV_INTERNAL, 3, 0, 1, 0 } };
 	int saved_live = g_live;
 
@@ -2197,6 +2284,7 @@ static void test_stress_concurrency(void)
 	for (int i = 0; i < 3; i++)
 		CHECK(pthread_create(&th[i], NULL, stress_reader, &args[i]) == 0);
 	CHECK(pthread_create(&th[3], NULL, stress_stats, NULL) == 0);
+	CHECK(pthread_create(&th[4], NULL, stress_writer, NULL) == 0);
 	/* switch until every reader has read a fair amount (slow under TSan) */
 	for (int i = 0; i < 240 || ((__atomic_load_n(&args[0].reads, __ATOMIC_RELAXED) < 40 ||
 	                             __atomic_load_n(&args[1].reads, __ATOMIC_RELAXED) < 40 ||
@@ -2222,7 +2310,7 @@ static void test_stress_concurrency(void)
 		sched_yield();
 	}
 	__atomic_store_n(&g_stress_stop, 1, __ATOMIC_RELEASE);
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 5; i++)
 		pthread_join(th[i], NULL);
 	CHECK(g_stress_bad == 0);
 	CHECK(args[0].reads > 20 && args[1].reads > 20 && args[2].reads > 20);

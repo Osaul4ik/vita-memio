@@ -1921,7 +1921,7 @@ static void test_readahead(void)
 			clean_calls = 0;
 			CHECK(rd_ok(u, i * 256, 256));
 			CHECK(clean_calls == 0 && fake_usermap_live == 0);
-			if (i < 2) {                          /* from the second read in a row */
+			if (i < 5) {                          /* from the sixth read in a row */
 				CHECK(copies_here == 0 && copies_elsewhere == 0);
 			} else {
 				CHECK(__atomic_load_n(&io_here, __ATOMIC_RELAXED) == here);
@@ -1929,7 +1929,7 @@ static void test_readahead(void)
 				           : copies_here >= 1 && copies_elsewhere == 0);
 			}
 		}
-		CHECK(g_ra_hits == 10 && g_ra_nc_kib == 10 * 128 && g_nc_stock_kib == 2 * 128);
+		CHECK(g_ra_hits == 7 && g_ra_nc_kib == 7 * 128 && g_nc_stock_kib == 5 * 128);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
 		/* elsewhere: dropped, straight in */
@@ -1937,15 +1937,15 @@ static void test_readahead(void)
 		vm_stage_fini();
 	}
 
-	/* one piece ahead after the second read, two after the third, then
-	 * three: little read past the end of a short file */
+	/* one piece ahead after the fifth read, two after the sixth, then
+	 * three: little read past the end of a file */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
-	for (uint32_t i = 0; i < 4; i++) {
-		static const int ahead[] = { 0, 1, 2, 3 };
+	for (uint32_t i = 0; i < 7; i++) {
+		static const int ahead[] = { 0, 0, 0, 0, 1, 2, 3 };
 		int live = 0;
 
 		CHECK(rd_ok(u, 100 + i * 512, 512));
@@ -1954,7 +1954,7 @@ static void test_readahead(void)
 		CHECK(live == ahead[i]);
 	}
 	/* random 1 MiB reads (four 256 KiB requests each, as the file system
-	 * issues them): the right data, whatever is read ahead and dropped */
+	 * issues them): never start it, the right data */
 	{
 		uint32_t x = 99;
 
@@ -1966,7 +1966,10 @@ static void test_readahead(void)
 			for (uint32_t q = 0; q < 4; q++)
 				CHECK(rd_ok(u, at + q * 512, 512));
 		}
-		CHECK(g_ra_hits > 0 && g_ra_drops > 0 && d->st.errors == 0 && !d->fallback);
+		const uint32_t hits = g_ra_hits;
+
+		CHECK(g_ra_drops == 1 && d->st.errors == 0 && !d->fallback);   /* the stream's */
+		(void)hits;
 	}
 	vm_stage_fini();
 

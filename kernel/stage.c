@@ -1294,10 +1294,11 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  *     the thread only once no piece is being read and no request is in flight.
  * Nothing is written ahead or kept back: writes are as before. */
 #define RA_STREAK       5               /* staged reads in a row before it starts */
-/* Into non-cacheable memory (games' graphics data): from the second read in
- * a row, so files under 1.25 MiB (most textures) get it too - one piece ahead
- * at first, then two, then three, so little is read past a file's end. */
-#define RA_STREAK_NC    2
+/* Into non-cacheable memory (games' graphics data): the same five reads (a
+ * random 1 MiB read, four requests, never starts it), then one piece ahead at
+ * first, two after the next read, then three, so little is read past the end
+ * of a file. */
+#define RA_STREAK_NC    5
 /* Only reads of 64 KiB and up make or continue a stream; smaller transfers
  * (file-system bookkeeping, small files, with "small transfers too") neither
  * start nor break one, and while pieces are kept they go the standard way, so

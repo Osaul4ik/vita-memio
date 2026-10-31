@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 /* The staging copy, with a time cost the tests can set (0 by default, so the
  * other tests' timings are io only). */
@@ -108,6 +109,14 @@ static void reset(void)
 	g_readahead = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
 	g_ra_nc_kib = 0;
+	g_ra_mode = VM_RA_OFF;
+	g_ra_pid = g_ra_seen = 0;
+	g_ra_thr[0] = g_ra_thr[1] = 0;
+	g_ra_learning = 0;
+	g_ra_title[0] = 0;
+	g_ra_auto_logged = 0;
+	g_title_fn = NULL;
+	ra_hist_clear();
 	g_nc_off_refused = 0;
 	g_nc_off_type = 0;
 	g_offload = VM_OFFLOAD_OFF;
@@ -1850,8 +1859,8 @@ static void test_readahead(void)
 	int saved_live = g_live;
 
 	/* off by default, and nothing made for it */
-	CHECK(VM_DEF_READAHEAD == 0 && vm_setting_valid(VM_KEY_READAHEAD, 1) &&
-	      !vm_setting_valid(VM_KEY_READAHEAD, 2));
+	CHECK(VM_DEF_READAHEAD == VM_RA_OFF && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) &&
+	      vm_setting_valid(VM_KEY_READAHEAD, VM_RA_AUTO) && !vm_setting_valid(VM_KEY_READAHEAD, 3));
 	reset();
 	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);
 	vm_stage_worker_tick();
@@ -2312,6 +2321,180 @@ static void test_readahead(void)
 	free(w);
 }
 
+/* Read ahead "Auto": per game (title id), the streams' lengths are learnt
+ * and the threshold that pays most is chosen per kind of memory, kept in
+ * ur0:data/vita-memio/ra/<title>.bin and used when the game runs again. */
+static const char *fake_title_of(SceUID pid)
+{
+	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001"
+	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : NULL;
+}
+
+static int fake_title(SceUID pid, char *t, SceSize len)
+{
+	const char *s = fake_title_of(pid);
+
+	if (!s)
+		return -1;
+	snprintf(t, len, "%s", s);
+	return 0;
+}
+
+/* `count` streams of `len` reads of `n` sectors each, one after another on
+ * the disk (wrapping), each starting somewhere new. */
+static void streams(uint8_t *u, uint32_t count, uint32_t len, uint32_t n)
+{
+	static uint32_t at = 0;
+
+	for (uint32_t k = 0; k < count; k++) {
+		at += 3 * n + 64;                         /* not where the last one ended */
+		if (at + len * n > DISK_SECTORS)
+			at = 0;
+		for (uint32_t i = 0; i < len; i++)
+			CHECK(rd_ok(u, at + i * n, n));
+		at += len * n;
+	}
+}
+
+static void test_readahead_auto(void)
+{
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+	uint32_t thr[2];
+
+	/* the choice: long streams start early; short ones (as a game reading
+	 * files of 1 MiB and less) never; a mix by what pays */
+	{
+		uint32_t c[RA_HBINS] = { 0 };
+
+		c[16] = 50;                                   /* 4 MiB streams */
+		CHECK(ra_choose(c) == 2);
+		memset(c, 0, sizeof(c));
+		c[2] = 300;
+		c[3] = 200;
+		c[4] = 100;                                   /* 1 MiB files */
+		CHECK(ra_choose(c) == RA_THR_NONE);
+		c[12] = 40;                                   /* and some 3 MiB ones */
+		CHECK(ra_choose(c) == 5);                     /* after the 1 MiB files */
+		memset(c, 0, sizeof(c));
+		CHECK(ra_choose(c) == RA_THR_NONE);           /* nothing seen */
+		c[1] = 1000;                                  /* single reads: nothing to gain */
+		CHECK(ra_choose(c) == RA_THR_NONE);
+	}
+
+	fakes_tmpdir_new();
+
+	/* a game of long streams: learnt (fixed threshold meanwhile), kept,
+	 * served early from then on */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x42;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();                           /* sees the game: learning */
+	CHECK(g_ra_pid == 0x42 && g_ra_learning && !strcmp(g_ra_title, "PCSE00001"));
+	CHECK(ra_threshold(0x42, 0) == RA_STREAK && ra_threshold(0x42, 1) == RA_STREAK_NC);
+	streams(u, RA_LEARN_STREAMS, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && g_ra_thr[1] == RA_THR_NONE);   /* none seen */
+	CHECK(ra_profile_load("PCSE00001", thr) && thr[0] == 2 && thr[1] == RA_THR_NONE);
+	CHECK(ra_threshold(0x42, 0) == 2 && ra_threshold(0x99, 0) == RA_STREAK);  /* only it */
+	{
+		const uint32_t hits = g_ra_hits;
+
+		streams(u, 4, 8, 256);
+		CHECK(g_ra_hits >= hits + 4 * 5);              /* from the third read on */
+	}
+	/* never: not even a long stream starts it (but stays correct) */
+	g_ra_thr[0] = RA_THR_NONE;
+	{
+		const uint32_t hits = g_ra_hits;
+
+		streams(u, 2, 12, 256);
+		CHECK(g_ra_hits == hits && ra_idle(d));
+	}
+	vm_stage_fini();
+
+	/* the same title again (another process): kept, not learnt again */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x43;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x43 && !g_ra_learning && g_ra_thr[0] == 2);
+	/* another game: learns its own; a stream of the first one meanwhile is
+	 * not counted for it */
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && !strcmp(g_ra_title, "PCSB00777"));
+	CHECK(g_ra_thr[0] == 0 && g_ra_hstreams == 0);
+	fake_pid = 0x44;
+	streams(u, 10, 2, 256);                           /* short ones */
+	CHECK(g_ra_hstreams >= 9);
+	/* a process with no usable title id: the fixed threshold, nothing saved */
+	fake_pid = 0x45;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x45 && !g_ra_learning && !g_ra_title[0]);
+	CHECK(ra_threshold(0x45, 0) == RA_STREAK);
+	/* system threads are never a game */
+	fake_pid = KERNEL_PID;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x45);
+	vm_stage_fini();
+
+	/* a fresh folder (no profiles): learnt again; a profile out of range or
+	 * damaged is not used */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	CHECK(!ra_profile_load("PCSE00001", thr));       /* the new folder has none */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x42;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning);
+	{
+		uint32_t t2[2] = { 7, 9 };                    /* 9: out of range */
+
+		ra_profile_save("PCSE00002", t2, 1);
+		CHECK(!ra_profile_load("PCSE00002", thr));
+		t2[1] = 3;
+		ra_profile_save("PCSE00002", t2, 1);
+		CHECK(ra_profile_load("PCSE00002", thr) && thr[0] == 7 && thr[1] == 3);
+	}
+	vm_stage_fini();
+
+	/* auto without title ids (an unknown firmware): as on, said once */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	fake_pid = 0x42;
+	streams(u, 3, 8, 256);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0 && g_ra_auto_logged == 1 && g_ra_hits > 0);
+	vm_stage_fini();
+
+	fakes_tmpdir_remove();
+	g_live = saved_live;
+	free(u);
+}
+
 /* Everything at once, for ThreadSanitizer: two readers on the memory card
  * (one of them mostly finds the buffer busy and goes stock), one on the
  * internal storage, the settings switched on the fly (overlapped reads, copy
@@ -2414,6 +2597,7 @@ static void test_stress_concurrency(void)
 
 	reset();
 	fake_pid = 0x42;                                /* a game: copy on the system core too */
+	g_title_fn = fake_title;                        /* read ahead's auto learns it */
 	in->buf = staging2;
 	in->enabled = 1;
 	in->fallback = 0;
@@ -2441,7 +2625,7 @@ static void test_stress_concurrency(void)
 		s.offload = (i / 3) % 3 == 1 ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF;
 		s.stats = (i / 9) & 1;
 		s.small = (i / 18) & 1;
-		s.readahead = (i / 5) % 4 != 0;
+		s.readahead = (i / 5) % 4 == 0 ? VM_RA_OFF : (i / 5) % 4 == 2 ? VM_RA_AUTO : VM_RA_ON;
 		vm_stage_apply(&s);
 		vm_stage_worker_tick();
 		sched_yield();
@@ -2498,6 +2682,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
+	RUN(test_readahead_auto);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
 	RUN(test_problems_wake_the_worker);

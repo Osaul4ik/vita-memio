@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
@@ -450,7 +451,15 @@ int ksceIoWrite(SceUID fd, const void *buf, SceSize n)
 
 int ksceIoClose(SceUID fd) { return close(fd); }
 
-int ksceIoMkdir(const char *path, int mode) { (void)path; (void)mode; return 0; }
+int ksceIoMkdir(const char *path, int mode)
+{
+	char p[512];
+
+	(void)mode;
+	if (map(path, p, sizeof(p)))
+		mkdir(p, 0777);                   /* a folder under the test's own one */
+	return 0;
+}
 
 int ksceIoRemove(const char *path)
 {

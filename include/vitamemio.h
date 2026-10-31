@@ -76,7 +76,7 @@ enum vm_key {
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
-	VM_KEY_READAHEAD,      /* 0/1: read ahead while a stream is read (EXPERIMENT) */
+	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read (EXPERIMENT) */
 	VM_KEY_COUNT
 };
 
@@ -99,6 +99,12 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_GPU     1
 #define VM_OFFLOAD_ALWAYS  2
+
+/* Read ahead (experimental): off; on from five large reads in a row; auto -
+ * learns, per game (title id), from when on to start and keeps that. */
+#define VM_RA_OFF          0
+#define VM_RA_ON           1
+#define VM_RA_AUTO         2
 
 /* The HUD always sits in the top right corner. */
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
@@ -162,8 +168,9 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_STATS:
 	case VM_KEY_GPUSAFE:
-	case VM_KEY_READAHEAD:
 		return v == 0 || v == 1;
+	case VM_KEY_READAHEAD:
+		return v >= VM_RA_OFF && v <= VM_RA_AUTO;
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:

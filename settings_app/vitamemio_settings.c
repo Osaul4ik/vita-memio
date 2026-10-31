@@ -87,7 +87,9 @@ static const char X_GROUP[] =
 		ROW_LIST("offload")
 			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "1") ITEM("vm_i_off2", "2")
 		"</list>"
-		ROW_TOGGLE("readahead")
+		ROW_LIST("readahead")
+			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") ITEM("vm_i_ra2", "2")
+		"</list>"
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
@@ -303,6 +305,9 @@ static const vm_u16 *vm_text(const char *id)
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
 	if (s_pfx(id, "vm_i_style") && id[10] >= '0' && id[10] <= '1' && !id[11])
 		return fixed_text(VM_I18N_ITEM_STYLE_CLASSIC + (id[10] - '0'));
+	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '2' && !id[8])
+		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
+		                : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_PIPE_AUTO);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '2' && !id[9])

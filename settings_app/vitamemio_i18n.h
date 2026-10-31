@@ -68,6 +68,7 @@ enum vm_i18n_id {
 	VM_I18N_ITEM_OFF_ALWAYS,
 	VM_I18N_ROW_READAHEAD,      /* Advanced > Read ahead (experimental)           */
 	VM_I18N_HINT_READAHEAD,
+	VM_I18N_ITEM_RA_ON,         /* its "On" (Off and Auto: the pipeline's)        */
 	VM_I18N_COUNT
 };
 

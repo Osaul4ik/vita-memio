@@ -209,8 +209,9 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin overlapped reads: %s%s\n", pipe_text(res->plugin0.pipeline),
 		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
-		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == 1 ? "on (experimental)"
-		    : res->plugin0.readahead == 0 ? "off" : "unknown");
+		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on (experimental)"
+		    : res->plugin0.readahead == VM_RA_AUTO ? "auto, learnt per game (experimental)"
+		    : res->plugin0.readahead == VM_RA_OFF ? "off" : "unknown");
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
@@ -410,8 +411,9 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
 			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only" : "always");
-		if (res->plugin0.readahead == 1)
-			line(&s, "read ahead: on (experimental)");
+		if (res->plugin0.readahead == VM_RA_ON || res->plugin0.readahead == VM_RA_AUTO)
+			line(&s, "read ahead: %s (experimental)",
+			     res->plugin0.readahead == VM_RA_AUTO ? "auto" : "on");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{

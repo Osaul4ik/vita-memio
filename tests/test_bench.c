@@ -656,6 +656,7 @@ static void test_small_files(void)
 	f.pipeline = 1;
 	f.offload = VM_OFFLOAD_GPU;
 	f.gpusafe = 1;
+	f.readahead = VM_RA_AUTO;
 	e = env_for(&f);
 	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r) && bench_integrity_ok(r));
 	for (int k = 0; k < r->nruns; k++)
@@ -670,6 +671,7 @@ static void test_small_files(void)
 	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
 	CHECK(strstr(text, "plugin copy on the system core: with GPU-safe reads only\n"));
 	CHECK(strstr(text, "plugin GPU-safe reads: on\n"));
+	CHECK(strstr(text, "plugin read ahead: auto, learnt per game (experimental)\n"));
 	CHECK(r->plugin0.offload == VM_OFFLOAD_GPU);
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)

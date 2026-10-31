@@ -213,6 +213,13 @@ typedef struct Dev {
 	 * dropping its pieces made a request wait (µs, atomic) */
 	int           ra_str_ra;
 	uint32_t      ra_str_cost_us;
+	/* depth (auto): where this stream is, and how far the cap has been brought
+	 * down (pieces off RA_PIECES, per kind) with how many clean streams since */
+	uint32_t      ra_depth, ra_ok, ra_last_n;
+	int           ra_hit_full;            /* the last read was served whole */
+	uint32_t      ra_cap_cut[2], ra_clean[2];
+	uint32_t      ra_str_served;          /* sectors this stream got from the pieces */
+	uint32_t      ra_str_waste;           /* ... and read ahead for it, not used (atomic) */
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
@@ -1356,6 +1363,14 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
 #define RA_COST_MIN_US    1000            /* a measured cost is never below this */
 #define RA_MEAS_MIN       16              /* samples before a measured value counts */
 #define RA_BUCKETS        4               /* read sizes: <256, <512, <1024, more sectors */
+/* Depth (auto, a game that is known): a stream starts with one piece ahead
+ * and gets one more after every RA_DEPTH_UP reads in a row served whole from
+ * the pieces, up to the cap. The cap (3 pieces at most, as ever) comes down by
+ * one when a stream ended with more read ahead and unused than half of what
+ * it used, and goes back up by one after RA_CAP_UP_STREAMS streams in a row
+ * that used at least four times what they wasted - per kind of memory. */
+#define RA_DEPTH_UP       2
+#define RA_CAP_UP_STREAMS 4
 #define RA_PROFILE_DIR    VM_DATA_DIR "/ra"
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
@@ -1506,6 +1521,15 @@ static int ra_meas_on(const Dev *d)
 
 	return LD(g_ra_mode) == VM_RA_AUTO && pid && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
 	       __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE);
+}
+
+/* Whether this stream's depth follows the game: auto, and the game is known
+ * (learning or learnt); anything else keeps the fixed depth, as on. */
+static int ra_adaptive(const Dev *d)
+{
+	const SceUID pid = d->ra_pid;
+
+	return LD(g_ra_mode) == VM_RA_AUTO && pid && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
 }
 
 /* The threshold that would have paid most for one kind's histogram, or
@@ -1831,6 +1855,7 @@ static void ra_drop(Dev *d)
 	if (any) {
 		ADD(g_ra_drops, 1);
 		ADD(g_ra_waste_kib, waste / 2);
+		ADD(d->ra_str_waste, waste);
 		if (meas)                               /* what the stream's end waited */
 			ADD(d->ra_str_cost_us, ksceKernelGetSystemTimeLow() - t0);
 	}
@@ -1946,6 +1971,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	uint32_t sz[RA_PIECES], cov = ra_cover(d, part, io, sector, n, idx, &cnt), w0, wait_us,
 	         cp_us = 0, at = 0;
 
+	d->ra_hit_full = 0;
 	if (!cov)
 		return 0;
 	w0 = stats ? ksceKernelGetSystemTimeLow() : 0;
@@ -1990,6 +2016,8 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	}
 	ADD(g_ra_hits, 1);
 	ADD(g_ra_kib, cov / 2);
+	d->ra_str_served += cov;
+	d->ra_hit_full = cov == left_all;
 	if (stats) {
 		ADD(d->tm.rd_sectors, cov);
 		ADD(d->tm.rd_io_us, wait_us);
@@ -1997,6 +2025,29 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		ADD(d->rd_bytes, (uint64_t)cov * 512);
 	}
 	return cov;
+}
+
+/* A stream that started read ahead has ended: bring the cap of its kind
+ * down if it wasted more than half of what it used, up after a few that used
+ * at least four times what they wasted (see RA_DEPTH_UP). */
+static void ra_cap_adapt(Dev *d)
+{
+	const int k = d->ra_nc;
+	const uint32_t served = d->ra_str_served, waste = LD(d->ra_str_waste);
+
+	if ((uint64_t)waste * 2 > served) {
+		d->ra_clean[k] = 0;
+		if (d->ra_cap_cut[k] < RA_PIECES - 1)
+			d->ra_cap_cut[k]++;
+	} else if ((uint64_t)waste * 4 <= served) {
+		if (++d->ra_clean[k] >= RA_CAP_UP_STREAMS) {
+			d->ra_clean[k] = 0;
+			if (d->ra_cap_cut[k])
+				d->ra_cap_cut[k]--;
+		}
+	} else {
+		d->ra_clean[k] = 0;
+	}
 }
 
 /* A read [sector, sector + n) has completed: the stream so far. 1 if it
@@ -2013,9 +2064,16 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
 			if (d->ra_str_ra && ra_meas_on(d))
 				ra_meas_cost(d->ra_nc, LD(d->ra_str_cost_us));
+			if (d->ra_str_ra && ra_adaptive(d))
+				ra_cap_adapt(d);
 		}
 		d->ra_str_ra = 0;
 		ST(d->ra_str_cost_us, 0);
+		d->ra_str_served = 0;
+		ST(d->ra_str_waste, 0);
+		d->ra_depth = 1;
+		d->ra_ok = 0;
+		d->ra_hit_full = 0;
 		d->ra_streak = 1;
 		d->ra_pid = 0;
 		if (LD(g_ra_mode) == VM_RA_AUTO) {
@@ -2028,6 +2086,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		}
 	}
 	d->ra_nc = nc;
+	d->ra_last_n = n;
 	d->ra_last_part = part;
 	d->ra_last_end = sector + n;
 	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))     /* no clock read otherwise */
@@ -2045,8 +2104,28 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 
 	if (d->ra_streak < thr)
 		return;
-	want = d->ra_nc && d->ra_streak - thr + 1 < RA_PIECES ? (int)(d->ra_streak - thr + 1)
-	                                                      : RA_PIECES;
+	if (ra_adaptive(d)) {
+		/* one more piece after RA_DEPTH_UP whole reads in a row, up to the cap,
+		 * and never fewer than the last read needed to be served whole */
+		const uint32_t cap = RA_PIECES - d->ra_cap_cut[d->ra_nc];
+		const uint32_t need = (d->ra_last_n + RA_PIECE_SECTORS - 1) / RA_PIECE_SECTORS;
+
+		if (d->ra_hit_full) {
+			if (++d->ra_ok >= RA_DEPTH_UP && d->ra_depth < cap) {
+				d->ra_depth++;
+				d->ra_ok = 0;
+			}
+		} else {
+			d->ra_ok = 0;
+		}
+		d->ra_hit_full = 0;
+		want = (int)(d->ra_depth < cap ? d->ra_depth : cap);
+		if (need > (uint32_t)want)
+			want = need < RA_PIECES ? (int)need : RA_PIECES;
+	} else {
+		want = d->ra_nc && d->ra_streak - thr + 1 < RA_PIECES ? (int)(d->ra_streak - thr + 1)
+		                                                      : RA_PIECES;
+	}
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 

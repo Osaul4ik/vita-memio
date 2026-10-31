@@ -2627,6 +2627,153 @@ static void test_readahead_measured(void)
 	free(u);
 }
 
+/* Auto's depth: a stream of a known game starts with one piece ahead and
+ * gets more as its reads are served whole; the cap comes down with streams
+ * that waste what they read ahead and back up with the clean ones; a request
+ * of more than one piece is never given less than it needs. Read ahead on, or
+ * auto before the game is known, keeps three at once. */
+static int ra_live(const Dev *d)
+{
+	int live = 0;
+
+	for (int i = 0; i < RA_PIECES; i++)
+		live += __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE;
+	return live;
+}
+
+static void ra_settle(Dev *d)                         /* the thread has read what is queued */
+{
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+}
+
+/* `count` streams of `len` reads of `n` sectors from `at`, each one further on
+ * (wrapping), the thread settled after each so that what it read ahead is
+ * there to be wasted. */
+static void depth_streams(uint8_t *u, Dev *d, uint32_t count, uint32_t len, uint32_t n)
+{
+	static uint32_t at = 0;
+
+	for (uint32_t k = 0; k < count; k++) {
+		at += 3 * n + 64;
+		if (at + len * n > DISK_SECTORS)
+			at = 0;
+		for (uint32_t i = 0; i < len; i++)
+			CHECK(rd_ok(u, at + i * n, n));
+		ra_settle(d);
+		at += len * n;
+	}
+}
+
+static void ra_depth_game(VmSettings *s, uint8_t *u, Dev *d)
+{
+	reset();
+	ra_settings(s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s->readahead = VM_RA_AUTO;
+	vm_stage_apply(s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;                                  /* a title with no profile */
+	CHECK(rd_ok(u, 3000, 256));                       /* one read: the game is seen */
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && d->ra_cap_cut[0] == 0);
+}
+
+static void test_readahead_depth(void)
+{
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	fakes_tmpdir_new();
+
+	/* the ramp: one piece after the fifth read, two after two whole reads, three
+	 * after two more */
+	ra_depth_game(&s, u, d);
+	for (uint32_t i = 0; i < 4; i++)
+		CHECK(rd_ok(u, 100 + i * 256, 256));
+	CHECK(ra_live(d) == 0);
+	CHECK(rd_ok(u, 100 + 4 * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 1 && d->ra_depth == 1);
+	CHECK(rd_ok(u, 100 + 5 * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 1);
+	CHECK(rd_ok(u, 100 + 6 * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 2 && d->ra_depth == 2);
+	CHECK(rd_ok(u, 100 + 7 * 256, 256));
+	CHECK(rd_ok(u, 100 + 8 * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 3 && d->ra_depth == 3);
+	CHECK(rd_ok(u, 100 + 9 * 256, 256));
+	CHECK(rd_ok(u, 100 + 10 * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 3 && g_ra_bad == 0 && d->st.errors == 0);   /* never more than three */
+	vm_stage_fini();
+
+	/* short streams waste what they read ahead: the cap comes down to one and stays */
+	ra_depth_game(&s, u, d);
+	depth_streams(u, d, 2, 8, 256);
+	CHECK(d->ra_cap_cut[0] == 1);                     /* the first one's end is noted by the second */
+	depth_streams(u, d, 2, 8, 256);
+	CHECK(d->ra_cap_cut[0] == 2);
+	depth_streams(u, d, 4, 8, 256);
+	CHECK(d->ra_cap_cut[0] == 2 && d->ra_cap_cut[1] == 0);   /* one piece: neither more nor less */
+	CHECK(rd_ok(u, 100, 256));
+	for (uint32_t i = 1; i < 8; i++)
+		CHECK(rd_ok(u, 100 + i * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 1);                           /* one ahead, not three */
+
+	/* long ones use it: the cap goes back up, one piece per four clean streams */
+	depth_streams(u, d, 5, 15, 256);
+	CHECK(d->ra_cap_cut[0] == 1);
+	depth_streams(u, d, 5, 15, 256);
+	CHECK(d->ra_cap_cut[0] == 0);
+	depth_streams(u, d, 6, 15, 256);
+	CHECK(d->ra_cap_cut[0] == 0 && g_ra_bad == 0 && d->st.errors == 0 && !d->fallback);
+	vm_stage_fini();
+
+	/* a request of two pieces is given two from the start; of three, three */
+	ra_depth_game(&s, u, d);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, 100 + i * 512, 512));
+	ra_settle(d);
+	CHECK(ra_live(d) == 2);
+	vm_stage_fini();
+	ra_depth_game(&s, u, d);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, 100 + i * 768, 768));
+	ra_settle(d);
+	CHECK(ra_live(d) == 3);
+	vm_stage_fini();
+
+	/* on, or auto while the game is not known: three at once, as before */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, 100 + i * 256, 256));
+	ra_settle(d);
+	CHECK(ra_live(d) == 3);
+	vm_stage_fini();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	for (uint32_t i = 0; i < 5; i++)                  /* no worker tick yet: not known */
+		CHECK(rd_ok(u, 100 + i * 256, 256));
+	ra_settle(d);
+	CHECK(g_ra_pid == 0 && ra_live(d) == 3);
+	vm_stage_fini();
+
+	fakes_tmpdir_remove();
+	g_live = saved_live;
+	free(u);
+}
+
 /* Everything at once, for ThreadSanitizer: two readers on the memory card
  * (one of them mostly finds the buffer busy and goes stock), one on the
  * internal storage, the settings switched on the fly (overlapped reads, copy
@@ -2825,6 +2972,7 @@ int main(void)
 	RUN(test_readahead);
 	RUN(test_readahead_auto);
 	RUN(test_readahead_measured);
+	RUN(test_readahead_depth);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
 	RUN(test_problems_wake_the_worker);

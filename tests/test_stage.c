@@ -2110,7 +2110,7 @@ static void test_readahead(void)
 static volatile int g_stress_stop, g_stress_bad;
 static void *g_null_ctx;                          /* the fake SD context's first word */
 
-typedef struct { int dev; int seed; int reads; int seq; } StressArg;
+typedef struct { int dev; int seed; int reads; int seq; int pause; } StressArg;
 
 static void *stress_reader(void *argp)
 {
@@ -2121,6 +2121,11 @@ static void *stress_reader(void *argp)
 	while (!__atomic_load_n(&g_stress_stop, __ATOMIC_ACQUIRE)) {
 		uint32_t n, at;
 		int r;
+
+		if (__atomic_load_n(&a->pause, __ATOMIC_ACQUIRE)) {
+			sched_yield();
+			continue;
+		}
 
 		x = x * 1103515245u + 12345u;
 		n = 64 + (x >> 8) % 1037;
@@ -2170,7 +2175,7 @@ static void test_stress_concurrency(void)
 	Dev *in = &g_dev[VM_DEV_INTERNAL];
 	uint8_t *staging2 = calloc(1, STAGE_BYTES);
 	pthread_t th[4];
-	StressArg args[3] = { { M, 1, 0, 1 }, { M, 2, 0, 0 }, { VM_DEV_INTERNAL, 3, 0, 1 } };
+	StressArg args[3] = { { M, 1, 0, 1, 0 }, { M, 2, 0, 0, 0 }, { VM_DEV_INTERNAL, 3, 0, 1, 0 } };
 	int saved_live = g_live;
 
 	reset();
@@ -2179,6 +2184,7 @@ static void test_stress_concurrency(void)
 	in->enabled = 1;
 	in->fallback = 0;
 	in->unusable = 0;                               /* an earlier vm_stage_fini set it */
+	in->ra_th = in->ra_go = in->ra_done = -1;
 	in->uid = -1;
 	memset(&s, 0, sizeof(s));
 	s.memcard = 1;
@@ -2205,9 +2211,12 @@ static void test_stress_concurrency(void)
 		vm_stage_worker_tick();
 		sched_yield();
 	}
-	/* read ahead left on until the streams have used it */
+	/* read ahead left on until the card's stream has used it (the other
+	 * card reader paused: it would break the stream); never on the
+	 * internal storage */
 	s.readahead = 1;
 	vm_stage_apply(&s);
+	__atomic_store_n(&args[1].pause, 1, __ATOMIC_RELEASE);
 	for (int i = 0; i < 200000 && !__atomic_load_n(&g_ra_hits, __ATOMIC_RELAXED); i++) {
 		vm_stage_worker_tick();
 		sched_yield();
@@ -2220,6 +2229,7 @@ static void test_stress_concurrency(void)
 	CHECK(g_dev[M].st.errors == 0 && in->st.errors == 0 && !g_dev[M].fallback && !in->fallback);
 	CHECK(g_dev[M].st.passthru > 0);                /* the two card readers met */
 	CHECK(g_ra_hits > 0);                           /* the stream read ahead */
+	CHECK(!in->ra_made && in->ra_th == -1 && in->pipe_made);
 	vm_stage_fini();
 	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
 	in->unusable = 0;

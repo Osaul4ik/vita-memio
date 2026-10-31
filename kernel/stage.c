@@ -1223,7 +1223,9 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 
 /* ---- read ahead (VM_KEY_READAHEAD) -------------------------------------------
  *
- * EXPERIMENT. While a program reads one stretch of a storage in order (five
+ * EXPERIMENT, the SD2Vita and the memory card only (never the internal
+ * storage, which holds the system's own data). While a program reads one
+ * stretch of a storage in order (five
  * staged reads in a row, each starting where the last one ended - so the four
  * pieces of one 1 MiB read never start it), the device's read-ahead thread on
  * the system core reads the next 384 KiB in three pieces of 128 KiB, one
@@ -2176,7 +2178,10 @@ void vm_stage_worker_tick(void)
 		const int wanted = (LD(g_pipeline) || LD(g_offload) || LD(g_readahead)) && LD(g_live) &&
 		                   LD(d->enabled) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
 		                   !LD(d->unusable);
-		const int ra_wanted = wanted && LD(g_readahead) && !LD(d->fallback);
+		/* never on the internal storage: the system's own data lives there,
+		 * read and written by the system at any time */
+		const int ra_wanted = wanted && LD(g_readahead) && !LD(d->fallback) &&
+		                      i != VM_DEV_INTERNAL;
 
 		/* read ahead: its thread, once the helper and buffers are there */
 		if (!ra_wanted && d->ra_made) {

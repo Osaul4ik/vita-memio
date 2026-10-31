@@ -1,0 +1,33 @@
+name: diag
+on:
+  push:
+    branches: [ci-diag]
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
+    steps:
+      - uses: actions/checkout@v4
+      - name: collect
+        shell: sh
+        run: |
+          set +e
+          O=diag/out; rm -rf $O; mkdir -p $O
+          (apk add --no-cache git >/dev/null 2>&1 || (apt-get update -q && apt-get install -y -q git) >/dev/null 2>&1)
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake > $O/cmake.txt 2>&1
+          cmake --build build -j4 > $O/build.txt 2>&1; echo "rc=$?" >> $O/build.txt
+          grep -n -iE "warning|error" $O/build.txt > $O/warnings.txt; echo "count=$(wc -l < $O/warnings.txt)" >> $O/warnings.txt
+          ls -la build/*.skprx build/*.suprx build/*.vpk > $O/ls_build.txt 2>&1
+          vita-elf-create -v build/vitamemio build/x_suprx.velf > $O/suprx_elfcreate.txt 2>&1
+          grep -iE "library|NID|Net" $O/suprx_elfcreate.txt | head -80 > $O/suprx_imports.txt
+          unzip -l build/vitamemio_tester.vpk > $O/vpk_list.txt 2>&1
+          rm -f build/*.velf
+      - name: commit results
+        shell: sh
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name ci-diag; git config user.email ci-diag@users.noreply.github.com
+          git add -f diag/out && git commit -qm "diag results [skip ci]" && git push -f origin HEAD:ci-diag

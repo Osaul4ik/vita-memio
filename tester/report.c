@@ -271,7 +271,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		 * thread runs on one of them, as a game's thread would): what the
 		 * reads and writes cost the game, however long a call takes. */
 		static const int cm[] = { BM_SEQ_R_1M, BM_SEQ_R_128K, BM_RR_32K, BM_RR_4K, BM_NC_R_1M,
-		                          BM_NCPC_R_1M, BM_CDRAM_R_1M, BM_SEQ_W_1M };
+		                          BM_NCPC_R_1M, BM_CDRAM_R_1M, BM_NC_RR_1M, BM_SEQ_W_1M };
 		double v;
 		int any = 0;
 

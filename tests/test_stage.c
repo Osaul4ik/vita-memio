@@ -1921,7 +1921,7 @@ static void test_readahead(void)
 			clean_calls = 0;
 			CHECK(rd_ok(u, i * 256, 256));
 			CHECK(clean_calls == 0 && fake_usermap_live == 0);
-			if (i < 5) {
+			if (i < 2) {                          /* from the second read in a row */
 				CHECK(copies_here == 0 && copies_elsewhere == 0);
 			} else {
 				CHECK(__atomic_load_n(&io_here, __ATOMIC_RELAXED) == here);
@@ -1929,13 +1929,46 @@ static void test_readahead(void)
 				           : copies_here >= 1 && copies_elsewhere == 0);
 			}
 		}
-		CHECK(g_ra_hits >= 7 && g_ra_nc_kib >= 7 * 128 && g_nc_stock_kib == 5 * 128);
+		CHECK(g_ra_hits == 10 && g_ra_nc_kib == 10 * 128 && g_nc_stock_kib == 2 * 128);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
 		/* elsewhere: dropped, straight in */
 		CHECK(rd_ok(u, 3500, 300) && ra_idle(d) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
 		vm_stage_fini();
 	}
+
+	/* one piece ahead after the second read, two after the third, then
+	 * three: little read past the end of a short file */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	fake_pid = 0x42;
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	for (uint32_t i = 0; i < 4; i++) {
+		static const int ahead[] = { 0, 1, 2, 3 };
+		int live = 0;
+
+		CHECK(rd_ok(u, 100 + i * 512, 512));
+		for (int k = 0; k < RA_PIECES; k++)
+			live += __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) != RA_FREE;
+		CHECK(live == ahead[i]);
+	}
+	/* random 1 MiB reads (four 256 KiB requests each, as the file system
+	 * issues them): the right data, whatever is read ahead and dropped */
+	{
+		uint32_t x = 99;
+
+		for (int r = 0; r < 12; r++) {
+			uint32_t at;
+
+			x = x * 1103515245u + 12345u;
+			at = (x >> 8) % (DISK_SECTORS - 2048);
+			for (uint32_t q = 0; q < 4; q++)
+				CHECK(rd_ok(u, at + q * 512, 512));
+		}
+		CHECK(g_ra_hits > 0 && g_ra_drops > 0 && d->st.errors == 0 && !d->fallback);
+	}
+	vm_stage_fini();
 
 	/* the non-cacheable mapping does not fit (here: cached): only those are
 	 * refused - the caller copies them; a cached read still goes to the copier */

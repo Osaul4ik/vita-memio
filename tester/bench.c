@@ -17,10 +17,10 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"rnd write 4K", "rnd write 32K", "rnd write 128K", "rnd write 1M",
 	"files create", "files read", "files delete",
 	"NC read 1M", "NC read 128K",
-	"NCphy read 1M", "CDRAM read 1M",
+	"NCphy read 1M", "CDRAM read 1M", "NC rnd read 1M",
 };
 
-typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R } Kind;
+typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R, K_NC_RR } Kind;
 
 #define SF_BYTES 4096u          /* one small file */
 
@@ -43,6 +43,7 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_NC_R_128K] = { K_NC_R, 128 * 1024 },
 	[BM_NCPC_R_1M] = { K_NCPC_R, MIB },
 	[BM_CDRAM_R_1M] = { K_CDRAM_R, MIB },
+	[BM_NC_RR_1M]  = { K_NC_RR, MIB },
 };
 
 const BenchProfile bench_profile_quick = {
@@ -55,7 +56,8 @@ const BenchProfile bench_profile_standard = {
 
 int bench_metric_is_iops(int metric)
 {
-	return k_def[metric].kind == K_RR || k_def[metric].kind == K_RW || k_def[metric].kind == K_SF;
+	return k_def[metric].kind == K_RR || k_def[metric].kind == K_RW || k_def[metric].kind == K_SF ||
+	       k_def[metric].kind == K_NC_RR;
 }
 
 const char *bench_metric_unit(int metric)
@@ -236,8 +238,10 @@ static int run_seq(Ctx *c, BenchRun *r, int m, int *h)
 static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 {
 	const BenchEnv *e = c->env;
-	const int write = k_def[m].kind == K_RW;
-	const int sz = write ? m - BM_RW_4K : m - BM_RR_4K;
+	const int write = k_def[m].kind == K_RW, nc = k_def[m].kind == K_NC_RR;
+	/* random 1 MiB reads into non-cacheable memory: as many as of cached ones */
+	const int sz = nc ? BM_RR_1M - BM_RR_4K : write ? m - BM_RW_4K : m - BM_RR_4K;
+	uint8_t *const buf = nc ? c->nc : c->buf;
 	const uint32_t io = k_def[m].io, S = c->cfg->profile->file_mib * MIB;
 	const uint32_t n = write ? c->cfg->profile->rw_ops[sz] : c->cfg->profile->rr_ops[sz];
 	const uint32_t slots = S / io;
@@ -262,7 +266,7 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
 		t0 = e->now_us(e->ctx);
 		got = write ? e->pwrite(e->ctx, h, c->buf, io, off)
-		            : e->pread(e->ctx, h, c->buf, io, off);
+		            : e->pread(e->ctx, h, buf, io, off);
 		t1 = e->now_us(e->ctx);
 		core_note(e, r, m, io, k_ok, k0);
 		if (e->cpu_us) {
@@ -277,7 +281,7 @@ static int run_rand(Ctx *c, BenchRun *r, int m, int h)
 		c->lat[i] = (uint32_t)(t1 - t0);
 		total += t1 - t0;
 		if (!write)
-			r->verify_bad += tp_verify(c->buf, off, io, NULL);
+			r->verify_bad += tp_verify(buf, off, io, NULL);
 		progress(c, BP_METRIC, r, m, (uint32_t)((uint64_t)(i + 1) * 1000 / n));
 	}
 	finish_metric(c, r, m, n, total, 0);
@@ -464,6 +468,7 @@ static int do_run(Ctx *c, int round)
 		case K_CDRAM_R: rc = c->cdram ? run_seq(c, r, m, &h) : BR_OK; break;
 		case K_RR:
 		case K_RW:    rc = run_rand(c, r, m, h); break;
+		case K_NC_RR: rc = c->nc ? run_rand(c, r, m, h) : BR_OK; break;
 		default:      break;
 		}
 	}

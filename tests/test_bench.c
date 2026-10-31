@@ -389,6 +389,10 @@ static void test_nc_reads(void)
 	CHECK(r->runs[0].ops[BM_NC_R_1M] == 2 && r->runs[0].ops[BM_NC_R_128K] == 16);
 	CHECK(r->runs[0].value[BM_NC_R_1M] > 0 && bench_metric_measured(r, BM_NC_R_1M));
 	CHECK(!bench_metric_is_iops(BM_NC_R_1M) && !strcmp(bench_metric_unit(BM_NC_R_128K), "MiB/s"));
+	/* random 1 MiB reads into it: as many as cached ones, counted per second */
+	CHECK(r->runs[0].ops[BM_NC_RR_1M] == r->runs[0].ops[BM_RR_1M] && r->runs[0].ops[BM_NC_RR_1M] > 0);
+	CHECK(bench_metric_is_iops(BM_NC_RR_1M) && bench_metric_measured(r, BM_NC_RR_1M));
+	CHECK(r->runs[0].verify_bad == 0);
 	CHECK_UNTOUCHED(f);
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "\nNC read 1M       MiB/s     ") && strstr(text, "(NC: into non-cacheable"));
@@ -679,9 +683,10 @@ static void test_small_files(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "GPU-safe reads: on");
 	CHECK(found);
-	CHECK(strstr(lines[n - 5], "files delete"));      /* then the NC reads */
-	CHECK(strstr(lines[n - 3], "NC read 128K"));
-	CHECK(strstr(lines[n - 1], "CDRAM read 1M"));    /* the other kinds */
+	CHECK(strstr(lines[n - 6], "files delete"));      /* then the NC reads */
+	CHECK(strstr(lines[n - 4], "NC read 128K"));
+	CHECK(strstr(lines[n - 2], "CDRAM read 1M"));    /* the other kinds */
+	CHECK(strstr(lines[n - 1], "NC rnd read 1M"));   /* random, non-cacheable */
 
 	/* a small file that reads back wrong fails the data check */
 	fake_init(&f, 1);

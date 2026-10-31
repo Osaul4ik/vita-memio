@@ -201,6 +201,7 @@ typedef struct Dev {
 	RaPiece       ra[RA_PIECES];
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
+	int           ra_nc;                  /* ... into non-cacheable memory     */
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
@@ -1293,6 +1294,10 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  *     the thread only once no piece is being read and no request is in flight.
  * Nothing is written ahead or kept back: writes are as before. */
 #define RA_STREAK       5               /* staged reads in a row before it starts */
+/* Into non-cacheable memory (games' graphics data): from the second read in
+ * a row, so files under 1.25 MiB (most textures) get it too - one piece ahead
+ * at first, then two, then three, so little is read past a file's end. */
+#define RA_STREAK_NC    2
 /* Only reads of 64 KiB and up make or continue a stream; smaller transfers
  * (file-system bookkeeping, small files, with "small transfers too") neither
  * start nor break one, and while pieces are kept they go the standard way, so
@@ -1579,14 +1584,15 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 
 /* A read [sector, sector + n) has completed: the stream so far. 1 if it
  * counts (then the pieces may be refilled after it). */
-static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
+static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 {
 	if (n < RA_MIN_SECTORS)
 		return 0;                           /* neither part of a stream nor a break */
-	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak)
+	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc)
 		d->ra_streak += d->ra_streak < 1000;
 	else
 		d->ra_streak = 1;
+	d->ra_nc = nc;
 	d->ra_last_part = part;
 	d->ra_last_end = sector + n;
 	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))     /* no clock read otherwise */
@@ -1598,24 +1604,31 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
  * where the stream is). */
 static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 {
+	const uint32_t thr = d->ra_nc ? RA_STREAK_NC : RA_STREAK;
 	uint32_t next = d->ra_last_end;
+	int want, live = 0;
 
-	if (d->ra_streak < RA_STREAK)
+	if (d->ra_streak < thr)
 		return;
+	want = d->ra_nc && d->ra_streak - thr + 1 < RA_PIECES ? (int)(d->ra_streak - thr + 1)
+	                                                      : RA_PIECES;
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 
-		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE &&
-		    pc->sector + pc->n > next)
-			next = pc->sector + pc->n;
+		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE) {
+			live++;
+			if (pc->sector + pc->n > next)
+				next = pc->sector + pc->n;
+		}
 	}
 	for (int i = 0; i < RA_PIECES; i++) {
 		RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE)
 			continue;
-		if (next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
+		if (live >= want || next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
 			return;
+		live++;
 		pc->seq = ++d->ra_seq;
 		ST(pc->sector, next);
 		ST(pc->n, (uint32_t)RA_PIECE_SECTORS);
@@ -1807,7 +1820,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		__sync_lock_release(&g_shadow_busy);
 	if (got)
 		ADD(g_ra_nc_kib, got / 2);
-	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec))
+	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec, 1))
 		ra_refill(d, io, ref, part);
 	if (LD(g_log_diag) && own)
 		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
@@ -2026,7 +2039,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
 	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem) {
-		if (ra_note(d, part, sector0, nsec) && ra)
+		if (ra_note(d, part, sector0, nsec, 0) && ra)
 			ra_refill(d, io, ref, part);
 	}
 	if (verify)

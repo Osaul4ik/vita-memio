@@ -52,6 +52,7 @@ enum bench_metric {
 	BM_SF_CREATE, BM_SF_READ, BM_SF_DELETE,
 	BM_NC_R_1M, BM_NC_R_128K,
 	BM_NCPC_R_1M, BM_CDRAM_R_1M,   /* games' GPU memory */
+	BM_NC_RR_1M,                   /* random 1 MiB reads into non-cacheable memory */
 	BM_COUNT
 };
 

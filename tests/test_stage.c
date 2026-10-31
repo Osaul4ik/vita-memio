@@ -1954,30 +1954,27 @@ static void test_readahead(void)
 	CHECK(g_offload_state == 1);
 	vm_stage_fini();
 
-	/* device memory, verify on, small reads, read ahead off: straight in as
-	 * before, nothing read ahead */
+	/* device memory, small reads, read ahead off: straight in as before,
+	 * nothing read ahead */
 	{
-		static const int kinds[] = { MEMTYPE_DEVICE, MEMTYPE_NC, MEMTYPE_NC, MEMTYPE_NC };
+		static const int kinds[] = { MEMTYPE_DEVICE, MEMTYPE_NC, MEMTYPE_NC };
 
-		for (int k = 0; k < 4; k++) {
+		for (int k = 0; k < 3; k++) {
 			reset();
 			ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
 			fake_memtype = kinds[k];
-			if (k == 1) {
-				g_verify = 1;
-			} else if (k == 3) {
+			if (k == 2) {
 				s.readahead = 0;
 				vm_stage_apply(&s);
 				vm_stage_worker_tick();
 			}
 			for (uint32_t i = 0; i < 10; i++) {
-				const uint32_t n = k == 2 ? 64 : 256;
+				const uint32_t n = k == 1 ? 64 : 256;
 
 				g_min_sectors = 1;
 				CHECK(rd_ok(u, i * n, n) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
 			}
-			CHECK(ra_idle(d) && g_ra_hits == 0 && g_nc_stock_kib == (k == 2 ? 10 * 32 : 10 * 128));
-			g_verify = 0;
+			CHECK(ra_idle(d) && g_ra_hits == 0 && g_nc_stock_kib == (k == 1 ? 10 * 32 : 10 * 128));
 			vm_stage_fini();
 		}
 	}
@@ -2160,18 +2157,42 @@ static void test_readahead(void)
 	CHECK(d->fallback && d->st.errors == 1 && ra_idle(d));
 	vm_stage_fini();
 
-	/* verify on: no read ahead (each read is compared with a stock one) */
-	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	g_verify = 1;
-	g_shadow = malloc(STAGE_BYTES);
-	for (uint32_t i = 0; i < 10; i++)
-		CHECK(rd_ok(u, i * 256, 256));
-	CHECK(g_ra_hits == 0 && ra_idle(d));
-	free(g_shadow);
-	g_shadow = NULL;
-	g_verify = 0;
-	vm_stage_fini();
+	/* verify on: read ahead too, and every read from the pieces is read
+	 * again the standard way and compared; a piece gone wrong (here: its
+	 * bytes changed in the buffer) falls back, the caller gets the disk's */
+	for (int nc = 0; nc <= 1; nc++) {
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+		fake_pid = 0x42;
+		if (nc) {
+			fake_memtype = MEMTYPE_NC;
+			fake_meminfo_type = 0x10208006;
+		}
+		g_verify = 1;
+		g_shadow = malloc(STAGE_BYTES);
+		for (uint32_t i = 0; i < 10; i++)
+			CHECK(rd_ok(u, i * 256, 256));
+		CHECK(g_ra_hits >= 4 && d->st.verified >= g_ra_hits && d->st.mismatches == 0);
+		CHECK(!d->fallback && g_shadow_busy == 0);
+		for (int i = 0; i < RA_PIECES; i++)
+			ra_wait(d, i);
+		for (int i = 0; i < RA_PIECES; i++)
+			if (d->ra[i].state == RA_READY && d->ra[i].sector == 10 * 256)
+				ra_ptr(d, i)[100] ^= 0xFF;
+		CHECK(rd_ok(u, 10 * 256, 256));
+		CHECK(d->st.mismatches == 1 && d->fallback == 1 && g_shadow_busy == 0);
+		{
+			const uint32_t hits = g_ra_hits;
+
+			CHECK(rd_ok(u, 11 * 256, 256) && g_ra_hits == hits);   /* stock from now on */
+		}
+		vm_stage_worker_tick();
+		CHECK(!d->ra_made);                       /* given back after the fallback */
+		free(g_shadow);
+		g_shadow = NULL;
+		g_verify = 0;
+		vm_stage_fini();
+	}
 
 	/* switched off in the middle of a stream: the thread is given back
 	 * once nothing is being read, the reads go on as before */

@@ -47,9 +47,9 @@
  *     the system core) reads the next ones back to back while the caller
  *     copies the one before (pipe_run). The parts are sized from the
  *     measured costs so each copy is hidden behind the next read. Nothing is
- *     read ahead or kept: every part belongs to the request, which is
- *     complete when it returns. Any error finishes the whole part stock, as
- *     above;
+ *     read ahead or kept here (that is "read ahead", off by default): every
+ *     part belongs to the request, which is complete when it returns. Any
+ *     error finishes the whole part stock, as above;
  *   - copy on the system core (VM_OFFLOAD_*, off by default): a game's read
  *     of 64 KiB or more is copied by a thread on the system core through a
  *     kernel mapping of the game's buffer, used only if it is writable and of
@@ -1282,6 +1282,8 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  *   - switching the device (off, on, after an error) counts ra_epoch up, and
  *     a piece older than RA_MAX_AGE_US is not used: a swapped card never
  *     answers a read with the old card's data;
+ *   - verify mode covers it: every read from the pieces is read again the
+ *     standard way and compared (ra_verify); a difference falls back;
  *   - a piece the card failed to read is not used, and does not switch the
  *     device to stock (it may simply lie past the card's end): the read is
  *     done as without read ahead;
@@ -1718,6 +1720,38 @@ static int ra_retire(Dev *d)
 	return 1;
 }
 
+/* Verify mode: what read ahead gave [sector, sector + n) at p is read again
+ * the standard way and compared, in pieces the size of the check buffer. On a
+ * mismatch the caller gets the standard data and the device falls back, as
+ * any faster transfer that differs. 1 on a mismatch. */
+static int ra_verify(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                     uint8_t *p, uint32_t n, int clean, void *shadow)
+{
+	int bad = 0;
+
+	while (n) {
+		const uint32_t k = n > STAGE_SECTORS ? STAGE_SECTORS : n;
+
+		if (io(ref, part, sector, shadow, k) >= 0) {
+			ADD(d->st.verified, 1);
+			if (memcmp(p, shadow, (size_t)k * 512) != 0) {
+				ADD(d->st.mismatches, 1);
+				ST(d->fallback, 1);
+				bad = 1;
+				memcpy(p, shadow, (size_t)k * 512);
+				if (clean)
+					clean_out(p, k * 512);
+				else
+					vm_dsb();
+			}
+		}
+		p += (size_t)k * 512;
+		sector += k;
+		n -= k;
+	}
+	return bad;
+}
+
 /* A read into non-cacheable memory (64 KiB and up) while read ahead is on:
  * from the pieces where they continue the stream (copied, by the copier as
  * the setting says; no cache to clean), the rest the standard way straight
@@ -1729,7 +1763,8 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 {
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2, .nc = 1 };
 	uint32_t got = 0, own = 0;
-	int ret = 0, stats, off, offload;
+	int ret = 0, stats, off, offload, bad = 0;
+	void *shadow;
 
 	if (!take(d, 1, nsec)) {
 		ADD(g_nc_stock_kib, nsec / 2);
@@ -1740,6 +1775,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, p, nsec);
 	}
+	shadow = take_shadow();                     /* verify mode: compared after */
 	stats = LD(g_stats);
 	offload = LD(g_offload);
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
@@ -1750,21 +1786,31 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
 	}
+	if (om.uid >= 0)
+		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
+	if (got && shadow)
+		bad = ra_verify(d, io, ref, part, sector, p, got, 0, shadow);
 	if (got < nsec) {
 		ret = io(ref, part, sector + got, p + (size_t)got * 512, nsec - got);
 		ADD(g_nc_stock_kib, (nsec - got) / 2);
 	}
-	if (om.uid >= 0)
-		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
+	if (shadow)
+		__sync_lock_release(&g_shadow_busy);
 	if (got)
 		ADD(g_ra_nc_kib, got / 2);
-	if (ret >= 0) {
+	if (ret >= 0 && !bad) {
 		ra_note(d, part, sector, nsec);
 		ra_refill(d, io, ref, part);
 	}
 	if (LD(g_log_diag) && own)
 		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
 	__sync_lock_release(&d->busy);
+	if (bad) {
+		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
+
+		if (fn)
+			fn();
+	}
 	return ret;
 }
 
@@ -1794,7 +1840,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data */
 		if (!write && nsec >= RA_MIN_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
-		    !LD(g_verify) && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC &&
+		    ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC &&
 		    ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1) == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
 		ADD(g_nc_stock_kib, nsec / 2);
@@ -1839,7 +1885,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const uint32_t sector0 = sector;
 	/* read ahead: this read continues the stream from the pieces, if they
 	 * hold it; anything else drops them first (they are in the buffers) */
-	const int ra = !write && !verify && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+	const int ra = !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
@@ -1850,6 +1896,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		                                   left, &own)
 		                        : 0;
 
+		if (got && verify && ra_verify(d, io, ref, part, sector, p, got, clean, shadow))
+			problem = 1;                      /* fallen back: the rest stock */
 		p += (size_t)got * 512;
 		sector += got;
 		left -= got;
@@ -1968,7 +2016,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
-	if (!write && ret >= 0 && !left && !LD(d->fallback)) {
+	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem) {
 		ra_note(d, part, sector0, nsec);
 		if (ra)
 			ra_refill(d, io, ref, part);

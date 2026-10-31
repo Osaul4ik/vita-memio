@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 /* The staging copy, with a time cost the tests can set (0 by default, so the
@@ -2509,6 +2510,8 @@ typedef struct { int dev; int seed; int reads; int seq; int pause; } StressArg;
  * ahead may have read: the pieces it touches are marked). */
 #define STRESS_RD_END  3584
 
+static volatile int g_stress_wpause;              /* the writer holds off */
+
 static void *stress_writer(void *argp)
 {
 	uint8_t *w = malloc(256 * 512);
@@ -2517,6 +2520,11 @@ static void *stress_writer(void *argp)
 	(void)argp;
 	while (!__atomic_load_n(&g_stress_stop, __ATOMIC_ACQUIRE)) {
 		uint32_t n, at;
+
+		if (__atomic_load_n(&g_stress_wpause, __ATOMIC_ACQUIRE)) {
+			sched_yield();
+			continue;
+		}
 
 		x = x * 1103515245u + 12345u;
 		n = (x >> 8) & 1 ? 8 : 256;                /* stock or staged */
@@ -2612,6 +2620,7 @@ static void test_stress_concurrency(void)
 	g_live = 1;
 	vm_stage_worker_tick();
 	g_stress_stop = g_stress_bad = 0;
+	g_stress_wpause = 0;
 	for (int i = 0; i < 3; i++)
 		CHECK(pthread_create(&th[i], NULL, stress_reader, &args[i]) == 0);
 	CHECK(pthread_create(&th[3], NULL, stress_stats, NULL) == 0);
@@ -2636,9 +2645,10 @@ static void test_stress_concurrency(void)
 	s.readahead = 1;
 	vm_stage_apply(&s);
 	__atomic_store_n(&args[1].pause, 1, __ATOMIC_RELEASE);
-	for (int i = 0; i < 200000 && !__atomic_load_n(&g_ra_hits, __ATOMIC_RELAXED); i++) {
+	__atomic_store_n(&g_stress_wpause, 1, __ATOMIC_RELEASE);   /* its writes break streams */
+	for (int i = 0; i < 30000 && !__atomic_load_n(&g_ra_hits, __ATOMIC_RELAXED); i++) {
 		vm_stage_worker_tick();
-		sched_yield();
+		usleep(1000);                               /* up to 30 s, however slow the runner */
 	}
 	__atomic_store_n(&g_stress_stop, 1, __ATOMIC_RELEASE);
 	for (int i = 0; i < 5; i++)

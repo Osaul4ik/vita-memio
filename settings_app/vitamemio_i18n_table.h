@@ -1232,25 +1232,3 @@
 	"Always",   /* engb */
 	"Her zaman",   /* tr */
 },
-[VM_I18N_ITEM_OFF_ALL] = {
-	"常に+NC",   /* ja */
-	"Always + NC",   /* en */
-	"Toujours + NC",   /* fr */
-	"Siempre + NC",   /* es */
-	"Immer + NC",   /* de */
-	"Sempre + NC",   /* it */
-	"Altijd + NC",   /* nl */
-	"Sempre + NC",   /* pt */
-	"Всегда + NC",   /* ru */
-	"항상 + NC",   /* ko */
-	"一律 + NC",   /* zht */
-	"始终 + NC",   /* zhs */
-	"Aina + NC",   /* fi */
-	"Alltid + NC",   /* sv */
-	"Altid + NC",   /* da */
-	"Alltid + NC",   /* no */
-	"Zawsze + NC",   /* pl */
-	"Sempre + NC",   /* ptbr */
-	"Always + NC",   /* engb */
-	"Her zaman + NC",   /* tr */
-},

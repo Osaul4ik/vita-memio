@@ -101,9 +101,6 @@ static void reset(void)
 	g_offload_type = 0;
 	g_offload_err = 0;
 	g_off_reads = g_off_kib = g_off_maperr = 0;
-	g_ncd_state = g_ncd_logged = g_ncd_err = 0;
-	g_ncd_type = 0;
-	g_ncd_reads = g_ncd_kib = g_ncd_maperr = g_ncd_busy = g_ncd_fail = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_cp_sys_kib = g_cp_game_kib = 0;
@@ -1528,137 +1525,6 @@ static int sems_empty(const Dev *d)
 	       fake_sema_count(d->sem_fin) == 0;
 }
 
-/* EXPERIMENT "Always + NC": a game's read into non-cacheable memory is
- * read by the helper straight into the game's buffer (mapped, non-cacheable
- * too); the game's thread reads nothing itself. Small reads, system threads,
- * other settings, verify, a busy device, a cached or unwritable mapping: the
- * standard path, as before. A failed read is read again the standard way. */
-static pthread_t ncd_io_thread;
-static int ncd_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
-{
-	ncd_io_thread = pthread_self();
-	return fake_io(ref, part, sector, buf, n);
-}
-
-static int ncd_rd(uint8_t *u, uint32_t sector, uint32_t n)
-{
-	return stage_xfer(&g_dev[M], 0, ncd_io, REF_RD, 0, NULL, sector, u, n);
-}
-
-static void test_ncd(void)
-{
-	uint8_t *u = user_buf(2048), *other = user_buf(2048);
-	VmSettings s;
-	Dev *d = &g_dev[M];
-	int saved_live = g_live;
-	uint32_t nc;
-
-	reset();
-	offload_on(&s, 0, VM_OFFLOAD_ALL, 1);
-	CHECK(d->pipe_made && d->pipe_ready);
-	fake_pid = 0x42;
-	fake_memtype = MEMTYPE_NC;                 /* the game's buffer and its mapping */
-	fake_meminfo_type = 0x10208006;            /* non-cacheable, read and write */
-
-	/* 128 KiB, 256 KiB and 1 MiB: on the helper, into the buffer itself */
-	{
-		static const uint32_t sizes[] = { 128, 256, 512, 2048 };
-
-		for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
-			const uint32_t n = sizes[i], at = (uint32_t)(i * 211) % 1000;
-
-			memset(u, 0, (size_t)n * 512);
-			io_calls = 0;
-			ncd_io_thread = pthread_self();
-			CHECK(ncd_rd(u, at, n) == 0);
-			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
-			CHECK(io_calls == 1 && last_buf == u);            /* one read, no staging */
-			CHECK(!pthread_equal(ncd_io_thread, pthread_self()));   /* by the helper */
-			CHECK(fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
-		}
-		CHECK(g_ncd_reads == 4 && g_ncd_state == 1 && g_ncd_kib == (128 + 256 + 512 + 2048) / 2);
-		CHECK(g_nc_stock_kib == 0 && d->st.reads == 0 && d->st.errors == 0);
-		CHECK(fake_meminfo_calls == fake_usermap_calls && fake_usermap_calls == 4);
-	}
-
-	/* under 64 KiB, a system thread, verify on: the standard path, nothing mapped */
-	nc = g_nc_stock_kib;
-	io_calls = 0;
-	CHECK(ncd_rd(u, 5, 64) == 0 && memcmp(u, disk + 5 * 512, 64 * 512) == 0);
-	CHECK(io_calls == 1 && last_buf == u && pthread_equal(ncd_io_thread, pthread_self()));
-	fake_pid = KERNEL_PID;
-	CHECK(ncd_rd(u, 7, 256) == 0 && memcmp(u, disk + 7 * 512, 256 * 512) == 0);
-	CHECK(pthread_equal(ncd_io_thread, pthread_self()));
-	fake_pid = 0x42;
-	g_verify = 1;
-	CHECK(ncd_rd(u, 9, 256) == 0 && pthread_equal(ncd_io_thread, pthread_self()));
-	g_verify = 0;
-	CHECK(g_nc_stock_kib == nc + (64 + 256 + 256) / 2 && fake_usermap_calls == 4 && g_ncd_reads == 4);
-
-	/* the device busy (another request): this one standard, counted */
-	d->busy = 1;
-	CHECK(ncd_rd(u, 11, 256) == 0 && memcmp(u, disk + 11 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_busy == 1 && pthread_equal(ncd_io_thread, pthread_self()));
-	d->busy = 0;
-
-	/* the read fails on the helper: read again the standard way, all of it */
-	io_calls = 0;
-	fail_at_call = 1;
-	memset(u, 0, 256 * 512);
-	CHECK(ncd_rd(u, 13, 256) == 0 && memcmp(u, disk + 13 * 512, 256 * 512) == 0);
-	CHECK(io_calls == 2 && g_ncd_fail == 1 && fake_usermap_live == 0 && sems_empty(d));
-	fail_at_call = 0;
-
-	/* device memory (not non-cacheable): standard, nothing mapped, not refused */
-	fake_memtype = MEMTYPE_DEVICE;
-	CHECK(ncd_rd(u, 15, 256) == 0 && pthread_equal(ncd_io_thread, pthread_self()));
-	CHECK(fake_usermap_calls == 5 && g_ncd_state == 1);
-	fake_memtype = MEMTYPE_NC;
-
-	/* the mapping cached: refused until the setting changes; reads standard */
-	fake_usermap_elsewhere = other;
-	fake_memtype_from = other;
-	fake_memtype_to = other + 2048 * 512;
-	fake_memtype_above = 0xD000;
-	g_ncd_state = 0;
-	CHECK(ncd_rd(u, 17, 256) == 0 && memcmp(u, disk + 17 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_state == -2 && fake_usermap_live == 0);
-	{
-		const int maps = fake_usermap_calls;
-
-		CHECK(ncd_rd(u, 19, 256) == 0 && fake_usermap_calls == maps);   /* not tried again */
-	}
-	fake_usermap_elsewhere = NULL;
-	fake_memtype_from = fake_memtype_to = NULL;
-	fake_memtype_above = 0xD000;
-	vm_stage_worker_tick();                       /* logs the refusal once */
-	CHECK(g_ncd_logged == -2);
-
-	/* switching the setting checks afresh; a mapping without write: refused */
-	s.offload = VM_OFFLOAD_ALWAYS;
-	vm_stage_apply(&s);
-	CHECK(g_ncd_state == 0);
-	CHECK(ncd_rd(u, 21, 256) == 0 && g_ncd_reads == 4);   /* Always: uncached stays standard */
-	s.offload = VM_OFFLOAD_ALL;
-	vm_stage_apply(&s);
-	fake_meminfo_type = 0x10208004;               /* no read bit */
-	CHECK(ncd_rd(u, 23, 256) == 0 && memcmp(u, disk + 23 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_state == -1 && fake_usermap_live == 0);
-
-	/* cached reads with "Always + NC": copied on the system core */
-	fake_meminfo_type = 0x1020D006;
-	fake_memtype = 0xD000;
-	copies_here = copies_elsewhere = 0;
-	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
-	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
-
-	vm_stage_fini();
-	CHECK(fake_threads_live == 0 && fake_semas_live == 0 && fake_usermap_live == 0);
-	g_live = saved_live;
-	free(u);
-	free(other);
-}
-
 static void test_offload(void)
 {
 	static const uint32_t sizes[] = { 1, 8, 32, 64, 100, 128, 256, 300, 512, 777, 1100 };
@@ -2046,7 +1912,6 @@ int main(void)
 	RUN(test_helper_runs_ahead);
 	RUN(test_plan_quick_check);
 	RUN(test_copy_diagnostics);
-	RUN(test_ncd);
 	RUN(test_offload);
 	RUN(test_pipe_retire_bounded);
 	RUN(test_stress_concurrency);

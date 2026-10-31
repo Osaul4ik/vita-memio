@@ -44,6 +44,7 @@ typedef struct Fake {
 	int      pipeline;           /* ... and its "overlapped reads"              */
 	int      offload;            /* ... and its "copy on the system core"       */
 	int      gpusafe;            /* ... and "GPU-safe reads"                    */
+	int      readahead;          /* ... and "read ahead"                        */
 	int      sf_corrupt;         /* small files read back wrong                 */
 	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
@@ -255,6 +256,7 @@ static int f_get(void *c, BenchPluginState *o)
 	o->pipeline = f->pipeline;
 	o->offload = f->offload;
 	o->gpusafe = f->gpusafe;
+	o->readahead = f->readahead;
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;

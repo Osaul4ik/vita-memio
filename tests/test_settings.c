@@ -167,7 +167,7 @@ static void test_invalid_set_is_rejected(void)
 
 static void test_corrupt_file_gives_defaults(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	VmSettings s;
 	size_t n;
 
@@ -197,7 +197,7 @@ static void test_corrupt_file_gives_defaults(void)
 
 static void test_older_file_with_fewer_keys(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 6 keys: no memcard yet */
 	VmSettings s;
 	size_t n;
@@ -338,7 +338,7 @@ static void test_file_with_more_keys(void)
 
 static void test_one_bad_value_keeps_the_rest(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 0, 0, 1 };
 	VmSettings s;
 	size_t n;
@@ -356,7 +356,7 @@ static void test_one_bad_value_keeps_the_rest(void)
  * not used. */
 static void test_other_version_gives_defaults(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	const int32_t v[7] = { 1, 0, 0, 2, 0, 1, 1 };
 	VmSettings s;
 	size_t n;

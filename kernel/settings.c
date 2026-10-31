@@ -47,7 +47,7 @@ static volatile int g_set_lock;
 static const int32_t g_defaults[VM_KEY_COUNT] = {
 	VM_DEF_SD2VITA, VM_DEF_INTERNAL, VM_DEF_VERIFY, VM_DEF_HUD, VM_DEF_HUD_STYLE,
 	VM_DEF_LOG, VM_DEF_MEMCARD, VM_DEF_SMALL, VM_DEF_STATS, VM_DEF_GPUSAFE,
-	VM_DEF_PIPELINE, VM_DEF_OFFLOAD,
+	VM_DEF_PIPELINE, VM_DEF_OFFLOAD, VM_DEF_READAHEAD,
 };
 
 /* A file may hold more keys than this build knows (one written by a newer

@@ -51,6 +51,7 @@ static uint8_t disk[DISK_SECTORS * 512];
 static uint8_t *staging;
 
 static int io_calls, fail_at_call, corrupt_staged;
+static int io_here;                       /* card reads by the test's own thread */
 static void *last_buf;
 static void *io_bufs[16];                 /* the buffer and size of each call */
 static uint32_t io_ns[16];
@@ -62,6 +63,8 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	int call = __sync_add_and_fetch(&io_calls, 1);
 
 	__atomic_store_n(&last_buf, buf, __ATOMIC_RELAXED);   /* threads in the stress test */
+	if (pthread_equal(pthread_self(), test_thread))
+		__atomic_fetch_add(&io_here, 1, __ATOMIC_RELAXED);
 	if (call <= (int)(sizeof(io_bufs) / sizeof(io_bufs[0]))) {
 		io_bufs[call - 1] = buf;
 		io_ns[call - 1] = n;
@@ -69,6 +72,8 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	__sync_fetch_and_add(&fake_now_us, 2500);
 	if (fail_at_call && call == fail_at_call)
 		return -5;
+	if (sector > DISK_SECTORS || n > DISK_SECTORS - sector)
+		return -5;                            /* past the card's end */
 	if (ref == REF_RD) {
 		memcpy(buf, disk + (size_t)sector * 512, (size_t)n * 512);
 		if (corrupt_staged && buf == staging)
@@ -96,6 +101,9 @@ static void reset(void)
 	d->uid = -1;
 	d->uid2 = d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
+	d->ra_th = d->ra_go = d->ra_done = -1;
+	g_readahead = 0;
+	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
 	g_offload = VM_OFFLOAD_OFF;
 	g_offload_state = g_offload_logged = 0;
 	g_offload_type = 0;
@@ -1790,6 +1798,309 @@ static void test_pipe_retire_bounded(void)
 	free(u);
 }
 
+/* EXPERIMENT "Read ahead": while a stream is read (five staged reads in a row,
+ * each where the last one ended), the read-ahead thread reads the next
+ * 384 KiB in pieces of 128 KiB; the stream's next reads take their data from
+ * them. Anything that does not continue the stream drops them; a write (any
+ * way) makes them unusable; switching the device too; a failed piece (past
+ * the card's end) is not used and is no error. The data is always the disk's. */
+static void ra_settings(VmSettings *s, int gpu, int offload, int pipeline)
+{
+	memset(s, 0, sizeof(*s));
+	s->memcard = 1;
+	s->stats = 1;
+	s->gpusafe = gpu;
+	s->pipeline = pipeline;
+	s->offload = offload;
+	s->readahead = 1;
+	vm_stage_apply(s);
+	g_live = 1;
+	if (gpu)
+		g_dcache_clean = fake_clean;
+	vm_stage_worker_tick();               /* the helper and copier ... */
+	vm_stage_worker_tick();               /* ... then the read-ahead thread */
+}
+
+static int ra_idle(const Dev *d)
+{
+	for (int i = 0; i < RA_PIECES; i++)
+		if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE)
+			return 0;
+	return 1;
+}
+
+/* Read [at, at + n) and check it against the disk. */
+static int rd_ok(uint8_t *u, uint32_t at, uint32_t n)
+{
+	memset(u, 0xEE, (size_t)n * 512);
+	return rd(u, at, n) == 0 && memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0;
+}
+
+static void test_readahead(void)
+{
+	uint8_t *u = user_buf(1100), *w = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	/* off by default, and nothing made for it */
+	CHECK(VM_DEF_READAHEAD == 0 && vm_setting_valid(VM_KEY_READAHEAD, 1) &&
+	      !vm_setting_valid(VM_KEY_READAHEAD, 2));
+	reset();
+	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && !d->ra_made && fake_threads_live == 2);
+	for (uint32_t at = 0; at < 8 * 256; at += 256)
+		CHECK(rd_ok(u, at, 256));
+	CHECK(g_ra_hits == 0 && ra_idle(d));
+	vm_stage_fini();
+
+	/* a stream of 128 KiB reads: from the sixth on, from the pieces */
+	for (int gpu = 0; gpu <= 1; gpu++) {
+		reset();
+		ra_settings(&s, gpu, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+		CHECK(d->pipe_made && d->ra_made && d->ra_ready && fake_threads_live == 3);
+		for (uint32_t i = 0; i < 12; i++) {
+			const int here = __atomic_load_n(&io_here, __ATOMIC_RELAXED);
+
+			CHECK(rd_ok(u, i * 256, 256));
+			if (i == 4)
+				CHECK(!ra_idle(d));               /* the fifth starts it */
+			if (i >= 5)                           /* from the pieces: no card read here */
+				CHECK(__atomic_load_n(&io_here, __ATOMIC_RELAXED) == here);
+		}
+		CHECK(g_ra_hits >= 6 && g_ra_kib >= 6 * 128 && g_ra_bad == 0);
+		CHECK(d->st.errors == 0 && !d->fallback && d->st.reads == 12);
+		if (gpu)
+			CHECK(clean_calls > 0);               /* cleaned as any GPU-safe read */
+		/* elsewhere: the pieces dropped (waiting for the one being read) */
+		CHECK(rd_ok(u, 3000, 300));
+		CHECK(g_ra_drops >= 1 && ra_idle(d) && fake_sema_count(d->ra_done) == 0);
+		vm_stage_fini();
+		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+	}
+
+	/* reads of other sizes (64, 300, 1100 sectors) in a stream: still the
+	 * disk's data, partly from the pieces */
+	{
+		static const uint32_t sizes[] = { 64, 300, 600 };
+
+		for (size_t k = 0; k < 3; k++) {
+			uint32_t at = 0;
+
+			reset();
+			ra_settings(&s, 1, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+			while (at + sizes[k] <= DISK_SECTORS) {
+				CHECK(rd_ok(u, at, sizes[k]));
+				at += sizes[k];
+			}
+			CHECK(g_ra_hits > 0 && d->st.errors == 0 && !d->fallback);
+			vm_stage_fini();
+		}
+	}
+
+	/* copy on the system core: a game's stream is copied by the copier from
+	 * the pieces, through its mapping, unmapped after */
+	reset();
+	ra_settings(&s, 1, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	fake_pid = 0x42;
+	CHECK(fake_threads_live == 3);
+	for (uint32_t i = 0; i < 7; i++) {
+		copies_here = copies_elsewhere = 0;
+		CHECK(rd_ok(u, 100 + i * 512, 512));
+		CHECK(copies_here == 0 && copies_elsewhere >= 1);
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+	}
+	CHECK(g_ra_hits >= 2 && g_off_reads >= 7);
+	vm_stage_fini();
+
+	/* a staged write in the stream: the pieces dropped, the new data read */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 6; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(!ra_idle(d));
+	memset(w, 0x5A, 256 * 512);
+	CHECK(wr(w, 6 * 256, 256, REF_RD) == 0);
+	CHECK(ra_idle(d) && d->ra_streak == 0);
+	CHECK(rd_ok(u, 6 * 256, 256) && u[0] == 0x5A);
+	vm_stage_fini();
+
+	/* a write that goes stock (small) into a piece: the piece is not used */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 6; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(!ra_idle(d));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);                            /* read already */
+	memset(w, 0xA5, 8 * 512);
+	CHECK(wr(w, 6 * 256 + 10, 8, REF_RD) == 0);   /* stock: under 32 KiB */
+	CHECK(d->ra_wgen == 2 && !ra_idle(d));
+	CHECK(rd_ok(u, 6 * 256, 256) && u[10 * 512] == 0xA5);
+	CHECK(g_ra_bad == 1 && g_ra_hits == 1);           /* the sixth was one */
+	/* ... and the stream goes on */
+	for (uint32_t i = 7; i < 14; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(g_ra_hits >= 4);
+	vm_stage_fini();
+
+	/* a read larger than the pieces hold: their part, then the rest as
+	 * before */
+	reset();
+	ra_settings(&s, 1, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(rd_ok(u, 5 * 256, 1100));
+	CHECK(g_ra_hits == 1 && g_ra_kib == 3 * 128 && ra_idle(d) == 0);
+	CHECK(rd_ok(u, 5 * 256 + 1100, 256) && g_ra_hits == 2);
+	vm_stage_fini();
+
+	/* a write while a piece is being read: that piece is not used */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	d->ra[0].gen = 1;                             /* as if a write had been running */
+	d->ra[0].ok = 0;
+	CHECK(rd_ok(u, 5 * 256, 256) && g_ra_bad == 1 && g_ra_hits == 0);
+	vm_stage_fini();
+
+	/* the device switched off and on: nothing read before is used */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	s.memcard = 0;
+	vm_stage_apply(&s);
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	CHECK(rd_ok(u, 5 * 256, 256) && g_ra_bad == 1 && g_ra_hits == 0);
+	/* too old: not used either */
+	for (uint32_t i = 6; i < 11; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	fake_now_us += RA_MAX_AGE_US;
+	{
+		const uint32_t bad = g_ra_bad;
+
+		CHECK(rd_ok(u, 11 * 256, 256) && g_ra_bad == bad + 1);
+	}
+	vm_stage_fini();
+
+	/* past the card's end: those pieces fail, no error, the device stays */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t at = DISK_SECTORS - 8 * 256; at < DISK_SECTORS; at += 256)
+		CHECK(rd_ok(u, at, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	CHECK(d->st.errors == 0 && !d->fallback && g_ra_hits >= 1);
+	CHECK(rd_ok(u, 0, 256) && ra_idle(d));       /* dropped, the failed ones too */
+	vm_stage_fini();
+
+	/* a card error in the stream itself: as without read ahead */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 5; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	for (int i = 0; i < RA_PIECES; i++)
+		ra_wait(d, i);
+	fail_at_call = io_calls + 1;                  /* the next card read */
+	CHECK(rd_ok(u, 2000, 256));                   /* drop, then fails, done stock */
+	CHECK(d->fallback && d->st.errors == 1 && ra_idle(d));
+	vm_stage_fini();
+
+	/* verify on: no read ahead (each read is compared with a stock one) */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_verify = 1;
+	g_shadow = malloc(STAGE_BYTES);
+	for (uint32_t i = 0; i < 10; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(g_ra_hits == 0 && ra_idle(d));
+	free(g_shadow);
+	g_shadow = NULL;
+	g_verify = 0;
+	vm_stage_fini();
+
+	/* switched off in the middle of a stream: the thread is given back
+	 * once nothing is being read, the reads go on as before */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 6; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	s.readahead = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!d->ra_made && !d->ra_ready && ra_idle(d) && d->pipe_made && fake_threads_live == 2);
+	CHECK(d->ra_go == -1 && d->ra_done == -1);
+	for (uint32_t i = 6; i < 12; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(ra_idle(d));
+	/* on again: made again; overlapped reads and copy both off still keep
+	 * the helper for it */
+	s.readahead = 1;
+	s.pipeline = VM_PIPE_OFF;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && d->ra_made && fake_threads_live == 3);
+	for (uint32_t i = 0; i < 10; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(g_ra_hits >= 4);
+	/* everything off: all of it given back */
+	s.readahead = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!d->ra_made && !d->pipe_made && fake_threads_live == 0 && fake_semas_live == 0);
+	vm_stage_fini();
+
+	/* the thread cannot be made: reads as before, not tried every tick */
+	reset();
+	offload_on(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	CHECK(d->pipe_made);
+	fake_thread_fail = 1;
+	s.readahead = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!d->ra_made && d->ra_failed && d->ra_go == -1 && fake_threads_live == 2);
+	fake_thread_fail = 0;
+	vm_stage_worker_tick();
+	CHECK(!d->ra_made);
+	for (uint32_t i = 0; i < 8; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	s.readahead = 0;
+	vm_stage_apply(&s);
+	s.readahead = 1;
+	vm_stage_apply(&s);                           /* switched again: tried afresh */
+	vm_stage_worker_tick();
+	CHECK(d->ra_made);
+	vm_stage_fini();
+	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+
+	/* the request in flight when it is switched off: released only after */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	d->busy = 1;
+	s.readahead = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->ra_made && !d->ra_ready && vm_stage_pending());
+	d->busy = 0;
+	vm_stage_worker_tick();
+	CHECK(!d->ra_made && !vm_stage_pending());
+	vm_stage_fini();
+
+	g_live = saved_live;
+	free(u);
+	free(w);
+}
+
 /* Everything at once, for ThreadSanitizer: two readers on the memory card
  * (one of them mostly finds the buffer busy and goes stock), one on the
  * internal storage, the settings switched on the fly (overlapped reads, copy
@@ -1799,7 +2110,7 @@ static void test_pipe_retire_bounded(void)
 static volatile int g_stress_stop, g_stress_bad;
 static void *g_null_ctx;                          /* the fake SD context's first word */
 
-typedef struct { int dev; int seed; int reads; } StressArg;
+typedef struct { int dev; int seed; int reads; int seq; } StressArg;
 
 static void *stress_reader(void *argp)
 {
@@ -1814,6 +2125,15 @@ static void *stress_reader(void *argp)
 		x = x * 1103515245u + 12345u;
 		n = 64 + (x >> 8) % 1037;
 		at = (x >> 4) % (DISK_SECTORS - n);
+		if (a->seq) {                               /* a stream: read ahead's case */
+			static __thread uint32_t pos;
+
+			n = 256;
+			if (pos + n > DISK_SECTORS)
+				pos = 0;
+			at = pos;
+			pos += n;
+		}
 		if (a->dev == M)
 			r = stage_xfer(&g_dev[M], 0, fake_io, REF_RD, 0, NULL, at, u, n);
 		else
@@ -1850,7 +2170,7 @@ static void test_stress_concurrency(void)
 	Dev *in = &g_dev[VM_DEV_INTERNAL];
 	uint8_t *staging2 = calloc(1, STAGE_BYTES);
 	pthread_t th[4];
-	StressArg args[3] = { { M, 1, 0 }, { M, 2, 0 }, { VM_DEV_INTERNAL, 3, 0 } };
+	StressArg args[3] = { { M, 1, 0, 1 }, { M, 2, 0, 0 }, { VM_DEV_INTERNAL, 3, 0, 1 } };
 	int saved_live = g_live;
 
 	reset();
@@ -1858,6 +2178,7 @@ static void test_stress_concurrency(void)
 	in->buf = staging2;
 	in->enabled = 1;
 	in->fallback = 0;
+	in->unusable = 0;                               /* an earlier vm_stage_fini set it */
 	in->uid = -1;
 	memset(&s, 0, sizeof(s));
 	s.memcard = 1;
@@ -1879,7 +2200,15 @@ static void test_stress_concurrency(void)
 		s.offload = (i / 3) % 3 == 1 ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF;
 		s.stats = (i / 9) & 1;
 		s.small = (i / 18) & 1;
+		s.readahead = (i / 5) % 4 != 0;
 		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		sched_yield();
+	}
+	/* read ahead left on until the streams have used it */
+	s.readahead = 1;
+	vm_stage_apply(&s);
+	for (int i = 0; i < 200000 && !__atomic_load_n(&g_ra_hits, __ATOMIC_RELAXED); i++) {
 		vm_stage_worker_tick();
 		sched_yield();
 	}
@@ -1890,6 +2219,7 @@ static void test_stress_concurrency(void)
 	CHECK(args[0].reads > 20 && args[1].reads > 20 && args[2].reads > 20);
 	CHECK(g_dev[M].st.errors == 0 && in->st.errors == 0 && !g_dev[M].fallback && !in->fallback);
 	CHECK(g_dev[M].st.passthru > 0);                /* the two card readers met */
+	CHECK(g_ra_hits > 0);                           /* the stream read ahead */
 	vm_stage_fini();
 	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
 	in->unusable = 0;
@@ -1922,6 +2252,7 @@ int main(void)
 	RUN(test_pipeline_setup_fails);
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
+	RUN(test_readahead);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
 	RUN(test_problems_wake_the_worker);

@@ -208,6 +208,8 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 		out->offload = s >= VM_OFFLOAD_OFF && s <= VM_OFFLOAD_ALWAYS ? s : -1;
 		s = vmGetSetting(VM_KEY_GPUSAFE);
 		out->gpusafe = s == 0 || s == 1 ? s : -1;
+		s = vmGetSetting(VM_KEY_READAHEAD);
+		out->readahead = s == 0 || s == 1 ? s : -1;
 	}
 	out->fingerprint = st.fingerprint;
 	out->verify = st.settings.verify;

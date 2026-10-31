@@ -120,6 +120,27 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
  * single slot and no context. `part` is NULL for the memory card. */
 typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n);
 
+/* Read ahead: three pieces of 128 KiB, in the staging buffer (two) and the
+ * second buffer (one). */
+#define RA_PIECE_SECTORS  256
+#define RA_PIECES         3
+#define RA_FREE           0
+#define RA_QUEUED         1           /* for the thread to read             */
+#define RA_READING        2
+#define RA_READY          3
+#define RA_FAILED         4
+
+typedef struct RaPiece {
+	int            state;             /* RA_*, atomic                         */
+	uint32_t       seq;               /* the order the thread reads them in    */
+	uint32_t       sector, n, off;    /* off: sectors already handed out       */
+	io_fn          io;
+	tai_hook_ref_t ref;
+	void          *part;
+	uint32_t       gen, epoch, t_done;   /* see ra_valid                       */
+	int            ok;
+} RaPiece;
+
 typedef struct Dev {
 	int           port;          /* SDIF port, or -1: the memory card          */
 	SceUID        uid;
@@ -164,15 +185,35 @@ typedef struct Dev {
 	uint32_t      est_io_ns;              /* per sector, for the split        */
 	uint32_t      est_cp_ns[2];           /* the copy: [0] plain, [1] + clean */
 	uint32_t      est_cmd_ns;             /* the fixed cost of one card read   */
+	/* a copier job whose parts are already read (read ahead): job_src[i]
+	 * instead of the staging buffers, no sem_free */
+	int           job_ra;
+	const void   *job_src[3];
+	/* Read ahead (see "read ahead"): the thread and its pieces, valid while
+	 * ra_made; ra_ready publishes them to the hooks. The pieces and the
+	 * stream are the busy holder's; the thread only reads queued pieces. */
+	int           ra_made, ra_failed;
+	volatile int  ra_ready, ra_quit;
+	SceUID        ra_th, ra_go, ra_done;
+	int           ra_waiting;             /* a request sleeps on ra_done      */
+	RaPiece       ra[RA_PIECES];
+	uint32_t      ra_seq;                 /* the last piece queued            */
+	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
+	void         *ra_last_part;
+	uint32_t      ra_wgen;                /* + 1 as a write starts, + 1 as it ends */
+	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
 	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
-	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
+	                      .ra_th = -1, .ra_go = -1, .ra_done = -1 },
 	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
-	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
+	                      .ra_th = -1, .ra_go = -1, .ra_done = -1 },
 	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
-	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1 },
+	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
+	                      .ra_th = -1, .ra_go = -1, .ra_done = -1 },
 };
 
 /* Set by vm_stage_init: from then on a device switched on gets its buffer.
@@ -734,7 +775,7 @@ static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t 
 	memcpy(sz, d->job_sz, sizeof(sz));
 	*done = *cp_us = 0;
 	for (uint32_t i = 0; i < k; i++) {
-		const void *cur = (i & 1) ? d->buf2 : d->buf;
+		const void *cur = d->job_ra ? d->job_src[i] : (i & 1) ? d->buf2 : d->buf;
 		uint32_t f, c0;
 
 		ksceKernelWaitSema(d->sem_done, 1, NULL);
@@ -750,7 +791,7 @@ static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t 
 			*cp_us += ksceKernelGetSystemTimeLow() - c0;
 		off += sz[i];
 		*done = off;
-		if (i + 2 < k)                      /* part i+2 reads into this buffer */
+		if (!d->job_ra && i + 2 < k)        /* part i+2 reads into this buffer */
 			ksceKernelSignalSema(d->sem_free, 1);
 	}
 	return 0;
@@ -804,8 +845,13 @@ static int pipe_copier(SceSize args, void *argp)
 	return 0;
 }
 
+static void ra_release(Dev *d);
+static int ra_retire(Dev *d);
+
 static void pipe_release(Dev *d)
 {
+	if (d->ra_made)
+		ra_release(d);                    /* its pieces are in these buffers */
 	if (d->th >= 0) {
 		d->pipe_quit = 1;
 		__sync_synchronize();
@@ -849,6 +895,8 @@ static void pipe_release(Dev *d)
 #define PIPE_RETIRE_MS  50
 static int pipe_retire(Dev *d)
 {
+	if (d->ra_made && !ra_retire(d))
+		return 0;
 	__atomic_store_n(&d->pipe_ready, 0, __ATOMIC_SEQ_CST);
 	__sync_synchronize();                 /* pairs with the fence in take() */
 	/* an acquire load: the request's last use of the buffers comes first */
@@ -1173,10 +1221,462 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 	return 0;
 }
 
+/* ---- read ahead (VM_KEY_READAHEAD) -------------------------------------------
+ *
+ * EXPERIMENT. While a program reads one stretch of a storage in order (five
+ * staged reads in a row, each starting where the last one ended - so the four
+ * pieces of one 1 MiB read never start it), the device's read-ahead thread on
+ * the system core reads the next 384 KiB in three pieces of 128 KiB, one
+ * card read each, while the program copies what it has. The next read of the
+ * stream then takes its data from those pieces (waiting only for a piece still
+ * being read) and the card goes on to the next one: it never waits for the
+ * program, and a stream needs one card command per 128 KiB.
+ *
+ * What makes this safe:
+ *   - a piece is handed out only to the read that continues the stream exactly
+ *     where it is, with the same card context; anything else (another sector,
+ *     a write through the staging buffer, a non-staged read is left alone)
+ *     first drops every piece, waiting for the one being read (up to one
+ *     piece, ~6 ms: the card cannot stop a read);
+ *   - every write on the device counts ra_wgen up as it starts and as it ends,
+ *     on every path (staged or not). A piece is handed out only if no write
+ *     ran while it was read and none started since (the count is unchanged,
+ *     and even), so nothing written since is ever read from a piece;
+ *   - switching the device (off, on, after an error) counts ra_epoch up, and
+ *     a piece older than RA_MAX_AGE_US is not used: a swapped card never
+ *     answers a read with the old card's data;
+ *   - a piece the card failed to read is not used, and does not switch the
+ *     device to stock (it may simply lie past the card's end): the read is
+ *     done as without read ahead;
+ *   - the pieces live in the staging buffers: every request holding `busy`
+ *     drops them before it uses those buffers itself, and the worker releases
+ *     the thread only once no piece is being read and no request is in flight.
+ * Nothing is written ahead or kept back: writes are as before. */
+#define RA_STREAK       5               /* staged reads in a row before it starts */
+#define RA_MAX_AGE_US   500000u
+#define RA_RETIRE_MS    50
+
+static volatile int g_readahead;          /* the setting                      */
+static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
+
+static uint8_t *ra_ptr(const Dev *d, int i)
+{
+	return i < 2 ? (uint8_t *)d->buf + (size_t)i * RA_PIECE_SECTORS * 512 : (uint8_t *)d->buf2;
+}
+
+static int ra_pending(int st)
+{
+	return st == RA_QUEUED || st == RA_READING;
+}
+
+/* The read-ahead thread: reads the queued pieces, oldest first, one at a time.
+ * A request waiting for one (ra_waiting) is woken after each. */
+static int ra_thread(SceSize args, void *argp)
+{
+	Dev *d;
+
+	(void)args;
+	memcpy(&d, argp, sizeof(d));          /* the start argument, copied */
+	for (;;) {
+		int best = -1, exp = RA_QUEUED, r;
+		uint32_t g1, g2;
+		RaPiece *pc;
+
+		ksceKernelWaitSema(d->ra_go, 1, NULL);
+		if (__atomic_load_n(&d->ra_quit, __ATOMIC_ACQUIRE))
+			break;
+		for (int i = 0; i < RA_PIECES; i++)
+			if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_QUEUED &&
+			    (best < 0 || (int32_t)(d->ra[i].seq - d->ra[best].seq) < 0))
+				best = i;
+		if (best < 0)
+			continue;                       /* dropped meanwhile */
+		pc = &d->ra[best];
+		if (!__atomic_compare_exchange_n(&pc->state, &exp, RA_READING, 0, __ATOMIC_ACQ_REL,
+		                                 __ATOMIC_RELAXED))
+			continue;
+		g1 = __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST);
+		r = pc->io(pc->ref, pc->part, pc->sector, ra_ptr(d, best), pc->n);
+		g2 = __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST);
+		pc->gen = g1;
+		pc->ok = r >= 0 && g1 == g2 && !(g1 & 1);
+		pc->t_done = ksceKernelGetSystemTimeLow();
+		__atomic_store_n(&pc->state, r >= 0 ? RA_READY : RA_FAILED, __ATOMIC_SEQ_CST);
+		if (__atomic_exchange_n(&d->ra_waiting, 0, __ATOMIC_SEQ_CST))
+			ksceKernelSignalSema(d->ra_done, 1);
+	}
+	return 0;
+}
+
+/* Wait until piece i is no longer queued or being read; its state. */
+static int ra_wait(Dev *d, int i)
+{
+	for (;;) {
+		int st = __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE);
+
+		if (!ra_pending(st))
+			return st;
+		__atomic_store_n(&d->ra_waiting, 1, __ATOMIC_SEQ_CST);
+		st = __atomic_load_n(&d->ra[i].state, __ATOMIC_SEQ_CST);
+		if (!ra_pending(st)) {
+			/* done meanwhile: if the thread took the flag, its signal is ours */
+			if (!__atomic_exchange_n(&d->ra_waiting, 0, __ATOMIC_SEQ_CST))
+				ksceKernelWaitSema(d->ra_done, 1, NULL);
+			return st;
+		}
+		ksceKernelWaitSema(d->ra_done, 1, NULL);   /* the thread cleared the flag */
+	}
+}
+
+static int ra_any(const Dev *d)
+{
+	for (int i = 0; i < RA_PIECES; i++)
+		if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE)
+			return 1;
+	return 0;
+}
+
+/* Drop every piece: the queued ones at once, the one being read once it is
+ * done. The staging buffers are then this request's again. */
+static void ra_drop(Dev *d)
+{
+	uint32_t waste = 0;
+	int any = 0;
+
+	for (int i = 0; i < RA_PIECES; i++) {
+		int exp = RA_QUEUED;
+
+		if (__atomic_compare_exchange_n(&d->ra[i].state, &exp, RA_FREE, 0, __ATOMIC_ACQ_REL,
+		                                __ATOMIC_RELAXED))
+			any = 1;                        /* not read yet: nothing wasted */
+	}
+	for (int i = 0; i < RA_PIECES; i++) {
+		const int st = ra_wait(d, i);
+
+		if (st != RA_FREE) {
+			any = 1;
+			if (st == RA_READY)
+				waste += d->ra[i].n - d->ra[i].off;
+			__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
+		}
+	}
+	if (any) {
+		ADD(g_ra_drops, 1);
+		ADD(g_ra_waste_kib, waste / 2);
+	}
+}
+
+/* Whether piece i may be handed out (see the top). */
+static int ra_valid(const Dev *d, int i)
+{
+	const RaPiece *pc = &d->ra[i];
+
+	return __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY && pc->ok &&
+	       pc->gen == __atomic_load_n(&d->ra_wgen, __ATOMIC_SEQ_CST) &&
+	       pc->epoch == LD(d->ra_epoch) &&
+	       ksceKernelGetSystemTimeLow() - pc->t_done < RA_MAX_AGE_US;
+}
+
+/* The pieces that continue the stream at `sector`, oldest first (idx), and
+ * how many sectors of the n asked for they hold. 0: they do not continue it. */
+static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, uint32_t n,
+                         int idx[RA_PIECES], int *cnt)
+{
+	uint32_t at = sector, cov = 0;
+
+	*cnt = 0;
+	while (cov < n && *cnt < RA_PIECES) {
+		int found = -1;
+
+		for (int i = 0; i < RA_PIECES; i++) {
+			const RaPiece *pc = &d->ra[i];
+
+			if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE &&
+			    pc->part == part && pc->io == io && pc->sector + pc->off == at &&
+			    pc->off < pc->n)
+				found = i;
+		}
+		if (found < 0)
+			break;
+		idx[(*cnt)++] = found;
+		{
+			const uint32_t have = d->ra[found].n - d->ra[found].off;
+			const uint32_t take_n = have < n - cov ? have : n - cov;
+
+			cov += take_n;
+			at += take_n;
+		}
+	}
+	return cov;
+}
+
+/* The buffer's memory type for the copier, read here (see stage_xfer). */
+static void off_memtype(OffMap *om)
+{
+	if (!om->tried && om->mt == -2) {
+		const int mt = ksceKernelGetMemBlockMemtypeByAddr(om->user);
+
+		om->mt = mt >= 0 && ksceKernelGetMemBlockMemtypeByAddr(om->user + om->len - 1) == mt
+		       ? mt : -1;
+	}
+}
+
+/* Copy k ready parts (src, sz) into p on the copier, as offload_run does with
+ * parts it reads; without a usable mapping this thread copies. *own: the
+ * sectors this thread copied. */
+static void ra_copy_off(Dev *d, uint8_t *p, const void *const *src, const uint32_t *sz, uint32_t k,
+                        int clean, OffMap *m, int last, uint32_t *own, uint32_t *cp_us)
+{
+	uint32_t done = 0, n = 0;
+	int nomap = 1;
+
+	d->job_k = k;
+	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++) {
+		d->job_sz[i] = i < k ? sz[i] : 0;
+		d->job_src[i] = i < k ? src[i] : NULL;
+		n += i < k ? sz[i] : 0;
+	}
+	d->job_ra = 1;
+	d->job_ret = 0;
+	__atomic_store_n(&d->job_fail, 0, __ATOMIC_RELAXED);
+	__sync_synchronize();
+	ksceKernelSignalSema(d->sem_done, (int)k);   /* every part is there already */
+	off_memtype(m);
+	if (!m->tried || m->uid >= 0) {
+		d->cjob_map = m;
+		d->cjob_off = (uint32_t)(p - m->user);
+		d->cjob_clean = clean;
+		d->cjob_last = last;
+		__sync_synchronize();
+		ksceKernelSignalSema(d->sem_cgo, 1);
+		ksceKernelWaitSema(d->sem_fin, 1, NULL);
+		__sync_synchronize();
+		nomap = d->cjob_nomap;
+	}
+	if (nomap) {
+		copy_parts(d, p, clean, &done, cp_us);
+		*own += done;
+	} else {
+		*cp_us = d->cjob_cp_us;
+		__atomic_fetch_add(&g_off_reads, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&g_off_kib, n / 2, __ATOMIC_RELAXED);
+	}
+	d->cjob_map = NULL;
+	d->job_ra = 0;
+}
+
+/* The start of a read from the pieces that continue the stream: the sectors
+ * done (0: none, the pieces are to be dropped). `off`: the copy goes to the
+ * copier (m, last as in offload_run). */
+static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t *p, uint32_t n,
+                         int clean, int stats, int off, OffMap *m, uint32_t left_all,
+                         uint32_t *own)
+{
+	int idx[RA_PIECES], cnt;
+	const void *src[RA_PIECES];
+	uint32_t sz[RA_PIECES], cov = ra_cover(d, part, io, sector, n, idx, &cnt), w0, wait_us,
+	         cp_us = 0, at = 0;
+
+	if (!cov)
+		return 0;
+	w0 = stats ? ksceKernelGetSystemTimeLow() : 0;
+	for (int j = 0; j < cnt; j++)
+		if (ra_wait(d, idx[j]) != RA_READY || !ra_valid(d, idx[j])) {
+			ADD(g_ra_bad, 1);
+			return 0;
+		}
+	wait_us = stats ? ksceKernelGetSystemTimeLow() - w0 : 0;
+	for (int j = 0; j < cnt; j++) {
+		const RaPiece *pc = &d->ra[idx[j]];
+		const uint32_t have = pc->n - pc->off;
+
+		sz[j] = have < cov - at ? have : cov - at;
+		src[j] = ra_ptr(d, idx[j]) + (size_t)pc->off * 512;
+		at += sz[j];
+	}
+	if (off) {
+		ra_copy_off(d, p, src, sz, (uint32_t)cnt, clean, m, cov == left_all, own, &cp_us);
+	} else {
+		const uint32_t c0 = stats ? ksceKernelGetSystemTimeLow() : 0;
+
+		at = 0;
+		for (int j = 0; j < cnt; j++) {
+			vm_copy_from_stage(p + (size_t)at * 512, src[j], sz[j] * 512);
+			if (clean)
+				clean_out(p + (size_t)at * 512, sz[j] * 512);
+			at += sz[j];
+		}
+		*own += cov;
+		if (stats)
+			cp_us = ksceKernelGetSystemTimeLow() - c0;
+	}
+	for (int j = 0; j < cnt; j++) {
+		RaPiece *pc = &d->ra[idx[j]];
+
+		pc->off += sz[j];
+		if (pc->off >= pc->n)
+			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
+	}
+	ADD(g_ra_hits, 1);
+	ADD(g_ra_kib, cov / 2);
+	if (stats) {
+		ADD(d->tm.rd_sectors, cov);
+		ADD(d->tm.rd_io_us, wait_us);
+		ADD(d->tm.rd_copy_us, cp_us);
+		ADD(d->rd_bytes, (uint64_t)cov * 512);
+	}
+	return cov;
+}
+
+/* A staged read [sector, sector + n) has completed: the stream so far. */
+static void ra_note(Dev *d, void *part, uint32_t sector, uint32_t n)
+{
+	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak)
+		d->ra_streak += d->ra_streak < 1000;
+	else
+		d->ra_streak = 1;
+	d->ra_last_part = part;
+	d->ra_last_end = sector + n;
+}
+
+/* Queue the free pieces after the stream (after the last piece queued, or
+ * where the stream is). */
+static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
+{
+	uint32_t next = d->ra_last_end;
+
+	if (d->ra_streak < RA_STREAK)
+		return;
+	for (int i = 0; i < RA_PIECES; i++) {
+		const RaPiece *pc = &d->ra[i];
+
+		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE &&
+		    pc->sector + pc->n > next)
+			next = pc->sector + pc->n;
+	}
+	for (int i = 0; i < RA_PIECES; i++) {
+		RaPiece *pc = &d->ra[i];
+
+		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE)
+			continue;
+		if (next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
+			return;
+		pc->seq = ++d->ra_seq;
+		pc->sector = next;
+		pc->n = RA_PIECE_SECTORS;
+		pc->off = 0;
+		pc->io = io;
+		pc->ref = ref;
+		pc->part = part;
+		pc->epoch = LD(d->ra_epoch);
+		pc->ok = 0;
+		next += RA_PIECE_SECTORS;
+		__atomic_store_n(&pc->state, RA_QUEUED, __ATOMIC_RELEASE);
+		ksceKernelSignalSema(d->ra_go, 1);
+	}
+}
+
+static void ra_release(Dev *d)
+{
+	if (d->ra_th >= 0) {
+		__atomic_store_n(&d->ra_quit, 1, __ATOMIC_RELEASE);
+		ksceKernelSignalSema(d->ra_go, 1);
+		ksceKernelWaitThreadEnd(d->ra_th, NULL, NULL);
+		ksceKernelDeleteThread(d->ra_th);
+	}
+	if (d->ra_go >= 0)
+		ksceKernelDeleteSema(d->ra_go);
+	if (d->ra_done >= 0)
+		ksceKernelDeleteSema(d->ra_done);
+	d->ra_th = d->ra_go = d->ra_done = -1;
+	for (int i = 0; i < RA_PIECES; i++)
+		__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
+	__atomic_store_n(&d->ra_waiting, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&d->ra_ready, 0, __ATOMIC_RELEASE);
+	ST(d->ra_made, 0);
+}
+
+/* Worker: the read-ahead thread of a device whose helper exists. 0 or the
+ * error (nothing kept). */
+static int ra_setup(Dev *d)
+{
+	Dev *arg = d;
+	int r;
+
+	/* the stream (ra_streak ...) is the requests' own, kept as it is */
+	d->ra_th = -1;
+	__atomic_store_n(&d->ra_quit, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&d->ra_waiting, 0, __ATOMIC_RELAXED);
+	for (int i = 0; i < RA_PIECES; i++)
+		__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
+	d->ra_go = ksceKernelCreateSema("SceVitaMemioAheadGo", 0, 0, 16, NULL);
+	d->ra_done = ksceKernelCreateSema("SceVitaMemioAheadDone", 0, 0, 1, NULL);
+	if (d->ra_go < 0 || d->ra_done < 0) {
+		r = d->ra_go < 0 ? d->ra_go : d->ra_done;
+		ra_release(d);
+		return r;
+	}
+	/* on the system core, as the helper: the card goes on at once */
+	d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, 0x2000, 0,
+	                                  PIPE_CPU_SYSTEM, NULL);
+	if (d->ra_th < 0)
+		d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, 0x2000, 0, 0,
+		                                  NULL);
+	if (d->ra_th < 0) {
+		r = d->ra_th;
+		d->ra_th = -1;
+		ra_release(d);
+		return r;
+	}
+	r = ksceKernelStartThread(d->ra_th, sizeof(arg), &arg);
+	if (r < 0) {
+		ksceKernelDeleteThread(d->ra_th);
+		d->ra_th = -1;
+		ra_release(d);
+		return r;
+	}
+	ST(d->ra_made, 1);
+	__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);
+	return 0;
+}
+
+/* Worker: stop read ahead on `d` - no new pieces, the queued ones dropped -
+ * and release the thread once no request is in flight and no piece is being
+ * read. Bounded as pipe_retire (a card stuck mid-read): 1 if released. */
+static int ra_retire(Dev *d)
+{
+	__atomic_store_n(&d->ra_ready, 0, __ATOMIC_SEQ_CST);
+	__sync_synchronize();
+	for (int i = 0; __atomic_load_n(&d->busy, __ATOMIC_ACQUIRE); i++) {
+		if (i >= RA_RETIRE_MS)
+			return 0;
+		ksceKernelDelayThread(1000);
+	}
+	for (int i = 0; i < RA_PIECES; i++) {
+		int exp = RA_QUEUED;
+
+		__atomic_compare_exchange_n(&d->ra[i].state, &exp, RA_FREE, 0, __ATOMIC_ACQ_REL,
+		                            __ATOMIC_RELAXED);
+	}
+	for (int t = 0;; t++) {
+		int reading = 0;
+
+		for (int i = 0; i < RA_PIECES; i++)
+			reading |= __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING;
+		if (!reading && !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE))
+			break;
+		if (t >= RA_RETIRE_MS)
+			return 0;
+		ksceKernelDelayThread(1000);
+	}
+	ra_release(d);
+	return 1;
+}
+
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
-static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                      void *part, uint32_t sector, void *buf, uint32_t nsec)
+static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                          void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
 	uint8_t *p = buf;
 	uint32_t left = nsec;
@@ -1230,9 +1730,26 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
+	const uint32_t sector0 = sector;
+	/* read ahead: this read continues the stream from the pieces, if they
+	 * hold it; anything else drops them first (they are in the buffers) */
+	const int ra = !write && !verify && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
+	if (write)
+		d->ra_streak = 0;
+	if (ra_any(d)) {
+		const uint32_t got = ra ? ra_serve(d, part, io, sector, p, left, clean, stats, off, &om,
+		                                   left, &own)
+		                        : 0;
+
+		p += (size_t)got * 512;
+		sector += got;
+		left -= got;
+		if (!got || left)
+			ra_drop(d);
+	}
 	while (ret >= 0 && left && !LD(d->fallback)) {
 		uint32_t n = left > STAGE_SECTORS ? STAGE_SECTORS : left, bytes = n * 512;
 		uint32_t t1 = 0, t2 = 0, t3 = 0;
@@ -1265,14 +1782,9 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 				k = 1;
 				sz[0] = n;
 			}
-			if (!om.tried && om.mt == -2) {
-				/* the buffer's memory type, read here: the copier, which
-				 * maps it, is not in this process */
-				const int mt = ksceKernelGetMemBlockMemtypeByAddr(om.user);
-
-				om.mt = mt >= 0 &&
-				        ksceKernelGetMemBlockMemtypeByAddr(om.user + om.len - 1) == mt ? mt : -1;
-			}
+			/* the buffer's memory type, read here: the copier, which maps
+			 * it, is not in this process */
+			off_memtype(&om);
 			ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &om,
 			                  left == n, &done, &mine_n);
 			own += mine_n;
@@ -1350,6 +1862,11 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
+	if (!write && ret >= 0 && !left && !LD(d->fallback)) {
+		ra_note(d, part, sector0, nsec);
+		if (ra)
+			ra_refill(d, io, ref, part);
+	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
 	__sync_lock_release(&d->busy);
@@ -1372,6 +1889,21 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 	/* Anything not done on the faster path (error, mismatch) is done stock. */
 	return left ? io(ref, part, sector, p, left) : ret;
+}
+
+/* Every write counts the device's ra_wgen up as it starts and as it ends,
+ * whichever way it goes (see "read ahead"). */
+static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                      void *part, uint32_t sector, void *buf, uint32_t nsec)
+{
+	int r;
+
+	if (!write)
+		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec);
+	__atomic_fetch_add(&d->ra_wgen, 1, __ATOMIC_SEQ_CST);
+	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec);
+	__atomic_fetch_add(&d->ra_wgen, 1, __ATOMIC_SEQ_CST);
+	return r;
 }
 
 /* The six hooks: a read and a write per device, SceSdif with a card context,
@@ -1510,7 +2042,7 @@ void vm_stage_fini(void)
 void vm_stage_apply(const VmSettings *s)
 {
 	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
-	const int needed = LD(g_pipeline) || LD(g_offload);   /* the helper, before this */
+	const int needed = LD(g_pipeline) || LD(g_offload) || LD(g_readahead);   /* the helper */
 	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
 	                   ? s->pipeline : VM_PIPE_OFF;
 	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
@@ -1519,6 +2051,8 @@ void vm_stage_apply(const VmSettings *s)
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
 
+		if ((want[i] ? 1 : 0) != LD(d->enabled))
+			ADD(d->ra_epoch, 1);  /* nothing read ahead before is used after */
 		if (want[i] && !LD(d->enabled)) {
 			ST(d->fallback, 0);   /* switching it back on is a fresh start */
 			ST(d->alloc_err, 0);  /* ... and a fresh try for its buffer    */
@@ -1544,9 +2078,13 @@ void vm_stage_apply(const VmSettings *s)
 		ST(g_offload_logged, 0);
 	}
 	ST(g_offload, offload);
-	/* The helper (and copier) wanted again after neither setting wanted it:
-	 * a fresh try at making them, whichever setting was switched on. */
-	if (!needed && (pipeline || offload))
+	if (!s->readahead != !LD(g_readahead))
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
+	ST(g_readahead, s->readahead == 1 ? 1 : 0);
+	/* The helper (and copier) wanted again after no setting wanted it: a
+	 * fresh try at making them, whichever setting was switched on. */
+	if (!needed && (pipeline || offload || LD(g_readahead)))
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			ST(g_dev[i].pipe_failed, 0);
 	if (!s->verify)
@@ -1593,6 +2131,11 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
+		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
+			VM_KLOGI("stage: read ahead %u reads %u MiB, dropped %u (%u MiB unused), unusable %u",
+			         (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
+			         (unsigned)LD(g_ra_drops), (unsigned)(LD(g_ra_waste_kib) / 1024),
+			         (unsigned)LD(g_ra_bad));
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),
@@ -1630,8 +2173,28 @@ void vm_stage_worker_tick(void)
 	 * while the setting is on, and given back once either is switched off. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
-		const int wanted = (LD(g_pipeline) || LD(g_offload)) && LD(g_live) && LD(d->enabled) &&
-		                   __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) && !LD(d->unusable);
+		const int wanted = (LD(g_pipeline) || LD(g_offload) || LD(g_readahead)) && LD(g_live) &&
+		                   LD(d->enabled) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
+		                   !LD(d->unusable);
+		const int ra_wanted = wanted && LD(g_readahead) && !LD(d->fallback);
+
+		/* read ahead: its thread, once the helper and buffers are there */
+		if (!ra_wanted && d->ra_made) {
+			if (ra_retire(d))
+				VM_KLOGI("stage: dev %d read ahead off", i);
+		} else if (ra_wanted && d->ra_made && !__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
+			__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);   /* wanted again */
+		} else if (ra_wanted && !d->ra_made && !LD(d->ra_failed) && d->pipe_made &&
+		           __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE)) {
+			const int r = ra_setup(d);
+
+			if (r < 0) {
+				ST(d->ra_failed, 1);
+				VM_KLOGW("stage: dev %d read ahead not set up (0x%08x)", i, (unsigned)r);
+			} else {
+				VM_KLOGI("stage: dev %d read ahead ready (EXPERIMENT)", i);
+			}
+		}
 
 		if (wanted && !d->pipe_made && !LD(d->pipe_failed)) {
 			int r = pipe_setup(d);
@@ -1685,7 +2248,8 @@ int vm_stage_verify_ready(void)
 int vm_stage_pending(void)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (LD(g_dev[i].pipe_made) && !__atomic_load_n(&g_dev[i].pipe_ready, __ATOMIC_ACQUIRE))
+		if ((LD(g_dev[i].pipe_made) && !__atomic_load_n(&g_dev[i].pipe_ready, __ATOMIC_ACQUIRE)) ||
+		    (LD(g_dev[i].ra_made) && !__atomic_load_n(&g_dev[i].ra_ready, __ATOMIC_ACQUIRE)))
 			return 1;
 	return 0;
 }

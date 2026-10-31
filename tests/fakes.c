@@ -33,7 +33,9 @@ void vm_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
 void vm_log(const char *fmt, ...) { (void)fmt; }
 
 /* ---- time / threads -------------------------------------------------------- */
-int ksceKernelDelayThread(unsigned us) { (void)us; return 0; }
+/* A short real pause: a bounded wait for another thread (the read-ahead
+ * thread finishing a piece) gives it the time to. */
+int ksceKernelDelayThread(unsigned us) { (void)us; sched_yield(); usleep(50); return 0; }
 int fake_time_calls;
 uint32_t ksceKernelGetSystemTimeLow(void)
 {

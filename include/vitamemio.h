@@ -76,6 +76,7 @@ enum vm_key {
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
+	VM_KEY_READAHEAD,      /* 0/1: read ahead while a stream is read (EXPERIMENT) */
 	VM_KEY_COUNT
 };
 
@@ -117,6 +118,7 @@ enum vm_key {
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
 #define VM_DEF_OFFLOAD   2   /* VM_OFFLOAD_ALWAYS: with GPU-safe reads or not  */
+#define VM_DEF_READAHEAD 0   /* experimental: opt-in                           */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -132,6 +134,7 @@ typedef struct VmSettings {
 	int32_t gpusafe;
 	int32_t pipeline;
 	int32_t offload;
+	int32_t readahead;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -159,6 +162,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_STATS:
 	case VM_KEY_GPUSAFE:
+	case VM_KEY_READAHEAD:
 		return v == 0 || v == 1;
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;

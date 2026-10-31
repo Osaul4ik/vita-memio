@@ -202,6 +202,8 @@ typedef struct Dev {
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
+	uint32_t      ra_extra[2];            /* threshold raised by waste [cached, nc] */
+	uint32_t      ra_credit[2];           /* pieces used since it last came down */
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
@@ -1298,6 +1300,12 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  * a row, so files under 1.25 MiB (most textures) get it too - one piece ahead
  * at first, then two, then three, so little is read past a file's end. */
 #define RA_STREAK_NC    2
+/* It tunes itself, per kind of memory: every stream that leaves pieces read
+ * for nothing (a game jumping elsewhere, random reads) raises its threshold
+ * by one read, up to RA_STREAK_MAX; every RA_CREDIT pieces used bring it one
+ * back down. Random reads then stop starting it, long streams keep it. */
+#define RA_STREAK_MAX   8
+#define RA_CREDIT       4
 /* Only reads of 64 KiB and up make or continue a stream; smaller transfers
  * (file-system bookkeeping, small files, with "small transfers too") neither
  * start nor break one, and while pieces are kept they go the standard way, so
@@ -1416,6 +1424,14 @@ static void ra_drop(Dev *d)
 	if (any) {
 		ADD(g_ra_drops, 1);
 		ADD(g_ra_waste_kib, waste / 2);
+	}
+	if (waste) {                            /* read for nothing: start later */
+		const int k = d->ra_nc ? 1 : 0;
+		const uint32_t base = k ? RA_STREAK_NC : RA_STREAK;
+
+		if (base + LD(d->ra_extra[k]) < RA_STREAK_MAX)
+			ST(d->ra_extra[k], LD(d->ra_extra[k]) + 1);   /* the log reads it */
+		d->ra_credit[k] = 0;
 	}
 }
 
@@ -1568,8 +1584,16 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		RaPiece *pc = &d->ra[idx[j]];
 
 		pc->off += sz[j];
-		if (pc->off >= pc->n)
+		if (pc->off >= pc->n) {
+			const int k = d->ra_nc ? 1 : 0;
+
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
+			if (++d->ra_credit[k] >= RA_CREDIT) {   /* used: start sooner again */
+				d->ra_credit[k] = 0;
+				if (LD(d->ra_extra[k]))
+					ST(d->ra_extra[k], LD(d->ra_extra[k]) - 1);
+			}
+		}
 	}
 	ADD(g_ra_hits, 1);
 	ADD(g_ra_kib, cov / 2);
@@ -1604,7 +1628,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
  * where the stream is). */
 static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 {
-	const uint32_t thr = d->ra_nc ? RA_STREAK_NC : RA_STREAK;
+	const uint32_t thr = (d->ra_nc ? RA_STREAK_NC : RA_STREAK) + LD(d->ra_extra[d->ra_nc ? 1 : 0]);
 	uint32_t next = d->ra_last_end;
 	int want, live = 0;
 
@@ -2320,11 +2344,13 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
 		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
 			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable), dropped %u "
-			         "(%u MiB unused), unusable %u, NC copier refused %d (0x%08x)",
-			         (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
+			         "(%u MiB unused), unusable %u, NC copier refused %d (0x%08x), starts "
+			         "after %u/%u", (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
-			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type),
+			         (unsigned)(RA_STREAK + LD(g_dev[VM_DEV_SD2VITA].ra_extra[0])),
+			         (unsigned)(RA_STREAK_NC + LD(g_dev[VM_DEV_SD2VITA].ra_extra[1])));
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),

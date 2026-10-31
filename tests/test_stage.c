@@ -1967,6 +1967,30 @@ static void test_readahead(void)
 				CHECK(rd_ok(u, at + q * 512, 512));
 		}
 		CHECK(g_ra_hits > 0 && g_ra_drops > 0 && d->st.errors == 0 && !d->fallback);
+		/* ... which read for nothing at every jump: it now starts so late
+		 * that a 1 MiB read never starts it, and nothing more is wasted */
+		CHECK(RA_STREAK_NC + d->ra_extra[1] >= 5);
+		{
+			const uint32_t drops = g_ra_drops, waste = g_ra_waste_kib;
+
+			for (int r = 0; r < 12; r++) {
+				uint32_t at;
+
+				x = x * 1103515245u + 12345u;
+				at = (x >> 8) % (DISK_SECTORS - 2048);
+				for (uint32_t q = 0; q < 4; q++)
+					CHECK(rd_ok(u, at + q * 512, 512));
+			}
+			CHECK(g_ra_waste_kib == waste && g_ra_drops <= drops + 1);
+		}
+		/* a long stream brings it back down, used pieces at a time */
+		{
+			const uint32_t extra = d->ra_extra[1];
+
+			for (uint32_t i = 0; i < 16; i++)
+				CHECK(rd_ok(u, i * 256, 256));
+			CHECK(d->ra_extra[1] < extra && g_ra_bad == 0);
+		}
 	}
 	vm_stage_fini();
 
@@ -2106,6 +2130,8 @@ static void test_readahead(void)
 	CHECK(wr(w, 3000, 8, REF_RD) == 0);           /* elsewhere, stock */
 	CHECK(wr(w, 3300, 256, REF_RD) == 0);         /* elsewhere, staged: drops them */
 	CHECK(ra_idle(d) && g_ra_drops == 1);
+	CHECK(d->ra_extra[0] == 1);                   /* read for nothing: starts a read later */
+	d->ra_extra[0] = 0;                           /* (as if streams had used pieces since) */
 	for (uint32_t i = 5; i < 10; i++)
 		CHECK(rd_ok(u, i * 256, 256));            /* a stream again from here */
 	for (int i = 0; i < RA_PIECES; i++)

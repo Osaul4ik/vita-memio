@@ -209,6 +209,10 @@ typedef struct Dev {
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
+	/* the stream so far, for auto's cost: it started read ahead, and what
+	 * dropping its pieces made a request wait (µs, atomic) */
+	int           ra_str_ra;
+	uint32_t      ra_str_cost_us;
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
@@ -1322,18 +1326,36 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
  * its length in reads, per kind of memory, for the game it came from (the
  * process that started it). Once RA_LEARN_STREAMS streams of that game are
  * in, the worker works out, per kind, the threshold that would have paid
- * most: each read served from the pieces saves about RA_GAIN_US (measured:
- * 128 KiB reads 7.5 -> 4.6 ms, 256 KiB ones about 3 ms each), each stream
- * that started read ahead costs about RA_COST_US (what was read past its end,
- * and the next read waiting for the card) - or none at all, if nothing pays. That is kept for the game, by its
- * title id, in ur0:data/vita-memio/ra/, and used whenever the game runs again.
- * Learning uses the fixed threshold. Only when to start changes: everything
- * "read ahead" guarantees holds whatever it learns. */
+ * most: each read served from the pieces saves RA_GAIN, each stream that
+ * started read ahead costs RA_COST (what the next read waited for the card
+ * while the pieces were dropped) - or none at all, if nothing pays.
+ *
+ * Gain and cost are measured while the game learns (see "measured"), with
+ * the clock read only for reads of 64 KiB and up, and only then: a read
+ * that nothing served ahead gives the time the device takes (per sector, by
+ * size), a read served from the pieces is compared with it, and the drop that
+ * ends a stream is timed. Until RA_MEAS_MIN samples are in, the priors below
+ * stand in (measured: 128 KiB reads 7.5 -> 4.6 ms, 256 KiB ones about 3 ms
+ * each; a stream's end about 8 ms).
+ *
+ * The result is kept for the game, by its title id, in ur0:data/vita-memio/ra/,
+ * and used whenever the game runs again. Learning uses the fixed threshold.
+ * Only when to start changes: everything "read ahead" guarantees holds
+ * whatever it learns. */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300
-#define RA_GAIN_US        2700            /* per read served from the pieces   */
-#define RA_COST_US        8000            /* per stream that started it        */
+#define RA_GAIN_PRIOR_US  2700            /* per read served from the pieces   */
+#define RA_COST_PRIOR_US  8000            /* per stream that started it        */
 #define RA_THR_NONE       0xFFFFu         /* learnt: never start               */
+/* A kind with fewer streams than this is not judged: it keeps the fixed
+ * threshold (an unused kind must not be switched off for good). */
+#define RA_KIND_MIN_STREAMS 20
+/* Read ahead must pay at least this much per stream, on average, to be
+ * chosen: less is inside what the measurement can tell. */
+#define RA_NET_MIN_US     300
+#define RA_COST_MIN_US    1000            /* a measured cost is never below this */
+#define RA_MEAS_MIN       16              /* samples before a measured value counts */
+#define RA_BUCKETS        4               /* read sizes: <256, <512, <1024, more sectors */
 #define RA_PROFILE_DIR    VM_DATA_DIR "/ra"
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
@@ -1351,6 +1373,119 @@ static int      g_ra_auto_logged;
 #define NID_PROCESS_TITLE_ID 0xEC3124A3
 static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
 
+/* ---- measured gain and cost ("measured") --------------------------------
+ *
+ * Per kind of memory, while the game learns. All atomics (a lost update only
+ * costs one sample). The averages are exponential: new = old + (x - old) / 8,
+ * the first sample taking the place of the old value; integers only (this is
+ * kernel code). */
+typedef struct RaMeas {
+	uint32_t base_ns[RA_BUCKETS];             /* per sector, a read nothing served ahead */
+	uint32_t base_n[RA_BUCKETS];
+	int32_t  gain_us;                         /* per read served from the pieces: what
+	                                           * the same read would have taken, less
+	                                           * what it did take                  */
+	uint32_t gain_n;
+	uint32_t cost_us;                         /* per stream that started read ahead:
+	                                           * the time its end waited for the card */
+	uint32_t cost_n;
+} RaMeas;
+static RaMeas g_ra_meas[2];
+
+static int32_t ra_ewma(int32_t old, int32_t x, uint32_t n)
+{
+	return n ? old + (x - old) / 8 : x;
+}
+
+static int ra_bucket(uint32_t nsec)
+{
+	return nsec < 256 ? 0 : nsec < 512 ? 1 : nsec < 1024 ? 2 : 3;
+}
+
+/* A read of nsec sectors that nothing served ahead, with no piece pending,
+ * took `us`. */
+static void ra_meas_base(int nc, uint32_t nsec, uint32_t us)
+{
+	RaMeas *m = &g_ra_meas[nc];
+	const int b = ra_bucket(nsec);
+	const uint32_t n = LD(m->base_n[b]);
+	const int64_t ns = (int64_t)us * 1000 / (nsec ? nsec : 1);
+
+	ST(m->base_ns[b], (uint32_t)ra_ewma((int32_t)LD(m->base_ns[b]),
+	                                    ns > 0x3FFFFFFF ? 0x3FFFFFFF : (int32_t)ns, n));
+	ST(m->base_n[b], n + (n != 0xFFFFFFFFu));
+}
+
+/* A read of nsec sectors served from the pieces took `us`: the gain is what
+ * a read of that size takes without them, less this. Nothing to compare with
+ * (no such read seen yet, or a clock that does not run): no sample. */
+static void ra_meas_served(int nc, uint32_t nsec, uint32_t us)
+{
+	RaMeas *m = &g_ra_meas[nc];
+	const uint32_t base = LD(m->base_ns[ra_bucket(nsec)]);
+	const uint32_t n = LD(m->gain_n);
+	int64_t saved;
+
+	if (!base)
+		return;
+	saved = (int64_t)base * nsec / 1000 - us;
+	if (saved > 1000000)
+		saved = 1000000;
+	else if (saved < -1000000)
+		saved = -1000000;
+	ST(m->gain_us, ra_ewma(LD(m->gain_us), (int32_t)saved, n));
+	ST(m->gain_n, n + (n != 0xFFFFFFFFu));
+}
+
+/* A stream of `pid` that started read ahead has ended; its end waited `us`. */
+static void ra_meas_cost(int nc, uint32_t us)
+{
+	RaMeas *m = &g_ra_meas[nc];
+	const uint32_t n = LD(m->cost_n);
+
+	ST(m->cost_us, (uint32_t)ra_ewma((int32_t)LD(m->cost_us),
+	                                 us > 0x3FFFFFFF ? 0x3FFFFFFF : (int32_t)us, n));
+	ST(m->cost_n, n + (n != 0xFFFFFFFFu));
+}
+
+/* What the choice goes by: the measured values once enough samples are in
+ * (kept inside 0 .. 3 x the prior for the gain and RA_COST_MIN_US .. 3 x for
+ * the cost, so a bad stretch cannot send them far), else the priors. */
+static void ra_gain_cost(int nc, int32_t *gain, int32_t *cost)
+{
+	const RaMeas *m = &g_ra_meas[nc];
+
+	*gain = RA_GAIN_PRIOR_US;
+	*cost = RA_COST_PRIOR_US;
+	if (LD(m->gain_n) >= RA_MEAS_MIN) {
+		int32_t g = LD(m->gain_us);
+
+		*gain = g < 0 ? 0 : g > 3 * RA_GAIN_PRIOR_US ? 3 * RA_GAIN_PRIOR_US : g;
+	}
+	if (LD(m->cost_n) >= RA_MEAS_MIN) {
+		int32_t c = (int32_t)LD(m->cost_us);
+
+		*cost = c < RA_COST_MIN_US ? RA_COST_MIN_US
+		      : c > 3 * RA_COST_PRIOR_US ? 3 * RA_COST_PRIOR_US : c;
+	}
+}
+
+static void ra_meas_clear(void)
+{
+	for (int k = 0; k < 2; k++) {
+		RaMeas *m = &g_ra_meas[k];
+
+		for (int b = 0; b < RA_BUCKETS; b++) {
+			ST(m->base_ns[b], 0);
+			ST(m->base_n[b], 0);
+		}
+		ST(m->gain_us, 0);
+		ST(m->gain_n, 0);
+		ST(m->cost_us, 0);
+		ST(m->cost_n, 0);
+	}
+}
+
 /* A stream of `pid` has ended: L reads. */
 static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 {
@@ -1363,15 +1498,33 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 	__atomic_fetch_add(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
 }
 
+/* Whether the reads of this device's stream are measured: auto, the game
+ * being learnt (reads of anything else are not its). */
+static int ra_meas_on(const Dev *d)
+{
+	const SceUID pid = d->ra_pid;
+
+	return LD(g_ra_mode) == VM_RA_AUTO && pid && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
+	       __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE);
+}
+
 /* The threshold that would have paid most for one kind's histogram, or
  * RA_THR_NONE: read ahead started at read T serves the L - T reads after it,
- * and costs its stream RA_COST_US. */
-static uint32_t ra_choose(const uint32_t *cnt)
+ * gaining RA_GAIN on each, and costs its stream RA_COST. A kind with too few
+ * streams to tell keeps the fixed threshold; one where the best choice does
+ * not pay RA_NET_MIN_US per stream on average gets none. */
+static uint32_t ra_choose(const uint32_t *cnt, int nc)
 {
 	static const uint8_t k_thr[] = { 2, 3, 4, 5, 6, 8 };
 	int64_t best = 0;
-	uint32_t best_t = RA_THR_NONE;
+	uint32_t best_t = RA_THR_NONE, total = 0;
+	int32_t gain, cost;
 
+	for (uint32_t L = 0; L < RA_HBINS; L++)
+		total += __atomic_load_n(&cnt[L], __ATOMIC_RELAXED);
+	if (total < RA_KIND_MIN_STREAMS)
+		return nc ? RA_STREAK_NC : RA_STREAK;
+	ra_gain_cost(nc, &gain, &cost);
 	for (size_t i = 0; i < sizeof(k_thr); i++) {
 		const uint32_t T = k_thr[i];
 		int64_t sc = 0;
@@ -1379,13 +1532,15 @@ static uint32_t ra_choose(const uint32_t *cnt)
 		for (uint32_t L = T; L < RA_HBINS; L++) {
 			const uint32_t c = __atomic_load_n(&cnt[L], __ATOMIC_RELAXED);
 
-			sc += (int64_t)c * ((int64_t)(L - T) * RA_GAIN_US - RA_COST_US);
+			sc += (int64_t)c * ((int64_t)(L - T) * gain - cost);
 		}
 		if (sc > best) {
 			best = sc;
 			best_t = T;
 		}
 	}
+	if (best_t != RA_THR_NONE && best < (int64_t)total * RA_NET_MIN_US)
+		return RA_THR_NONE;
 	return best_t;
 }
 
@@ -1474,6 +1629,7 @@ static void ra_hist_clear(void)
 		for (int b = 0; b < RA_HBINS; b++)
 			__atomic_store_n(&g_ra_hcnt[k][b], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_hstreams, 0, __ATOMIC_RELAXED);
+	ra_meas_clear();
 }
 
 static void ra_thr_text(char *out, size_t n, uint32_t t)
@@ -1534,12 +1690,20 @@ static void ra_auto_tick(void)
 		uint32_t thr[2];
 		char a[8], b[8];
 
-		thr[0] = ra_choose(g_ra_hcnt[0]);
-		thr[1] = ra_choose(g_ra_hcnt[1]);
+		thr[0] = ra_choose(g_ra_hcnt[0], 0);
+		thr[1] = ra_choose(g_ra_hcnt[1], 1);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
 		ra_profile_save(g_ra_title, thr, __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED));
+		for (int k = 0; k < 2; k++) {
+			int32_t g, c;
+
+			ra_gain_cost(k, &g, &c);
+			VM_KLOGI("stage: read ahead auto: %s - %s: gain %d us/read (%u samples), cost %d us/stream "
+			         "(%u samples)", g_ra_title, k ? "non-cacheable" : "cacheable", (int)g,
+			         (unsigned)LD(g_ra_meas[k].gain_n), (int)c, (unsigned)LD(g_ra_meas[k].cost_n));
+		}
 		ra_thr_text(a, sizeof(a), thr[0]);
 		ra_thr_text(b, sizeof(b), thr[1]);
 		VM_KLOGI("stage: read ahead auto: %s - learnt from %u streams: starts after %s / %s "
@@ -1644,6 +1808,8 @@ static void ra_drop(Dev *d)
 {
 	uint32_t waste = 0;
 	int any = 0;
+	const int meas = ra_meas_on(d);
+	const uint32_t t0 = meas ? ksceKernelGetSystemTimeLow() : 0;
 
 	for (int i = 0; i < RA_PIECES; i++) {
 		int exp = RA_QUEUED;
@@ -1665,6 +1831,8 @@ static void ra_drop(Dev *d)
 	if (any) {
 		ADD(g_ra_drops, 1);
 		ADD(g_ra_waste_kib, waste / 2);
+		if (meas)                               /* what the stream's end waited */
+			ADD(d->ra_str_cost_us, ksceKernelGetSystemTimeLow() - t0);
 	}
 }
 
@@ -1841,8 +2009,13 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		d->ra_streak += d->ra_streak < 1000;
 	} else {
 		/* the last stream is over: noted for auto; a new one starts */
-		if (d->ra_streak)
+		if (d->ra_streak) {
 			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
+			if (d->ra_str_ra && ra_meas_on(d))
+				ra_meas_cost(d->ra_nc, LD(d->ra_str_cost_us));
+		}
+		d->ra_str_ra = 0;
+		ST(d->ra_str_cost_us, 0);
 		d->ra_streak = 1;
 		d->ra_pid = 0;
 		if (LD(g_ra_mode) == VM_RA_AUTO) {
@@ -1891,6 +2064,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		if (live >= want || next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
 			return;
 		live++;
+		d->ra_str_ra = 1;
 		pc->seq = ++d->ra_seq;
 		ST(pc->sector, next);
 		ST(pc->n, (uint32_t)RA_PIECE_SECTORS);
@@ -2047,7 +2221,8 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 {
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2, .nc = 1 };
 	uint32_t got = 0, own = 0;
-	int ret = 0, stats, off, offload, bad = 0;
+	int ret = 0, stats, off, offload, bad = 0, meas, idle0;
+	uint32_t t0;
 	void *shadow;
 
 	if (!take(d, 1, nsec)) {
@@ -2062,6 +2237,10 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	shadow = take_shadow();                     /* verify mode: compared after */
 	stats = LD(g_stats);
 	offload = LD(g_offload);
+	/* auto, learning: the time of this read (not with verify, which reads again) */
+	meas = !shadow && ra_meas_on(d);
+	idle0 = meas && !ra_any(d);
+	t0 = meas ? ksceKernelGetSystemTimeLow() : 0;
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
 	      offload != VM_OFFLOAD_OFF && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
@@ -2077,6 +2256,14 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	if (got < nsec) {
 		ret = io(ref, part, sector + got, p + (size_t)got * 512, nsec - got);
 		ADD(g_nc_stock_kib, (nsec - got) / 2);
+	}
+	if (meas && ret >= 0 && !bad) {
+		const uint32_t us = ksceKernelGetSystemTimeLow() - t0;
+
+		if (got == nsec)
+			ra_meas_served(1, nsec, us);
+		else if (!got && idle0)
+			ra_meas_base(1, nsec, us);           /* nothing pending: the device's own time */
 	}
 	if (shadow)
 		__sync_lock_release(&g_shadow_busy);
@@ -2170,6 +2357,11 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* read ahead: this read continues the stream from the pieces, if they
 	 * hold it; anything else drops them first (they are in the buffers) */
 	const int ra = !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+	/* auto, learning: the time of this read (not with verify, which reads again) */
+	const int meas = ra && !verify && ra_meas_on(d);
+	const int idle0 = meas && !ra_any(d);
+	const uint32_t t0 = meas ? ksceKernelGetSystemTimeLow() : 0;
+	uint32_t served = 0;
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
@@ -2182,6 +2374,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 		if (got && verify && ra_verify(d, io, ref, part, sector, p, got, clean, shadow))
 			problem = 1;                      /* fallen back: the rest stock */
+		served = got;
 		p += (size_t)got * 512;
 		sector += got;
 		left -= got;
@@ -2301,6 +2494,14 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
 	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem) {
+		if (meas && nsec >= RA_MIN_SECTORS) {
+			const uint32_t us = ksceKernelGetSystemTimeLow() - t0;
+
+			if (served == nsec)
+				ra_meas_served(0, nsec, us);
+			else if (!served && idle0)
+				ra_meas_base(0, nsec, us);       /* nothing pending: the device's own time */
+		}
 		if (ra_note(d, part, sector0, nsec, 0) && ra)
 			ra_refill(d, io, ref, part);
 	}

@@ -2371,18 +2371,23 @@ static void test_readahead_auto(void)
 		uint32_t c[RA_HBINS] = { 0 };
 
 		c[16] = 50;                                   /* 4 MiB streams */
-		CHECK(ra_choose(c) == 2);
+		CHECK(ra_choose(c, 0) == 2);
 		memset(c, 0, sizeof(c));
 		c[2] = 300;
 		c[3] = 200;
 		c[4] = 100;                                   /* 1 MiB files */
-		CHECK(ra_choose(c) == RA_THR_NONE);
+		CHECK(ra_choose(c, 0) == RA_THR_NONE);
 		c[12] = 40;                                   /* and some 3 MiB ones */
-		CHECK(ra_choose(c) == 5);                     /* after the 1 MiB files */
+		CHECK(ra_choose(c, 0) == 5);                     /* after the 1 MiB files */
 		memset(c, 0, sizeof(c));
-		CHECK(ra_choose(c) == RA_THR_NONE);           /* nothing seen */
+		/* too few streams to tell (nothing seen, or a handful): the fixed one,
+		 * not "never" - a kind a game has not used yet must not be switched off */
+		CHECK(ra_choose(c, 0) == RA_STREAK && ra_choose(c, 1) == RA_STREAK_NC);
+		c[16] = RA_KIND_MIN_STREAMS - 1;
+		CHECK(ra_choose(c, 0) == RA_STREAK);
 		c[1] = 1000;                                  /* single reads: nothing to gain */
-		CHECK(ra_choose(c) == RA_THR_NONE);
+		c[16] = 0;
+		CHECK(ra_choose(c, 0) == RA_THR_NONE);
 	}
 
 	fakes_tmpdir_new();
@@ -2400,9 +2405,11 @@ static void test_readahead_auto(void)
 	CHECK(g_ra_pid == 0x42 && g_ra_learning && !strcmp(g_ra_title, "PCSE00001"));
 	CHECK(ra_threshold(0x42, 0) == RA_STREAK && ra_threshold(0x42, 1) == RA_STREAK_NC);
 	streams(u, RA_LEARN_STREAMS, 8, 256);
+	ra_meas_clear();                                  /* what the fake card measured depends on how
+	                                                   * its threads interleave: here the priors */
 	vm_stage_worker_tick();
-	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && g_ra_thr[1] == RA_THR_NONE);   /* none seen */
-	CHECK(ra_profile_load("PCSE00001", thr) && thr[0] == 2 && thr[1] == RA_THR_NONE);
+	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && g_ra_thr[1] == RA_STREAK_NC);   /* none seen: fixed */
+	CHECK(ra_profile_load("PCSE00001", thr) && thr[0] == 2 && thr[1] == RA_STREAK_NC);
 	CHECK(ra_threshold(0x42, 0) == 2 && ra_threshold(0x99, 0) == RA_STREAK);  /* only it */
 	{
 		const uint32_t hits = g_ra_hits;
@@ -2491,6 +2498,130 @@ static void test_readahead_auto(void)
 	CHECK(g_ra_pid == 0 && g_ra_auto_logged == 1 && g_ra_hits > 0);
 	vm_stage_fini();
 
+	fakes_tmpdir_remove();
+	g_live = saved_live;
+	free(u);
+}
+
+/* Auto's gain and cost are measured, not assumed: the averages, the bounds,
+ * what the choice does with them, and that they are gathered while a game
+ * learns - with the statistics switched off too - and never otherwise. */
+static void test_readahead_measured(void)
+{
+	uint8_t *u = user_buf(1100);
+	VmSettings s;
+	int32_t g, c;
+	int saved_live = g_live;
+	RaMeas *m = &g_ra_meas[0];
+
+	/* the averages: the first sample is the value, then 1/8 of the way each */
+	ra_meas_clear();
+	ra_meas_base(0, 256, 5000);                       /* 256 sectors: bucket 1 */
+	CHECK(m->base_n[1] == 1 && m->base_ns[1] == 19531);
+	ra_meas_base(0, 256, 7000);
+	CHECK(m->base_n[1] == 2 && m->base_ns[1] == 19531 + (27343 - 19531) / 8);
+	CHECK(m->base_n[0] == 0 && m->base_n[2] == 0 && m->base_n[3] == 0);
+	CHECK(ra_bucket(128) == 0 && ra_bucket(255) == 0 && ra_bucket(256) == 1 &&
+	      ra_bucket(511) == 1 && ra_bucket(512) == 2 && ra_bucket(1023) == 2 &&
+	      ra_bucket(1024) == 3 && ra_bucket(4096) == 3);
+
+	/* a served read is compared with the same size's baseline; with none (that
+	 * size not seen, or a clock that does not run) there is no sample */
+	ra_meas_clear();
+	ra_meas_base(0, 256, 5000);
+	ra_meas_served(0, 256, 2000);
+	CHECK(m->gain_n == 1 && m->gain_us == 4999 - 2000);
+	ra_meas_served(0, 600, 100);                      /* bucket 2: no baseline */
+	CHECK(m->gain_n == 1);
+	ra_meas_served(0, 256, 6000);                     /* slower than without: negative */
+	CHECK(m->gain_n == 2 && m->gain_us < 2999);
+	ra_meas_clear();
+	ra_meas_base(0, 256, 0);                          /* a clock that stands still */
+	ra_meas_served(0, 256, 0);
+	CHECK(m->gain_n == 0);
+	ra_meas_cost(1, 4000);
+	ra_meas_cost(1, 6000);
+	CHECK(g_ra_meas[1].cost_n == 2 && g_ra_meas[1].cost_us == 4000 + 2000 / 8 && m->cost_n == 0);
+
+	/* what the choice goes by: the priors until RA_MEAS_MIN samples, then the
+	 * measured values inside their bounds */
+	ra_meas_clear();
+	ra_gain_cost(0, &g, &c);
+	CHECK(g == RA_GAIN_PRIOR_US && c == RA_COST_PRIOR_US);
+	m->gain_us = 100000;
+	m->gain_n = RA_MEAS_MIN - 1;
+	m->cost_us = 1;
+	m->cost_n = RA_MEAS_MIN - 1;
+	ra_gain_cost(0, &g, &c);
+	CHECK(g == RA_GAIN_PRIOR_US && c == RA_COST_PRIOR_US);   /* one sample short */
+	m->gain_n = m->cost_n = RA_MEAS_MIN;
+	ra_gain_cost(0, &g, &c);
+	CHECK(g == 3 * RA_GAIN_PRIOR_US && c == RA_COST_MIN_US);
+	m->gain_us = -500;
+	m->cost_us = 1000000;
+	ra_gain_cost(0, &g, &c);
+	CHECK(g == 0 && c == 3 * RA_COST_PRIOR_US);
+	m->gain_us = 1234;
+	m->cost_us = 4321;
+	ra_gain_cost(0, &g, &c);
+	CHECK(g == 1234 && c == 4321);
+	ra_gain_cost(1, &g, &c);                          /* the other kind: its own, still priors */
+	CHECK(g == RA_GAIN_PRIOR_US && c == RA_COST_PRIOR_US);
+
+	/* the choice follows them: the same 100 streams of 8 reads */
+	{
+		uint32_t h[RA_HBINS] = { 0 };
+
+		h[8] = 100;
+		ra_meas_clear();
+		CHECK(ra_choose(h, 0) == 2);                  /* priors: 6 x 2700 > 8000 */
+		m->gain_n = m->cost_n = RA_MEAS_MIN;
+		m->gain_us = 0;                               /* it gains nothing here */
+		m->cost_us = 3000;
+		CHECK(ra_choose(h, 0) == RA_THR_NONE);
+		m->gain_us = 2700;
+		m->cost_us = 40000;                           /* ... or costs more than it saves */
+		CHECK(ra_choose(h, 0) == RA_THR_NONE);
+		/* positive, but less than RA_NET_MIN_US per stream: inside the noise */
+		m->cost_us = 1000;
+		m->gain_us = 200;                             /* 100 x (6 x 200 - 1000) / 100 = 200 */
+		CHECK(ra_choose(h, 0) == RA_THR_NONE);
+		m->gain_us = 300;                             /* 800 per stream */
+		CHECK(ra_choose(h, 0) == 2);
+		/* the other kind keeps its own numbers (here the priors) */
+		CHECK(ra_choose(h, 1) == 2);
+	}
+
+	/* gathered while the game learns, statistics off or on; not when read
+	 * ahead is simply on */
+	fakes_tmpdir_new();
+	for (int stats = 0; stats < 2; stats++) {
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+		s.readahead = VM_RA_AUTO;
+		s.stats = stats;
+		vm_stage_apply(&s);
+		g_title_fn = fake_title;
+		fake_pid = 0x44;                              /* a title with no profile yet */
+		streams(u, 1, 8, 256);
+		vm_stage_worker_tick();                       /* sees the game: learning */
+		CHECK(g_ra_learning && g_ra_meas[0].base_n[1] == 0);
+		streams(u, 30, 8, 256);
+		CHECK(g_ra_meas[0].base_n[1] > 0 && g_ra_meas[0].cost_n >= 29);
+		CHECK(g_ra_meas[0].gain_n > 0 && g_ra_meas[1].base_n[1] == 0);
+		CHECK(g_ra_meas[0].base_ns[1] > 0);           /* the fake card takes time */
+		vm_stage_worker_tick();
+		vm_stage_fini();
+	}
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* on, not auto */
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	streams(u, 30, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_hits > 0 && g_ra_meas[0].base_n[1] == 0 && g_ra_meas[0].gain_n == 0 &&
+	      g_ra_meas[0].cost_n == 0);
+	vm_stage_fini();
 	fakes_tmpdir_remove();
 	g_live = saved_live;
 	free(u);
@@ -2693,6 +2824,7 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
 	RUN(test_readahead_auto);
+	RUN(test_readahead_measured);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
 	RUN(test_problems_wake_the_worker);

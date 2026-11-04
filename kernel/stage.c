@@ -1344,7 +1344,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  *
  * Each stream that ends (a large read that does not continue it) is noted:
  * its length in reads, per kind of memory, for the game it came from (the
- * process that started it). Once RA_LEARN_STREAMS streams of that game are
+ * process that started it). Once RA_LEARN_STREAMS streams of that game
+ * (RA_LEARN_HB for homebrew, see ra_learn_target) are
  * in, the worker works out, per kind, the threshold that would have paid
  * most: each read served from the pieces saves about RA_GAIN_US (measured:
  * 128 KiB reads 7.5 -> 4.6 ms, 256 KiB ones about 3 ms each), each stream
@@ -1374,7 +1375,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  * RA_TICK_US while a game is learnt or its storage not yet known - also
  * with the HUD and the log off. */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
-#define RA_LEARN_STREAMS  300
+#define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
+#define RA_LEARN_HB       150             /* anything else (homebrew)          */
 #define RA_LEARN_MIN      32              /* ... or this many, when it ends   */
 #define RA_SWITCH         3               /* streams of another process: a new game */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
@@ -1545,6 +1547,29 @@ static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t s
 	if (ksceIoWrite(fd, &p, sizeof(p)) != (int)sizeof(p))
 		VM_KLOGW("stage: read ahead profile for %s not saved (short write)", title);
 	ksceIoClose(fd);
+}
+
+/* A retail game's title id (4 letters + 5 digits): PCSA..PCSH (the regions'
+ * games) and the Japanese / Asian cartridge ones (VCJS, VLJM, VCAS, ...).
+ * Anything else - homebrew, emulators, Adrenaline - is not. */
+static int ra_title_retail(const char *t)
+{
+	for (int i = 4; i < 9; i++)
+		if (t[i] < '0' || t[i] > '9')
+			return 0;
+	if (t[9])
+		return 0;
+	if (t[0] == 'P' && t[1] == 'C' && t[2] == 'S' && t[3] >= 'A' && t[3] <= 'H')
+		return 1;
+	return t[0] == 'V' && (t[1] == 'C' || t[1] == 'L') &&
+	       (t[2] == 'J' || t[2] == 'A' || t[2] == 'C' || t[2] == 'K') &&
+	       (t[3] == 'S' || t[3] == 'M');
+}
+
+/* Streams to learn from: a game reads more, and longer, than homebrew. */
+static uint32_t ra_learn_target(const char *t)
+{
+	return t[0] && ra_title_retail(t) ? RA_LEARN_STREAMS : RA_LEARN_HB;
 }
 
 /* Title ids are letters and digits; anything else is not used as a file name. */
@@ -1820,7 +1845,7 @@ static void ra_auto_tick(void)
 		}
 	}
 	if (is_auto && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
-	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_STREAMS)
+	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= ra_learn_target(g_ra_title))
 		ra_learn_finish();
 	if (stats)
 		ra_stats_flush(0);
@@ -3330,6 +3355,7 @@ void vm_stage_ra_now(VmRaNow *o)
 	o->measure = LD(g_ra_measure);
 	o->learning = __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE);
 	o->streams = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+	o->target = ra_learn_target(o->title);
 	for (int k = 0; k < 2; k++) {
 		const uint32_t t = __atomic_load_n(&g_ra_thr[k], __ATOMIC_RELAXED);
 

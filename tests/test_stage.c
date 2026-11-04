@@ -2495,7 +2495,8 @@ static void test_readahead(void)
 static const char *fake_title_of(SceUID pid)
 {
 	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001"
-	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : NULL;
+	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : pid == 0x46 ? "VITASHELL"
+	     : NULL;
 }
 
 static int fake_title(SceUID pid, char *t, SceSize len)
@@ -2954,6 +2955,40 @@ static void test_readahead_auto(void)
 		CHECK(now.learning && now.thr[0] == RA_STREAK && now.dev == -1);
 		CHECK(vm_stage_ra_list(pl, 8) == 1 && !strcmp(pl[0].title, "PCSE00001"));
 	}
+	vm_stage_fini();
+
+	/* how long it learns: a game (retail title id) 300 streams, anything
+	 * else (homebrew) 150 */
+	CHECK(ra_learn_target("PCSE00001") == 300 && ra_learn_target("PCSH12345") == 300 &&
+	      ra_learn_target("VCJS10001") == 300 && ra_learn_target("VLJM35001") == 300 &&
+	      ra_learn_target("VCAS32001") == 300);
+	CHECK(ra_learn_target("VITASHELL") == 150 && ra_learn_target("PSPEMUCFW") == 150 &&
+	      ra_learn_target("PCSI00001") == 150 && ra_learn_target("PCSE0001") == 150 &&
+	      ra_learn_target("PCSE000012") == 150 && ra_learn_target("RETROVITA") == 150 &&
+	      ra_learn_target("NPXS10000") == 150 && ra_learn_target("") == 150);
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x46;                                  /* homebrew */
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x46 && g_ra_learning);
+	{
+		VmRaNow now;
+
+		vm_stage_ra_now(&now);
+		CHECK(now.target == RA_LEARN_HB);
+	}
+	streams(u, RA_LEARN_HB - 2, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning);
+	streams(u, 2, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && ra_profile_load("VITASHELL", thr, &dev) && thr[0] == 2);
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */

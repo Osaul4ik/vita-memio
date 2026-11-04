@@ -358,7 +358,7 @@ static int hud_auto_line(char *o, int on)
 	if (!now.title[0])
 		snprintf(l, sizeof(l), HUD_C_DIM "-");
 	else if (now.learning)
-		snprintf(l, sizeof(l), HUD_C_WARN "%u/300", (unsigned)now.streams);
+		snprintf(l, sizeof(l), HUD_C_WARN "%u/%u", (unsigned)now.streams, (unsigned)now.target);
 	else
 		snprintf(l, sizeof(l), HUD_C_GOOD "done");
 	for (int i = 0; i < 3; i++)
@@ -565,8 +565,8 @@ static void overlay_feed(void)
 		else if (!now.title[0])
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: waiting for a game");
 		else if (now.learning)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/300",
-			         (unsigned)now.streams);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/%u",
+			         (unsigned)now.streams, (unsigned)now.target);
 		else
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_GOOD "learnt");
 		ov_thr(a, sizeof(a), now.mode, now.thr[0]);

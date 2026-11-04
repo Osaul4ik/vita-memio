@@ -53,6 +53,7 @@ typedef struct VmRaNow {
 	int      measure;       /* learning switched on (auto)                   */
 	int      learning;      /* 1 while it learns this game                   */
 	uint32_t streams;       /* ... streams seen so far                       */
+	uint32_t target;        /* ... of this many (a game 300, homebrew 150)   */
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)  */
 	int      dev;           /* the game's storage, -1 not known              */
 } VmRaNow;

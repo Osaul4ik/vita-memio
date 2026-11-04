@@ -44,6 +44,7 @@ static int            g_installed;
 
 static OvLogic        g_ov;
 static volatile int   g_lock;
+static uint32_t       g_look_us;        /* closed: the last look (atomic)      */
 static void (*volatile g_wake)(void);
 
 /* The buttons of the newest buffer seen, through the logic; then, if the
@@ -55,6 +56,15 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 
 	if (!pad || count <= 0 || count > 64)
 		return;
+	/* closed: a look every OV_SAMPLE_US is enough (a combination is held
+	 * for OV_HOLD_US); the polls in between cost a clock read */
+	const uint32_t now = ksceKernelGetSystemTimeLow();
+
+	if (__atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) != OV_MENU) {
+		if (now - __atomic_load_n(&g_look_us, __ATOMIC_RELAXED) < OV_SAMPLE_US)
+			return;
+		__atomic_store_n(&g_look_us, now, __ATOMIC_RELAXED);
+	}
 	if (ksceKernelMemcpyUserToKernel(&b, (const char *)&pad[count - 1] +
 	                                 offsetof(SceCtrlData, buttons), sizeof(b)) < 0)
 		return;
@@ -65,7 +75,7 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 		changed = 0;
 		hide = __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) == OV_MENU;
 	} else {
-		changed = ov_input(&g_ov, b);
+		changed = ov_input(&g_ov, b, now);
 		hide = g_ov.state == OV_MENU;
 		__sync_lock_release(&g_lock);
 	}
@@ -113,6 +123,8 @@ void vm_overlay_enable(int on, void (*wake)(void))
 		g_ov.op = 0;
 		g_ov.prev = 0;
 		g_ov.cursor = 0;
+		g_ov.hold = 0;
+		g_ov.held = 0;
 		__sync_lock_release(&g_lock);
 
 		for (int i = 0; i < OV_FNS; i++) {

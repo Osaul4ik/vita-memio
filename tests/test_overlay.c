@@ -8,13 +8,37 @@
 #include "../kernel/overlay_logic.h"
 #include "vm_test.h"
 
+static uint32_t T = 0xFFFF0000u;            /* the clock, us (it wraps soon) */
+
+/* one look at the buttons, a frame later */
+static int in(OvLogic *o, uint32_t b)
+{
+	T += 16667;
+	return ov_input(o, b, T);
+}
+
 /* press `b` (with what is held), then let go of everything */
 static int tap(OvLogic *o, uint32_t held, uint32_t b)
 {
-	int c = ov_input(o, held);
+	int c = in(o, held);
 
-	c |= ov_input(o, held | b);
-	ov_input(o, 0);
+	c |= in(o, held | b);
+	in(o, 0);
+	return c;
+}
+
+/* closed: hold SELECT + `b` for `ms`, looked at every OV_SAMPLE_US (as the
+ * hook does), then let go */
+static int hold(OvLogic *o, uint32_t b, uint32_t ms)
+{
+	int c = 0;
+
+	for (uint32_t t = 0; t <= ms * 1000u; t += OV_SAMPLE_US) {
+		T += t ? OV_SAMPLE_US : 0;
+		c |= ov_input(o, OV_BTN_SELECT | b, T);
+	}
+	T += OV_SAMPLE_US;
+	ov_input(o, 0, T);
 	return c;
 }
 
@@ -24,36 +48,66 @@ static void test_states(void)
 
 	memset(&o, 0, sizeof(o));
 	CHECK(o.state == OV_CLOSED);
-	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_MENU);   /* opens */
-	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_HUD);    /* HUD */
-	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
-	CHECK(o.state == OV_HUD);                                            /* stays */
-	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_LEFT) && o.state == OV_MENU);    /* back */
-	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_LEFT) && o.state == OV_CLOSED);  /* closed */
+	/* closed: a combination counts once held half a second */
+	CHECK(!hold(&o, OV_BTN_RIGHT, 400) && o.state == OV_CLOSED);
+	CHECK(!tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_CLOSED);   /* a tap: no */
+	CHECK(hold(&o, OV_BTN_RIGHT, 500) && o.state == OV_MENU);             /* opens */
+	/* open: a press acts at once */
+	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_HUD);      /* HUD */
+	/* the HUD shown (the overlay closed): held again */
 	tap(&o, OV_BTN_SELECT, OV_BTN_LEFT);
+	CHECK(o.state == OV_HUD);
+	hold(&o, OV_BTN_RIGHT, 600);
+	CHECK(o.state == OV_HUD);                                              /* stays */
+	CHECK(hold(&o, OV_BTN_LEFT, 500) && o.state == OV_MENU);              /* back */
+	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_LEFT) && o.state == OV_CLOSED);    /* closed */
+	hold(&o, OV_BTN_LEFT, 600);
 	CHECK(o.state == OV_CLOSED);
 	/* Up or Down with SELECT: everything closed, from either */
-	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
+	hold(&o, OV_BTN_RIGHT, 500);
+	CHECK(o.state == OV_MENU);
 	tap(&o, OV_BTN_SELECT, OV_BTN_UP);
 	CHECK(o.state == OV_CLOSED);
+	hold(&o, OV_BTN_RIGHT, 500);
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
-	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
-	tap(&o, OV_BTN_SELECT, OV_BTN_DOWN);
+	CHECK(o.state == OV_HUD);
+	hold(&o, OV_BTN_DOWN, 500);
 	CHECK(o.state == OV_CLOSED);
-	/* held, not newly pressed: nothing; the arrow alone (closed): nothing */
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT);
+	/* held on after it acted: once per hold - opened, not then the HUD */
+	for (int i = 0; i < 20; i++) {
+		T += OV_SAMPLE_US;
+		ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	}
 	CHECK(o.state == OV_MENU);
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT);
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT);
+	in(&o, OV_BTN_SELECT | OV_BTN_RIGHT);             /* open, still held: not new */
 	CHECK(o.state == OV_MENU);
-	ov_input(&o, 0);
+	in(&o, 0);
 	tap(&o, OV_BTN_SELECT, OV_BTN_UP);
-	tap(&o, 0, OV_BTN_RIGHT);
+	/* closed: the arrow alone, two arrows, or SELECT alone: nothing */
+	hold(&o, 0, 600);
+	CHECK(o.state == OV_CLOSED);
+	hold(&o, OV_BTN_RIGHT | OV_BTN_UP, 600);
+	CHECK(o.state == OV_CLOSED);
+	for (int i = 0; i < 10; i++) {
+		T += OV_SAMPLE_US;
+		ov_input(&o, OV_BTN_RIGHT, T);
+	}
 	CHECK(o.state == OV_CLOSED && !o.op);
-	/* SELECT pressed after the arrow: the arrow is not new, nothing */
-	ov_input(&o, OV_BTN_RIGHT);
-	ov_input(&o, OV_BTN_RIGHT | OV_BTN_SELECT);
+	/* the hold broken (another arrow) starts over */
+	T += OV_SAMPLE_US;
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	T += 300000;
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_UP, T);
+	T += 300000;
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
 	CHECK(o.state == OV_CLOSED);
+	T += 300000;
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	CHECK(o.state == OV_CLOSED);
+	T += 300000;
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	CHECK(o.state == OV_MENU);
+	ov_input(&o, 0, T);
 }
 
 static void test_menu(void)
@@ -65,7 +119,8 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
-	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
+	hold(&o, OV_BTN_RIGHT, 500);
+	CHECK(o.state == OV_MENU);
 	CHECK(o.cursor == OV_ITEM_C && OV_GROUP_APP == 0 && OV_GROUP_SETTINGS == OV_ITEM_RA);
 	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_NC);
 	tap(&o, 0, OV_BTN_UP);

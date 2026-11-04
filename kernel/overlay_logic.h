@@ -3,10 +3,15 @@
  * kernel calls so the host tests can drive it (tests/test_overlay.c).
  * Included by overlay.c only.
  *
- * Keys (SELECT held, the arrow newly pressed):
+ * Keys:
  *   SELECT + Right   closed -> overlay -> HUD (the overlay closes, the HUD shows)
  *   SELECT + Left    HUD -> overlay -> closed
  *   SELECT + Up/Down everything closed
+ * With the overlay closed (nothing, or the HUD shown) a combination counts
+ * once it has been held for OV_HOLD_US, and the buttons are only looked at
+ * every OV_SAMPLE_US (overlay.c), so a game's own polling costs next to
+ * nothing. With the overlay open, every look counts and a newly pressed
+ * arrow (SELECT held) acts at once.
  * While the overlay is open, the game gets no buttons, and without SELECT:
  *   Up / Down        the cursor
  *   Left / Right     the value under it, back / on (Cross: on); on "Auto
@@ -23,6 +28,9 @@
 #define OV_CLOSED  0
 #define OV_MENU    1
 #define OV_HUD     2
+
+#define OV_HOLD_US    (500u * 1000u)   /* closed: hold a combination this long */
+#define OV_SAMPLE_US  (100u * 1000u)   /* closed: look at the buttons this often */
 
 /* SceCtrl button bits */
 #define OV_BTN_SELECT 0x00000001u
@@ -63,21 +71,53 @@ static inline int ov_item_action(int i)
 
 typedef struct OvLogic {
 	uint32_t prev;       /* the buttons last seen                              */
+	uint32_t hold;       /* closed: the combination being held (0: none) ...   */
+	uint32_t hold_us;    /* ... since                                          */
+	int      held;       /* ... and it has acted (once per hold)               */
 	int      state;      /* OV_*                                               */
 	int      cursor;     /* OV_ITEM_*                                          */
 	uint32_t op;         /* 0, or an OV_OP not yet taken by the worker         */
 } OvLogic;
 
-/* One look at the buttons. Returns 1 if anything visible changed (the worker
- * should redraw). After it, o->state == OV_MENU means: hide the buttons from
- * the game. */
-static inline int ov_input(OvLogic *o, uint32_t b)
+/* The state SELECT + one arrow leads to from `state` (unchanged: none). */
+static inline int ov_combo(int state, uint32_t arrow)
+{
+	if (arrow == OV_BTN_RIGHT)
+		return state == OV_CLOSED ? OV_MENU : OV_HUD;
+	if (arrow == OV_BTN_LEFT)
+		return state == OV_HUD ? OV_MENU : OV_CLOSED;
+	if (arrow == OV_BTN_UP || arrow == OV_BTN_DOWN)
+		return OV_CLOSED;
+	return state;
+}
+
+/* One look at the buttons, `now` in microseconds (wrapping). Returns 1 if
+ * anything visible changed (the worker should redraw). After it, o->state ==
+ * OV_MENU means: hide the buttons from the game. */
+static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now)
 {
 	const uint32_t down = b & ~o->prev;
 	const int was_state = o->state, was_cursor = o->cursor;
 	const uint32_t was_op = o->op;
 
 	o->prev = b;
+	if (o->state != OV_MENU) {
+		/* closed: SELECT and exactly one arrow, held OV_HOLD_US */
+		const uint32_t arrows = b & (OV_BTN_UP | OV_BTN_DOWN | OV_BTN_LEFT | OV_BTN_RIGHT);
+		const uint32_t combo = (b & OV_BTN_SELECT) && arrows && !(arrows & (arrows - 1))
+		                     ? arrows : 0;
+
+		if (combo != o->hold) {
+			o->hold = combo;
+			o->hold_us = now;
+			o->held = 0;
+		} else if (combo && !o->held && now - o->hold_us >= OV_HOLD_US) {
+			o->held = 1;
+			o->state = ov_combo(o->state, combo);
+		}
+		return o->state != was_state;
+	}
+	o->hold = 0;
 	if (b & OV_BTN_SELECT) {
 		if (down & OV_BTN_RIGHT)
 			o->state = o->state == OV_CLOSED ? OV_MENU : OV_HUD;

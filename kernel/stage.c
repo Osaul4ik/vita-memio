@@ -67,10 +67,13 @@
 #include <psp2kern/io/stat.h>
 #include <psp2kern/io/dirent.h>
 #include <psp2kern/kernel/sysroot.h>   /* ksceKernelSysrootGetProcessTitleId */
-#include <psp2kern/appmgr.h>           /* ksceAppMgrIsExclusiveProcessRunning */
 #include <taihen.h>
 
 #include "stage.h"
+
+/* SceAppMgrForDriver: 1 if an exclusive app (a game) runs; title_id NULL:
+ * any. Declared here: the pinned VitaSDK's appmgr.h does not have it yet. */
+int ksceAppMgrIsExclusiveProcessRunning(const char *title_id);
 #include "klog.h"
 
 /* The CPU copies between the caller's buffer and the staging buffer (the host

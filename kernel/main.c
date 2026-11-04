@@ -365,8 +365,8 @@ static int hud_auto_line(char *o, int on)
 		other += core[i] - base_core[i];
 	pct_text(c, sizeof(c), ov_pct(core[3] - base_core[3], other));
 	pct_text(nc, sizeof(nc), ov_pct(ncs - base_ncs, nco - base_nco));
-	snprintf(o, VM_HUD_LINE_MAX, HUD_C_TEXT "AUTO " HUD_C_DIM "L: %s " HUD_C_DIM "C:%s "
-	         HUD_C_DIM "NC:%s", l, c, nc);
+	snprintf(o, VM_HUD_LINE_MAX, HUD_C_TEXT "AUTO " HUD_C_DIM "L: %.14s " HUD_C_DIM "C:%.7s "
+	         HUD_C_DIM "NC:%.7s", l, c, nc);
 	return 1;
 }
 

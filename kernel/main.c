@@ -20,8 +20,9 @@
  *
  * The exported functions are the user->kernel boundary. The state is copied out
  * with ksceKernelMemcpyKernelToUser, which fails cleanly on a bad pointer; key
- * ids and values are validated before anything changes. They do no file I/O and
- * no logging themselves - the worker saves and logs within a second.
+ * ids and values are validated before anything changes. Settings do no file
+ * I/O or logging there - the worker saves and logs within a second; only the
+ * read ahead profiles' list and delete touch their files.
  */
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem.h>    /* ksceKernelMemcpy{User,Kernel} macros */
@@ -86,8 +87,9 @@ static uint64_t g_t0_us;             /* ... from this system time          */
  *   - every 5 s while a failed settings save is to be retried;
  *   - every 250 ms while the overlay is open (its live values);
  *   - once a minute while the log is on (the stage's statistics line);
- *   - every 2 s while read ahead learns a game or looks for its storage
- *     (auto or statistics; also woken when a new game starts reading);
+ *   - every 2 s while read ahead has a game to follow or to learn again
+ *     (woken when an app comes to the front, when its storage can be told,
+ *     when it has streams enough); once a minute with Full statistics;
  *   - otherwise not at all, until it is woken: by a changed setting (saved
  *     and applied at once: buffers, helper threads) or by a device error or
  *     verify mismatch (logged at once). */
@@ -413,6 +415,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	return n;
 }
 
+#define VM_LANG_EVERY_US  (30ull * 1000u * 1000u)
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
@@ -426,8 +430,6 @@ static void hud_feed(const VmDevState *now)
 	last_us = now_us;
 
 	vm_settings_copy(&s);
-	if (s.hud != VM_HUD_OFF || s.overlay)
-		read_lang();
 	/* the overlay draws through the HUD's hook too */
 	if ((s.hud != VM_HUD_OFF || s.overlay) && !vm_hud_installed() && !hud_failed &&
 	    vm_hud_init() != VM_OK) {
@@ -437,6 +439,20 @@ static void hud_feed(const VmDevState *now)
 	hud_effective(&s);
 	if (!vm_hud_installed())
 		s.hud = VM_HUD_OFF;
+	/* transfers counted while anything shows them, also by the overlay's keys
+	 * with the HUD's own setting off */
+	vm_stage_count_hud(s.hud != VM_HUD_OFF || vm_overlay_state() == OV_MENU);
+	/* its words: as it comes up, then now and then (the language can change) */
+	{
+		static int was_on;
+		static uint64_t lang_us;
+
+		if (s.hud != VM_HUD_OFF && (!was_on || now_us - lang_us >= VM_LANG_EVERY_US)) {
+			read_lang();
+			lang_us = now_us;
+		}
+		was_on = s.hud != VM_HUD_OFF;
+	}
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
 	 * or not they took the faster path, coloured by what the faster path is
@@ -897,12 +913,12 @@ int vmResetSafeMode(void)
 	return guard_write('0', "settings");
 }
 
-/* At most this many profiles per call (a kernel buffer of 64 x 32 bytes). */
+/* At most this many profiles per call (a kernel buffer of 64 x 36 bytes). */
 #define VM_RA_LIST_MAX 64
 
 int vmRaProfileList(VmRaProfile *out, int max)
 {
-	static VmRaProfile k[VM_RA_LIST_MAX];   /* one caller at a time: g_list_lock */
+	static VmRaProfile k[VM_RA_LIST_MAX];   /* one caller at a time: `lock` */
 	static volatile int lock;
 	int n;
 
@@ -1017,8 +1033,11 @@ int module_stop(SceSize argc, const void *args)
 	vm_stage_on_problem(NULL);
 	g_run = 0;
 	worker_wake();
-	if (g_worker >= 0)
+	if (g_worker >= 0) {
 		ksceKernelWaitThreadEnd(g_worker, NULL, NULL);
+		ksceKernelDeleteThread(g_worker);
+		g_worker = -1;
+	}
 	if (g_wake >= 0) {
 		ksceKernelDeleteSema(g_wake);
 		g_wake = -1;

@@ -77,7 +77,6 @@ typedef struct VmAppNow {
 	VmApp cur;              /* in effect now (applied, maybe not saved)       */
 	VmApp saved;            /* as in its profile                              */
 	VmApp global;           /* the global ones (Settings; thr: 0)             */
-	int   learnt;           /* Auto has learnt it                             */
 } VmAppNow;
 void vm_stage_app_now(VmAppNow *out);
 /* Worker thread. VM_OK, VM_ERR_NOT_READY (no app in front), VM_ERR_ARG (a
@@ -104,5 +103,8 @@ void vm_stage_fg(VmFg *out);
  * caller's own. Counted while vm_stage_count_cores(1) or the log is on. */
 void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib);
 void vm_stage_count_cores(int on);
+/* Whether the HUD or the overlay shows transfers now, whatever the settings
+ * say (either by keys): every transfer's bytes are counted while it does. */
+void vm_stage_count_hud(int on);
 
 #endif /* VITAMEMIO_STAGE_H */

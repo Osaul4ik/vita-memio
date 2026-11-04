@@ -195,6 +195,67 @@ static void test_menu(void)
 	CHECK(o.cursor == OV_ITEM_SAVE && !o.op);
 }
 
+/* What the overlay closed with stays hidden until released; an idle port's
+ * empty buffer is no release. */
+static void test_hide_and_ports(void)
+{
+	OvLogic o;
+
+	memset(&o, 0, sizeof(o));
+	o.state = OV_MENU;
+	o.cursor = OV_ITEM_CLOSE;
+	ov_input(&o, 0, 0, OV_MASK_ALL);
+	ov_input(&o, OV_BTN_CROSS, 1000, OV_MASK_ALL);
+	CHECK(o.state == OV_CLOSED && o.hide == OV_BTN_CROSS);
+	ov_input(&o, OV_BTN_CROSS | OV_BTN_UP, 2000, OV_MASK_ALL);   /* a new one is the game's */
+	CHECK(o.hide == OV_BTN_CROSS);
+	ov_input(&o, OV_BTN_UP, 3000, OV_MASK_ALL);
+	CHECK(o.hide == 0);
+	ov_input(&o, OV_BTN_CROSS, 4000, OV_MASK_ALL);               /* pressed again: the game's */
+	CHECK(o.hide == 0);
+
+	/* closed by SELECT + an arrow, or on to the HUD */
+	memset(&o, 0, sizeof(o));
+	o.state = OV_MENU;
+	ov_input(&o, OV_BTN_SELECT, 0, OV_MASK_ALL);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_LEFT, 1000, OV_MASK_ALL);
+	CHECK(o.state == OV_CLOSED && o.hide == (OV_BTN_SELECT | OV_BTN_LEFT));
+	memset(&o, 0, sizeof(o));
+	o.state = OV_MENU;
+	ov_input(&o, OV_BTN_SELECT, 0, OV_MASK_ALL);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, 1000, OV_MASK_ALL);
+	CHECK(o.state == OV_HUD && o.hide == (OV_BTN_SELECT | OV_BTN_RIGHT));
+
+	/* Down held, port 0 and an idle port 1 polled in turn: one step */
+	memset(&o, 0, sizeof(o));
+	o.state = OV_MENU;
+	o.cursor = OV_ITEM_RA;
+	ov_input(&o, ov_merge(&o, 0, OV_BTN_DOWN), 0, OV_MASK_ALL);
+	{
+		const int c = o.cursor;
+
+		CHECK(c != OV_ITEM_RA);
+		ov_input(&o, ov_merge(&o, 1, 0), 1, OV_MASK_ALL);
+		ov_input(&o, ov_merge(&o, 0, OV_BTN_DOWN), 2, OV_MASK_ALL);
+		CHECK(o.cursor == c);
+		ov_input(&o, ov_merge(&o, 0, 0), 3, OV_MASK_ALL);        /* released ... */
+		ov_input(&o, ov_merge(&o, 0, OV_BTN_DOWN), 4, OV_MASK_ALL);   /* ... pressed */
+		CHECK(o.cursor != c);
+	}
+	/* a port out of range changes nothing */
+	CHECK(ov_merge(&o, 99, OV_BTN_UP) == OV_BTN_DOWN);
+	CHECK(ov_merge(&o, -1, OV_BTN_UP) == OV_BTN_DOWN);
+
+	/* the combination held across idle-port looks still opens it, closed */
+	memset(&o, 0, sizeof(o));
+	const uint32_t combo = OV_BTN_SELECT | OV_BTN_RIGHT;
+
+	ov_input(&o, ov_merge(&o, 0, combo), 0, OV_MASK_ALL);
+	ov_input(&o, ov_merge(&o, 1, 0), 100000, OV_MASK_ALL);
+	ov_input(&o, ov_merge(&o, 0, combo), OV_HOLD_US + 1, OV_MASK_ALL);
+	CHECK(o.state == OV_MENU);
+}
+
 static void test_helpers(void)
 {
 	static const int off[] = { 0, 1, 2, 4, 3 };   /* the Settings page's order */
@@ -219,6 +280,7 @@ int main(void)
 {
 	RUN(test_states);
 	RUN(test_menu);
+	RUN(test_hide_and_ports);
 	RUN(test_helpers);
 
 	printf(vm_failures ? "test_overlay: %d FAILED\n" : "test_overlay: ok\n", vm_failures);

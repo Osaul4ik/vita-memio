@@ -48,6 +48,7 @@ static void *fake_copy(void *d, const void *s, size_t n)
 #define REF_RD       1
 #define REF_WR       2
 #define M            VM_DEV_MEMCARD
+#define RA_SWITCH    3                    /* a few streams: the worker follows on its tick */
 
 static uint8_t disk[DISK_SECTORS * 512];
 static pthread_mutex_t disk_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -112,9 +113,8 @@ static void reset(void)
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
-	g_ra_seen_n = 0;
 	g_ra_rate_max = 0;                         /* no rate limit (but its test) */
-	g_ra_rate_us = g_ra_rate_n = 0;
+	g_ra_rate_us = g_ra_rate_n = g_ra_rate_n1 = 0;
 	g_ra_fg = g_ra_exited = 0;
 	g_ra_saved_n = 0;
 	g_ra_relearn = 0;
@@ -2750,8 +2750,8 @@ static void test_readahead_auto(void)
 	{
 		const uint32_t sec = g_ra_dev_sec[M];
 
-		streams(u, 2, 8, 256);                        /* known: no more wake-ups, */
-		CHECK(g_problem_calls == 0 && g_ra_dev_sec[M] == sec);   /* nor counting */
+		streams(u, 2, 8, 256);                        /* known: no more wake-ups */
+		CHECK(g_problem_calls == 0 && g_ra_dev_sec[M] > sec);
 	}
 	/* a short session: what it learnt kept for next time when the next
 	 * game comes to the front */
@@ -3918,6 +3918,7 @@ static void test_stress_concurrency(void)
 	 * internal storage */
 	s.readahead = 1;
 	vm_stage_apply(&s);
+	vm_stage_worker_tick();                         /* at least once: g_ra_hits may be > 0 already */
 	__atomic_store_n(&args[1].pause, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_stress_wpause, 1, __ATOMIC_RELEASE);   /* its writes break streams */
 	for (int i = 0; i < 30000 && !__atomic_load_n(&g_ra_hits, __ATOMIC_RELAXED); i++) {
@@ -3939,6 +3940,217 @@ static void test_stress_concurrency(void)
 	in->buf = NULL;
 	g_live = saved_live;
 	free(staging2);
+}
+
+/* What a review found. */
+static void auto_game(VmSettings *s, SceUID pid)
+{
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s->readahead = VM_RA_AUTO;
+	vm_stage_apply(s);
+	g_title_fn = fake_title;
+	as_app(pid);
+	vm_stage_worker_tick();
+}
+
+static void test_review_fixes(void)
+{
+	static uint8_t u[64 * 512 * 16];
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+	VmApp a;
+	VmAppNow an;
+	RaProf pf;
+	char path[96];
+
+	/* a suspended game's profile deleted in Settings: back in front, the
+	 * overlay still has its title and settings */
+	auto_game(&s, 0x44);
+	ra_app_global(&a);
+	a.pipe = VM_PIPE_FIXED;
+	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);
+	vm_stage_worker_tick();
+	ra_proc_event(0x44, 5);
+	vm_stage_worker_tick();
+	vm_stage_app_now(&an);
+	CHECK(!strcmp(an.title, "PCSB00777") && app_in_front() && an.cur.pipe == VM_APP_GLOBAL);
+	vm_stage_fini();
+
+	/* read ahead switched on with no helper: both made on the one wake-up,
+	 * the worker may sleep after it */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	g_live = 1;
+	ensure_buf(d);
+	vm_stage_worker_tick();
+	CHECK(d->pipe_made && d->ra_ready && vm_stage_tick_us() == 0 && !vm_stage_pending());
+	vm_stage_fini();
+
+	/* learnt on one storage, the game moved to another: read ahead goes
+	 * with it, and the profile says so */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	memset(&pf, 0, sizeof(pf));
+	ra_app_global(&pf.app);
+	pf.flags = RA_PF_LEARNT;
+	pf.thr[0] = pf.thr[1] = 2;
+	pf.streams = 300;
+	pf.dev = VM_DEV_SD2VITA;
+	ra_prof_save("PCSB00777", &pf);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(g_ra_dev == VM_DEV_SD2VITA && !ra_auto_here(d));
+	ra_dev_add(VM_DEV_SD2VITA, 3 * RA_DEV_DECIDE);    /* its own reads ... */
+	ra_dev_add(M, RA_DEV_DECIDE);                     /* ... some elsewhere: it stays */
+	vm_stage_worker_tick();
+	CHECK(g_ra_dev == VM_DEV_SD2VITA);
+	ra_dev_add(M, 3 * RA_DEV_DECIDE);                 /* most of them elsewhere now */
+	vm_stage_worker_tick();
+	CHECK(g_ra_dev == M && ra_prof_load("PCSB00777", &pf) && pf.dev == M);
+	vm_stage_fini();
+
+	/* the HUD by the overlay's keys, Statistics and the HUD's setting off */
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.overlay = 1;
+	vm_stage_apply(&s);
+	CHECK(!g_count_all);
+	vm_stage_count_hud(1);
+	CHECK(g_count_all);
+	vm_stage_apply(&s);                               /* a setting changed meanwhile */
+	CHECK(g_count_all);
+	vm_stage_count_hud(0);
+	CHECK(!g_count_all);
+	s.stats = 1;
+	vm_stage_apply(&s);
+	vm_stage_count_hud(0);
+	CHECK(g_count_all);
+
+	/* singles count after RA_DRY_US with no worker tick in between (the HUD
+	 * off), as the app leaves; a longer stream since starts it over */
+	auto_game(&s, 0x44);
+	streams(u, 1, 3, 256);
+	streams(u, 1, 1, 256);
+	fake_now_us += (uint32_t)RA_DRY_US + 1000;
+	streams(u, 20, 1, 256);
+	CHECK(g_ra_hstreams == 1 && g_ra_pend >= 20);
+	ra_learn_keep();
+	CHECK(g_ra_hstreams >= 21 && g_ra_pend == 0);
+	streams(u, 5, 1, 256);
+	streams(u, 1, 3, 256);
+	streams(u, 1, 1, 256);
+	CHECK(g_ra_pend <= 1);
+	fake_now_us += 1000;
+	{
+		const uint32_t n = g_ra_hstreams, p = g_ra_pend;
+
+		ra_learn_dry();
+		CHECK(g_ra_hstreams == n && g_ra_pend == p);  /* not dry */
+	}
+	vm_stage_fini();
+
+	/* singles do not use up the longer streams' share */
+	auto_game(&s, 0x44);
+	g_ra_rate_max = 2;
+	g_ra_rate_us = fake_now_us;
+	g_ra_rate_n = g_ra_rate_n1 = 0;
+	for (int i = 0; i < 6; i++)
+		ra_hist_note(0x44, 0, 1);
+	ra_hist_note(0x44, 0, 4);
+	CHECK(g_ra_hcnt[0][1] == 2 && g_ra_hcnt[0][4] == 1 && g_ra_hstreams == 1);
+	g_ra_rate_max = 0;
+	vm_stage_fini();
+
+	/* a large write ends a stream, and the stream is noted */
+	auto_game(&s, 0x44);
+	ra_dev_clear();
+	d->ra_pid = 0x44;
+	d->ra_nc = 0;
+	d->ra_streak = 7;
+	CHECK(stage_xfer(d, 1, fake_io, REF_WR, REF_RD, NULL, 1024, u, 256) >= 0);
+	CHECK(d->ra_streak == 0 && g_ra_hcnt[0][7] == 1);
+	vm_stage_fini();
+
+	/* a profile is never left half written: a short write keeps the old
+	 * one; a save cut off before the rename leaves the copy, which loads;
+	 * deleting it takes the copy too */
+	auto_game(&s, 0x44);
+	memset(&pf, 0, sizeof(pf));
+	ra_app_global(&pf.app);
+	pf.app.pipe = VM_PIPE_FIXED;
+	pf.dev = -1;
+	ra_prof_save("PCSB00777", &pf);
+	fake_write_short = 1;
+	pf.app.pipe = VM_PIPE_OFF;
+	ra_prof_save("PCSB00777", &pf);
+	fake_write_short = 0;
+	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_FIXED);
+	ra_profile_tmp(path, sizeof(path), "PCSB00777");
+	{
+		SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+
+		CHECK(fd < 0);                                /* nothing left behind */
+	}
+	pf.app.pipe = VM_PIPE_OFF;
+	fake_rename_fail = 1;
+	ra_prof_save("PCSB00777", &pf);
+	fake_rename_fail = 0;
+	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_OFF);
+	CHECK(ra_prof_remove("PCSB00777") < 0 && !ra_prof_load("PCSB00777", &pf));
+	vm_stage_fini();
+
+	/* Save with everything global keeps a learning begun */
+	auto_game(&s, 0x44);
+	streams(u, 3, 8, 256);
+	ra_learn_keep();
+	CHECK(ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_PARTIAL));
+	CHECK(vm_stage_app_save() == VM_OK);
+	CHECK(ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_PARTIAL) && pf.streams >= 2);
+	vm_stage_fini();
+
+	/* the verify buffer given back once verify is off, not while it is used;
+	 * a request that looked just before gets none */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.verify = 1;
+	vm_stage_apply(&s);
+	g_live = 1;
+	vm_stage_worker_tick();
+	CHECK(g_shadow != NULL);
+	s.verify = 0;
+	vm_stage_apply(&s);
+	g_shadow_busy = 1;
+	vm_stage_worker_tick();
+	CHECK(g_shadow != NULL && vm_stage_pending());
+	g_shadow_busy = 0;
+	vm_stage_worker_tick();
+	CHECK(g_shadow == NULL && g_shadow_uid < 0 && !vm_stage_pending());
+	s.verify = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(g_shadow != NULL && take_shadow() != NULL);
+	g_shadow_busy = 0;
+	vm_stage_fini();
 }
 
 int main(void)
@@ -3968,6 +4180,7 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
 	RUN(test_readahead_auto);
+	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);
 	RUN(test_pipeline_released_while_reading);
 	RUN(test_problems_wake_the_worker);

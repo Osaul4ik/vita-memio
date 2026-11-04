@@ -70,6 +70,7 @@
 
 #include "stage.h"
 #include "klog.h"
+#include "vm_hook.h"
 
 /* The CPU copies between the caller's buffer and the staging buffer (the host
  * tests replace both to give the copy a measurable time).
@@ -241,6 +242,7 @@ static volatile uint32_t g_min_sectors = MIN_SECTORS;
  *   g_count_all  every transfer's bytes (the HUD's speeds), also with stats. */
 static volatile int g_stats;
 static volatile int g_count_all;
+static volatile int g_count_cfg, g_count_hud;   /* it is: as set, or shown by keys */
 
 /* GPU-safe reads: ksceKernelDcacheCleanRange (SceCpuForDriver: L1 and L2),
  * looked up at run time by vm_stage_init. */
@@ -258,18 +260,11 @@ int ksceKernelGetMemBlockMemtypeByAddr(const void *addr);
 #define MEMTYPE_NC      0x8000
 #define MEMTYPE_DEVICE  0x0800
 
-static int is_uncached(const void *a)
+/* Whether a memory type is non-cacheable; anything unknown counts as cached
+ * (and is staged as before). */
+static int mt_uncached(int m)
 {
-	int m = ksceKernelGetMemBlockMemtypeByAddr(a);
-
 	return m == MEMTYPE_NC || m == MEMTYPE_DEVICE;
-}
-
-/* Whether the caller's [p, p + n) is non-cacheable memory, looked at both
- * ends; anything unknown counts as cached (and is staged as before). */
-static int caller_uncached(const uint8_t *p, uint32_t n)
-{
-	return is_uncached(p) && is_uncached(p + n - 1);
 }
 
 /* Write [p, p + n) out of the data cache to memory (whole 32-byte lines). */
@@ -307,13 +302,9 @@ static int io_msif(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	return TAI_CONTINUE(int, ref, sector, buf, n);
 }
 
-/* taiHEN can make a hook live a moment before it stores the ref. A call that
- * lands in that window waits for it (bounded) instead of sleeping blindly. */
 static tai_hook_ref_t ref_of(int h)
 {
-	for (int i = 0; i < 2000 && g_ref[h] == 0; i++)
-		ksceKernelDelayThread(10);
-	return g_ref[h];
+	return vm_hook_ref(&g_ref[h]);
 }
 
 static int on_port(void *part, int port)
@@ -493,6 +484,7 @@ typedef struct OffMap {
 	uint8_t *kern;             /* the same bytes through the mapping         */
 	uint32_t len;
 	int      tried;
+	int      first;            /* its memory type at the start, if already read, or -2 */
 	int      mt;               /* the buffer's memory type at both ends (read by
 	                            * the caller: an address of its own space), or -1 */
 	int      nc;               /* a non-cacheable buffer (read ahead): a mapping
@@ -1044,7 +1036,14 @@ static void *take_shadow(void)
 
 	if (!LD(g_verify) || !(b = __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE)))
 		return NULL;
-	return __sync_lock_test_and_set(&g_shadow_busy, 1) ? NULL : b;
+	if (__sync_lock_test_and_set(&g_shadow_busy, 1))
+		return NULL;
+	/* taken: the worker frees it only while it holds g_shadow_busy itself */
+	if (__atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) != b) {
+		__sync_lock_release(&g_shadow_busy);
+		return NULL;
+	}
+	return b;
 }
 
 /* An overlapped read of one chunk in k parts (sz, from pipe_plan) into the
@@ -1367,7 +1366,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  *
  * Auto reads ahead only for the game, and only on its storage: the device
  * that served most of its large reads (decided after RA_DEV_DECIDE sectors,
- * kept in its profile). Other processes and the other storage read as with
+ * kept in its profile; decided again if it now reads more from another one -
+ * it was moved). Other processes and the other storage read as with
  * read ahead off.
  *
  * Measuring (the game followed, its storage, its streams: g_ra_measure) is
@@ -1385,7 +1385,6 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 #define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
 #define RA_DRY_US         (5ll * 60 * 1000 * 1000)  /* no stream this long: singles count */
-#define RA_SWITCH         3               /* streams of another process: a new game */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
 #define RA_TICK_US        (2u * 1000u * 1000u)
@@ -1406,12 +1405,10 @@ static SceUID   g_ra_pid, g_ra_seen;      /* g_ra_seen: the last game with a str
 static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
-static uint32_t g_ra_seen_n;              /* g_ra_seen's streams so far       */
 static uint32_t g_ra_saved_n;             /* streams in its profile (worker)  */
-/* the fallback: single reads not counted yet, a longer stream seen since
- * the worker last looked (atomics), and since when none (worker) */
+/* the fallback: single reads not counted yet, and since when no longer
+ * stream (atomics) */
 static uint32_t g_ra_pend;
-static int      g_ra_multi;
 static int64_t  g_ra_dry_us;
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
@@ -1433,7 +1430,7 @@ static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
 #define NID_EXCLUSIVE_RUNNING  0xA888C2DC   /* ksceAppMgrIsExclusiveProcessRunning */
 static int (*g_exclusive_fn)(const char *title_id);
 static SceUID         g_proc_hook = -1;
-static tai_hook_ref_t g_proc_ref;
+static volatile tai_hook_ref_t g_proc_ref;
 static SceUID         g_ra_fg;              /* atomic */
 static char           g_fg_title[16];       /* its title id ("" none / not known) */
 static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
@@ -1464,28 +1461,30 @@ static void ra_dev_clear(void)
  * are enough to know its storage (it does not poll for it). */
 static void ra_dev_add(int dev, uint32_t n)
 {
+	const int known = LD(g_ra_dev);
 	uint32_t old;
 
-	/* known, and no Full statistics to write it in: nothing more to count */
-	if (LD(g_ra_dev) >= 0 && !LD(g_ra_stats))
-		return;
 	__atomic_fetch_add(&g_ra_dev_sec[dev], n, __ATOMIC_RELAXED);
-	if (LD(g_ra_dev) >= 0)
-		return;
+	if (known == dev)
+		return;                               /* its storage: nothing to decide */
 	old = __atomic_fetch_add(&g_ra_dev_total, n, __ATOMIC_RELAXED);
-	if (old < RA_DEV_DECIDE && old + n >= RA_DEV_DECIDE)
+	/* not known: woken once there is enough to tell. Known, and read from
+	 * elsewhere: each RA_DEV_DECIDE sectors (it may have been moved) */
+	if (known < 0 ? old < RA_DEV_DECIDE && old + n >= RA_DEV_DECIDE
+	              : old / RA_DEV_DECIDE != (old + n) / RA_DEV_DECIDE)
 		ra_wake();
 }
 
 /* What a stream counts for in learning: a stream of 2 reads or more at
  * once; a single read only as the fallback (g_ra_pend: counted by the
  * worker once no longer stream was seen for RA_DRY_US; one next to longer
- * streams never). At most g_ra_rate_max a second (0: no limit; the tests),
- * so a burst of any kind (a video, a long scripted scene) is a sample of the
- * app, not most of it. Nothing here but atomics: no time read for it. */
+ * streams never). At most g_ra_rate_max a second of each of the two (0: no
+ * limit; the tests), so a burst of any kind (a video, a long scripted scene)
+ * is a sample of the app, not most of it, and singles do not use up the share
+ * of longer streams. Atomics and a clock read, once per stream. */
 #define RA_RATE_MAX  20
 static uint32_t g_ra_rate_max = RA_RATE_MAX;
-static uint32_t g_ra_rate_us, g_ra_rate_n;    /* atomics: this second's window */
+static uint32_t g_ra_rate_us, g_ra_rate_n, g_ra_rate_n1;    /* atomics: this second's window */
 
 static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 {
@@ -1495,14 +1494,22 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 	if (!pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	    (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && !LD(g_ra_stats)))
 		return;
+	if (L >= 2) {
+		/* no longer dry, also when over the share below */
+		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
+		if (__atomic_load_n(&g_ra_pend, __ATOMIC_RELAXED))
+			__atomic_store_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
+	}
 	if (g_ra_rate_max) {
 		const uint32_t now = ksceKernelGetSystemTimeLow();
 
 		if (now - __atomic_load_n(&g_ra_rate_us, __ATOMIC_RELAXED) >= 1000000u) {
 			__atomic_store_n(&g_ra_rate_us, now, __ATOMIC_RELAXED);
 			__atomic_store_n(&g_ra_rate_n, 0, __ATOMIC_RELAXED);
+			__atomic_store_n(&g_ra_rate_n1, 0, __ATOMIC_RELAXED);
 		}
-		if (__atomic_add_fetch(&g_ra_rate_n, 1, __ATOMIC_RELAXED) > g_ra_rate_max)
+		if (__atomic_add_fetch(L < 2 ? &g_ra_rate_n1 : &g_ra_rate_n, 1, __ATOMIC_RELAXED) >
+		    g_ra_rate_max)
 			return;                           /* over this second's share */
 	}
 	__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
@@ -1511,10 +1518,6 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 			__atomic_fetch_add(&g_ra_pend, 1, __ATOMIC_RELAXED);
 		return;
 	}
-	if (__atomic_load_n(&g_ra_pend, __ATOMIC_RELAXED))
-		__atomic_store_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
-	if (!__atomic_load_n(&g_ra_multi, __ATOMIC_RELAXED))
-		__atomic_store_n(&g_ra_multi, 1, __ATOMIC_RELAXED);
 	n = __atomic_add_fetch(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
 	/* learnt enough: the worker woken (it does not poll) */
 	if (n == __atomic_load_n(&g_ra_target, __ATOMIC_RELAXED) &&
@@ -1557,9 +1560,10 @@ static uint32_t ra_choose(const uint32_t *cnt)
  *            non-cacheable: 2..8, or RA_THR_NONE (never)
  *   dev      the app's storage (VM_DEV_SD2VITA / VM_DEV_MEMCARD), -1 not known
  *   streams  what it was learnt from
- * On the card: version 4, 14 words with a check word. Versions 1 and 2 (a
- * learnt profile; 1: no dev) and 3 (set by hand: read ahead On with those
- * thresholds; ignored: read ahead Off) still load. Anything else - another
+ * On the card: version 5, with a check word; written aside and swapped in, so
+ * a cut-off write leaves the old file or the finished copy. Versions 1 and 2 (a
+ * learnt profile; 1: no dev), 3 (set by hand: read ahead On with those
+ * thresholds; ignored: read ahead Off) and 4 still load. Anything else - another
  * size, an unknown flag, a value out of range, a wrong check - is not used at
  * all: the app then has the global settings, Auto learns it again, and the
  * file is replaced. */
@@ -1675,6 +1679,11 @@ static void ra_profile_path(char *out, size_t n, const char *title)
 	snprintf(out, n, "%s/%s.bin", RA_PROFILE_DIR, title);
 }
 
+static void ra_profile_tmp(char *out, size_t n, const char *title)
+{
+	snprintf(out, n, "%s/%s.tmp", RA_PROFILE_DIR, title);
+}
+
 static int ra_thr_ok(uint32_t t)
 {
 	return t == RA_THR_NONE || (t >= 2 && t <= 8);
@@ -1702,22 +1711,23 @@ static int ra_app_set_any(const VmApp *a)
 	       a->thr[1];
 }
 
-/* 1 and the profile if the app has a usable one. */
-static int ra_prof_load(const char *title, RaProf *out)
+/* One profile file, if usable. The two large buffers are not on the stack
+ * (this also runs in a syscall, on the caller's small kernel stack): g_prof_lock. */
+static volatile int g_prof_lock;
+
+static int ra_prof_read(const char *path, RaProf *out)
 {
-	char path[96];
-	union {
+	static union {
 		RaProfileV2 v2;
 		RaProfileV3 v3;
 		RaProfileV4 v4;
 		RaProfileV5 v5;
 		uint8_t     raw[sizeof(RaProfileV5) + 16];
 	} f;
-	RaProf p;
+	static RaProf p;
 	SceUID fd;
 	int n;
 
-	ra_profile_path(path, sizeof(path), title);
 	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
 	if (fd < 0)
 		return 0;
@@ -1819,11 +1829,42 @@ static int ra_prof_load(const char *title, RaProf *out)
 	return 1;
 }
 
-static void ra_prof_save(const char *title, const RaProf *in)
+/* 1 and the profile if the app has a usable one: its file, or the finished
+ * copy a save cut short between removing it and the rename left. */
+static int ra_prof_load(const char *title, RaProf *out)
 {
 	char path[96];
+	int ok;
+
+	while (__sync_lock_test_and_set(&g_prof_lock, 1))
+		ksceKernelDelayThread(100);
+	ra_profile_path(path, sizeof(path), title);
+	ok = ra_prof_read(path, out);
+	if (!ok) {
+		ra_profile_tmp(path, sizeof(path), title);
+		ok = ra_prof_read(path, out);
+	}
+	__sync_lock_release(&g_prof_lock);
+	return ok;
+}
+
+/* The app's profile gone, its copy with it. The result: its file's removal. */
+static int ra_prof_remove(const char *title)
+{
+	char path[96];
+
+	ra_profile_tmp(path, sizeof(path), title);
+	ksceIoRemove(path);
+	ra_profile_path(path, sizeof(path), title);
+	return ksceIoRemove(path);
+}
+
+static void ra_prof_save(const char *title, const RaProf *in)
+{
+	char path[96], tmp[96];
 	RaProfileV5 p;
 	SceUID fd;
+	int w;
 
 	/* nothing out of range is ever written */
 	if ((in->flags & ~RA_PF_KNOWN) || !ra_app_ok(&in->app) ||
@@ -1833,6 +1874,7 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	    (in->dev != -1 && in->dev != VM_DEV_SD2VITA && in->dev != VM_DEV_MEMCARD))
 		return;
 	ra_profile_path(path, sizeof(path), title);
+	ra_profile_tmp(tmp, sizeof(tmp), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
 	p.version = 5;
@@ -1858,14 +1900,24 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(VM_DATA_DIR, 0777);
 	ksceIoMkdir(RA_PROFILE_DIR, 0777);
-	fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	/* written aside, then swapped in: the old file stays until the new one is
+	 * whole (as the settings) */
+	fd = ksceIoOpen(tmp, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	if (fd < 0) {
 		VM_KLOGW("stage: profile for %s not saved (0x%08x)", title, (unsigned)fd);
 		return;
 	}
-	if (ksceIoWrite(fd, &p, sizeof(p)) != (int)sizeof(p))
-		VM_KLOGW("stage: profile for %s not saved (short write)", title);
+	w = ksceIoWrite(fd, &p, sizeof(p));
 	ksceIoClose(fd);
+	if (w != (int)sizeof(p)) {
+		VM_KLOGW("stage: profile for %s not saved (short write)", title);
+		ksceIoRemove(tmp);
+		return;
+	}
+	ksceIoRemove(path);
+	if ((w = ksceIoRename(tmp, path)) < 0)
+		VM_KLOGW("stage: profile for %s: rename failed (0x%08x), the copy stays", title,
+		         (unsigned)w);
 }
 
 /* What Auto learnt, if it has (1). */
@@ -1936,18 +1988,14 @@ static uint32_t ra_learn_target(const char *t)
  * nothing new: no writes the storage does not need). */
 static void ra_learn_finish(void);
 
-/* The fallback (worker, as it runs anyway; no timer of its own): no stream
- * of 2 reads or more for RA_DRY_US while the app runs - its single reads
- * count. */
+/* The fallback (worker, as it runs anyway, at the latest as the app leaves;
+ * no timer of its own): no stream of 2 reads or more for RA_DRY_US while the
+ * app runs - its single reads since then count. */
 static void ra_learn_dry(void)
 {
 	const int64_t now = ksceKernelGetSystemTimeWide();
 
-	if (__atomic_exchange_n(&g_ra_multi, 0, __ATOMIC_RELAXED)) {
-		g_ra_dry_us = now;
-		return;
-	}
-	if (now - g_ra_dry_us >= RA_DRY_US) {
+	if (now - __atomic_load_n(&g_ra_dry_us, __ATOMIC_RELAXED) >= RA_DRY_US) {
 		const uint32_t p = __atomic_exchange_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
 
 		if (p)
@@ -2017,7 +2065,6 @@ static void ra_hist_clear(void)
 			__atomic_store_n(&g_ra_hcnt[k][b], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_hstreams, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_ra_multi, 0, __ATOMIC_RELAXED);
 }
 
 static void ra_thr_text(char *out, size_t n, uint32_t t)
@@ -2142,8 +2189,9 @@ static void ra_auto_begin(void)
 {
 	uint32_t thr[2] = { 0, 0 };
 	RaProf pf;
+	const int have = ra_prof_load(g_ra_title, &pf);
 
-	if (ra_prof_load(g_ra_title, &pf) && (pf.flags & RA_PF_LEARNT)) {
+	if (have && (pf.flags & RA_PF_LEARNT)) {
 		char a[8], b[8];
 
 		thr[0] = pf.thr[0];
@@ -2157,7 +2205,7 @@ static void ra_auto_begin(void)
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 	} else {
 		/* learning: from where it was left, if it was begun */
-		const int partial = ra_prof_load(g_ra_title, &pf) && (pf.flags & RA_PF_PARTIAL);
+		const int partial = have && (pf.flags & RA_PF_PARTIAL);
 
 		ra_hist_clear();
 		if (partial) {
@@ -2169,7 +2217,7 @@ static void ra_auto_begin(void)
 				ST(g_ra_dev, pf.dev);
 		}
 		g_ra_saved_n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
-		g_ra_dry_us = ksceKernelGetSystemTimeWide();
+		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		if (partial)
@@ -2233,14 +2281,12 @@ static void ra_auto_tick(void)
 		ra_dev_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
 		g_ra_saved_n = 0;
-		g_ra_dry_us = ksceKernelGetSystemTimeWide();
+		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
 	}
-	if (seen && seen != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
-	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
-	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
+	if (seen && seen != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 		char t[32];
 
 		memset(t, 0, sizeof(t));
@@ -2266,8 +2312,10 @@ static void ra_auto_tick(void)
 		__atomic_store_n(&g_ra_pid, seen, __ATOMIC_RELEASE);
 		return;
 	}
-	/* the game's storage: where most of its large reads went */
-	if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) && LD(g_ra_dev) < 0) {
+	/* the game's storage: where most of its large reads went - also once
+	 * known: reading more from another one, it was moved */
+	if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
+		const int known = LD(g_ra_dev);
 		uint32_t sum = 0, best = 0;
 		int bi = -1;
 
@@ -2280,7 +2328,8 @@ static void ra_auto_tick(void)
 				bi = i;
 			}
 		}
-		if (sum >= RA_DEV_DECIDE && bi >= 0 && bi != VM_DEV_INTERNAL) {
+		if ((known < 0 ? sum : best) >= RA_DEV_DECIDE && bi >= 0 && bi != VM_DEV_INTERNAL &&
+		    bi != known) {
 			ST(g_ra_dev, bi);
 			VM_KLOGI("stage: read ahead: %s - on storage %d",
 			         g_ra_title[0] ? g_ra_title : "(no title id)", bi);
@@ -2324,7 +2373,6 @@ static void ra_auto_stop(void)
 	ST(g_ra_dev, -1);
 	ra_dev_clear();
 	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
-	__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
 	g_ra_title[0] = 0;
@@ -2342,7 +2390,6 @@ static void ra_game_forget(void)
 	ra_dev_clear();
 	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
 	g_ra_stats_written = 0xFFFFFFFFu;
-	__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
 	g_ra_title[0] = 0;
@@ -2433,8 +2480,10 @@ static void ra_proc_event(SceUID pid, int ev)
 
 static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 {
+	const tai_hook_ref_t ref = vm_hook_ref(&g_proc_ref);
+
 	ra_proc_event(pid, ev);
-	return TAI_CONTINUE(int, g_proc_ref, pid, ev, a3, a4, a5, a6);
+	return ref ? TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6) : 0;
 }
 
 /* Auto: whether this device reads ahead for the stream it has - only the
@@ -2626,7 +2675,7 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 static void off_memtype(OffMap *om)
 {
 	if (!om->tried && om->mt == -2) {
-		const int mt = ksceKernelGetMemBlockMemtypeByAddr(om->user);
+		const int mt = om->first != -2 ? om->first : ksceKernelGetMemBlockMemtypeByAddr(om->user);
 
 		om->mt = mt >= 0 && ksceKernelGetMemBlockMemtypeByAddr(om->user + om->len - 1) == mt
 		       ? mt : -1;
@@ -2977,7 +3026,8 @@ static SceUID ncd_wanted(uint32_t nsec);
 static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                       uint8_t *p, uint32_t nsec)
 {
-	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2, .nc = 1 };
+	/* the caller found it non-cacheable at both ends */
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = -2, .mt = MEMTYPE_NC, .nc = 1 };
 	uint32_t got = 0, own = 0;
 	int ret = 0, stats, off, offload, bad = 0;
 	void *shadow;
@@ -3183,6 +3233,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	uint8_t *p = buf;
 	uint32_t left = nsec;
 	int verify, ret = 0, mine = on_port(part, d->port);
+	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
 
 	/* the largest read request seen, for the log (a lost update is fine) */
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
@@ -3201,7 +3252,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* A non-cacheable caller buffer: the standard path is the faster one
 	 * (see the top). Looked at only for transfers that would be staged. */
 	if (mine && LD(d->enabled) && !LD(d->fallback) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
-	    nsec && nsec >= LD(g_min_sectors) && caller_uncached(p, nsec * 512)) {
+	    nsec && nsec >= LD(g_min_sectors) &&
+	    mt_uncached(mt0 = ksceKernelGetMemBlockMemtypeByAddr(p)) &&
+	    mt_uncached(mt1 = ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1))) {
 		SceUID pid;
 		int r;
 
@@ -3209,8 +3262,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		 * memory, as games load their graphics data (what the pieces do not
 		 * cover goes to the system core there too, with "C + NC") */
 		if (!write && nsec >= RA_MIN_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
-		    ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC &&
-		    ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1) == MEMTYPE_NC)
+		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
 		/* EXPERIMENT: "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
@@ -3255,7 +3307,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const int offload = LD(g_offload);
 	/* copy on the system core: a game's read (a system thread's buffers
 	 * need no mapping, and copy where they are), as the setting says */
-	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = mt0, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
 	                vm_offload_cached(offload, clean) &&
@@ -3269,8 +3321,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
-	if (write && nsec >= RA_MIN_SECTORS)
+	if (write && nsec >= RA_MIN_SECTORS) {
+		/* a write ends the stream: noted, as any other end */
+		if (d->ra_streak)
+			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
 		d->ra_streak = 0;
+	}
 	if (ra_any(d)) {
 		const uint32_t got = ra ? ra_serve(d, part, io, sector, p, left, clean, stats, off, &om,
 		                                   left, &own)
@@ -3562,7 +3618,8 @@ int vm_stage_init(void)
 	/* the app in front: the process events, hooked as PSVshell hooks them -
 	 * SceProcessmgr's import of ksceKernelInvokeProcEventHandler (an import,
 	 * not an export: there is none to hook) */
-	g_proc_hook = taiHookFunctionImportForKernel(KERNEL_PID, &g_proc_ref, "SceProcessmgr",
+	g_proc_ref = 0;
+	g_proc_hook = taiHookFunctionImportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_proc_ref, "SceProcessmgr",
 	                                             LIB_PROCMGR_KERNEL, NID_PROC_EVENT,
 	                                             ra_proc_event_hook);
 	if (g_proc_hook >= 0)
@@ -3621,7 +3678,6 @@ void vm_stage_fini(void)
 static volatile int g_glob_ra, g_glob_offload, g_glob_pipe, g_glob_gpu = 1, g_glob_full;
 /* g_app_cur: declared above; set to the global ones at init (app_load) */
 static VmApp        g_app_saved = { -1, -1, -1, -1, { 0, 0 } };
-static int          g_app_learnt;           /* worker: Auto has learnt it        */
 /* g_app_pid: whose they are (atomic), declared above */
 static char         g_app_title[16];
 static volatile int g_app_reload;           /* its profile changed (Settings)    */
@@ -3701,7 +3757,8 @@ void vm_stage_apply(const VmSettings *s)
 	}
 	ST(g_min_sectors, s->small ? 1u : (uint32_t)MIN_SECTORS);
 	ST(g_stats, s->stats ? 1 : 0);
-	ST(g_count_all, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
+	ST(g_count_cfg, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
+	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
 	ST(g_ra_stats, s->stats == VM_STATS_FULL ? 1 : 0);
@@ -3727,17 +3784,16 @@ static void app_load(SceUID fg)
 
 	eff_lock();
 	ra_app_global(&g_app_cur);
-	g_app_learnt = 0;
-	g_app_title[0] = 0;
-	if (fg) {
+	if (fg && fg == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
 		memcpy(g_app_title, g_fg_title, sizeof(g_app_title) - 1);
 		g_app_title[sizeof(g_app_title) - 1] = 0;
-	}
+	} else if (!fg || fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE)) {
+		g_app_title[0] = 0;
+	}                                     /* else suspended, reloaded: its title kept */
 	__sync_lock_release(&g_eff_lock);
 	if (fg && g_app_title[0] && ra_prof_load(g_app_title, &pf)) {
 		eff_lock();
 		g_app_cur = pf.app;
-		g_app_learnt = (pf.flags & RA_PF_LEARNT) ? 1 : 0;
 		__sync_lock_release(&g_eff_lock);
 		if (ra_app_set_any(&pf.app))
 			VM_KLOGI("stage: %s - its own settings (read ahead %d, copy %d, overlapped %d, "
@@ -3759,7 +3815,6 @@ void vm_stage_app_now(VmAppNow *o)
 		memcpy(o->title, g_app_title, sizeof(o->title) - 1);
 		o->cur = g_app_cur;
 		o->saved = g_app_saved;
-		o->learnt = g_app_learnt;
 	} else {
 		ra_app_global(&o->cur);
 		ra_app_global(&o->saved);
@@ -3801,7 +3856,6 @@ int vm_stage_app_set(const VmApp *a)
 
 int vm_stage_app_save(void)
 {
-	char path[96];
 	RaProf pf;
 
 	if (!app_in_front())
@@ -3813,10 +3867,9 @@ int vm_stage_app_save(void)
 	if (pf.dev < 0 && LD(g_ra_dev) >= 0 && !strncmp(g_app_title, g_ra_title, sizeof(g_app_title)))
 		pf.dev = LD(g_ra_dev);                 /* its storage, if Auto knows it */
 	pf.app = g_app_cur;
-	if (!ra_app_set_any(&pf.app) && !(pf.flags & RA_PF_LEARNT)) {
-		/* all global, nothing learnt: no profile at all */
-		ra_profile_path(path, sizeof(path), g_app_title);
-		ksceIoRemove(path);
+	if (!ra_app_set_any(&pf.app) && !(pf.flags & (RA_PF_LEARNT | RA_PF_PARTIAL))) {
+		/* all global, nothing learnt or begun: no profile at all */
+		ra_prof_remove(g_app_title);
 	} else {
 		ra_prof_save(g_app_title, &pf);
 		if (!ra_prof_load(g_app_title, &pf))
@@ -3829,7 +3882,6 @@ int vm_stage_app_save(void)
 
 int vm_stage_app_relearn(void)
 {
-	char path[96];
 	RaProf pf;
 
 	if (!app_in_front())
@@ -3840,14 +3892,11 @@ int vm_stage_app_relearn(void)
 		pf.streams = 0;
 		pf.secs = 0;
 		memset(pf.hist, 0, sizeof(pf.hist));
-		if (ra_app_set_any(&pf.app)) {
+		if (ra_app_set_any(&pf.app))
 			ra_prof_save(g_app_title, &pf);
-		} else {
-			ra_profile_path(path, sizeof(path), g_app_title);
-			ksceIoRemove(path);
-		}
+		else
+			ra_prof_remove(g_app_title);
 	}
-	g_app_learnt = 0;
 	/* followed by Auto now: learnt again from nothing */
 	if (!strncmp(g_app_title, g_ra_title, sizeof(g_app_title))) {
 		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);
@@ -4019,7 +4068,6 @@ void vm_stage_worker_tick(void)
 
 		if (fg && fg != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_ra_seen, fg, __ATOMIC_RELEASE);
-			__atomic_store_n(&g_ra_seen_n, RA_SWITCH, __ATOMIC_RELAXED);
 		}
 		ra_auto_tick();
 	}
@@ -4059,24 +4107,6 @@ void vm_stage_worker_tick(void)
 		const int ra_wanted = wanted && LD(g_readahead) && !LD(d->fallback) &&
 		                      i != VM_DEV_INTERNAL;
 
-		/* read ahead: its thread, once the helper and buffers are there */
-		if (!ra_wanted && d->ra_made) {
-			if (ra_retire(d))
-				VM_KLOGI("stage: dev %d read ahead off", i);
-		} else if (ra_wanted && d->ra_made && !__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
-			__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);   /* wanted again */
-		} else if (ra_wanted && !d->ra_made && !LD(d->ra_failed) && d->pipe_made &&
-		           __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE)) {
-			const int r = ra_setup(d);
-
-			if (r < 0) {
-				ST(d->ra_failed, 1);
-				VM_KLOGW("stage: dev %d read ahead not set up (0x%08x)", i, (unsigned)r);
-			} else {
-				VM_KLOGI("stage: dev %d read ahead ready (EXPERIMENT)", i);
-			}
-		}
-
 		if (wanted && !d->pipe_made && !LD(d->pipe_failed)) {
 			int r = pipe_setup(d);
 
@@ -4096,8 +4126,35 @@ void vm_stage_worker_tick(void)
 				VM_KLOGI("stage: dev %d overlapped reads off - helper, copier and buffer "
 				         "released", i);
 		}
+
+		/* read ahead: its thread, once the helper and buffers are there
+		 * (just made above: in this same tick, the worker may sleep after it) */
+		if (!ra_wanted && d->ra_made) {
+			if (ra_retire(d))
+				VM_KLOGI("stage: dev %d read ahead off", i);
+		} else if (ra_wanted && d->ra_made && !__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
+			__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);   /* wanted again */
+		} else if (ra_wanted && !d->ra_made && !LD(d->ra_failed) && d->pipe_made &&
+		           __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE)) {
+			const int r = ra_setup(d);
+
+			if (r < 0) {
+				ST(d->ra_failed, 1);
+				VM_KLOGW("stage: dev %d read ahead not set up (0x%08x)", i, (unsigned)r);
+			} else {
+				VM_KLOGI("stage: dev %d read ahead ready (EXPERIMENT)", i);
+			}
+		}
 	}
-	/* The verify buffer is only allocated once verify mode is first turned on. */
+	/* The verify buffer: allocated once verify mode is turned on, given back
+	 * once it is off (not while a request has it: the next tick then). */
+	if (!LD(g_verify) && __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) &&
+	    !__sync_lock_test_and_set(&g_shadow_busy, 1)) {
+		__atomic_store_n(&g_shadow, NULL, __ATOMIC_RELEASE);
+		ksceKernelFreeMemBlock(g_shadow_uid);
+		g_shadow_uid = -1;
+		__sync_lock_release(&g_shadow_busy);
+	}
 	if (LD(g_verify) && !__atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) && g_shadow_uid < 0 &&
 	    !LD(g_shadow_failed)) {
 		void *b = NULL;
@@ -4124,10 +4181,12 @@ int vm_stage_verify_ready(void)
 	return __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE) != NULL;
 }
 
-/* A release of the helper waits for a request still in flight (see
- * pipe_retire): the worker should come back soon. */
+/* A release of the helper or of the verify buffer waits for a request still
+ * in flight (see pipe_retire): the worker should come back soon. */
 int vm_stage_pending(void)
 {
+	if (!LD(g_verify) && __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE))
+		return 1;
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if ((LD(g_dev[i].pipe_made) && !__atomic_load_n(&g_dev[i].pipe_ready, __ATOMIC_ACQUIRE)) ||
 		    (LD(g_dev[i].ra_made) && !__atomic_load_n(&g_dev[i].ra_ready, __ATOMIC_ACQUIRE)))
@@ -4137,9 +4196,12 @@ int vm_stage_pending(void)
 
 /* ---- read ahead profiles, for Settings and the overlay --------------------- */
 
+/* One caller at a time (vmRaProfileList's lock). The large buffers are not on
+ * the stack: this runs on the caller's small kernel stack. */
 int vm_stage_ra_list(VmRaProfile *out, int max)
 {
-	SceIoDirent e;
+	static SceIoDirent e;
+	static RaProf pf;
 	SceUID dfd;
 	int n = 0;
 
@@ -4150,7 +4212,6 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 		return 0;
 	while (n < max) {
 		char t[16];
-		RaProf pf;
 		int len = 0, at;
 
 		memset(&e, 0, sizeof(e));
@@ -4194,7 +4255,7 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 
 int vm_stage_ra_delete(const char *title)
 {
-	char path[96], t[16];
+	char t[16];
 	int i;
 
 	for (i = 0; i < (int)sizeof(t) - 1 && title[i]; i++)
@@ -4202,7 +4263,7 @@ int vm_stage_ra_delete(const char *title)
 	t[i] = 0;
 	if (!ra_title_ok(t))
 		return VM_ERR_ARG;
-	const int gone = (ra_profile_path(path, sizeof(path), t), ksceIoRemove(path)) >= 0;
+	const int gone = ra_prof_remove(t) >= 0;
 	/* that game running (the worker's g_ra_title; a racy read of a string
 	 * that changes only on a new game is fine for this): learnt again from
 	 * nothing, also when it had no profile yet (learning starts over) */
@@ -4274,6 +4335,12 @@ void vm_stage_count_cores(int on)
 	ST(g_count_cores, on ? 1 : 0);
 }
 
+void vm_stage_count_hud(int on)
+{
+	ST(g_count_hud, on ? 1 : 0);
+	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
+}
+
 /* Read ahead's measuring: how soon the worker should tick again (0: only
  * when woken). */
 unsigned vm_stage_tick_us(void)
@@ -4284,8 +4351,7 @@ unsigned vm_stage_tick_us(void)
 		return 0;
 	if (LD(g_ra_relearn))
 		return RA_TICK_US;
-	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid &&
-	    (!pid || __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH))
+	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid)
 		return RA_TICK_US;                  /* a game to follow */
 	if (pid && LD(g_ra_stats) && g_ra_title[0])
 		return RA_STATS_EVERY_US;             /* its file, once a minute */

@@ -3,6 +3,11 @@
  * kernel calls so the host tests can drive it (tests/test_overlay.c).
  * Included by overlay.c only.
  *
+ * What the game had held as the overlay closed stays hidden from it until
+ * released (`hide`), so the Cross of Close or the combination that closed it
+ * does not act in the game. Looks from several ports are put together
+ * (ov_merge): an idle port's empty buffer is no release of the buttons.
+ *
  * Keys:
  *   SELECT + Right   closed -> overlay -> HUD (the overlay closes, the HUD shows)
  *   SELECT + Left    HUD -> overlay -> closed
@@ -30,6 +35,8 @@
 
 #define OV_HOLD_US    (500u * 1000u)   /* closed: hold SELECT + Right this long */
 #define OV_SAMPLE_US  (100u * 1000u)   /* closed: look at the buttons this often */
+#define OV_HUD_SAMPLE_US (20u * 1000u) /* the HUD shown: this often (a press lasts longer) */
+#define OV_PORTS      5                /* controller ports: 0, and 1..4 on a PS TV */
 
 /* SceCtrl button bits */
 #define OV_BTN_SELECT 0x00000001u
@@ -89,7 +96,21 @@ typedef struct OvLogic {
 	int      state;      /* OV_*                                               */
 	int      cursor;     /* OV_ITEM_*                                          */
 	uint32_t op;         /* 0, or an OV_OP not yet taken by the worker         */
+	uint32_t hide;       /* closed with these held: hidden until released      */
+	uint32_t ports[OV_PORTS];   /* the buttons last seen per port              */
 } OvLogic;
+
+/* The buttons of one look at `port`, with what the other ports last had. */
+static inline uint32_t ov_merge(OvLogic *o, int port, uint32_t b)
+{
+	uint32_t all = 0;
+
+	if (port >= 0 && port < OV_PORTS)
+		o->ports[port] = b;
+	for (int i = 0; i < OV_PORTS; i++)
+		all |= o->ports[i];
+	return all;
+}
 
 /* The state SELECT + one arrow leads to from `state` (unchanged: none). */
 static inline int ov_combo(int state, uint32_t arrow)
@@ -113,6 +134,7 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 	const uint32_t was_op = o->op;
 
 	o->prev = b;
+	o->hide &= b;
 	if (o->state == OV_CLOSED) {
 		/* nothing shown: SELECT + Right (and no other arrow), held OV_HOLD_US */
 		const uint32_t arrows = b & (OV_BTN_UP | OV_BTN_DOWN | OV_BTN_LEFT | OV_BTN_RIGHT);
@@ -168,6 +190,8 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 		else if (!o->op && ov_item_action(o->cursor) && (down & OV_BTN_CROSS))
 			o->op = OV_OP(o->cursor, 0);
 	}
+	if (was_state == OV_MENU && o->state != OV_MENU)
+		o->hide = b;
 	return o->state != was_state || o->cursor != was_cursor || o->op != was_op;
 }
 

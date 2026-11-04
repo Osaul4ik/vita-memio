@@ -18,6 +18,7 @@
 #include "overlay.h"
 #include "overlay_logic.h"
 #include "klog.h"
+#include "vm_hook.h"
 
 /* The user-callable SceCtrl functions (library SceCtrl). Negative ones carry
  * the buttons inverted. */
@@ -39,7 +40,7 @@ static const struct {
 #define OV_FNS ((int)(sizeof(k_fn) / sizeof(k_fn[0])))
 
 static SceUID         g_hook[OV_FNS];
-static tai_hook_ref_t g_ref[OV_FNS];
+static volatile tai_hook_ref_t g_ref[OV_FNS];
 static int            g_installed;
 
 static OvLogic        g_ov;
@@ -49,20 +50,24 @@ static uint32_t       g_mask = OV_MASK_ALL;   /* the items shown (the worker's) 
 static void (*volatile g_wake)(void);
 
 /* The buttons of the newest buffer seen, through the logic; then, if the
- * overlay is open, cleared in all `count` of them. */
-static void on_pad(SceCtrlData *pad, int count, int negative)
+ * overlay is open, cleared in all `count` of them (else those still held from
+ * when it closed). */
+static void on_pad(int port, SceCtrlData *pad, int count, int negative)
 {
-	uint32_t b = 0;
+	uint32_t b = 0, mask;
 	int changed, hide;
 
 	if (!pad || count <= 0 || count > 64)
 		return;
 	/* closed: a look every OV_SAMPLE_US is enough (a combination is held
-	 * for OV_HOLD_US); the polls in between cost a clock read */
+	 * for OV_HOLD_US), the HUD shown every OV_HUD_SAMPLE_US; the polls in
+	 * between cost a clock read. Every poll while something is to be hidden. */
 	const uint32_t now = ksceKernelGetSystemTimeLow();
+	const int st = __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED);
 
-	if (__atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) == OV_CLOSED) {
-		if (now - __atomic_load_n(&g_look_us, __ATOMIC_RELAXED) < OV_SAMPLE_US)
+	if (st != OV_MENU && !__atomic_load_n(&g_ov.hide, __ATOMIC_RELAXED)) {
+		if (now - __atomic_load_n(&g_look_us, __ATOMIC_RELAXED) <
+		    (st == OV_HUD ? OV_HUD_SAMPLE_US : OV_SAMPLE_US))
 			return;
 		__atomic_store_n(&g_look_us, now, __ATOMIC_RELAXED);
 	}
@@ -75,9 +80,12 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 		/* another thread is at it: its look counts; the hiding still applies */
 		changed = 0;
 		hide = __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) == OV_MENU;
+		mask = __atomic_load_n(&g_ov.hide, __ATOMIC_RELAXED);
 	} else {
-		changed = ov_input(&g_ov, b, now, __atomic_load_n(&g_mask, __ATOMIC_RELAXED));
+		changed = ov_input(&g_ov, ov_merge(&g_ov, port, b), now,
+		                   __atomic_load_n(&g_mask, __ATOMIC_RELAXED));
 		hide = g_ov.state == OV_MENU;
+		mask = g_ov.hide;
 		__sync_lock_release(&g_lock);
 	}
 	if (changed) {
@@ -92,15 +100,26 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 		for (int i = 0; i < count; i++)
 			ksceKernelMemcpyKernelToUser((char *)&pad[i] + offsetof(SceCtrlData, buttons),
 			                             &none, sizeof(none));
+	} else if (mask) {
+		for (int i = 0; i < count; i++) {
+			char *const at = (char *)&pad[i] + offsetof(SceCtrlData, buttons);
+			uint32_t v;
+
+			if (ksceKernelMemcpyUserToKernel(&v, at, sizeof(v)) < 0)
+				break;
+			v = negative ? v | mask : v & ~mask;
+			ksceKernelMemcpyKernelToUser(at, &v, sizeof(v));
+		}
 	}
 }
 
 #define OV_HOOK(i)                                                               \
 	static int ov_fn##i(int port, SceCtrlData *pad, int count)                   \
 	{                                                                            \
-		int r = TAI_CONTINUE(int, g_ref[i], port, pad, count);                   \
+		const tai_hook_ref_t ref = vm_hook_ref(&g_ref[i]);                       \
+		int r = ref ? TAI_CONTINUE(int, ref, port, pad, count) : VM_HOOK_NO_REF; \
 		if (r > 0)                                                               \
-			on_pad(pad, r < count ? r : count, k_fn[i].negative);                \
+			on_pad(port, pad, r < count ? r : count, k_fn[i].negative);          \
 		return r;                                                                \
 	}
 OV_HOOK(0) OV_HOOK(1) OV_HOOK(2) OV_HOOK(3) OV_HOOK(4)
@@ -120,17 +139,14 @@ void vm_overlay_enable(int on, void (*wake)(void))
 		 * were released may have left a state) */
 		while (__sync_lock_test_and_set(&g_lock, 1))
 			ksceKernelDelayThread(100);
-		g_ov.state = OV_CLOSED;
-		g_ov.op = 0;
-		g_ov.prev = 0;
-		g_ov.cursor = 0;
-		g_ov.hold = 0;
-		g_ov.held = 0;
+		memset(&g_ov, 0, sizeof(g_ov));
 		__sync_lock_release(&g_lock);
 
 		for (int i = 0; i < OV_FNS; i++) {
-			g_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, &g_ref[i], "SceCtrl",
-			                                           TAI_ANY_LIBRARY, k_fn[i].nid, k_hooks[i]);
+			g_ref[i] = 0;                  /* not the last time's: see vm_hook_ref */
+			g_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_ref[i],
+			                                           "SceCtrl", TAI_ANY_LIBRARY, k_fn[i].nid,
+			                                           k_hooks[i]);
 			ok += g_hook[i] >= 0;
 		}
 		g_installed = 1;
@@ -149,6 +165,7 @@ void vm_overlay_enable(int on, void (*wake)(void))
 			ksceKernelDelayThread(100);
 		g_ov.state = OV_CLOSED;
 		g_ov.op = 0;
+		g_ov.hide = 0;
 		__sync_lock_release(&g_lock);
 	}
 }

@@ -25,10 +25,11 @@
 #include "hud.h"
 #include "hud_draw.h"
 #include "klog.h"
+#include "vm_hook.h"
 #include "../include/vitamemio.h"
 
 static SceUID         g_hook = -1;
-static tai_hook_ref_t g_ref;
+static volatile tai_hook_ref_t g_ref;
 
 /* Double-buffered: the worker fills the back copy, then flips g_front. */
 static HudText      g_text[2];
@@ -74,8 +75,12 @@ static inline void hud_dacr_restore(uint32_t prev)
 static int hook_set_framebuf(int head, int index,
                              const SceDisplayFrameBuf *pParam, int sync)
 {
-	int ret = TAI_CONTINUE(int, g_ref, head, index, pParam, sync);
+	const tai_hook_ref_t ref = vm_hook_ref(&g_ref);
 	const HudText *t;
+
+	if (!ref)
+		return VM_HOOK_NO_REF;
+	int ret = TAI_CONTINUE(int, ref, head, index, pParam, sync);
 
 	if (head != 0 || !pParam || !pParam->base)
 		return ret;
@@ -121,7 +126,8 @@ int vm_hud_init(void)
 	 * unchanged in 3.65 and 3.68:
 	 *   SceDisplayForDriver library    = 0x9FED47AC
 	 *   ksceDisplaySetFrameBufInternal = 0x16466675 */
-	g_hook = taiHookFunctionExportForKernel(KERNEL_PID, &g_ref,
+	g_ref = 0;                             /* not the last time's: see vm_hook_ref */
+	g_hook = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_ref,
 	                                        "SceDisplay",
 	                                        0x9FED47AC, /* SceDisplayForDriver  */
 	                                        0x16466675, /* ...SetFrameBufInternal */

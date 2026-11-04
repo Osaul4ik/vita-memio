@@ -378,9 +378,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 		if (!now.title[0])
 			snprintf(st, sizeof(st), HUD_C_DIM "-");
 		else if (now.learning)
-			snprintf(st, sizeof(st), HUD_C_WARN "%s%u/%u", ext ? "learning " : "",
-			         (unsigned)(now.streams > 9999 ? 9999 : now.streams),
-			         (unsigned)now.target);
+			snprintf(st, sizeof(st), HUD_C_WARN "%s%u%%", ext ? "learning " : "",
+			         (unsigned)now.percent);
 		else
 			snprintf(st, sizeof(st), HUD_C_GOOD "learnt");
 	}
@@ -710,8 +709,10 @@ static void overlay_feed(void)
 				ov_thr(d, sizeof(d), now.thr[1]);
 				if (now.title[0] && now.learning)
 					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_WARN
-					         "learning %u/%u" HUD_C_DIM "  start after C %s NC %s",
-					         (unsigned)now.streams, (unsigned)now.target, c, d);
+					         "learning %u%%" HUD_C_DIM " (%u/%u, %u min)",
+					         (unsigned)now.percent, (unsigned)(now.streams > 9999 ? 9999 :
+					         now.streams), (unsigned)now.target,
+					         (unsigned)(now.minutes > 999 ? 999 : now.minutes));
 				else if (now.title[0])
 					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_GOOD "learnt"
 					         HUD_C_DIM "  start after C %s NC %s", c, d);

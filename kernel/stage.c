@@ -1610,7 +1610,7 @@ static void ra_prof_save(const char *title, const RaProf *in)
 }
 
 /* The older call shapes: a learnt profile (no flags). */
-static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
+static inline int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 {
 	RaProf p;
 

@@ -1676,6 +1676,25 @@ static void test_ncd(void)
 	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
 
+	/* "NC only": cached reads copied by the game's thread, uncached ones
+	 * read on the system core */
+	s.offload = VM_OFFLOAD_NC;
+	vm_stage_apply(&s);
+	CHECK(g_ncd_state == 0);
+	copies_here = copies_elsewhere = 0;
+	CHECK(rd(u, 27, 256) == 0 && memcmp(u, disk + 27 * 512, 256 * 512) == 0);
+	CHECK(copies_here >= 1 && copies_elsewhere == 0);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t reads = g_ncd_reads;
+
+		memset(u, 0, 256 * 512);
+		CHECK(ncd_rd(u, 29, 256) == 0 && memcmp(u, disk + 29 * 512, 256 * 512) == 0);
+		CHECK(g_ncd_reads == reads + 1 && !pthread_equal(ncd_io_thread, pthread_self()));
+		CHECK(fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
+	}
+
 	vm_stage_fini();
 	CHECK(fake_threads_live == 0 && fake_semas_live == 0 && fake_usermap_live == 0);
 	g_live = saved_live;
@@ -2051,10 +2070,16 @@ static void test_readahead(void)
 
 	/* a stream into non-cacheable memory (a game's graphics data): the first
 	 * reads straight into the buffer as before, then from the pieces, copied
-	 * by the copier through its non-cacheable mapping, nothing cleaned */
-	for (int offl = 0; offl <= 1; offl++) {
+	 * by the copier through its non-cacheable mapping (only with an NC
+	 * setting: "Always" covers cached reads only), nothing cleaned; with an
+	 * NC setting the first reads go to the system core too, straight in */
+	for (int mode = 0; mode < 4; mode++) {
+		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
+		                             VM_OFFLOAD_NC };
+		const int offl = vm_offload_nc(modes[mode]);
+
 		reset();
-		ra_settings(&s, 1, offl ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+		ra_settings(&s, 1, modes[mode], VM_PIPE_AUTO);
 		fake_pid = 0x42;
 		fake_memtype = MEMTYPE_NC;
 		fake_meminfo_type = 0x10208006;           /* the mapping: non-cacheable, RW */
@@ -2073,7 +2098,9 @@ static void test_readahead(void)
 				           : copies_here >= 1 && copies_elsewhere == 0);
 			}
 		}
-		CHECK(g_ra_hits == 7 && g_ra_nc_kib == 7 * 128 && g_nc_stock_kib == 5 * 128);
+		CHECK(g_ra_hits == 7 && g_ra_nc_kib == 7 * 128);
+		CHECK(offl ? g_nc_stock_kib == 0 && g_ncd_reads == 5 && g_ncd_kib == 5 * 128
+		           : g_nc_stock_kib == 5 * 128 && g_ncd_reads == 0);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
 		/* elsewhere: dropped, straight in */
@@ -2120,7 +2147,7 @@ static void test_readahead(void)
 	/* the non-cacheable mapping does not fit (here: cached): only those are
 	 * refused - the caller copies them; a cached read still goes to the copier */
 	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x1020D006;

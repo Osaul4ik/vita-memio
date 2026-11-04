@@ -110,7 +110,8 @@ static const char *offload_text(int v)
 {
 	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_GPU ? "with GPU-safe reads only"
 	     : v == VM_OFFLOAD_ALWAYS ? "always"
-	     : v == VM_OFFLOAD_ALL ? "always + NC (non-cacheable reads too)" : "unknown";
+	     : v == VM_OFFLOAD_ALL ? "always + NC (non-cacheable reads too)"
+	     : v == VM_OFFLOAD_NC ? "NC only (non-cacheable reads only)" : "unknown";
 }
 
 /* The same, short enough for the screen. */
@@ -412,7 +413,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
 			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe only"
-			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "always + NC" : "always");
+			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "always + NC"
+			     : res->plugin0.offload == VM_OFFLOAD_NC ? "NC only" : "always");
 		if (res->plugin0.readahead == VM_RA_ON || res->plugin0.readahead == VM_RA_AUTO)
 			line(&s, "read ahead: %s (experimental)",
 			     res->plugin0.readahead == VM_RA_AUTO ? "auto" : "on");

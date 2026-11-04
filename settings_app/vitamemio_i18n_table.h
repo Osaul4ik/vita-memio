@@ -1254,6 +1254,28 @@
 	"Always + NC",   /* engb */
 	"Her zaman + NC",   /* tr */
 },
+[VM_I18N_ITEM_OFF_NC] = {
+	"NCのみ",   /* ja */
+	"NC only",   /* en */
+	"NC seulement",   /* fr */
+	"Solo NC",   /* es */
+	"Nur NC",   /* de */
+	"Solo NC",   /* it */
+	"Alleen NC",   /* nl */
+	"Só NC",   /* pt */
+	"Только NC",   /* ru */
+	"NC만",   /* ko */
+	"僅 NC",   /* zht */
+	"仅 NC",   /* zhs */
+	"Vain NC",   /* fi */
+	"Endast NC",   /* sv */
+	"Kun NC",   /* da */
+	"Kun NC",   /* no */
+	"Tylko NC",   /* pl */
+	"Só NC",   /* ptbr */
+	"NC only",   /* engb */
+	"Yalnızca NC",   /* tr */
+},
 [VM_I18N_ROW_READAHEAD] = {
 	"先読み（試験的）",   /* ja */
 	"Read ahead (experimental)",   /* en */

@@ -67,6 +67,7 @@ enum vm_i18n_id {
 	VM_I18N_ITEM_OFF_GPU,
 	VM_I18N_ITEM_OFF_ALWAYS,
 	VM_I18N_ITEM_OFF_ALL,       /* EXPERIMENT: Always + NC                         */
+	VM_I18N_ITEM_OFF_NC,        /* EXPERIMENT: NC only                             */
 	VM_I18N_ROW_READAHEAD,      /* Advanced > Read ahead (experimental)           */
 	VM_I18N_HINT_READAHEAD,
 	VM_I18N_ITEM_RA_ON,         /* its "On" (Off and Auto: the pipeline's)        */

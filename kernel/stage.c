@@ -497,7 +497,7 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
-/* VM_OFFLOAD_ALL ("Always + NC"): a game's read into
+/* VM_OFFLOAD_ALL ("Always + NC") and VM_OFFLOAD_NC ("NC only"): a game's read into
  * NON-cacheable memory, which otherwise takes the standard path on the game's
  * own thread, is read by the helper on the system core straight into the
  * game's buffer through a kernel mapping of it - no staging, no copy - while
@@ -2087,7 +2087,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	offload = LD(g_offload);
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
-	      offload != VM_OFFLOAD_OFF && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
+	      vm_offload_nc(offload) && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	if (ra_any(d)) {
 		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
 		if (got < nsec)
@@ -2240,7 +2240,7 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
  * KERNEL_PID if not. */
 static SceUID ncd_wanted(uint32_t nsec)
 {
-	if (LD(g_offload) != VM_OFFLOAD_ALL || LD(g_verify) || nsec < NCD_MIN_SECTORS ||
+	if (!vm_offload_nc(LD(g_offload)) || LD(g_verify) || nsec < NCD_MIN_SECTORS ||
 	    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) < 0)
 		return KERNEL_PID;
 	return ksceKernelGetProcessId();
@@ -2340,7 +2340,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
-	                (offload >= VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
+	                vm_offload_cached(offload, clean) &&
 	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
@@ -2674,7 +2674,7 @@ void vm_stage_apply(const VmSettings *s)
 	const int needed = LD(g_pipeline) || LD(g_offload) || LD(g_readahead);   /* the helper */
 	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
 	                   ? s->pipeline : VM_PIPE_OFF;
-	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALL
+	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_NC
 	                  ? s->offload : VM_OFFLOAD_OFF;
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -2779,7 +2779,7 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)LD(g_offload_err));
-		if (LD(g_offload) == VM_OFFLOAD_ALL || LD(g_ncd_reads))
+		if (vm_offload_nc(LD(g_offload)) || LD(g_ncd_reads))
 			VM_KLOGI("stage: uncached read on the system core %u reads %u MiB, busy %u, "
 			         "failed %u, mapping failed %u (0x%08x)",
 			         (unsigned)LD(g_ncd_reads), (unsigned)(LD(g_ncd_kib) / 1024),
@@ -2809,7 +2809,7 @@ void vm_stage_worker_tick(void)
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
 
-		if (LD(g_offload) == VM_OFFLOAD_ALL && st != LD(g_ncd_logged)) {
+		if (vm_offload_nc(LD(g_offload)) && st != LD(g_ncd_logged)) {
 			ST(g_ncd_logged, st);
 			if (st > 0)
 				VM_KLOGI("stage: uncached reads on the system core ready (mapping type 0x%08x)",

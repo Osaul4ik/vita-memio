@@ -72,8 +72,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 #define SAFE_BUTTON_ID   "vm_safe_reset"
 #define STATUS_BUTTON_ID "vm_status"
 
-/* The group: X_HEAD, then the read ahead profiles (built when the page
- * loads, see rp_build), then X_TAIL. */
+/* The group. */
 static const char X_HEAD[] =
 	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">"
 	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" "
@@ -90,13 +89,13 @@ static const char X_HEAD[] =
 			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "1") ITEM("vm_i_off2", "2") ITEM("vm_i_off4", "4") ITEM("vm_i_off3", "3")
 		"</list>"
 		ROW_LIST("readahead")
-			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") ITEM("vm_i_ra2", "2")
+			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1")
 		"</list>"
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
 		ROW_LIST("stats")
-			ITEM("vm_i_st0", "0") ITEM("vm_i_st1", "1") ITEM("vm_i_st2", "2")
+			ITEM("vm_i_st0", "0") ITEM("vm_i_st1", "1")
 		"</list>"
 		ROW_LIST("hud")
 			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
@@ -109,9 +108,8 @@ static const char X_HEAD[] =
 		"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" "
 		"error_dialog_message=\"vm_m_safe_err\"/>"
 	"</setting_list>"
-	"<setting_list id=\"vm_raprof\" title=\"vm_t_raprof\" icon=\"tex_spanner\">";
+	;
 static const char X_TAIL[] =
-	"</setting_list>"
 	"</setting_list>";
 
 /* Accept a Devices page up to this size; leave it alone if it is ever bigger.
@@ -173,221 +171,7 @@ static void l_hex(Line *l, uint32_t v)
 	l_put(l, h);
 }
 
-/* ---- read ahead Auto profiles (a sub-page) ------------------------------ */
-
-#define RP_MAX       32            /* shown; the kernel keeps any number       */
-#define RP_XML_EACH  1024          /* one profile's XML, at most (about 800)   */
-
-static VmRaProfile g_rp[RP_MAX];
-static int         g_rp_n;
-static char        g_rp_gone[RP_MAX];   /* deleted since the page was built  */
-static char        g_rp_xml[RP_MAX * RP_XML_EACH + 512];
-
-static int x_put(char *o, int n, int cap, const char *t)
-{
-	while (*t && n < cap - 1)
-		o[n++] = *t++;
-	o[n] = 0;
-	return n;
-}
-
-static int x_uint(char *o, int n, int cap, uint32_t v)
-{
-	char d[11];
-	int k = 0;
-
-	do
-		d[k++] = (char)('0' + v % 10);
-	while ((v /= 10) && k < 10);
-	while (k && n < cap - 1)
-		o[n++] = d[--k];
-	o[n] = 0;
-	return n;
-}
-
-/* One row: <button id="vm_rp_<kind>_<i>" ... />. Info rows show their text
- * again as the dialog; the delete row has its own. */
-static int x_button(char *o, int n, int cap, char kind, int i)
-{
-	char id[16];
-	int k = x_put(id, 0, sizeof(id), "vm_rp_");
-
-	id[k++] = kind;
-	id[k++] = '_';
-	k = x_uint(id, k, sizeof(id), (uint32_t)i);
-	n = x_put(o, n, cap, "<button id=\"");
-	n = x_put(o, n, cap, id);
-	n = x_put(o, n, cap, "\" title=\"");
-	n = x_put(o, n, cap, id);
-	n = x_put(o, n, cap, "\" icon=\"tex_spanner\" hint=\"vm_rp_h_");
-	n = x_uint(o, n, cap, (uint32_t)i);
-	if (kind == 'x') {
-		n = x_put(o, n, cap, "\" success_dialog_message=\"vm_m_rpdel_ok\" "
-		                     "error_dialog_message=\"vm_m_rpdel_err\"/>");
-	} else {
-		n = x_put(o, n, cap, "\" success_dialog_message=\"");
-		n = x_put(o, n, cap, id);
-		n = x_put(o, n, cap, "\"/>");
-	}
-	return n;
-}
-
-/* The profiles' part of the page, from the kernel module as it is now. */
-static int rp_build(void)
-{
-	const int cap = (int)sizeof(g_rp_xml);
-	VmState st;
-	int n = 0, r;
-
-	g_rp_n = 0;
-	if (get_state(&st) && (r = vmRaProfileList(g_rp, RP_MAX)) > 0)
-		g_rp_n = r > RP_MAX ? RP_MAX : r;
-	for (int i = 0; i < RP_MAX; i++)
-		g_rp_gone[i] = 0;
-	if (!g_rp_n)
-		return x_put(g_rp_xml, 0, cap, "<button id=\"vm_rp_none\" title=\"vm_rp_none\" "
-		                               "icon=\"tex_spanner\" hint=\"vm_h_raprof\"/>");
-	for (int i = 0; i < g_rp_n; i++) {
-		/* never a profile cut short (the page would not load): the rest left out */
-		if (cap - n < RP_XML_EACH) {
-			g_rp_n = i;
-			break;
-		}
-		n = x_put(g_rp_xml, n, cap, "<setting_list id=\"vm_rp_l_");
-		n = x_uint(g_rp_xml, n, cap, (uint32_t)i);
-		n = x_put(g_rp_xml, n, cap, "\" title=\"vm_rp_t_");
-		n = x_uint(g_rp_xml, n, cap, (uint32_t)i);
-		n = x_put(g_rp_xml, n, cap, "\" icon=\"tex_spanner\">");
-		n = x_button(g_rp_xml, n, cap, 'm', i);    /* learnt / by hand / ignored */
-		n = x_button(g_rp_xml, n, cap, 'c', i);    /* cached */
-		n = x_button(g_rp_xml, n, cap, 'n', i);    /* non-cacheable */
-		n = x_button(g_rp_xml, n, cap, 'd', i);    /* storage */
-		n = x_button(g_rp_xml, n, cap, 's', i);    /* learnt from */
-		n = x_button(g_rp_xml, n, cap, 'x', i);    /* delete */
-		n = x_put(g_rp_xml, n, cap, "</setting_list>");
-	}
-	return n;
-}
-
-/* "after %u reads" or "never" for a threshold. */
-static void rp_thr(Line *l, int32_t t)
-{
-	const char *f = vm_i18n(VM_I18N_RP_AFTER);
-
-	if (t == VM_RA_NEVER) {
-		l_put(l, vm_i18n(VM_I18N_RP_NEVER));
-		return;
-	}
-	if (t < 1 || t > 99) {                /* never from the kernel; shown as unknown */
-		l_put(l, "-");
-		return;
-	}
-	for (; *f; f++) {
-		if (f[0] == '%' && f[1] == 'u') {
-			char d[12];
-
-			x_uint(d, 0, sizeof(d), (uint32_t)t);
-			l_put(l, d);
-			f++;
-		} else {
-			char c[2] = { *f, 0 };
-
-			l_put(l, c);
-		}
-	}
-}
-
-static void rp_dev(Line *l, int32_t dev)
-{
-	l_put(l, dev == VM_DEV_SD2VITA ? "SD2Vita" : dev == VM_DEV_MEMCARD ? vm_i18n(VM_I18N_RP_MEMCARD)
-	         : vm_i18n(VM_I18N_RP_UNKNOWN));
-}
-
-/* A profile's texts: kind t (title), c, n, d, s (rows), h (the hint: all of it). */
-static const vm_u16 *rp_text(char kind, int i)
-{
-	Line l = { {0}, 0 };
-	const VmRaProfile *p;
-	vm_u16 *o;
-
-	if (i < 0 || i >= g_rp_n)
-		return 0;
-	p = &g_rp[i];
-	if (kind == 't') {
-		char t[sizeof(p->title) + 1];
-
-		s_cpy(t, p->title, (int)sizeof(p->title));   /* always ended */
-		t[sizeof(p->title)] = 0;
-		l_put(&l, t);
-		if (g_rp_gone[i])
-			l_put(&l, " (-)");
-	}
-	if (kind == 'm' || kind == 'h') {
-		l_put(&l, vm_i18n((p->flags & VM_RA_PF_IGNORE) ? VM_I18N_RP_IGNORED
-		                : (p->flags & VM_RA_PF_MANUAL) ? VM_I18N_RP_MANUAL : VM_I18N_RP_LEARNT));
-		if (kind == 'h')
-			l_put(&l, ". ");
-	}
-	if (kind == 'c' || kind == 'h') {
-		l_put(&l, "C: ");
-		rp_thr(&l, p->thr[0]);
-	}
-	if (kind == 'h')
-		l_put(&l, ". ");
-	if (kind == 'n' || kind == 'h') {
-		l_put(&l, "NC: ");
-		rp_thr(&l, p->thr[1]);
-	}
-	if (kind == 'h')
-		l_put(&l, ". ");
-	if (kind == 'd' || kind == 'h') {
-		l_put(&l, vm_i18n(VM_I18N_RP_STORAGE));
-		l_put(&l, ": ");
-		rp_dev(&l, p->dev);
-	}
-	if (kind == 'h')
-		l_put(&l, ". ");
-	if (kind == 's' || kind == 'h') {
-		const char *f = vm_i18n(VM_I18N_RP_STREAMS);
-
-		for (; *f; f++) {
-			if (f[0] == '%' && f[1] == 'u') {
-				char d[12];
-
-				x_uint(d, 0, sizeof(d), p->streams);
-				l_put(&l, d);
-				f++;
-			} else {
-				char c[2] = { *f, 0 };
-
-				l_put(&l, c);
-			}
-		}
-	}
-	if (kind == 'x')
-		l_put(&l, vm_i18n(VM_I18N_RP_DELETE));
-	o = next_buf();
-	vm_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
-	return o;
-}
-
-/* "vm_rp_<k>_<i>": the kind and index, or 0. */
-static int rp_parse(const char *id, char *kind, int *i)
-{
-	int v = 0, d = 0;
-
-	if (!s_pfx(id, "vm_rp_") || !id[6] || id[7] != '_')
-		return 0;
-	*kind = id[6];
-	for (id += 8; *id >= '0' && *id <= '9' && d < 4; id++, d++)
-		v = v * 10 + (*id - '0');
-	if (!d || *id)
-		return 0;
-	*i = v;
-	return 1;
-}
-
-static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_HEAD) + sizeof(g_rp_xml) + sizeof(X_TAIL)];
+static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_HEAD) + sizeof(X_TAIL)];
 
 /* The status row: title and help (also the dialog it opens). */
 static const vm_u16 *status_text(int hint)
@@ -513,23 +297,6 @@ static const vm_u16 *vm_text(const char *id)
 		return fixed_text(VM_I18N_MSG_SAFE_OK);
 	if (s_eqn(id, "vm_m_safe_err", 14))
 		return fixed_text(VM_I18N_MSG_SAFE_ERR);
-	if (s_eqn(id, "vm_t_raprof", 12))
-		return fixed_text(VM_I18N_ROW_RAPROF);
-	if (s_eqn(id, "vm_h_raprof", 12))
-		return fixed_text(VM_I18N_HINT_RAPROF);
-	if (s_eqn(id, "vm_rp_none", 11))
-		return fixed_text(VM_I18N_RP_NONE);
-	if (s_eqn(id, "vm_m_rpdel_ok", 14))
-		return fixed_text(VM_I18N_MSG_RP_DELETED);
-	if (s_eqn(id, "vm_m_rpdel_err", 15))
-		return fixed_text(VM_I18N_MSG_RP_ERR);
-	{
-		char kind;
-		int i;
-
-		if (rp_parse(id, &kind, &i))
-			return rp_text(kind, i);
-	}
 	if (s_pfx(id, "vm_t_") && (k = key_index(id + 5)) >= 0 && k_row[k] >= 0)
 		return fixed_text(k_row[k]);
 	if (s_pfx(id, "vm_h_") && (k = key_index(id + 5)) >= 0 && k_hint[k] >= 0) {
@@ -545,12 +312,8 @@ static const vm_u16 *vm_text(const char *id)
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
 	if (s_pfx(id, "vm_i_style") && id[10] >= '0' && id[10] <= '1' && !id[11])
 		return fixed_text(VM_I18N_ITEM_STYLE_CLASSIC + (id[10] - '0'));
-	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '2' && !id[8])
-		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
-		                : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_PIPE_AUTO);
-	if (s_pfx(id, "vm_i_st") && id[7] >= '0' && id[7] <= '2' && !id[8])
-		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
-		                : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_STATS_FULL);
+	if ((s_pfx(id, "vm_i_ra") || s_pfx(id, "vm_i_st")) && id[7] >= '0' && id[7] <= '1' && !id[8])
+		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF : VM_I18N_ITEM_RA_ON);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '4' && !id[9])
@@ -625,20 +388,17 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 		}
 		const char *ins = devices_insert_at(s, size);
 		const int hl = (int)sizeof(X_HEAD) - 1, tl = (int)sizeof(X_TAIL) - 1;
-		int pl = 0;
 		if (!ins)
 			VM_LOGI("[SET] devices page (size=%d): insert point not found - page not added",
 			        size);
 		if (ins) {
 			int head = (int)(ins - s);
 
-			pl = rp_build();
 			s_cpy(g_pagebuf, s, head);
 			s_cpy(g_pagebuf + head, X_HEAD, hl);
-			s_cpy(g_pagebuf + head + hl, g_rp_xml, pl);
-			s_cpy(g_pagebuf + head + hl + pl, X_TAIL, tl);
-			s_cpy(g_pagebuf + head + hl + pl + tl, ins, size - head);
-			buf = g_pagebuf; size = size + hl + pl + tl;
+			s_cpy(g_pagebuf + head + hl, X_TAIL, tl);
+			s_cpy(g_pagebuf + head + hl + tl, ins, size - head);
+			buf = g_pagebuf; size = size + hl + tl;
 		}
 	}
 	return TAI_CONTINUE(int, r_xml, out, buf, size, a4);
@@ -696,26 +456,6 @@ static int button_hook(const char *id, int a2, void *a3)
 
 	if (id && s_eqn(id, STATUS, (int)sizeof(STATUS)))
 		return 0;                         /* shows the status dialog */
-	if (id && s_pfx(id, "vm_rp_")) {
-		char kind;
-		int i, r;
-
-		if (s_eqn(id, "vm_rp_none", 11))
-			return 0;
-		if (!rp_parse(id, &kind, &i) || i >= g_rp_n)
-			return 0;
-		if (kind != 'x')
-			return 0;                     /* an info row: its text as the dialog */
-		if (g_rp_gone[i])
-			return 0;
-		r = vmRaProfileDelete(g_rp[i].title);
-		if (r != VM_OK) {
-			VM_LOGI("[SET] read ahead profile %s not deleted (%d)", g_rp[i].title, r);
-			return -1;
-		}
-		g_rp_gone[i] = 1;
-		return 0;
-	}
 	if (id && s_eqn(id, ID, (int)sizeof(ID))) {
 		VmState st;
 		int r = get_state(&st) ? vmResetSafeMode() : VM_ERR_NOT_READY;   /* no kernel: error */

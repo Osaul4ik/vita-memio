@@ -17,5 +17,3 @@ vitamemio_kernel:
         - vmResetSafeMode
         - vmGetSetting
         - vmGetBuild
-        - vmRaProfileList
-        - vmRaProfileDelete

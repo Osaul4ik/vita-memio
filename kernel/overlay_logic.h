@@ -20,7 +20,7 @@
  * While the overlay is open, the game gets no buttons, and without SELECT:
  *   Up / Down        the cursor (over the lines shown: see `mask`)
  *   Left / Right     the value under it, back / on (Cross: on)
- *   Cross            on Learn it again / Save: do it; on Close: closed
+ *   Cross            on Save: do it; on Close: closed
  * A change is not made here: it is left in `op` for the worker, which owns
  * the settings and the files.
  */
@@ -47,17 +47,15 @@
 #define OV_BTN_CROSS  0x00004000u
 
 /* The menu's items, top to bottom: the app in front's own settings, then
- * read ahead Auto's for it, then the actions. Which are shown is the
- * worker's (a mask of 1 << item): the thresholds only with read ahead On,
- * Learn it again only with Auto, nothing but Close with no app in front. */
+ * then the actions. Which are shown is the worker's (a mask of 1 << item): the
+ * thresholds only with read ahead On, nothing but Close with no app in front. */
 enum {
-	OV_ITEM_RA = 0,      /* read ahead: Global / Off / On / Auto              */
+	OV_ITEM_RA = 0,      /* read ahead: Global / Off / On                     */
 	OV_ITEM_C,           /* ... On: reads in a row before it starts, cached   */
 	OV_ITEM_NC,          /* ... non-cacheable                                 */
 	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
-	OV_ITEM_RELEARN,     /* Auto: what it learnt of the app forgotten         */
 	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
 	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS
@@ -67,7 +65,7 @@ enum {
 /* Items done with Cross only (an action, not a value). */
 static inline int ov_item_action(int i)
 {
-	return i == OV_ITEM_RELEARN || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
+	return i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
 }
 
 /* The next item shown from `i`, `dir` -1 / +1 (wrapping); `i` itself if

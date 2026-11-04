@@ -212,7 +212,6 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
 		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on (experimental)"
-		    : res->plugin0.readahead == VM_RA_AUTO ? "auto, learnt per game (experimental)"
 		    : res->plugin0.readahead == VM_RA_OFF ? "off" : "unknown");
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
@@ -415,9 +414,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe (C)"
 			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC"
 			     : res->plugin0.offload == VM_OFFLOAD_NC ? "NCached only" : "cached only");
-		if (res->plugin0.readahead == VM_RA_ON || res->plugin0.readahead == VM_RA_AUTO)
-			line(&s, "read ahead: %s (experimental)",
-			     res->plugin0.readahead == VM_RA_AUTO ? "auto" : "on");
+		if (res->plugin0.readahead == VM_RA_ON)
+			line(&s, "read ahead: on (experimental)");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{

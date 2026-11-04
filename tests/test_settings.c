@@ -255,7 +255,7 @@ static void test_gpusafe_default_and_stored_value(void)
 	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_NC) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
 	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
 	CHECK(vm_setting_valid(VM_KEY_STATS, VM_STATS_OFF) && vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) &&
-	      vm_setting_valid(VM_KEY_STATS, VM_STATS_FULL) && !vm_setting_valid(VM_KEY_STATS, 3));
+	      vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) && !vm_setting_valid(VM_KEY_STATS, 2));
 	v[VM_KEY_PIPELINE] = VM_PIPE_AUTO;
 	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_ALWAYS;
 	clean();

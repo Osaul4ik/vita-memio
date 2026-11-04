@@ -13,10 +13,9 @@
  * else (the overlay open, or the HUD shown) acts at once on a newly
  * pressed arrow with SELECT held.
  * While the overlay is open, the game gets no buttons, and without SELECT:
- *   Up / Down        the cursor
- *   Left / Right     the value under it, back / on (Cross: on); on "Auto
- *                    ignores it", either toggles it
- *   Cross            on "Save as its profile" / "Learn it again": do it
+ *   Up / Down        the cursor (over the lines shown: see `mask`)
+ *   Left / Right     the value under it, back / on (Cross: on)
+ *   Cross            on Learn it again / Save: do it; on Close: closed
  * A change is not made here: it is left in `op` for the worker, which owns
  * the settings and the files.
  */
@@ -40,28 +39,41 @@
 #define OV_BTN_LEFT   0x00000080u
 #define OV_BTN_CROSS  0x00004000u
 
-/* The menu's items, top to bottom, in two groups. */
+/* The menu's items, top to bottom: the app in front's own settings, then
+ * read ahead Auto's for it, then the actions. Which are shown is the
+ * worker's (a mask of 1 << item): the thresholds only with read ahead On,
+ * Learn it again only with Auto, nothing but Close with no app in front. */
 enum {
-	/* this app, for read ahead Auto */
-	OV_ITEM_C = 0,       /* reads in a row before it starts, cached           */
+	OV_ITEM_RA = 0,      /* read ahead: Global / Off / On / Auto              */
+	OV_ITEM_C,           /* ... On: reads in a row before it starts, cached   */
 	OV_ITEM_NC,          /* ... non-cacheable                                 */
-	OV_ITEM_SAVE,        /* keep those as its profile (set by hand)           */
-	OV_ITEM_IGNORE,      /* Auto ignores it (on / off)                        */
-	OV_ITEM_RESET,       /* delete its profile: learnt again                  */
-	/* the settings */
-	OV_ITEM_RA,          /* read ahead: Off / On / Auto                       */
-	OV_ITEM_OFFLOAD,     /* copy on the system core (core 3)                  */
+	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
+	OV_ITEM_RELEARN,     /* Auto: what it learnt of the app forgotten         */
+	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
+	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS
 };
-#define OV_GROUP_APP       OV_ITEM_C       /* first item of each group        */
-#define OV_GROUP_SETTINGS  OV_ITEM_RA
+#define OV_MASK_ALL  ((1u << OV_ITEMS) - 1)
 
 /* Items done with Cross only (an action, not a value). */
 static inline int ov_item_action(int i)
 {
-	return i == OV_ITEM_SAVE || i == OV_ITEM_RESET;
+	return i == OV_ITEM_RELEARN || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
+}
+
+/* The next item shown from `i`, `dir` -1 / +1 (wrapping); `i` itself if
+ * nothing else is shown. */
+static inline int ov_next(int i, int dir, uint32_t mask)
+{
+	for (int k = 1; k <= OV_ITEMS; k++) {
+		const int j = ((i + dir * k) % OV_ITEMS + OV_ITEMS) % OV_ITEMS;
+
+		if (mask & (1u << j))
+			return j;
+	}
+	return i;
 }
 
 /* An op for the worker: the item + 1 in bits 8.., the step (-1, +1) below. */
@@ -94,7 +106,7 @@ static inline int ov_combo(int state, uint32_t arrow)
 /* One look at the buttons, `now` in microseconds (wrapping). Returns 1 if
  * anything visible changed (the worker should redraw). After it, o->state ==
  * OV_MENU means: hide the buttons from the game. */
-static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now)
+static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 {
 	const uint32_t down = b & ~o->prev;
 	const int was_state = o->state, was_cursor = o->cursor;
@@ -131,10 +143,16 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now)
 		else if (down & (OV_BTN_UP | OV_BTN_DOWN))
 			o->state = OV_CLOSED;
 	} else if (o->state == OV_MENU) {
+		if (!(mask & OV_MASK_ALL))
+			mask = 1u << OV_ITEM_CLOSE;
+		if (!(mask & (1u << o->cursor)))      /* its line is gone: the next one shown */
+			o->cursor = ov_next(o->cursor, 1, mask);
 		if (down & OV_BTN_UP)
-			o->cursor = o->cursor > 0 ? o->cursor - 1 : OV_ITEMS - 1;
+			o->cursor = ov_next(o->cursor, -1, mask);
 		else if (down & OV_BTN_DOWN)
-			o->cursor = o->cursor + 1 < OV_ITEMS ? o->cursor + 1 : 0;
+			o->cursor = ov_next(o->cursor, 1, mask);
+		else if (o->cursor == OV_ITEM_CLOSE && (down & OV_BTN_CROSS))
+			o->state = OV_CLOSED;
 		else if (!o->op && !ov_item_action(o->cursor) &&
 		         (down & (OV_BTN_LEFT | OV_BTN_RIGHT | OV_BTN_CROSS)))
 			o->op = OV_OP(o->cursor, (down & OV_BTN_LEFT) ? -1 : 1);

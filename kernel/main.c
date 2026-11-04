@@ -352,9 +352,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	static int counting;
 	static uint32_t base_core[4], base_ncs, base_nco;
 	const int ext = s->hud == VM_HUD_EXTENDED;
-	const char *mode = s->readahead == VM_RA_AUTO ? HUD_C_ACCENT "Auto"
-	                 : s->readahead == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
 	char st[32], c[16], nc[16];
+	const char *mode;
 	VmRaNow now;
 	int n = 0;
 
@@ -370,17 +369,14 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	if (!on || room <= 0)
 		return 0;
 	vm_stage_ra_now(&now);
-	/* Auto's state for the app: learning / learnt / set by hand / ignored */
+	/* in effect for the app in front (its own, or the global one) */
+	mode = now.mode == VM_RA_AUTO ? HUD_C_ACCENT "Auto"
+	     : now.mode == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
+	/* Auto's state for the app: learning / learnt */
 	st[0] = 0;
-	if (s->readahead == VM_RA_AUTO) {
-		if (!fg->title[0] && !now.app[0])
+	if (now.mode == VM_RA_AUTO) {
+		if (!now.title[0])
 			snprintf(st, sizeof(st), HUD_C_DIM "-");
-		else if (now.app_ignored)
-			snprintf(st, sizeof(st), HUD_C_WARN "ignored");
-		else if (!now.title[0])
-			snprintf(st, sizeof(st), HUD_C_DIM "-");
-		else if (now.manual)
-			snprintf(st, sizeof(st), HUD_C_ACCENT "%s", ext ? "set by hand" : "hand");
 		else if (now.learning)
 			snprintf(st, sizeof(st), HUD_C_WARN "%s%u/%u", ext ? "learning " : "",
 			         (unsigned)(now.streams > 9999 ? 9999 : now.streams),
@@ -391,7 +387,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	hud_thr(c, sizeof(c), now.thr[0], !ext);
 	hud_thr(nc, sizeof(nc), now.thr[1], !ext);
 	if (!ext) {
-		if (s->readahead == VM_RA_OFF)
+		if (now.mode == VM_RA_OFF)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s", mode);
 		else
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s%s%.20s " HUD_C_DIM "C %.7s "
@@ -399,8 +395,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 		return n;
 	}
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s  %.24s", mode,
-	         fg->title[0] ? fg->title : now.app[0] ? now.app : "", st);
-	if (s->readahead != VM_RA_OFF && n < room && !now.app_ignored)
+	         fg->title, st);
+	if (now.mode != VM_RA_OFF && n < room)
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  start after  C %.7s" HUD_C_DIM
 		         "  NC %.7s", c, nc);
 	if (n < room) {
@@ -507,80 +503,7 @@ static const char *const k_ov_ra[] = { "Off", "On", "Auto" };
 static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C + NC",
                                         "NCached only" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
-
-/* A change asked for in the overlay, made here (the worker owns the
- * settings and the files). */
-static void overlay_op(uint32_t op, const VmSettings *s, char *msg, int cap)
-{
-	static const int ra[] = { VM_RA_OFF, VM_RA_ON, VM_RA_AUTO };
-	static const int off[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_NC,
-	                           VM_OFFLOAD_ALL };   /* as on the Settings page */
-	static const int pipe[] = { VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
-	static const int onoff[] = { 0, 1 };
-	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };
-	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
-	VmRaNow now;
-	int r = VM_OK;
-
-	msg[0] = 0;
-	vm_stage_ra_now(&now);
-	switch (item) {
-	case OV_ITEM_C:
-	case OV_ITEM_NC: {
-		const int k = item == OV_ITEM_NC;
-
-		if (now.app_ignored)
-			r = VM_ERR_ARG;
-		else
-			r = vm_stage_ra_tune(k, (uint32_t)ov_step(thr, 8, (int)now.thr[k], dir));
-		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_DIM "Set by hand (now; Save to keep it)");
-		break;
-	}
-	case OV_ITEM_SAVE:
-		r = now.app_ignored ? VM_ERR_ARG : vm_stage_ra_save();
-		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: profile saved", now.title);
-		break;
-	case OV_ITEM_IGNORE:
-		if (now.app_system) {
-			snprintf(msg, cap, HUD_C_WARN "A system app: always ignored");
-			return;
-		}
-		r = vm_stage_ra_ignore(!now.app_ignored);
-		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: %s", now.app,
-			         now.app_ignored ? "Auto follows it again" : "Auto ignores it");
-		break;
-	case OV_ITEM_RESET:
-		if (!now.app[0] || now.app_system)
-			r = VM_ERR_ARG;
-		else if (vm_stage_ra_delete(now.app) == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: learnt again", now.app);
-		else
-			snprintf(msg, cap, HUD_C_WARN "%.15s: no profile yet", now.app);
-		break;
-	case OV_ITEM_RA:
-		vm_settings_set(VM_KEY_READAHEAD, ov_step(ra, 3, s->readahead, dir));
-		break;
-	case OV_ITEM_OFFLOAD:
-		vm_settings_set(VM_KEY_OFFLOAD, ov_step(off, 5, s->offload, dir));
-		break;
-	case OV_ITEM_PIPE:
-		vm_settings_set(VM_KEY_PIPELINE, ov_step(pipe, 3, s->pipeline, dir));
-		break;
-	case OV_ITEM_GPUSAFE:
-		vm_settings_set(VM_KEY_GPUSAFE, ov_step(onoff, 2, s->gpusafe, dir));
-		break;
-	default:
-		break;
-	}
-	if (r == VM_ERR_NOT_READY)
-		snprintf(msg, cap, HUD_C_WARN "No app followed (read ahead Auto?)");
-	else if (r != VM_OK && !msg[0])
-		snprintf(msg, cap, HUD_C_WARN "Not for this app");
-	vm_settings_flush();                  /* saved now */
-}
+static const char *const k_ov_onoff[] = { "Off", "On" };
 
 /* A threshold: "5" / "never". */
 static void ov_thr(char *o, int cap, uint32_t t)
@@ -591,23 +514,95 @@ static void ov_thr(char *o, int cap, uint32_t t)
 		snprintf(o, cap, "%u", (unsigned)(t > 99 ? 99 : t));
 }
 
-/* What read ahead does now; 1 if the app's values apply (a game followed,
- * not one Auto ignores). */
-static int now_app_ok(VmRaNow *now)
+/* A change asked for in the overlay, made here: the app in front's own
+ * settings (in effect at once; kept only by Save), or an action. */
+static void overlay_op(uint32_t op, char *msg, int cap)
 {
-	vm_stage_ra_now(now);
-	return now->title[0] && !now->app_ignored;
+	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON, VM_RA_AUTO };
+	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS,
+	                           VM_OFFLOAD_NC, VM_OFFLOAD_ALL };   /* as on the Settings page */
+	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
+	static const int onoff[] = { VM_APP_GLOBAL, 0, 1 };
+	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };
+	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
+	VmAppNow an;
+	VmApp a;
+	int r = VM_OK;
+
+	msg[0] = 0;
+	vm_stage_app_now(&an);
+	a = an.cur;
+	switch (item) {
+	case OV_ITEM_RA:
+		a.ra = ov_step(ra, 4, a.ra, dir);
+		break;
+	case OV_ITEM_C:
+	case OV_ITEM_NC: {
+		const int k = item == OV_ITEM_NC;
+		const int cur = a.thr[k] ? (int)a.thr[k] : k ? 5 : 5;   /* the fixed: 5 */
+
+		a.thr[k] = (uint32_t)ov_step(thr, 8, cur, dir);
+		break;
+	}
+	case OV_ITEM_OFFLOAD:
+		a.offload = ov_step(off, 6, a.offload, dir);
+		break;
+	case OV_ITEM_PIPE:
+		a.pipe = ov_step(pipe, 4, a.pipe, dir);
+		break;
+	case OV_ITEM_GPUSAFE:
+		a.gpusafe = ov_step(onoff, 3, a.gpusafe, dir);
+		break;
+	case OV_ITEM_SAVE:
+		r = vm_stage_app_save();
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: saved", an.title);
+		return;
+	case OV_ITEM_RELEARN:
+		r = vm_stage_app_relearn();
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: learnt again", an.title);
+		return;
+	default:
+		return;
+	}
+	r = vm_stage_app_set(&a);
+	if (r == VM_ERR_NOT_READY)
+		snprintf(msg, cap, HUD_C_WARN "No app in front");
 }
 
-/* One menu line: the cursor, the name padded, the value. */
-static void ov_item(char *o, int cur, int i, const char *name, const char *val)
+/* The colour of an app's value: as the global one (not its own, nothing to
+ * save) white; changed and not saved blue (as PSVshell marks its own
+ * values); saved and its own green. */
+static const char *ov_color(int cur, int saved)
+{
+	if (cur != saved)
+		return HUD_C_ACCENT;
+	return cur == VM_APP_GLOBAL ? HUD_C_TEXT : HUD_C_GOOD;
+}
+
+/* "Global (Auto)" for a value that is the global one, else the value. */
+static void ov_val(char *o, int cap, int cur, int global, const char *const *names, int n)
+{
+	const int v = cur == VM_APP_GLOBAL ? global : cur;
+	const char *name = v >= 0 && v < n ? names[v] : "?";
+
+	if (cur == VM_APP_GLOBAL)
+		snprintf(o, cap, "Global (%s)", name);
+	else
+		snprintf(o, cap, "%s", name);
+}
+
+/* One menu line: the cursor, the name padded, the value in its colour. */
+static void ov_line(char *o, int cur, int i, int indent, const char *name, const char *color,
+                    const char *val)
 {
 	char nm[24];
 
-	pad(nm, sizeof(nm), name, 20, 20, 0);
-	snprintf(o, VM_HUD_LINE_MAX, "%s%s" HUD_C_TEXT "%s%s%.20s",
-	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ", nm,
-	         i == cur ? HUD_C_ACCENT : HUD_C_GOOD, val);
+	pad(nm, sizeof(nm), name, 18 - indent, 18, 0);
+	snprintf(o, VM_HUD_LINE_MAX, "%s%s%s" HUD_C_TEXT "%s%s%.24s",
+	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ",
+	         indent ? "  " : "", nm, color, val);
 }
 
 static void overlay_feed(void)
@@ -625,9 +620,8 @@ static void overlay_feed(void)
 	vm_overlay_enable(s.overlay && vm_hud_installed(), worker_wake);
 	op = vm_overlay_take_op();
 	if (op) {
-		overlay_op(op, &s, msg, sizeof(msg));
+		overlay_op(op, msg, sizeof(msg));
 		msg_us = ksceKernelGetSystemTimeLow();
-		vm_settings_copy(&s);
 	}
 	if (vm_overlay_state() != OV_MENU) {
 		if (shown) {
@@ -644,60 +638,97 @@ static void overlay_feed(void)
 		shown = 1;
 	}
 	{
+		VmAppNow an;
 		VmRaNow now;
-		uint32_t core[4], ncs, nco, other = 0;
-		char a[16], b[16], tc[8], tn[8];
-		const char *dev;
+		VmFg fg;
+		uint32_t core[4], ncs, nco, other = 0, mask;
+		char a[16], b[16], v[40];
 		const int cur = vm_overlay_cursor();
-		const int app_ok = now_app_ok(&now);
+		int ra;
 
+		vm_stage_app_now(&an);
+		vm_stage_ra_now(&now);
+		vm_stage_fg(&fg);
 		vm_stage_core_stats(core, &ncs, &nco);
-		dev = now.app_ignored ? "-" : now.dev == VM_DEV_SD2VITA ? "SD2Vita"
-		    : now.dev == VM_DEV_MEMCARD ? "memory card" : "?";
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_ACCENT "vita-memio" HUD_C_DIM
-		         "   SEL+> HUD  SEL+< close");
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "App " HUD_C_TEXT "%.15s" HUD_C_DIM
-		         "  storage " HUD_C_TEXT "%s", now.app[0] ? now.app : "-", dev);
-		if (now.mode != VM_RA_AUTO)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: off (Read ahead %s)",
-			         k_ov_ra[s.readahead]);
-		else if (!now.app[0])
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: waiting for an app");
-		else if (now.app_ignored)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "ignores %s",
-			         now.app_system ? "it (system app)" : "it");
-		else if (now.manual)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_ACCENT "set by hand");
-		else if (now.learning)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/%u",
-			         (unsigned)now.streams, (unsigned)now.target);
-		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_GOOD "learnt");
+		ra = an.cur.ra == VM_APP_GLOBAL ? an.global.ra : an.cur.ra;   /* in effect */
 		for (int i = 0; i < 3; i++)
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "On core 3    C %.7s" HUD_C_DIM "  NC %.7s",
-		         a, b);
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- This app (read ahead Auto) --");
-		ov_thr(tc, sizeof(tc), now.thr[0]);
-		ov_thr(tn, sizeof(tn), now.thr[1]);
-		ov_item(L[n++], cur, OV_ITEM_C, "Start after (C)", app_ok ? tc : "-");
-		ov_item(L[n++], cur, OV_ITEM_NC, "Start after (NC)", app_ok ? tn : "-");
-		ov_item(L[n++], cur, OV_ITEM_SAVE, "Save as its profile", "(X)");
-		ov_item(L[n++], cur, OV_ITEM_IGNORE, "Auto ignores it",
-		        !now.app[0] ? "-" : now.app_system ? "yes (system)"
-		        : now.app_ignored ? "yes" : "no");
-		ov_item(L[n++], cur, OV_ITEM_RESET, "Learn it again", "(X)");
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings --");
-		ov_item(L[n++], cur, OV_ITEM_RA, "Read ahead", k_ov_ra[s.readahead]);
-		ov_item(L[n++], cur, OV_ITEM_OFFLOAD, "Copy on core 3", k_ov_off[s.offload]);
-		ov_item(L[n++], cur, OV_ITEM_PIPE, "Overlapped reads", k_ov_pipe[s.pipeline]);
-		ov_item(L[n++], cur, OV_ITEM_GPUSAFE, "GPU-safe reads", s.gpusafe ? "On" : "Off");
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_ACCENT "vita-memio" HUD_C_DIM
+		         "                SEL+> HUD");
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_TEXT "%.15s" HUD_C_DIM " %s" HUD_C_DIM
+		         "  core 3 C %.7s" HUD_C_DIM " NC %.7s",
+		         an.title[0] ? an.title : "home screen",
+		         fg.dev == VM_DEV_SD2VITA ? "SD2Vita" : fg.dev == VM_DEV_MEMCARD ? "memory card"
+		         : fg.dev == VM_DEV_INTERNAL ? "internal" : "", a, b);
+		if (!an.title[0]) {
+			mask = 1u << OV_ITEM_CLOSE;
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
+		} else {
+			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_PIPE) |
+			       (1u << OV_ITEM_GPUSAFE) | (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
+			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
+			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
+			        ov_color(an.cur.ra, an.saved.ra), v);
+			if (ra == VM_RA_ON) {                 /* its thresholds: On only */
+				for (int k = 0; k < 2; k++) {
+					const uint32_t t = an.cur.thr[k] ? an.cur.thr[k] : 5;
+
+					if (t == VM_RA_NEVER)
+						snprintf(v, sizeof(v), "never");
+					else
+						snprintf(v, sizeof(v), "%u%s", (unsigned)t,
+						         an.cur.thr[k] ? "" : " (fixed)");
+					ov_line(L[n++], cur, k ? OV_ITEM_NC : OV_ITEM_C, 1,
+					        k ? "Start after NC" : "Start after C",
+					        an.cur.thr[k] != an.saved.thr[k] ? HUD_C_ACCENT
+					        : an.cur.thr[k] ? HUD_C_GOOD : HUD_C_TEXT, v);
+				}
+				mask |= (1u << OV_ITEM_C) | (1u << OV_ITEM_NC);
+			}
+			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
+			ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
+			        ov_color(an.cur.offload, an.saved.offload), v);
+			ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
+			ov_line(L[n++], cur, OV_ITEM_PIPE, 0, "Overlapped reads",
+			        ov_color(an.cur.pipe, an.saved.pipe), v);
+			ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_onoff, 2);
+			ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 0, "GPU-safe reads",
+			        ov_color(an.cur.gpusafe, an.saved.gpusafe), v);
+			if (ra == VM_RA_AUTO) {               /* Auto's for it */
+				char c[8], d[8];
+
+				snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Read ahead Auto --");
+				ov_thr(c, sizeof(c), now.thr[0]);
+				ov_thr(d, sizeof(d), now.thr[1]);
+				if (now.title[0] && now.learning)
+					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_WARN
+					         "learning %u/%u" HUD_C_DIM "  start after C %s NC %s",
+					         (unsigned)now.streams, (unsigned)now.target, c, d);
+				else if (now.title[0])
+					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_GOOD "learnt"
+					         HUD_C_DIM "  start after C %s NC %s", c, d);
+				else
+					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  waiting for it to read");
+				ov_line(L[n++], cur, OV_ITEM_RELEARN, 0, "Learn it again", HUD_C_TEXT, "(X)");
+				mask |= 1u << OV_ITEM_RELEARN;
+			}
+			{
+				const int dirty = memcmp(&an.cur, &an.saved, sizeof(an.cur)) != 0;
+
+				ov_line(L[n++], cur, OV_ITEM_SAVE, 0, "Save",
+				        dirty ? HUD_C_ACCENT : HUD_C_DIM, dirty ? "(X) not saved" : "(X)");
+			}
+		}
+		ov_line(L[n++], cur, OV_ITEM_CLOSE, 0, "Close", HUD_C_TEXT, "(X)");
+		vm_overlay_set_mask(mask);
 		if (msg[0] && ksceKernelGetSystemTimeLow() - msg_us < 4u * 1000u * 1000u)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);
 		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Up/Down  Left/Right change  X");
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Up/Down  Left/Right change  X do");
 	}
 	vm_hud_set_overlay(L, n);
 }

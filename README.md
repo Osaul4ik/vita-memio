@@ -133,13 +133,17 @@ Settings, logs and tester results live in `ur0:data/vita-memio/`.
 | SELECT + Left | from the HUD back to the overlay; pressed again (open): closes it |
 | SELECT + Up or Down | closes the overlay and the HUD |
 | Up / Down | (overlay open) choose a line |
-| Left / Right, Cross | change the value on it; Cross on *Save as its profile* / *Learn it again* does it |
-With nothing shown, the buttons are only looked at every 0.1 s, so a game's polling costs next to nothing; with the overlay or the HUD shown every poll counts, and while the overlay is open the game gets no buttons. At the top: the app (the game Auto follows, or an app Auto ignores that read last) and its storage, what Auto does with it (learning and how far, learnt, set by hand, or ignored), and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Then two groups:
+| Left / Right, Cross | change the value on it; Cross on *Learn it again*, *Save* or *Close* does it |
 
-- **This app (read ahead Auto):** *Start after (C)* and *(NC)* - after how many reads in a row read ahead starts for it (2 to 8, or never); a change applies at once and stops Auto learning it. *Save as its profile* keeps them (marked *set by hand*: Auto does not learn it again). *Auto ignores it* puts the app on Auto's ignore list, or takes it off: an ignored app is not followed, nothing of it is learnt and nothing is read ahead for it in Auto. *Learn it again* deletes its profile.
-- **Settings:** read ahead, copy on core 3, overlapped reads, GPU-safe reads - saved as in Settings.
+With nothing shown, the buttons are only looked at every 0.1 s, so a game's polling costs next to nothing; with the overlay or the HUD shown every poll counts, and while the overlay is open the game gets no buttons.
 
-The overlay is in English.
+The overlay is about **the app in front** (the game, homebrew, emulator...), with its title ID and storage, and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 since it opened:
+
+- **Settings (this app):** read ahead, copy on core 3, overlapped reads, GPU-safe reads, each *Global (…)* - the one set in Settings - or this app's own. With read ahead *On*, *Start after C / NC* (2-8 or never) set when it starts for this app; they are hidden with *Auto* and *Off*. A change is in effect at once, for this app only, while it is in front.
+- **Read ahead Auto** (only when it is Auto for this app): learning (how far) or learnt, the thresholds it uses, and *Learn it again*.
+- **Save** keeps this app's settings in its profile (its changes are not kept otherwise: another app in front drops them). **Close** closes the overlay.
+
+Colours: white - the global setting; **blue** - changed, not saved; **green** - this app's own, saved. The overlay is in English. Settings (the system app) sets the global ones; an app's own are made in the overlay only.
 
 **Apps Auto never follows.** The system's own apps (title IDs starting with NPXS, and the home screen) are always ignored, so opening Settings or the home screen during a game does not take Auto off the game.
 

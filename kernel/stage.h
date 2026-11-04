@@ -46,23 +46,47 @@ void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT]);
 int  vm_stage_ra_list(VmRaProfile *out, int max);
 int  vm_stage_ra_delete(const char *title);
 
-/* What read ahead is doing now, for the overlay. */
+/* An app's own settings (the overlay; kept in its profile): each -1 for the
+ * global one (Settings), else a value of that setting; thr: its thresholds
+ * with read ahead On (cached, non-cacheable), 0 for the fixed one, else
+ * 2..8 or VM_RA_NEVER. */
+typedef struct VmApp {
+	int32_t  ra, offload, pipe, gpusafe;
+	uint32_t thr[2];
+} VmApp;
+#define VM_APP_GLOBAL  (-1)
+
+/* What read ahead is doing now (the settings in effect), for the HUD and
+ * the overlay. */
 typedef struct VmRaNow {
-	char     title[16];     /* the game followed ("" none / no title id)     */
-	int      mode;          /* VM_RA_*                                       */
-	int      measure;       /* learning switched on (auto)                   */
-	int      learning;      /* 1 while it learns this game                   */
-	uint32_t streams;       /* ... streams seen so far                       */
-	uint32_t target;        /* ... of this many (a game 300, homebrew 150)   */
-	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)  */
-	int      dev;           /* the game's storage, -1 not known              */
-	int      manual;        /* its thresholds are set by hand                */
-	char     app[16];       /* the app the overlay acts on: the game, or one
-	                         * Auto ignores that read last ("" none)          */
-	int      app_ignored;   /* ... Auto ignores it                           */
-	int      app_system;    /* ... a system app (always ignored)             */
+	char     title[16];     /* the game Auto follows ("" none)               */
+	int      mode;          /* VM_RA_* in effect (global, or the app's)       */
+	int      measure;       /* following an app (Auto, or Full statistics)    */
+	int      learning;      /* 1 while Auto learns it                         */
+	uint32_t streams;       /* ... streams seen so far                        */
+	uint32_t target;        /* ... of this many (a game 300, homebrew 150)    */
+	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)   */
+	int      dev;           /* its storage, -1 not known                      */
 } VmRaNow;
 void vm_stage_ra_now(VmRaNow *out);
+
+/* The app in front's own settings, for the overlay. */
+typedef struct VmAppNow {
+	char  title[16];        /* "" : no app in front (the home screen)         */
+	VmApp cur;              /* in effect now (applied, maybe not saved)       */
+	VmApp saved;            /* as in its profile                              */
+	VmApp global;           /* the global ones (Settings; thr: 0)             */
+	int   learnt;           /* Auto has learnt it                             */
+} VmAppNow;
+void vm_stage_app_now(VmAppNow *out);
+/* Worker thread. VM_OK, VM_ERR_NOT_READY (no app in front), VM_ERR_ARG (a
+ * value out of range), VM_ERR_IO.
+ *   set:     its settings, in effect at once (not saved);
+ *   save:    as they are now, into its profile;
+ *   relearn: what Auto learnt of it forgotten (its settings kept). */
+int  vm_stage_app_set(const VmApp *a);
+int  vm_stage_app_save(void);
+int  vm_stage_app_relearn(void);
 
 /* The app in front (process events) and the storage it reads from most
  * since it came to the front (-1: none in front, or too little read yet;
@@ -73,16 +97,6 @@ typedef struct VmFg {
 } VmFg;
 void vm_stage_fg(VmFg *out);
 
-/* The overlay's changes (worker thread). VM_OK, VM_ERR_NOT_READY (no game
- * followed / no app ignored) or VM_ERR_ARG.
- *   tune:   the game's threshold for cached (0) / non-cacheable (1) reads,
- *           2..8 or VM_RA_NEVER, now (set by hand: no longer learnt);
- *   save:   its thresholds as its profile, set by hand;
- *   ignore: 1: the game on Auto's ignore list (no longer followed);
- *           0: the ignored app that read last off it (not a system app). */
-int  vm_stage_ra_tune(int kind, uint32_t thr);
-int  vm_stage_ra_save(void);
-int  vm_stage_ra_ignore(int on);
 
 /* Where reads were copied / read, since boot (KiB; wrap-safe differences):
  * the copies by core, and non-cacheable reads on the system core vs the

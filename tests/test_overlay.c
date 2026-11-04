@@ -9,12 +9,13 @@
 #include "vm_test.h"
 
 static uint32_t T = 0xFFFF0000u;            /* the clock, us (it wraps soon) */
+static uint32_t g_mask = OV_MASK_ALL;        /* the items shown */
 
 /* one look at the buttons, a frame later */
 static int in(OvLogic *o, uint32_t b)
 {
 	T += 16667;
-	return ov_input(o, b, T);
+	return ov_input(o, b, T, g_mask);
 }
 
 /* press `b` (with what is held), then let go of everything */
@@ -35,10 +36,10 @@ static int hold(OvLogic *o, uint32_t b, uint32_t ms)
 
 	for (uint32_t t = 0; t <= ms * 1000u; t += OV_SAMPLE_US) {
 		T += t ? OV_SAMPLE_US : 0;
-		c |= ov_input(o, OV_BTN_SELECT | b, T);
+		c |= ov_input(o, OV_BTN_SELECT | b, T, g_mask);
 	}
 	T += OV_SAMPLE_US;
-	ov_input(o, 0, T);
+	ov_input(o, 0, T, g_mask);
 	return c;
 }
 
@@ -74,7 +75,7 @@ static void test_states(void)
 	/* held on after it opened: once per hold - not then the HUD */
 	for (int i = 0; i < 20; i++) {
 		T += OV_SAMPLE_US;
-		ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+		ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
 	}
 	CHECK(o.state == OV_MENU);
 	in(&o, OV_BTN_SELECT | OV_BTN_RIGHT);             /* open, still held: not new */
@@ -88,24 +89,24 @@ static void test_states(void)
 	CHECK(o.state == OV_CLOSED);
 	for (int i = 0; i < 10; i++) {
 		T += OV_SAMPLE_US;
-		ov_input(&o, OV_BTN_RIGHT, T);
+		ov_input(&o, OV_BTN_RIGHT, T, g_mask);
 	}
 	CHECK(o.state == OV_CLOSED && !o.op);
 	/* the hold broken (another arrow) starts over */
 	T += OV_SAMPLE_US;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
 	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_UP, T);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_UP, T, g_mask);
 	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
 	CHECK(o.state == OV_CLOSED);
 	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
 	CHECK(o.state == OV_CLOSED);
 	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
+	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
 	CHECK(o.state == OV_MENU);
-	ov_input(&o, 0, T);
+	ov_input(&o, 0, T, g_mask);
 }
 
 static void test_menu(void)
@@ -113,35 +114,36 @@ static void test_menu(void)
 	OvLogic o;
 
 	memset(&o, 0, sizeof(o));
+	g_mask = OV_MASK_ALL;
 	/* closed: the arrows and Cross belong to the game */
 	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
 	hold(&o, OV_BTN_RIGHT, 500);
-	CHECK(o.state == OV_MENU);
-	CHECK(o.cursor == OV_ITEM_C && OV_GROUP_APP == 0 && OV_GROUP_SETTINGS == OV_ITEM_RA);
-	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_NC);
+	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_RA);
+	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_C);
 	tap(&o, 0, OV_BTN_UP);
 	tap(&o, 0, OV_BTN_UP);
-	CHECK(o.cursor == OV_ITEMS - 1);                  /* wraps */
+	CHECK(o.cursor == OV_ITEM_CLOSE);                 /* wraps */
 	tap(&o, 0, OV_BTN_DOWN);
-	CHECK(o.cursor == 0);
+	CHECK(o.cursor == OV_ITEM_RA);
 	/* a value: left for the worker, one at a time */
 	tap(&o, 0, OV_BTN_RIGHT);
-	CHECK(o.op == OV_OP(OV_ITEM_C, 1) && OV_OP_ITEM(o.op) == OV_ITEM_C && OV_OP_DIR(o.op) == 1);
+	CHECK(o.op == OV_OP(OV_ITEM_RA, 1) && OV_OP_ITEM(o.op) == OV_ITEM_RA && OV_OP_DIR(o.op) == 1);
 	tap(&o, 0, OV_BTN_LEFT);
 	CHECK(OV_OP_DIR(o.op) == 1);                       /* not taken yet: kept */
 	o.op = 0;
 	tap(&o, 0, OV_BTN_LEFT);
-	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_C && OV_OP_DIR(o.op) == -1);
+	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_RA && OV_OP_DIR(o.op) == -1);
 	o.op = 0;
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(OV_OP_DIR(o.op) == 1);
 	o.op = 0;
 	/* actions: only Cross */
-	for (int it = 0; it < OV_ITEMS; it++) {
-		if (!ov_item_action(it))
-			continue;
+	CHECK(ov_item_action(OV_ITEM_SAVE) && ov_item_action(OV_ITEM_RELEARN) &&
+	      ov_item_action(OV_ITEM_CLOSE) && !ov_item_action(OV_ITEM_RA) &&
+	      !ov_item_action(OV_ITEM_C) && !ov_item_action(OV_ITEM_GPUSAFE));
+	for (int it = OV_ITEM_RELEARN; it <= OV_ITEM_SAVE; it++) {
 		o.cursor = it;
 		tap(&o, 0, OV_BTN_RIGHT);
 		tap(&o, 0, OV_BTN_LEFT);
@@ -150,30 +152,57 @@ static void test_menu(void)
 		CHECK(OV_OP_ITEM(o.op) == it && OV_OP_DIR(o.op) == 0);
 		o.op = 0;
 	}
-	CHECK(ov_item_action(OV_ITEM_SAVE) && ov_item_action(OV_ITEM_RESET) &&
-	      !ov_item_action(OV_ITEM_IGNORE) && !ov_item_action(OV_ITEM_C));
-	/* the ignore switch: either arrow or Cross */
-	o.cursor = OV_ITEM_IGNORE;
-	tap(&o, 0, OV_BTN_LEFT);
-	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_IGNORE);
+	/* the lines not shown are skipped: no thresholds (not On), no Learn
+	 * it again (not Auto) */
+	g_mask = OV_MASK_ALL & ~((1u << OV_ITEM_C) | (1u << OV_ITEM_NC) | (1u << OV_ITEM_RELEARN));
+	o.cursor = OV_ITEM_RA;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_OFFLOAD);
+	tap(&o, 0, OV_BTN_UP);
+	CHECK(o.cursor == OV_ITEM_RA);
+	o.cursor = OV_ITEM_GPUSAFE;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_SAVE);
+	/* the cursor on a line that went away (read ahead changed): the next
+	 * one shown, before anything acts */
+	o.cursor = OV_ITEM_C;
+	tap(&o, 0, OV_BTN_CROSS);
+	CHECK(o.cursor == OV_ITEM_OFFLOAD && OV_OP_ITEM(o.op) == OV_ITEM_OFFLOAD);
 	o.op = 0;
-	o.cursor = OV_ITEM_RESET;
+	/* no app in front: only Close; Cross on it closes */
+	g_mask = 1u << OV_ITEM_CLOSE;
+	tap(&o, 0, OV_BTN_UP);
+	CHECK(o.cursor == OV_ITEM_CLOSE);
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_CLOSE);
+	CHECK(tap(&o, 0, OV_BTN_CROSS) && o.state == OV_CLOSED && !o.op);
+	/* a mask of nothing: as only Close */
+	g_mask = OV_MASK_ALL;
+	hold(&o, OV_BTN_RIGHT, 500);
+	g_mask = 0;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_CLOSE);
+	g_mask = OV_MASK_ALL;
 	/* the HUD state: the game has its buttons, nothing changes */
+	o.cursor = OV_ITEM_SAVE;
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
 	CHECK(o.state == OV_HUD);
 	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_CROSS);
-	CHECK(o.cursor == OV_ITEM_RESET && !o.op);
+	CHECK(o.cursor == OV_ITEM_SAVE && !o.op);
 }
 
 static void test_helpers(void)
 {
 	static const int off[] = { 0, 1, 2, 4, 3 };   /* the Settings page's order */
+	static const int ra[] = { -1, 0, 1, 2 };      /* Global first */
 	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, 0xFFFF };
 
 	CHECK(ov_step(off, 5, 2, 1) == 4 && ov_step(off, 5, 4, 1) == 3 && ov_step(off, 5, 3, 1) == 0);
 	CHECK(ov_step(off, 5, 0, -1) == 3 && ov_step(off, 5, 4, -1) == 2);
 	CHECK(ov_step(off, 5, 9, 1) == 0);
+	CHECK(ov_step(ra, 4, -1, 1) == 0 && ov_step(ra, 4, -1, -1) == 2 && ov_step(ra, 4, 2, 1) == -1);
+	CHECK(ov_next(0, -1, OV_MASK_ALL) == OV_ITEMS - 1 && ov_next(0, 1, 0) == 0);
 	CHECK(ov_step(thr, 8, 8, 1) == 0xFFFF && ov_step(thr, 8, 0xFFFF, 1) == 2 &&
 	      ov_step(thr, 8, 2, -1) == 0xFFFF && ov_step(thr, 8, -5, 1) == 2);   /* never negative */
 	CHECK(ov_pct(0, 0) == -1 && ov_pct(1, 0) == 100 && ov_pct(0, 5) == 0 && ov_pct(1, 2) == 33 &&

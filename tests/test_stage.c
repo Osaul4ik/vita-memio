@@ -3032,8 +3032,8 @@ static void test_readahead_auto(void)
 	CHECK(!g_ra_learning && ra_profile_load("VITASHELL", thr, &dev) && thr[0] == 2);
 	vm_stage_fini();
 
-	/* system apps (NPXS*, the home screen "main") are never followed: the
-	 * game stays followed, nothing of theirs counts or is read ahead */
+	/* system apps (NPXS*, the home screen "main") never come to the front:
+	 * the game stays followed, and their reads count for it */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3046,30 +3046,29 @@ static void test_readahead_auto(void)
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0 && g_ra_fg == 0);
 	{
-		VmRaNow now;
+		VmAppNow an;
 
-		vm_stage_ra_now(&now);
-		CHECK(!now.app[0] && !now.title[0]);
-		CHECK(vm_stage_ra_ignore(0) == VM_ERR_NOT_READY);
+		vm_stage_app_now(&an);
+		CHECK(!an.title[0] && an.cur.ra == VM_APP_GLOBAL && an.global.ra == VM_RA_AUTO);
 	}
 	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning);
 	{
-		const uint32_t n = g_ra_hstreams, hits = g_ra_hits;
+		const uint32_t n = g_ra_hstreams;
 
 		as_app(0x48);                              /* the home screen: not in front */
 		CHECK(g_ra_fg == 0x44);
 		streams(u, 5, 8, 256);
 		vm_stage_worker_tick();
 		CHECK(g_ra_pid == 0x44 && g_ra_hstreams >= n);  /* still the game's */
-		(void)hits;
 	}
 	vm_stage_fini();
 
-	/* the overlay's changes: thresholds by hand (now, no longer learnt),
-	 * kept as the app's profile; the app on / off the ignore list */
+	/* the app's own settings (the overlay): in effect at once while it is in
+	 * front, the global ones otherwise; kept only by Save; changes not saved
+	 * dropped when another app comes to the front */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3077,129 +3076,235 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	CHECK(vm_stage_ra_tune(0, 3) == VM_ERR_NOT_READY && vm_stage_ra_save() == VM_ERR_NOT_READY &&
-	      vm_stage_ra_ignore(1) == VM_ERR_NOT_READY && vm_stage_ra_ignore(0) == VM_ERR_NOT_READY);
-	as_app(0x44);
-	streams(u, 1, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(g_ra_learning);
-	CHECK(vm_stage_ra_tune(0, 1) == VM_ERR_ARG && vm_stage_ra_tune(0, 9) == VM_ERR_ARG &&
-	      vm_stage_ra_tune(2, 3) == VM_ERR_ARG && vm_stage_ra_tune(-1, 3) == VM_ERR_ARG &&
-	      vm_stage_ra_tune(0, 0) == VM_ERR_ARG && vm_stage_ra_tune(0, 0xFFFFFFFFu) == VM_ERR_ARG);
-	CHECK(vm_stage_ra_tune(0, 3) == VM_OK && vm_stage_ra_tune(1, VM_RA_NEVER) == VM_OK);
-	CHECK(!g_ra_learning && g_ra_manual && g_ra_thr[0] == 3 && g_ra_thr[1] == RA_THR_NONE);
-	CHECK(ra_threshold(0x44, 0) == 3);                /* used at once */
-	CHECK(!ra_profile_load("PCSB00777", thr, &dev));  /* not kept until saved */
-	CHECK(vm_stage_ra_save() == VM_OK);
 	{
-		VmRaProfile pl[4];
+		VmApp a;
+		VmAppNow an;
 		RaProf pf;
 
-		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_MANUAL && pf.thr[0] == 3 &&
-		      pf.thr[1] == RA_THR_NONE);
-		CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL && pl[0].thr[0] == 3);
-	}
-	/* the game ends and runs again: set by hand, used, not learnt */
-	as_app(0x42);
-	streams(u, RA_SWITCH, 8, 256);
-	vm_stage_worker_tick();
-	as_app(0x43 + 1);                              /* PCSB00777 again (0x44) */
-	streams(u, RA_SWITCH, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_manual && g_ra_thr[0] == 3);
-	/* on the ignore list: no longer followed, its streams not counted */
-	CHECK(vm_stage_ra_ignore(1) == VM_OK);
-	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x44 && !g_ra_skip_sys && !g_ra_title[0]);
-	{
-		RaProf pf;
-		VmRaNow now;
+		ra_app_global(&a);
+		CHECK(vm_stage_app_set(&a) == VM_ERR_NOT_READY && vm_stage_app_save() == VM_ERR_NOT_READY &&
+		      vm_stage_app_relearn() == VM_ERR_NOT_READY);
+		as_app(0x44);
+		vm_stage_worker_tick();                       /* its profile (none): all global */
+		vm_stage_app_now(&an);
+		CHECK(!strcmp(an.title, "PCSB00777") && an.cur.ra == VM_APP_GLOBAL &&
+		      !memcmp(&an.cur, &an.saved, sizeof(an.cur)));
+		/* out of range: refused, nothing changes */
+		a.ra = 3;
+		CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
+		a.ra = -2;
+		CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
+		ra_app_global(&a);
+		a.offload = 5;
+		CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
+		ra_app_global(&a);
+		a.thr[0] = 1;
+		CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
+		a.thr[0] = 9;
+		CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
+		CHECK(g_ra_mode == VM_RA_AUTO && g_offload == VM_OFFLOAD_OFF);
+		/* read ahead On with its thresholds, copy C + NC, no overlapped
+		 * reads: in effect at once, not saved */
+		ra_app_global(&a);
+		a.ra = VM_RA_ON;
+		a.thr[0] = 3;
+		a.thr[1] = VM_RA_NEVER;
+		a.offload = VM_OFFLOAD_ALL;
+		a.pipe = VM_PIPE_OFF;
+		CHECK(vm_stage_app_set(&a) == VM_OK);
+		CHECK(g_ra_mode == VM_RA_ON && g_offload == VM_OFFLOAD_ALL && g_pipeline == VM_PIPE_OFF &&
+		      g_gpu_safe == 0 && !g_ra_measure);       /* GPU-safe: the global one */
+		CHECK(ra_threshold(0x44, 0) == 3 && ra_threshold(0x44, 1) == RA_THR_NONE);
+		vm_stage_app_now(&an);
+		CHECK(an.cur.ra == VM_RA_ON && an.saved.ra == VM_APP_GLOBAL);
+		CHECK(!ra_prof_load("PCSB00777", &pf));       /* not kept until saved */
+		/* Settings changing the global ones meanwhile: the app's stay */
+		s.offload = VM_OFFLOAD_GPU;
+		vm_stage_apply(&s);
+		CHECK(g_offload == VM_OFFLOAD_ALL && g_ra_mode == VM_RA_ON);
+		CHECK(vm_stage_app_save() == VM_OK);
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.ra == VM_RA_ON && pf.app.thr[0] == 3 &&
+		      pf.app.offload == VM_OFFLOAD_ALL && pf.app.pipe == VM_PIPE_OFF &&
+		      pf.app.gpusafe == VM_APP_GLOBAL && !(pf.flags & RA_PF_LEARNT));
+		{
+			VmRaProfile pl[4];
 
-		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == (RA_PF_MANUAL | RA_PF_IGNORE) &&
-		      pf.thr[0] == 3);
-		streams(u, 4, 8, 256);
+			CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL &&
+			      pl[0].thr[0] == 3 && pl[0].thr[1] == VM_RA_NEVER);
+		}
+		/* the home screen: the global ones again */
+		ra_proc_event(0x44, 4);
 		vm_stage_worker_tick();
-		CHECK(g_ra_pid == 0 && g_ra_hstreams == 0);
-		vm_stage_ra_now(&now);
-		CHECK(!strcmp(now.app, "PCSB00777") && now.app_ignored && !now.app_system);
-		CHECK(vm_stage_ra_tune(0, 4) == VM_ERR_NOT_READY);   /* nothing followed */
-		/* off the list: its profile (set by hand) kept; followed again */
-		CHECK(vm_stage_ra_ignore(0) == VM_OK);
-		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_MANUAL);
-		streams(u, 1, 8, 256);
+		CHECK(g_ra_mode == VM_RA_AUTO && g_offload == VM_OFFLOAD_GPU && g_pipeline == VM_PIPE_AUTO);
+		/* back: its own, as saved */
+		as_app(0x44);
 		vm_stage_worker_tick();
-		CHECK(g_ra_pid == 0x44 && g_ra_manual && g_ra_thr[0] == 3);
-	}
-	/* a new app ignored before anything was learnt: only the mark is kept,
-	 * and taken off it is learnt from scratch */
-	as_app(0x46);
-	streams(u, RA_SWITCH, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x46 && g_ra_learning);
-	CHECK(vm_stage_ra_ignore(1) == VM_OK);
-	{
-		RaProf pf;
+		CHECK(g_ra_mode == VM_RA_ON && g_offload == VM_OFFLOAD_ALL && ra_threshold(0x44, 0) == 3);
+		/* a change not saved, then another app: dropped */
+		a.ra = VM_RA_OFF;
+		CHECK(vm_stage_app_set(&a) == VM_OK && g_ra_mode == VM_RA_OFF && !g_readahead);
+		as_app(0x46);
+		vm_stage_worker_tick();
+		CHECK(g_ra_mode == VM_RA_AUTO && g_offload == VM_OFFLOAD_GPU);   /* VITASHELL: global */
+		as_app(0x44);
+		vm_stage_worker_tick();
+		CHECK(g_ra_mode == VM_RA_ON);                 /* as saved, not Off */
+		/* Off for it (as an ignore list): nothing measured or read ahead */
+		a.ra = VM_RA_OFF;
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+		CHECK(!g_readahead && !g_ra_measure);
+		{
+			VmRaProfile pl[4];
 
-		CHECK(ra_prof_load("VITASHELL", &pf) && pf.flags == RA_PF_IGNORE && pf.streams == 0);
-		CHECK(vm_stage_ra_ignore(0) == VM_OK && !ra_prof_load("VITASHELL", &pf));
+			CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_IGNORE);
+		}
+		/* all back to the global ones and saved: no profile left */
+		ra_app_global(&a);
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+		CHECK(!ra_prof_load("PCSB00777", &pf) && g_ra_mode == VM_RA_AUTO);
+		/* deleted in Settings while in front: the global ones at once */
+		a.offload = VM_OFFLOAD_NC;
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+		CHECK(g_offload == VM_OFFLOAD_NC);
+		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);
+		vm_stage_worker_tick();
+		CHECK(g_offload == VM_OFFLOAD_GPU);
+		vm_stage_app_now(&an);
+		CHECK(an.cur.offload == VM_APP_GLOBAL && an.saved.offload == VM_APP_GLOBAL);
 	}
-	/* an ignored app's profile deleted (Settings): no longer ignored */
-	as_app(0x44);
-	streams(u, RA_SWITCH, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x44 && vm_stage_ra_ignore(1) == VM_OK && g_ra_skip_pid == 0x44);
-	CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK && g_ra_skip_pid == 0);
 	vm_stage_fini();
 
-	/* profiles that are not right are never used: Auto learns the app
-	 * again; older versions still load; nothing out of range is written */
+	/* Auto learns an app; its own settings kept with it; learn it again
+	 * forgets only what Auto learnt */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	{
+		VmApp a;
+		RaProf pf;
+
+		as_app(0x44);
+		streams(u, 1, 8, 256);
+		vm_stage_worker_tick();
+		ra_app_global(&a);
+		a.pipe = VM_PIPE_FIXED;
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+		streams(u, RA_LEARN_STREAMS + 1, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(!g_ra_learning && ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_LEARNT) &&
+		      pf.thr[0] == 2 && pf.app.pipe == VM_PIPE_FIXED);
+		CHECK(vm_stage_app_relearn() == VM_OK);
+		vm_stage_worker_tick();
+		CHECK(g_ra_learning && ra_prof_load("PCSB00777", &pf) && !(pf.flags & RA_PF_LEARNT) &&
+		      pf.app.pipe == VM_PIPE_FIXED);
+	}
+	vm_stage_fini();
+
+	/* profiles that are not right are never used: the app has the global
+	 * settings, Auto learns it again; older versions still load (version 3:
+	 * set by hand = On with those, ignored = Off); nothing out of range is
+	 * written */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	{
-		RaProf pf, good = { { 3, RA_THR_NONE }, M, 300, RA_PF_MANUAL };
+		RaProf pf, good;
+		RaProfileV4 v4;
 		RaProfileV3 v3;
 		RaProfileV2 v2;
 		SceUID fd;
 
+		memset(&good, 0, sizeof(good));
+		good.thr[0] = 3;
+		good.thr[1] = RA_THR_NONE;
+		good.dev = M;
+		good.streams = 300;
+		good.flags = RA_PF_LEARNT;
+		ra_app_global(&good.app);
+		good.app.ra = VM_RA_ON;
+		good.app.thr[0] = 4;
 #define WRITE_RAW(p, len) do { \
 		ksceIoMkdir("ur0:data/vita-memio/ra", 0777); \
 		fd = ksceIoOpen("ur0:data/vita-memio/ra/PCSE00009.bin", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666); \
 		ksceIoWrite(fd, (p), (len)); \
 		ksceIoClose(fd); } while (0)
 		ra_prof_save("PCSE00009", &good);
-		CHECK(ra_prof_load("PCSE00009", &pf) && pf.thr[0] == 3 && pf.flags == RA_PF_MANUAL &&
-		      pf.dev == M && pf.streams == 300);
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.thr[0] == 3 && pf.flags == RA_PF_LEARNT &&
+		      pf.dev == M && pf.streams == 300 && pf.app.ra == VM_RA_ON && pf.app.thr[0] == 4 &&
+		      pf.app.offload == VM_APP_GLOBAL);
 		fd = ksceIoOpen("ur0:data/vita-memio/ra/PCSE00009.bin", SCE_O_RDONLY, 0);
-		ksceIoRead(fd, &v3, sizeof(v3));
+		ksceIoRead(fd, &v4, sizeof(v4));
 		ksceIoClose(fd);
 		{
 			struct { uint32_t off, val; } bad[] = {
 				{ 3, 1 }, { 3, 9 }, { 3, 0 }, { 3, 0xFFFFFFFFu },   /* thr[0] */
 				{ 4, 0x80000000u },                                  /* thr[1] */
-				{ 2, 4 }, { 2, 0xFFFFFFFFu },                        /* flags  */
+				{ 2, 1 }, { 2, 8 }, { 2, 0xFFFFFFFFu },              /* flags  */
 				{ 5, RA_STREAMS_MAX + 1 },                           /* streams */
 				{ 6, (uint32_t)-2 }, { 6, VM_DEV_INTERNAL }, { 6, 7 }, /* dev  */
-				{ 1, 4 }, { 1, 0 },                                  /* version */
+				{ 7, 3 }, { 7, (uint32_t)-2 },                       /* read ahead */
+				{ 8, 5 }, { 8, (uint32_t)-7 },                       /* copy   */
+				{ 9, 3 }, { 10, 2 }, { 10, 0x80000000u },            /* overlapped, GPU */
+				{ 11, 1 }, { 12, 9 },                                /* its thresholds */
+				{ 1, 5 }, { 1, 0 },                                  /* version */
 			};
 
 			for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
-				RaProfileV3 b = v3;
+				RaProfileV4 b = v4;
 
 				((uint32_t *)&b)[bad[i].off] = bad[i].val;
-				b.check = ra_profile_check3(&b);          /* even with a right check */
+				b.check = ra_profile_check4(&b);          /* even with a right check */
 				WRITE_RAW(&b, sizeof(b));
 				CHECK(!ra_prof_load("PCSE00009", &pf));
 			}
-			v3.check ^= 1;                                /* a wrong check */
-			WRITE_RAW(&v3, sizeof(v3));
+			{
+				RaProfileV4 b = v4;                       /* not learnt, yet learnt values */
+
+				b.flags = 0;
+				b.check = ra_profile_check4(&b);
+				WRITE_RAW(&b, sizeof(b));
+				CHECK(!ra_prof_load("PCSE00009", &pf));
+			}
+			v4.check ^= 1;                                /* a wrong check */
+			WRITE_RAW(&v4, sizeof(v4));
 			CHECK(!ra_prof_load("PCSE00009", &pf));
-			v3.check ^= 1;
-			WRITE_RAW(&v3, sizeof(v3) - 4);               /* cut short */
+			v4.check ^= 1;
+			WRITE_RAW(&v4, sizeof(v4) - 4);               /* cut short */
 			CHECK(!ra_prof_load("PCSE00009", &pf));
 			WRITE_RAW("garbage", 7);
 			CHECK(!ra_prof_load("PCSE00009", &pf));
 			WRITE_RAW("", 0);
 			CHECK(!ra_prof_load("PCSE00009", &pf));
 		}
+		/* version 3: learnt, set by hand (On), ignored (Off) */
+		memset(&v3, 0, sizeof(v3));
+		v3.magic = RA_PROFILE_MAGIC;
+		v3.version = 3;
+		v3.thr[0] = 3;
+		v3.thr[1] = RA_THR_NONE;
+		v3.streams = 300;
+		v3.dev = M;
+		v3.check = ra_profile_check3(&v3);
+		WRITE_RAW(&v3, sizeof(v3));
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.flags == RA_PF_LEARNT && pf.thr[0] == 3 &&
+		      pf.app.ra == VM_APP_GLOBAL);
+		v3.flags = RA_V3_MANUAL;
+		v3.check = ra_profile_check3(&v3);
+		WRITE_RAW(&v3, sizeof(v3));
+		CHECK(ra_prof_load("PCSE00009", &pf) && !(pf.flags & RA_PF_LEARNT) &&
+		      pf.app.ra == VM_RA_ON && pf.app.thr[0] == 3 && pf.app.thr[1] == RA_THR_NONE);
+		v3.flags = RA_V3_IGNORE;
+		v3.streams = 0;
+		v3.check = ra_profile_check3(&v3);
+		WRITE_RAW(&v3, sizeof(v3));
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.app.ra == VM_RA_OFF && !(pf.flags & RA_PF_LEARNT));
+		v3.flags = 4;
+		v3.check = ra_profile_check3(&v3);
+		WRITE_RAW(&v3, sizeof(v3));
+		CHECK(!ra_prof_load("PCSE00009", &pf));
 		/* version 2 and 1 */
 		memset(&v2, 0, sizeof(v2));
 		v2.magic = RA_PROFILE_MAGIC;
@@ -3212,7 +3317,7 @@ static void test_readahead_auto(void)
 		v2.check2 = ra_profile_check2(&v2);
 		WRITE_RAW(&v2, sizeof(v2));
 		CHECK(ra_prof_load("PCSE00009", &pf) && pf.thr[0] == 4 && pf.thr[1] == 6 &&
-		      pf.dev == VM_DEV_SD2VITA && pf.flags == 0);
+		      pf.dev == VM_DEV_SD2VITA && pf.flags == RA_PF_LEARNT && pf.app.ra == VM_APP_GLOBAL);
 		v2.dev = -5;
 		v2.check2 = ra_profile_check2(&v2);
 		WRITE_RAW(&v2, sizeof(v2));
@@ -3234,6 +3339,12 @@ static void test_readahead_auto(void)
 			ra_prof_save("PCSE00009", &w);
 			w = good;
 			w.flags = 8;
+			ra_prof_save("PCSE00009", &w);
+			w = good;
+			w.app.pipe = 7;
+			ra_prof_save("PCSE00009", &w);
+			w = good;
+			w.app.thr[1] = 1;
 			ra_prof_save("PCSE00009", &w);
 			CHECK(!ra_prof_load("PCSE00009", &pf));
 		}

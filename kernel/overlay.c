@@ -45,6 +45,7 @@ static int            g_installed;
 static OvLogic        g_ov;
 static volatile int   g_lock;
 static uint32_t       g_look_us;        /* closed: the last look (atomic)      */
+static uint32_t       g_mask = OV_MASK_ALL;   /* the items shown (the worker's) */
 static void (*volatile g_wake)(void);
 
 /* The buttons of the newest buffer seen, through the logic; then, if the
@@ -75,7 +76,7 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 		changed = 0;
 		hide = __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) == OV_MENU;
 	} else {
-		changed = ov_input(&g_ov, b, now);
+		changed = ov_input(&g_ov, b, now, __atomic_load_n(&g_mask, __ATOMIC_RELAXED));
 		hide = g_ov.state == OV_MENU;
 		__sync_lock_release(&g_lock);
 	}
@@ -165,6 +166,11 @@ int vm_overlay_state(void)
 int vm_overlay_cursor(void)
 {
 	return __atomic_load_n(&g_ov.cursor, __ATOMIC_RELAXED);
+}
+
+void vm_overlay_set_mask(uint32_t mask)
+{
+	__atomic_store_n(&g_mask, mask, __ATOMIC_RELAXED);
 }
 
 uint32_t vm_overlay_take_op(void)

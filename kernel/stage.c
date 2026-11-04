@@ -1406,13 +1406,6 @@ static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
 static uint32_t g_ra_seen_n;              /* g_ra_seen's streams so far       */
-/* An app Auto ignores (a system app, or one put on its ignore list) that read
- * a stream: not followed, its streams not counted; kept to show it in the
- * overlay (g_ra_skip_last: it read last, after the game followed). */
-static SceUID   g_ra_skip_pid;
-static char     g_ra_skip_title[16];
-static int      g_ra_skip_sys, g_ra_skip_last;
-static int      g_ra_manual;              /* the game's thresholds: set by hand */
 static int      g_ra_paused;              /* worker: see ra_auto_stop           */
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
@@ -1436,6 +1429,9 @@ static char           g_fg_title[16];       /* its title id ("" none / not known
 static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
 static SceUID         g_ra_exited;          /* atomic: the game followed has exited */
 static uint32_t       g_fg_noid;            /* atomic: processes with no title id (log) */
+static void eff_update(void);
+static SceUID g_app_pid;
+static VmApp  g_app_cur;
 
 /* A stream of `pid` has ended: L reads. */
 /* The worker, now (from a request: only a semaphore signal, and rarely). */
@@ -1510,21 +1506,25 @@ static uint32_t ra_choose(const uint32_t *cnt)
 	return best_t;
 }
 
-/* A profile, as used (always validated):
- *   thr      reads in a row before read ahead starts, cached / non-cacheable:
- *            2..8, or RA_THR_NONE (never)
- *   dev      the game's storage (VM_DEV_SD2VITA / VM_DEV_MEMCARD), -1 not known
- *   streams  what it was learnt from (0: set by hand, or only ignored)
- *   flags    RA_PF_MANUAL: set by hand in the overlay (Auto does not learn it
- *            again); RA_PF_IGNORE: Auto ignores this app (not followed, nothing
- *            read ahead for it in Auto)
- * On the card: version 3, 8 words with a check word; versions 1 and 2 (no
- * flags; 1: no dev) still load. Anything else - another size, an unknown
- * flag, a value out of range, a wrong check - is not used at all: Auto then
- * learns the app again and the file is replaced. */
-#define RA_PF_MANUAL      0x1u
-#define RA_PF_IGNORE      0x2u
-#define RA_PF_KNOWN       (RA_PF_MANUAL | RA_PF_IGNORE)
+/* An app's profile, as used (always validated):
+ *   app      its own settings (VmApp): read ahead, copy on core 3,
+ *            overlapped reads, GPU-safe reads (-1: the global one, from
+ *            Settings), and its thresholds with read ahead On (0: the fixed)
+ *   flags    RA_PF_LEARNT: Auto has learnt it - then:
+ *   thr      reads in a row before read ahead starts in Auto, cached /
+ *            non-cacheable: 2..8, or RA_THR_NONE (never)
+ *   dev      the app's storage (VM_DEV_SD2VITA / VM_DEV_MEMCARD), -1 not known
+ *   streams  what it was learnt from
+ * On the card: version 4, 14 words with a check word. Versions 1 and 2 (a
+ * learnt profile; 1: no dev) and 3 (set by hand: read ahead On with those
+ * thresholds; ignored: read ahead Off) still load. Anything else - another
+ * size, an unknown flag, a value out of range, a wrong check - is not used at
+ * all: the app then has the global settings, Auto learns it again, and the
+ * file is replaced. */
+#define RA_PF_LEARNT      0x4u
+#define RA_PF_KNOWN       RA_PF_LEARNT
+#define RA_V3_MANUAL      0x1u            /* version 3's flags */
+#define RA_V3_IGNORE      0x2u
 #define RA_STREAMS_MAX    1000000u
 
 typedef struct RaProf {
@@ -1532,6 +1532,7 @@ typedef struct RaProf {
 	int32_t  dev;
 	uint32_t streams;
 	uint32_t flags;
+	VmApp    app;
 } RaProf;
 
 /* version 1 and 2 (read only) */
@@ -1542,12 +1543,20 @@ typedef struct RaProfileV2 {
 } RaProfileV2;
 #define RA_PROFILE_V1_SIZE (6 * 4)
 
-/* version 3 */
+/* version 3 (read only) */
 typedef struct RaProfileV3 {
 	uint32_t magic, version, flags, thr[2], streams;
 	int32_t  dev;
 	uint32_t check;
 } RaProfileV3;
+
+/* version 4 */
+typedef struct RaProfileV4 {
+	uint32_t magic, version, flags, thr[2], streams;
+	int32_t  dev, ra, offload, pipe, gpusafe;
+	uint32_t thr_on[2];
+	uint32_t check;
+} RaProfileV4;
 
 static uint32_t ra_profile_check(const RaProfileV2 *p)
 {
@@ -1560,14 +1569,23 @@ static uint32_t ra_profile_check2(const RaProfileV2 *p)
 	return ra_profile_check(p) ^ ((uint32_t)p->dev * 2246822519u) ^ 0xC3C3C3C3u;
 }
 
-static uint32_t ra_profile_check3(const RaProfileV3 *p)
+static uint32_t ra_words_check(const uint32_t *w, int n)
 {
-	const uint32_t *w = (const uint32_t *)p;
 	uint32_t c = 0x811C9DC5u;
 
-	for (int i = 0; i < 7; i++)
+	for (int i = 0; i < n; i++)
 		c = (c ^ w[i]) * 16777619u;
 	return c ^ 0xA5C3A5C3u;
+}
+
+static uint32_t ra_profile_check3(const RaProfileV3 *p)
+{
+	return ra_words_check((const uint32_t *)p, 7);
+}
+
+static uint32_t ra_profile_check4(const RaProfileV4 *p)
+{
+	return ra_words_check((const uint32_t *)p, 13);
 }
 
 static void ra_profile_path(char *out, size_t n, const char *title)
@@ -1580,6 +1598,28 @@ static int ra_thr_ok(uint32_t t)
 	return t == RA_THR_NONE || (t >= 2 && t <= 8);
 }
 
+/* An app's own settings, every one -1 (global) or a value of its setting;
+ * thresholds 0 (the fixed) or 2..8 / never. */
+static int ra_app_ok(const VmApp *a)
+{
+	return a->ra >= -1 && a->ra <= VM_RA_AUTO && a->offload >= -1 &&
+	       a->offload <= VM_OFFLOAD_NC && a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
+	       a->gpusafe >= -1 && a->gpusafe <= 1 &&
+	       (!a->thr[0] || ra_thr_ok(a->thr[0])) && (!a->thr[1] || ra_thr_ok(a->thr[1]));
+}
+
+static void ra_app_global(VmApp *a)
+{
+	a->ra = a->offload = a->pipe = a->gpusafe = -1;
+	a->thr[0] = a->thr[1] = 0;
+}
+
+static int ra_app_set_any(const VmApp *a)
+{
+	return a->ra >= 0 || a->offload >= 0 || a->pipe >= 0 || a->gpusafe >= 0 || a->thr[0] ||
+	       a->thr[1];
+}
+
 /* 1 and the profile if the app has a usable one. */
 static int ra_prof_load(const char *title, RaProf *out)
 {
@@ -1587,7 +1627,8 @@ static int ra_prof_load(const char *title, RaProf *out)
 	union {
 		RaProfileV2 v2;
 		RaProfileV3 v3;
-		uint8_t     raw[64];
+		RaProfileV4 v4;
+		uint8_t     raw[96];
 	} f;
 	RaProf p;
 	SceUID fd;
@@ -1603,21 +1644,51 @@ static int ra_prof_load(const char *title, RaProf *out)
 	if (n <= 0 || f.v2.magic != RA_PROFILE_MAGIC)
 		return 0;
 	memset(&p, 0, sizeof(p));
-	if (f.v3.version == 3) {
-		if (n != (int)sizeof(f.v3) || f.v3.check != ra_profile_check3(&f.v3) ||
-		    (f.v3.flags & ~RA_PF_KNOWN))
+	ra_app_global(&p.app);
+	if (f.v4.version == 4) {
+		if (n != (int)sizeof(f.v4) || f.v4.check != ra_profile_check4(&f.v4) ||
+		    (f.v4.flags & ~RA_PF_KNOWN))
 			return 0;
-		p.thr[0] = f.v3.thr[0];
-		p.thr[1] = f.v3.thr[1];
+		p.flags = f.v4.flags;
+		p.thr[0] = f.v4.thr[0];
+		p.thr[1] = f.v4.thr[1];
+		p.dev = f.v4.dev;
+		p.streams = f.v4.streams;
+		p.app.ra = f.v4.ra;
+		p.app.offload = f.v4.offload;
+		p.app.pipe = f.v4.pipe;
+		p.app.gpusafe = f.v4.gpusafe;
+		p.app.thr[0] = f.v4.thr_on[0];
+		p.app.thr[1] = f.v4.thr_on[1];
+		if (!(p.flags & RA_PF_LEARNT) && (p.thr[0] || p.thr[1] || p.streams))
+			return 0;                         /* nothing learnt: none of it set */
+	} else if (f.v3.version == 3) {
+		if (n != (int)sizeof(f.v3) || f.v3.check != ra_profile_check3(&f.v3) ||
+		    (f.v3.flags & ~(RA_V3_MANUAL | RA_V3_IGNORE)))
+			return 0;
 		p.dev = f.v3.dev;
-		p.streams = f.v3.streams;
-		p.flags = f.v3.flags;
+		if (f.v3.flags & RA_V3_IGNORE) {
+			p.app.ra = VM_RA_OFF;             /* ignored: read ahead Off for it */
+		} else if (f.v3.flags & RA_V3_MANUAL) {
+			p.app.ra = VM_RA_ON;              /* set by hand: On, its thresholds */
+			p.app.thr[0] = f.v3.thr[0];
+			p.app.thr[1] = f.v3.thr[1];
+		}
+		if (!(f.v3.flags & RA_V3_MANUAL) && f.v3.streams) {
+			p.flags = RA_PF_LEARNT;
+			p.thr[0] = f.v3.thr[0];
+			p.thr[1] = f.v3.thr[1];
+			p.streams = f.v3.streams;
+		}
+		if (!ra_thr_ok(f.v3.thr[0]) || !ra_thr_ok(f.v3.thr[1]))
+			return 0;
 	} else if (f.v2.version == 1 || f.v2.version == 2) {
 		if (f.v2.check != ra_profile_check(&f.v2))
 			return 0;
 		if (f.v2.version == 1 ? n != RA_PROFILE_V1_SIZE
 		                      : n != (int)sizeof(f.v2) || f.v2.check2 != ra_profile_check2(&f.v2))
 			return 0;
+		p.flags = RA_PF_LEARNT;
 		p.thr[0] = f.v2.thr[0];
 		p.thr[1] = f.v2.thr[1];
 		p.dev = f.v2.version == 1 ? -1 : f.v2.dev;
@@ -1625,7 +1696,8 @@ static int ra_prof_load(const char *title, RaProf *out)
 	} else {
 		return 0;
 	}
-	if (!ra_thr_ok(p.thr[0]) || !ra_thr_ok(p.thr[1]) || p.streams > RA_STREAMS_MAX ||
+	if (((p.flags & RA_PF_LEARNT) && (!ra_thr_ok(p.thr[0]) || !ra_thr_ok(p.thr[1]))) ||
+	    p.streams > RA_STREAMS_MAX || !ra_app_ok(&p.app) ||
 	    (p.dev != -1 && p.dev != VM_DEV_SD2VITA && p.dev != VM_DEV_MEMCARD))
 		return 0;
 	*out = p;
@@ -1635,42 +1707,51 @@ static int ra_prof_load(const char *title, RaProf *out)
 static void ra_prof_save(const char *title, const RaProf *in)
 {
 	char path[96];
-	RaProfileV3 p;
+	RaProfileV4 p;
 	SceUID fd;
 
 	/* nothing out of range is ever written */
-	if (!ra_thr_ok(in->thr[0]) || !ra_thr_ok(in->thr[1]) || (in->flags & ~RA_PF_KNOWN) ||
+	if ((in->flags & ~RA_PF_KNOWN) || !ra_app_ok(&in->app) ||
+	    ((in->flags & RA_PF_LEARNT) && (!ra_thr_ok(in->thr[0]) || !ra_thr_ok(in->thr[1]))) ||
 	    (in->dev != -1 && in->dev != VM_DEV_SD2VITA && in->dev != VM_DEV_MEMCARD))
 		return;
 	ra_profile_path(path, sizeof(path), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
-	p.version = 3;
+	p.version = 4;
 	p.flags = in->flags;
-	p.thr[0] = in->thr[0];
-	p.thr[1] = in->thr[1];
-	p.streams = in->streams > RA_STREAMS_MAX ? RA_STREAMS_MAX : in->streams;
+	if (in->flags & RA_PF_LEARNT) {
+		p.thr[0] = in->thr[0];
+		p.thr[1] = in->thr[1];
+		p.streams = in->streams > RA_STREAMS_MAX ? RA_STREAMS_MAX : in->streams;
+	}
 	p.dev = in->dev;
-	p.check = ra_profile_check3(&p);
+	p.ra = in->app.ra;
+	p.offload = in->app.offload;
+	p.pipe = in->app.pipe;
+	p.gpusafe = in->app.gpusafe;
+	p.thr_on[0] = in->app.thr[0];
+	p.thr_on[1] = in->app.thr[1];
+	p.check = ra_profile_check4(&p);
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(VM_DATA_DIR, 0777);
 	ksceIoMkdir(RA_PROFILE_DIR, 0777);
 	fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	if (fd < 0) {
-		VM_KLOGW("stage: read ahead profile for %s not saved (0x%08x)", title, (unsigned)fd);
+		VM_KLOGW("stage: profile for %s not saved (0x%08x)", title, (unsigned)fd);
 		return;
 	}
 	if (ksceIoWrite(fd, &p, sizeof(p)) != (int)sizeof(p))
-		VM_KLOGW("stage: read ahead profile for %s not saved (short write)", title);
+		VM_KLOGW("stage: profile for %s not saved (short write)", title);
 	ksceIoClose(fd);
 }
 
-/* The older call shapes: a learnt profile (no flags). */
+/* What Auto learnt, if it has (1). */
 static inline int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 {
 	RaProf p;
 
-	if (!ra_prof_load(title, &p))
+	if (!ra_prof_load(title, &p) || !(p.flags & RA_PF_LEARNT))
 		return 0;
 	thr[0] = p.thr[0];
 	thr[1] = p.thr[1];
@@ -1678,10 +1759,20 @@ static inline int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 	return 1;
 }
 
+/* What Auto learnt, kept with the app's own settings (if it has a profile). */
 static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams, int dev)
 {
-	const RaProf p = { { thr[0], thr[1] }, dev, streams, 0 };
+	RaProf p;
 
+	if (!ra_prof_load(title, &p)) {
+		memset(&p, 0, sizeof(p));
+		ra_app_global(&p.app);
+	}
+	p.flags |= RA_PF_LEARNT;
+	p.thr[0] = thr[0];
+	p.thr[1] = thr[1];
+	p.streams = streams;
+	p.dev = dev;
 	ra_prof_save(title, &p);
 }
 
@@ -1859,19 +1950,17 @@ static void ra_auto_begin(void)
 	uint32_t thr[2] = { 0, 0 };
 	RaProf pf;
 
-	if (ra_prof_load(g_ra_title, &pf)) {
+	if (ra_prof_load(g_ra_title, &pf) && (pf.flags & RA_PF_LEARNT)) {
 		char a[8], b[8];
 
 		thr[0] = pf.thr[0];
 		thr[1] = pf.thr[1];
 		ra_thr_text(a, sizeof(a), thr[0]);
 		ra_thr_text(b, sizeof(b), thr[1]);
-		VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d "
-		         "(%s)", g_ra_title, a, b, (int)pf.dev,
-		         (pf.flags & RA_PF_MANUAL) ? "set by hand" : "kept");
+		VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d (kept)",
+		         g_ra_title, a, b, (int)pf.dev);
 		if (pf.dev >= 0)
 			ST(g_ra_dev, pf.dev);
-		ST(g_ra_manual, (pf.flags & RA_PF_MANUAL) ? 1 : 0);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 	} else {
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
@@ -1935,7 +2024,6 @@ static void ra_auto_tick(void)
 		ST(g_ra_dev, -1);
 		ra_dev_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
-		ST(g_ra_manual, 0);
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
@@ -1944,25 +2032,10 @@ static void ra_auto_tick(void)
 	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
 		char t[32];
-		RaProf pf;
 
-		/* an app Auto ignores: the game followed stays; this one is noted */
 		memset(t, 0, sizeof(t));
-		if (g_title_fn(seen, t, sizeof(t) - 1) >= 0 && ra_title_ok(t) &&
-		    (ra_title_system(t) || (ra_prof_load(t, &pf) && (pf.flags & RA_PF_IGNORE)))) {
-			memcpy(g_ra_skip_title, t, sizeof(g_ra_skip_title) - 1);
-			g_ra_skip_title[sizeof(g_ra_skip_title) - 1] = 0;
-			ST(g_ra_skip_sys, ra_title_system(t));
-			__atomic_store_n(&g_ra_skip_pid, seen, __ATOMIC_RELEASE);
-			__atomic_store_n(&g_ra_skip_last, 1, __ATOMIC_RELAXED);
-			__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
-			__atomic_store_n(&g_ra_seen, __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE),
-			                 __ATOMIC_RELEASE);
-			return;
-		}
+		g_title_fn(seen, t, sizeof(t) - 1);
 		ra_game_end();                        /* the last game has ended */
-		__atomic_store_n(&g_ra_skip_last, 0, __ATOMIC_RELAXED);
-		ST(g_ra_manual, 0);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		ra_hist_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
@@ -2060,11 +2133,6 @@ static void ra_auto_stop(void)
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
 	g_ra_title[0] = 0;
-	ST(g_ra_manual, 0);
-	__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);
-	g_ra_skip_title[0] = 0;
-	ST(g_ra_skip_sys, 0);
-	ST(g_ra_skip_last, 0);
 }
 
 /* The game followed is gone (it exited): what it learnt is kept if enough
@@ -2078,7 +2146,6 @@ static void ra_game_forget(void)
 	ST(g_ra_dev, -1);
 	ra_dev_clear();
 	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
-	ST(g_ra_manual, 0);
 	g_ra_stats_written = 0xFFFFFFFFu;
 	__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
@@ -2116,14 +2183,19 @@ static void ra_proc_event(SceUID pid, int ev)
 			g_fg_title[sizeof(g_fg_title) - 1] = 0;
 		}
 		__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
-		if (pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) && LD(g_ra_measure))
+		if (pid != fg) {
+			eff_update();                     /* the global settings until its own load */
 			ra_wake();
+		}
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
 
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
-		                                __ATOMIC_RELAXED))
+		                                __ATOMIC_RELAXED)) {
 			g_fg_title[0] = 0;
+			eff_update();                     /* the global settings again */
+			ra_wake();
+		}
 		if (ev == 3 && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_ra_exited, pid, __ATOMIC_RELEASE);
 			ra_wake();
@@ -2155,6 +2227,15 @@ static uint32_t ra_threshold(SceUID pid, int nc)
 	const uint32_t base = nc ? RA_STREAK_NC : RA_STREAK;
 	uint32_t t;
 
+	/* On: the app in front's own thresholds, if it has them */
+	if (LD(g_ra_mode) == VM_RA_ON) {
+		const SceUID app = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE);
+
+		if (app && app == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) &&
+		    (t = __atomic_load_n(&g_app_cur.thr[nc], __ATOMIC_RELAXED)) != 0)
+			return t;
+		return base;
+	}
 	if (LD(g_ra_mode) != VM_RA_AUTO || !pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
 		return base;
 	t = __atomic_load_n(&g_ra_thr[nc], __ATOMIC_RELAXED);
@@ -2453,14 +2534,8 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 
 			if (pid) {
 				d->ra_pid = pid;
-				if (pid == __atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE)) {
-					/* an app Auto ignores: nothing of it counts */
-					__atomic_store_n(&g_ra_skip_last, 1, __ATOMIC_RELAXED);
-					d->ra_pid = 0;
-				} else if (pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
-					__atomic_store_n(&g_ra_skip_last, 0, __ATOMIC_RELAXED);
+				if (pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
 					ra_dev_add((int)(d - g_dev), n);
-				}
 				/* else: in front, not followed yet - the worker was woken */
 			}
 		}
@@ -3291,14 +3366,81 @@ void vm_stage_fini(void)
 	}
 }
 
+/* ---- the settings in effect: the global ones, or the app in front's -------
+ *
+ * Settings sets the global ones; the app in front may have its own (the
+ * overlay; its profile): read ahead, copy on core 3, overlapped reads,
+ * GPU-safe reads, and its thresholds with read ahead On. What every request
+ * uses (g_ra_mode, g_offload, g_pipeline, g_gpu_safe, ...) is put in effect
+ * here from both, whenever either changes or another app comes to the front
+ * (the worker loads its profile then; changes not saved are dropped). */
+static volatile int g_glob_ra, g_glob_offload, g_glob_pipe, g_glob_gpu = 1, g_glob_full;
+/* g_app_cur: declared above; set to the global ones at init (app_load) */
+static VmApp        g_app_saved = { -1, -1, -1, -1, { 0, 0 } };
+static int          g_app_learnt;           /* worker: Auto has learnt it        */
+/* g_app_pid: whose they are (atomic), declared above */
+static char         g_app_title[16];
+static volatile int g_app_reload;           /* its profile changed (Settings)    */
+static volatile int g_eff_lock;
+
+static void eff_lock(void)
+{
+	while (__sync_lock_test_and_set(&g_eff_lock, 1))
+		ksceKernelDelayThread(100);
+}
+
+/* Put the settings in effect. Any thread. */
+static void eff_update(void)
+{
+	VmApp a;
+	int needed, pipeline, offload, gpusafe, ra;
+
+	eff_lock();
+	if (__atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
+	    __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE))
+		a = g_app_cur;
+	else
+		ra_app_global(&a);
+	needed = LD(g_pipeline) || LD(g_offload) || LD(g_readahead);   /* the helper */
+	pipeline = a.pipe >= 0 ? a.pipe : LD(g_glob_pipe);
+	offload = a.offload >= 0 ? a.offload : LD(g_glob_offload);
+	gpusafe = a.gpusafe >= 0 ? a.gpusafe : LD(g_glob_gpu);
+	ra = a.ra >= 0 ? a.ra : LD(g_glob_ra);
+	ST(g_gpu_safe, gpusafe ? 1 : 0);
+	if (pipeline != LD(g_pipeline))
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			ST(g_dev[i].est_cp_ns[0], 0u);    /* measured afresh */
+			ST(g_dev[i].est_cp_ns[1], 0u);
+		}
+	ST(g_pipeline, pipeline);
+	if (offload != LD(g_offload) || !ra != !LD(g_readahead))
+		ST(g_nc_off_refused, 0);                  /* checked afresh */
+	if (offload != LD(g_offload)) {
+		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
+		ST(g_offload_logged, 0);
+		__atomic_store_n(&g_ncd_state, 0, __ATOMIC_RELEASE);
+		ST(g_ncd_logged, 0);
+	}
+	ST(g_offload, offload);
+	if (!ra != !LD(g_readahead))
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
+	ST(g_ra_mode, ra);
+	ST(g_readahead, ra != VM_RA_OFF ? 1 : 0);
+	/* follow the app: for Auto, and for Full statistics (which only
+	 * collects and writes; it starts nothing of read ahead's own) */
+	ST(g_ra_measure, ra == VM_RA_AUTO || LD(g_glob_full) ? 1 : 0);
+	/* The helper (and copier) wanted again after no setting wanted it: a
+	 * fresh try at making them, whichever setting was switched on. */
+	if (!needed && (pipeline || offload || ra))
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			ST(g_dev[i].pipe_failed, 0);
+	__sync_lock_release(&g_eff_lock);
+}
+
 void vm_stage_apply(const VmSettings *s)
 {
 	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
-	const int needed = LD(g_pipeline) || LD(g_offload) || LD(g_readahead);   /* the helper */
-	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
-	                   ? s->pipeline : VM_PIPE_OFF;
-	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_NC
-	                  ? s->offload : VM_OFFLOAD_OFF;
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];
@@ -3315,42 +3457,147 @@ void vm_stage_apply(const VmSettings *s)
 	}
 	ST(g_min_sectors, s->small ? 1u : (uint32_t)MIN_SECTORS);
 	ST(g_stats, s->stats ? 1 : 0);
-	ST(g_gpu_safe, s->gpusafe ? 1 : 0);
-	if (pipeline != LD(g_pipeline))
-		for (int i = 0; i < VM_DEV_COUNT; i++) {
-			ST(g_dev[i].est_cp_ns[0], 0u);    /* measured afresh */
-			ST(g_dev[i].est_cp_ns[1], 0u);
-		}
-	ST(g_pipeline, pipeline);
 	ST(g_count_all, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
-	if (offload != LD(g_offload) || !s->readahead != !LD(g_readahead))
-		ST(g_nc_off_refused, 0);                  /* checked afresh */
-	if (offload != LD(g_offload)) {
-		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
-		ST(g_offload_logged, 0);
-		__atomic_store_n(&g_ncd_state, 0, __ATOMIC_RELEASE);
-		ST(g_ncd_logged, 0);
-	}
-	ST(g_offload, offload);
-	if (!s->readahead != !LD(g_readahead))
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
-	ST(g_ra_mode, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
-	                                                                    : VM_RA_OFF);
-	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
-	/* follow the game: for Auto, and for Statistics (which only collects
-	 * and writes; it starts nothing of read ahead's own) */
 	ST(g_ra_stats, s->stats == VM_STATS_FULL ? 1 : 0);
-	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats == VM_STATS_FULL ? 1 : 0);
-	/* The helper (and copier) wanted again after no setting wanted it: a
-	 * fresh try at making them, whichever setting was switched on. */
-	if (!needed && (pipeline || offload || LD(g_readahead)))
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			ST(g_dev[i].pipe_failed, 0);
+	/* the global ones, then what is in effect */
+	ST(g_glob_gpu, s->gpusafe ? 1 : 0);
+	ST(g_glob_pipe, s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
+	                                                                         : VM_PIPE_OFF);
+	ST(g_glob_offload, s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_NC
+	                   ? s->offload : VM_OFFLOAD_OFF);
+	ST(g_glob_ra, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
+	                                                                    : VM_RA_OFF);
+	ST(g_glob_full, s->stats == VM_STATS_FULL ? 1 : 0);
+	eff_update();
 	if (!s->verify)
 		ST(g_shadow_failed, 0);   /* turning verify off and on again retries the buffer */
+}
+
+/* The app in front's own settings, from its profile (worker thread; fg 0:
+ * none). Changes not saved for the one before are dropped. */
+static void app_load(SceUID fg)
+{
+	RaProf pf;
+
+	eff_lock();
+	ra_app_global(&g_app_cur);
+	g_app_learnt = 0;
+	g_app_title[0] = 0;
+	if (fg) {
+		memcpy(g_app_title, g_fg_title, sizeof(g_app_title) - 1);
+		g_app_title[sizeof(g_app_title) - 1] = 0;
+	}
+	__sync_lock_release(&g_eff_lock);
+	if (fg && g_app_title[0] && ra_prof_load(g_app_title, &pf)) {
+		eff_lock();
+		g_app_cur = pf.app;
+		g_app_learnt = (pf.flags & RA_PF_LEARNT) ? 1 : 0;
+		__sync_lock_release(&g_eff_lock);
+		if (ra_app_set_any(&pf.app))
+			VM_KLOGI("stage: %s - its own settings (read ahead %d, copy %d, overlapped %d, "
+			         "GPU-safe %d, start after %u / %u)", g_app_title, (int)pf.app.ra,
+			         (int)pf.app.offload, (int)pf.app.pipe, (int)pf.app.gpusafe,
+			         (unsigned)pf.app.thr[0], (unsigned)pf.app.thr[1]);
+	}
+	g_app_saved = g_app_cur;
+	__atomic_store_n(&g_app_pid, fg, __ATOMIC_RELEASE);
+	eff_update();
+}
+
+void vm_stage_app_now(VmAppNow *o)
+{
+	memset(o, 0, sizeof(*o));
+	eff_lock();
+	if (__atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
+	    __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
+		memcpy(o->title, g_app_title, sizeof(o->title) - 1);
+		o->cur = g_app_cur;
+		o->saved = g_app_saved;
+		o->learnt = g_app_learnt;
+	} else {
+		ra_app_global(&o->cur);
+		ra_app_global(&o->saved);
+	}
+	__sync_lock_release(&g_eff_lock);
+	o->global.ra = LD(g_glob_ra);
+	o->global.offload = LD(g_glob_offload);
+	o->global.pipe = LD(g_glob_pipe);
+	o->global.gpusafe = LD(g_glob_gpu);
+}
+
+static int app_in_front(void)
+{
+	const SceUID pid = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE);
+
+	return pid && pid == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) && g_app_title[0];
+}
+
+int vm_stage_app_set(const VmApp *a)
+{
+	if (!a || !ra_app_ok(a))
+		return VM_ERR_ARG;
+	if (!app_in_front())
+		return VM_ERR_NOT_READY;
+	eff_lock();
+	g_app_cur = *a;
+	__sync_lock_release(&g_eff_lock);
+	eff_update();
+	return VM_OK;
+}
+
+int vm_stage_app_save(void)
+{
+	char path[96];
+	RaProf pf;
+
+	if (!app_in_front())
+		return VM_ERR_NOT_READY;
+	if (!ra_prof_load(g_app_title, &pf)) {
+		memset(&pf, 0, sizeof(pf));
+		pf.dev = -1;
+	}
+	pf.app = g_app_cur;
+	if (!ra_app_set_any(&pf.app) && !(pf.flags & RA_PF_LEARNT)) {
+		/* all global, nothing learnt: no profile at all */
+		ra_profile_path(path, sizeof(path), g_app_title);
+		ksceIoRemove(path);
+	} else {
+		ra_prof_save(g_app_title, &pf);
+		if (!ra_prof_load(g_app_title, &pf))
+			return VM_ERR_IO;
+	}
+	g_app_saved = g_app_cur;
+	VM_KLOGI("stage: %s - its settings saved", g_app_title);
+	return VM_OK;
+}
+
+int vm_stage_app_relearn(void)
+{
+	char path[96];
+	RaProf pf;
+
+	if (!app_in_front())
+		return VM_ERR_NOT_READY;
+	if (ra_prof_load(g_app_title, &pf) && (pf.flags & RA_PF_LEARNT)) {
+		pf.flags &= ~RA_PF_LEARNT;
+		pf.thr[0] = pf.thr[1] = 0;
+		pf.streams = 0;
+		if (ra_app_set_any(&pf.app)) {
+			ra_prof_save(g_app_title, &pf);
+		} else {
+			ra_profile_path(path, sizeof(path), g_app_title);
+			ksceIoRemove(path);
+		}
+	}
+	g_app_learnt = 0;
+	/* followed by Auto now: learnt again from nothing */
+	if (!strncmp(g_app_title, g_ra_title, sizeof(g_app_title))) {
+		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);
+		ra_wake();
+	}
+	return VM_OK;
 }
 
 void vm_stage_on_problem(void (*fn)(void))
@@ -3451,6 +3698,14 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
 		}
 	}
+	/* the app in front's own settings, when it changes (or its profile did) */
+	{
+		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+		if (fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) ||
+		    __atomic_exchange_n(&g_app_reload, 0, __ATOMIC_ACQ_REL))
+			app_load(fg);
+	}
 	/* the game followed has exited: kept if learnt enough, then gone */
 	{
 		const SceUID ex = __atomic_exchange_n(&g_ra_exited, 0, __ATOMIC_ACQ_REL);
@@ -3467,8 +3722,7 @@ void vm_stage_worker_tick(void)
 		 * measuring was off): ra_auto_tick follows it */
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
-		if (fg && fg != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
-		    fg != __atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE)) {
+		if (fg && fg != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_ra_seen, fg, __ATOMIC_RELEASE);
 			__atomic_store_n(&g_ra_seen_n, RA_SWITCH, __ATOMIC_RELAXED);
 		}
@@ -3621,11 +3875,19 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 			out[at] = out[at - 1];
 		memset(&out[at], 0, sizeof(out[at]));
 		memcpy(out[at].title, t, sizeof(t));
-		out[at].thr[0] = (int32_t)pf.thr[0];
-		out[at].thr[1] = (int32_t)pf.thr[1];
+		/* read ahead On for it: its thresholds (set by hand); Off: ignored;
+		 * else what Auto learnt (never if nothing) */
+		if (pf.app.ra == VM_RA_ON) {
+			out[at].thr[0] = (int32_t)(pf.app.thr[0] ? pf.app.thr[0] : RA_STREAK);
+			out[at].thr[1] = (int32_t)(pf.app.thr[1] ? pf.app.thr[1] : RA_STREAK_NC);
+			out[at].flags = VM_RA_PF_MANUAL;
+		} else {
+			out[at].thr[0] = (int32_t)((pf.flags & RA_PF_LEARNT) ? pf.thr[0] : RA_THR_NONE);
+			out[at].thr[1] = (int32_t)((pf.flags & RA_PF_LEARNT) ? pf.thr[1] : RA_THR_NONE);
+			out[at].flags = pf.app.ra == VM_RA_OFF ? VM_RA_PF_IGNORE : 0;
+		}
 		out[at].dev = pf.dev;
 		out[at].streams = pf.streams;
-		out[at].flags = pf.flags;
 		n++;
 	}
 	ksceIoDclose(dfd);
@@ -3648,8 +3910,10 @@ int vm_stage_ra_delete(const char *title)
 	 * nothing, also when it had no profile yet (learning starts over) */
 	const int running = LD(g_ra_mode) == VM_RA_AUTO && !strncmp(t, g_ra_title, sizeof(t));
 
-	if (gone && !LD(g_ra_skip_sys) && !strncmp(t, g_ra_skip_title, sizeof(t)))
-		__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);   /* no longer ignored */
+	if (gone && !strncmp(t, g_app_title, sizeof(t))) {
+		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the global settings again */
+		ra_wake();
+	}
 	if (running) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
@@ -3669,132 +3933,11 @@ void vm_stage_ra_now(VmRaNow *o)
 	o->learning = __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE);
 	o->streams = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
 	o->target = ra_learn_target(o->title);
-	for (int k = 0; k < 2; k++) {
-		const uint32_t t = __atomic_load_n(&g_ra_thr[k], __ATOMIC_RELAXED);
-
-		/* in use: auto's learnt one, else the fixed one */
-		o->thr[k] = o->mode == VM_RA_AUTO && t && __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)
-		          ? t : k ? RA_STREAK_NC : RA_STREAK;
-	}
+	for (int k = 0; k < 2; k++)
+		o->thr[k] = ra_threshold(__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE), k);   /* in use */
 	o->dev = LD(g_ra_dev);
-	o->manual = LD(g_ra_manual);
-	/* the app the overlay acts on: the one Auto ignores, if it read last */
-	if (LD(g_ra_skip_last) && __atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE) &&
-	    g_ra_skip_title[0]) {
-		memcpy(o->app, g_ra_skip_title, sizeof(o->app) - 1);
-		o->app_ignored = 1;
-		o->app_system = LD(g_ra_skip_sys);
-	} else {
-		memcpy(o->app, o->title, sizeof(o->app));
-	}
 }
 
-/* ---- the overlay's changes to the game's profile (worker thread) ---------- */
-
-/* Thresholds in use for the game: learnt / set, else the fixed ones. */
-static void ra_thr_now(uint32_t thr[2])
-{
-	for (int k = 0; k < 2; k++) {
-		const uint32_t t = __atomic_load_n(&g_ra_thr[k], __ATOMIC_RELAXED);
-
-		thr[k] = ra_thr_ok(t) ? t : k ? RA_STREAK_NC : RA_STREAK;
-	}
-}
-
-int vm_stage_ra_tune(int kind, uint32_t thr)
-{
-	uint32_t cur[2];
-
-	if (kind < 0 || kind > 1 || !ra_thr_ok(thr))
-		return VM_ERR_ARG;
-	if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
-		return VM_ERR_NOT_READY;
-	ra_thr_now(cur);
-	cur[kind] = thr;
-	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);   /* set by hand: not learnt */
-	ST(g_ra_manual, 1);
-	__atomic_store_n(&g_ra_thr[0], cur[0], __ATOMIC_RELAXED);
-	__atomic_store_n(&g_ra_thr[1], cur[1], __ATOMIC_RELAXED);
-	return VM_OK;
-}
-
-int vm_stage_ra_save(void)
-{
-	RaProf pf, old;
-
-	if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
-		return VM_ERR_NOT_READY;
-	memset(&pf, 0, sizeof(pf));
-	ra_thr_now(pf.thr);
-	pf.dev = LD(g_ra_dev);
-	pf.streams = ra_prof_load(g_ra_title, &old) ? old.streams : 0;
-	pf.flags = RA_PF_MANUAL;
-	ra_prof_save(g_ra_title, &pf);
-	if (!ra_prof_load(g_ra_title, &old))
-		return VM_ERR_IO;
-	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
-	ST(g_ra_manual, 1);
-	__atomic_store_n(&g_ra_thr[0], pf.thr[0], __ATOMIC_RELAXED);
-	__atomic_store_n(&g_ra_thr[1], pf.thr[1], __ATOMIC_RELAXED);
-	return VM_OK;
-}
-
-int vm_stage_ra_ignore(int on)
-{
-	RaProf pf;
-	char path[96];
-
-	if (on) {
-		/* the game followed: on the list, then no longer followed */
-		if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
-			return VM_ERR_NOT_READY;
-		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);   /* nothing learnt now */
-		if (!ra_prof_load(g_ra_title, &pf)) {
-			memset(&pf, 0, sizeof(pf));
-			pf.thr[0] = RA_STREAK;
-			pf.thr[1] = RA_STREAK_NC;
-			pf.dev = LD(g_ra_dev);
-		}
-		pf.flags |= RA_PF_IGNORE;
-		ra_prof_save(g_ra_title, &pf);
-		memcpy(g_ra_skip_title, g_ra_title, sizeof(g_ra_skip_title));
-		ST(g_ra_skip_sys, 0);
-		__atomic_store_n(&g_ra_skip_pid, __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE),
-		                 __ATOMIC_RELEASE);
-		ST(g_ra_skip_last, 1);
-		ra_hist_clear();
-		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
-		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
-		ST(g_ra_dev, -1);
-		ra_dev_clear();
-		ST(g_ra_manual, 0);
-		__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
-		__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
-		__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
-		VM_KLOGI("stage: read ahead auto: %s - ignored from now on", g_ra_title);
-		g_ra_title[0] = 0;
-		return VM_OK;
-	}
-	/* the app ignored that read last: off the list (never a system app) */
-	if (!__atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE) || !g_ra_skip_title[0])
-		return VM_ERR_NOT_READY;
-	if (LD(g_ra_skip_sys))
-		return VM_ERR_ARG;
-	if (ra_prof_load(g_ra_skip_title, &pf)) {
-		pf.flags &= ~RA_PF_IGNORE;
-		if (!pf.streams && !(pf.flags & RA_PF_MANUAL)) {
-			ra_profile_path(path, sizeof(path), g_ra_skip_title);
-			ksceIoRemove(path);                /* only the mark: learnt from scratch */
-		} else {
-			ra_prof_save(g_ra_skip_title, &pf);
-		}
-	}
-	VM_KLOGI("stage: read ahead auto: %s - no longer ignored", g_ra_skip_title);
-	__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);
-	ST(g_ra_skip_last, 0);
-	g_ra_skip_title[0] = 0;
-	return VM_OK;
-}
 
 void vm_stage_fg(VmFg *o)
 {

@@ -288,20 +288,6 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
 
 void *ksceSdifGetSdContextGlobal(int port) { (void)port; return NULL; }
 
-/* A process's main module (taiHEN): fake_main_nid 0 = not found. */
-uint32_t fake_main_nid;
-char fake_main_name[27];
-
-int taiGetModuleInfoForKernel(int pid, const char *module, tai_module_info_t *info)
-{
-	(void)pid;
-	if (module || !fake_main_nid || !info || info->size < sizeof(*info))
-		return -1;
-	info->module_nid = fake_main_nid;
-	snprintf(info->name, sizeof(info->name), "%s", fake_main_name);
-	return 0;
-}
-
 /* ---- file system: ur0:data/vita-memio/<x> -> <tmpdir>/<x> ---------------- */
 static char g_tmp[256];
 

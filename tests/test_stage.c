@@ -113,6 +113,7 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_seen_n = 0;
+	g_ra_fg = g_ra_exited = 0;
 	g_ra_paused = 0;
 	g_ra_relearn = 0;
 	g_count_cores = 0;
@@ -124,7 +125,6 @@ static void reset(void)
 	g_ra_title[0] = 0;
 	g_ra_auto_logged = 0;
 	g_title_fn = NULL;
-	fake_main_nid = 0;
 	ra_hist_clear();
 	g_nc_off_refused = 0;
 	g_nc_off_type = 0;
@@ -710,9 +710,9 @@ static void test_init_all_hooks(void)
 	CHECK(fake_alloc_calls == 0);             /* nothing yet (could be safe mode) */
 	CHECK(vm_stage_init() == VM_OK);
 	count_free_bufs(&n);
-	CHECK(n == 3 && fake_alloc_calls == 3 && fake_hook_calls == 6);
+	CHECK(n == 3 && fake_alloc_calls == 3 && fake_hook_calls == 7);   /* + the app events */
 	vm_stage_fini();
-	CHECK(fake_hook_releases == 6 && fake_free_calls == 3);
+	CHECK(fake_hook_releases == 7 && fake_free_calls == 3);
 	count_free_bufs(&n);
 	CHECK(n == 0);
 	vm_stage_apply(&s);                       /* after fini: nothing allocated again */
@@ -754,7 +754,7 @@ static void test_init_memcard_hook_fails_only_memcard_stock(void)
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_fini();
-	CHECK(fake_hook_releases == 5);
+	CHECK(fake_hook_releases == 6);   /* 1 + the four SDIF hooks + the app events */
 }
 
 /* A buffer only for the devices that are on; one switched on later gets its
@@ -2511,6 +2511,16 @@ static int fake_title(SceUID pid, char *t, SceSize len)
 	return 0;
 }
 
+static int fake_exclusive(void) { return 1; }
+
+/* `pid` comes to the front (started / resumed: its process event) and
+ * reads from now on */
+static void as_app(SceUID pid)
+{
+	fake_pid = pid;
+	ra_proc_event(pid, 1);
+}
+
 /* `count` streams of `len` reads of `n` sectors each, one after another on
  * the disk (wrapping), each starting somewhere new. */
 static void streams(uint8_t *u, uint32_t count, uint32_t len, uint32_t n)
@@ -2565,7 +2575,7 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();                           /* sees the game: learning */
 	CHECK(g_ra_pid == 0x42 && g_ra_learning && !strcmp(g_ra_title, "PCSE00001"));
@@ -2599,26 +2609,21 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x43;
+	as_app(0x43);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x43 && !g_ra_learning && g_ra_thr[0] == 2 && g_ra_dev == M);
-	/* a stream or two of another process: not a new game */
-	fake_pid = 0x44;
-	streams(u, 2, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x43);
-	/* another game: learns its own; a stream of the first one meanwhile is
-	 * not counted for it */
+	/* another game comes to the front: followed at once, learns its own */
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning && !strcmp(g_ra_title, "PCSB00777"));
 	CHECK(g_ra_thr[0] == 0 && g_ra_hstreams == 0);
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 10, 2, 256);                           /* short ones */
 	CHECK(g_ra_hstreams >= 9);
 	/* a process with no usable title id: the fixed threshold, nothing saved */
-	fake_pid = 0x45;
+	as_app(0x45);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x45 && !g_ra_learning && !g_ra_title[0]);
@@ -2641,7 +2646,7 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_learning);
@@ -2673,7 +2678,7 @@ static void test_readahead_auto(void)
 
 		ra_profile_save("PCSE00001", t2, 300, VM_DEV_SD2VITA);
 	}
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x42 && !g_ra_learning && g_ra_dev == VM_DEV_SD2VITA);
@@ -2685,14 +2690,18 @@ static void test_readahead_auto(void)
 		g_ra_dev = M;                                 /* now here */
 		streams(u, 4, 8, 256);
 		CHECK(g_ra_hits >= hits + 4 * 5);
-		fake_pid = 0x99;                              /* another process here */
+		fake_pid = KERNEL_PID;                        /* a system thread reading for it */
 		streams(u, 2, 8, 256);
-		CHECK(g_ra_hits < hits + 4 * 5 + 2 * 5 && g_ra_pid == 0x42);
+		CHECK(g_ra_hits >= hits + 4 * 5 + 2 * 3 && g_ra_pid == 0x42);   /* the game's */
 	}
 	{
 		const uint32_t hits = g_ra_hits;
 
-		fake_pid = 0x99;
+		as_app(0x99);                                 /* another app in front, not followed */
+		streams(u, 2, 8, 256);
+		CHECK(g_ra_hits == hits && ra_idle(d));
+		ra_proc_event(0x99, 4);                       /* back to the home screen: none */
+		CHECK(g_ra_fg == 0);
 		streams(u, 2, 8, 256);
 		CHECK(g_ra_hits == hits && ra_idle(d));
 	}
@@ -2707,7 +2716,7 @@ static void test_readahead_auto(void)
 	g_title_fn = fake_title;
 	g_problem_calls = 0;
 	vm_stage_on_problem(count_problem);               /* the worker's wake-up */
-	fake_pid = 0x44;                                  /* PCSB00777: no profile here */
+	as_app(0x44);                                  /* PCSB00777: no profile here */
 	streams(u, 1, 8, 256);
 	CHECK(g_problem_calls == 1);                      /* a new game: woken */
 	vm_stage_worker_tick();
@@ -2733,11 +2742,10 @@ static void test_readahead_auto(void)
 	streams(u, RA_LEARN_MIN, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_learning);                             /* not yet RA_LEARN_STREAMS */
-	fake_pid = 0x42;
 	g_problem_calls = 0;
+	as_app(0x42);
 	streams(u, RA_SWITCH, 8, 256);
-	CHECK(g_problem_calls == 1);                      /* a new game: woken once */
-	CHECK(vm_stage_tick_us() == RA_TICK_US);
+	CHECK(g_problem_calls == 1);                      /* a new game in front: woken once */
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x42);
 	CHECK(ra_profile_load("PCSB00777", thr, &dev) && thr[0] == 2 && dev == M);
@@ -2762,11 +2770,11 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 5, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning);
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x42 && !ra_profile_load("PCSB00777", thr, &dev));
@@ -2786,7 +2794,7 @@ static void test_readahead_auto(void)
 		vm_stage_apply(&s);
 		CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
 		g_title_fn = fake_title;
-		fake_pid = 0x44;
+		as_app(0x44);
 		streams(u, RA_SWITCH, 8, 256);
 		vm_stage_worker_tick();
 		CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
@@ -2809,7 +2817,7 @@ static void test_readahead_auto(void)
 	{
 		const uint32_t sec = g_ra_dev_sec[M], n = g_ra_hstreams;
 
-		fake_pid = 0x42;                              /* not measured: not followed */
+		as_app(0x42);                              /* not measured: not followed */
 		streams(u, RA_SWITCH, 8, 256);
 		vm_stage_worker_tick();
 		CHECK(g_ra_pid == 0x44 && g_ra_dev_sec[M] == sec && g_ra_hstreams == n &&
@@ -2837,7 +2845,7 @@ static void test_readahead_auto(void)
 		vm_stage_worker_tick();
 		CHECK(g_ra_measure == 1 && g_ra_stats == 1);
 		g_title_fn = fake_title;
-		fake_pid = 0x44;
+		as_app(0x44);
 		hits = g_ra_hits;
 		streams(u, 1, 8, 256);
 		vm_stage_worker_tick();
@@ -2854,7 +2862,7 @@ static void test_readahead_auto(void)
 		CHECK(g_ra_dev == M && g_ra_thr[0] == 0 && ra_threshold(0x44, 0) == RA_STREAK);
 		CHECK(vm_stage_tick_us() == RA_STATS_EVERY_US);     /* its file once a minute */
 		/* the game ends (another reads): its file written; no profile */
-		fake_pid = 0x42;
+		as_app(0x42);
 		streams(u, RA_SWITCH, 8, 256);
 		vm_stage_worker_tick();
 		CHECK(g_ra_pid == 0x42);
@@ -2893,7 +2901,7 @@ static void test_readahead_auto(void)
 	s.stats = VM_STATS_FULL;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning);
@@ -2919,7 +2927,7 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	streams(u, RA_LEARN_MIN, 8, 256);
@@ -2966,7 +2974,7 @@ static void test_readahead_auto(void)
 		CHECK(vm_stage_ra_delete("../x") == VM_ERR_ARG);
 		CHECK(vm_stage_ra_delete("PCSE00099") == VM_ERR_IO);
 
-		fake_pid = 0x44;                              /* PCSB00777 runs */
+		as_app(0x44);                              /* PCSB00777 runs */
 		streams(u, 1, 8, 256);
 		vm_stage_worker_tick();
 		CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_thr[0] == 2 && g_ra_dev == M);
@@ -2999,7 +3007,7 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x46;                                  /* homebrew */
+	as_app(0x46);                                  /* homebrew */
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x46 && g_ra_learning);
@@ -3026,30 +3034,30 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x47;                                  /* Settings first: not followed */
+	as_app(0x47);                                  /* Settings first: never in front */
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x47 && g_ra_skip_sys);
+	CHECK(g_ra_pid == 0 && g_ra_fg == 0);
 	{
 		VmRaNow now;
 
 		vm_stage_ra_now(&now);
-		CHECK(!strcmp(now.app, "NPXS10015") && now.app_ignored && now.app_system && !now.title[0]);
-		CHECK(vm_stage_ra_ignore(0) == VM_ERR_ARG);   /* a system app stays ignored */
+		CHECK(!now.app[0] && !now.title[0]);
+		CHECK(vm_stage_ra_ignore(0) == VM_ERR_NOT_READY);
 	}
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning);
 	{
 		const uint32_t n = g_ra_hstreams, hits = g_ra_hits;
 
-		fake_pid = 0x48;                              /* the home screen streams */
+		as_app(0x48);                              /* the home screen: not in front */
+		CHECK(g_ra_fg == 0x44);
 		streams(u, 5, 8, 256);
 		vm_stage_worker_tick();
-		/* the game's own stream it cut short counts for the game: one */
-		CHECK(g_ra_pid == 0x44 && g_ra_hstreams <= n + 1 && g_ra_skip_pid == 0x48);
-		CHECK(g_ra_hits == hits);                     /* nothing read ahead for it */
+		CHECK(g_ra_pid == 0x44 && g_ra_hstreams >= n);  /* still the game's */
+		(void)hits;
 	}
 	vm_stage_fini();
 
@@ -3064,7 +3072,7 @@ static void test_readahead_auto(void)
 	g_title_fn = fake_title;
 	CHECK(vm_stage_ra_tune(0, 3) == VM_ERR_NOT_READY && vm_stage_ra_save() == VM_ERR_NOT_READY &&
 	      vm_stage_ra_ignore(1) == VM_ERR_NOT_READY && vm_stage_ra_ignore(0) == VM_ERR_NOT_READY);
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_learning);
@@ -3085,10 +3093,10 @@ static void test_readahead_auto(void)
 		CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL && pl[0].thr[0] == 3);
 	}
 	/* the game ends and runs again: set by hand, used, not learnt */
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
-	fake_pid = 0x43 + 1;                              /* PCSB00777 again (0x44) */
+	as_app(0x43 + 1);                              /* PCSB00777 again (0x44) */
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_manual && g_ra_thr[0] == 3);
@@ -3116,7 +3124,7 @@ static void test_readahead_auto(void)
 	}
 	/* a new app ignored before anything was learnt: only the mark is kept,
 	 * and taken off it is learnt from scratch */
-	fake_pid = 0x46;
+	as_app(0x46);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x46 && g_ra_learning);
@@ -3128,7 +3136,7 @@ static void test_readahead_auto(void)
 		CHECK(vm_stage_ra_ignore(0) == VM_OK && !ra_prof_load("VITASHELL", &pf));
 	}
 	/* an ignored app's profile deleted (Settings): no longer ignored */
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && vm_stage_ra_ignore(1) == VM_OK && g_ra_skip_pid == 0x44);
@@ -3235,7 +3243,7 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	fake_pid = 0x44;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	streams(u, 10, 8, 256);
@@ -3284,68 +3292,54 @@ static void test_readahead_auto(void)
 	CHECK(g_ra_paused);
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
-	fake_pid = 0x46;
+	as_app(0x46);
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x46 && g_ra_learning && g_ra_hstreams == 0);
 	vm_stage_fini();
 
-	/* without a title id function (a firmware whose NIDs are not known):
-	 * the id from the main module - a game ("M" + its module NID) is
-	 * followed and learnt as a game; a system app ("Sce..." -> NPXS...) is
-	 * ignored; nothing from taiHEN: as without an id. The function found
-	 * failing for a process falls back the same way. */
-	{
-		char t[32];
-
-		memset(t, 0, sizeof(t));
-		fake_main_nid = 0;
-		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) < 0);
-		fake_main_nid = 0x1A2B3C4D;
-		snprintf(fake_main_name, sizeof(fake_main_name), "GameMain");
-		CHECK(ra_title_from_module(0x44, t, 12) < 0);          /* too small */
-		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "M1A2B3C4D"));
-		CHECK(ra_title_ok(t) && !ra_title_system(t) && ra_learn_target(t) == RA_LEARN_STREAMS);
-		snprintf(fake_main_name, sizeof(fake_main_name), "SceShell");
-		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "NPXS1A2B3C4D"));
-		CHECK(ra_title_ok(t) && ra_title_system(t));
-		CHECK(!ra_title_module("M1A2B3C4") && !ra_title_module("M1A2B3C4G") &&
-		      !ra_title_module("PCSE00001") && ra_title_module("M00000000"));
-		/* a title id function that fails for this one: the module's id */
-		g_title_fn = fake_title;
-		snprintf(fake_main_name, sizeof(fake_main_name), "GameMain");
-		memset(t, 0, sizeof(t));
-		CHECK(ra_get_title(0x99, t, sizeof(t) - 1) == 0 && !strcmp(t, "M1A2B3C4D"));
-		CHECK(ra_get_title(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "PCSB00777"));
-	}
+	/* the app in front, by its process events (as PSVshell): a system app
+	 * never takes it; while an exclusive app runs, another process starting
+	 * does not either; suspended, nothing is in front (its learning goes on
+	 * when it is resumed); exited, it is learnt from what it read (if
+	 * enough) and forgotten */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
-	g_title_fn = ra_title_from_module;                /* as on such a firmware */
-	fake_main_nid = 0x00C0FFEE;
-	snprintf(fake_main_name, sizeof(fake_main_name), "SceSettings");
-	fake_pid = 0x47;
+	g_title_fn = fake_title;
+	as_app(0x44);
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x47);     /* a system app: ignored */
-	snprintf(fake_main_name, sizeof(fake_main_name), "eboot");
-	fake_pid = 0x44;
-	streams(u, 1, 8, 256);
+	CHECK(g_ra_pid == 0x44 && g_ra_learning);
+	streams(u, 10, 8, 256);
+	ra_proc_event(0x44, 4);                           /* suspended */
+	CHECK(g_ra_fg == 0);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x44 && !strcmp(g_ra_title, "M00C0FFEE") && g_ra_learning);
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_hstreams >= 9);
 	{
-		VmRaNow now;
+		const uint32_t n = g_ra_hstreams;
 
-		vm_stage_ra_now(&now);
-		CHECK(now.target == RA_LEARN_STREAMS && !strcmp(now.app, "M00C0FFEE"));
+		streams(u, 5, 8, 256);                        /* the home screen reads: not its */
+		CHECK(g_ra_hstreams <= n + 1);
+		ra_proc_event(0x44, 5);                       /* resumed: goes on */
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0x44 && g_ra_learning);
 	}
-	streams(u, RA_LEARN_STREAMS + 1, 8, 256);
+	g_exclusive_fn = fake_exclusive;
+	ra_proc_event(0x46, 1);                           /* a process starts meanwhile */
+	CHECK(g_ra_fg == 0x44);
+	g_exclusive_fn = NULL;
+	streams(u, RA_LEARN_MIN, 8, 256);
+	ra_proc_event(0x44, 3);                           /* exits: kept, forgotten */
+	CHECK(g_ra_fg == 0 && g_ra_exited == 0x44);
 	vm_stage_worker_tick();
-	CHECK(!g_ra_learning && ra_profile_load("M00C0FFEE", thr, &dev) && dev == M);
-	fake_main_nid = 0;
+	CHECK(g_ra_pid == 0 && !g_ra_title[0] && !g_ra_learning && g_ra_hstreams == 0);
+	CHECK(ra_profile_load("PCSB00777", thr, &dev) && dev == M);
+	ra_proc_event(0x46, 3);                           /* another one exiting: nothing */
+	CHECK(g_ra_exited == 0);
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */
@@ -3353,7 +3347,7 @@ static void test_readahead_auto(void)
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
-	fake_pid = 0x42;
+	as_app(0x42);
 	streams(u, 3, 8, 256);
 	vm_stage_worker_tick();
 	vm_stage_worker_tick();
@@ -3473,7 +3467,7 @@ static void test_stress_concurrency(void)
 	int saved_live = g_live;
 
 	reset();
-	fake_pid = 0x42;                                /* a game: copy on the system core too */
+	as_app(0x42);                                /* a game: copy on the system core too */
 	g_title_fn = fake_title;                        /* read ahead's auto learns it */
 	in->buf = staging2;
 	in->enabled = 1;

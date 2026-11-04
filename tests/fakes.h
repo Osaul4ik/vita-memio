@@ -24,8 +24,6 @@ extern const void *fake_memtype_to;   /* ... up to this one (if set) ...        
 extern int fake_memtype_above;        /* ... the memory type is this one             */
 
 /* Fresh temp directory, exported as the "ur0:data/vita-memio" root. */
-extern uint32_t fake_main_nid;
-extern char fake_main_name[27];
 const char *fakes_tmpdir_new(void);
 void fakes_tmpdir_remove(void);
 void fakes_reset(void);

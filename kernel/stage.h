@@ -65,8 +65,7 @@ typedef struct VmRaNow {
 	int      learning;      /* 1 while Auto learns it                         */
 	uint32_t streams;       /* ... streams seen so far                        */
 	uint32_t target;        /* ... of this many (a game 300, homebrew 150)    */
-	uint32_t minutes;       /* ... minutes in front so far                    */
-	uint32_t percent;       /* ... how far (streams or time), 0..99           */
+	uint32_t percent;       /* ... how far, 0..99                             */
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)   */
 	int      dev;           /* its storage, -1 not known                      */
 } VmRaNow;

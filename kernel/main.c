@@ -709,10 +709,9 @@ static void overlay_feed(void)
 				ov_thr(d, sizeof(d), now.thr[1]);
 				if (now.title[0] && now.learning)
 					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_WARN
-					         "learning %u%%" HUD_C_DIM " (%u/%u, %u min)",
+					         "learning %u%%" HUD_C_DIM " (%u/%u)",
 					         (unsigned)now.percent, (unsigned)(now.streams > 9999 ? 9999 :
-					         now.streams), (unsigned)now.target,
-					         (unsigned)(now.minutes > 999 ? 999 : now.minutes));
+					         now.streams), (unsigned)now.target);
 				else if (now.title[0])
 					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_GOOD "learnt"
 					         HUD_C_DIM "  start after C %s NC %s", c, d);

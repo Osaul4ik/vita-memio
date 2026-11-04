@@ -29,7 +29,7 @@ int vm_failures;
 uint32_t fake_now_us;
 int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
-int fake_rename_fail, fake_write_short;
+int fake_rename_fail, fake_write_short, fake_prof_writes;
 
 /* ---- logging: swallowed ---------------------------------------------------- */
 void vm_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
@@ -393,7 +393,7 @@ void fakes_reset(void)
 	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
-	fake_rename_fail = fake_write_short = 0;
+	fake_rename_fail = fake_write_short = fake_prof_writes = 0;
 	fake_memtype = 0xD000;          /* ordinary cached memory */
 	fake_memtype_calls = 0;
 	fake_memtype_from = fake_memtype_to = NULL;
@@ -436,6 +436,8 @@ SceUID ksceIoOpen(const char *path, int flags, int mode)
 
 	if (!map(path, p, sizeof(p)))
 		return -1;
+	if ((flags & SCE_O_WRONLY) && strstr(path, "/ra/"))
+		__atomic_fetch_add(&fake_prof_writes, 1, __ATOMIC_RELAXED);
 	if ((flags & SCE_O_RDONLY) && (flags & SCE_O_WRONLY))
 		f |= O_RDWR;
 	else if (flags & SCE_O_WRONLY)

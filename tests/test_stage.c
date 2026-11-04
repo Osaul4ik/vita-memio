@@ -116,8 +116,6 @@ static void reset(void)
 	g_ra_rate_max = 0;                         /* no rate limit (but its test) */
 	g_ra_rate_us = g_ra_rate_n = 0;
 	g_ra_fg = g_ra_exited = 0;
-	g_ra_learn_ms = 0;
-	g_ra_clock_on = 0;
 	g_ra_saved_n = 0;
 	g_ra_relearn = 0;
 	g_count_cores = 0;
@@ -2733,7 +2731,7 @@ static void test_readahead_auto(void)
 	CHECK(g_problem_calls == 1);                      /* a new game: woken */
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_dev == -1);
-	CHECK(vm_stage_tick_us() >= 60000000u);          /* no polling: its time's end only */
+	CHECK(vm_stage_tick_us() == 0);                  /* no polling */
 	{
 		const uint32_t hits = g_ra_hits;
 
@@ -2746,8 +2744,8 @@ static void test_readahead_auto(void)
 		CHECK(g_ra_hits == hits && g_problem_calls == 1);
 	}
 	vm_stage_worker_tick();
-	/* no polling: only learning's clock, once its time is up (10 min at most) */
-	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE && vm_stage_tick_us() >= 60000000u);
+	/* no polling */
+	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE && vm_stage_tick_us() == 0);
 	g_problem_calls = 0;
 	{
 		const uint32_t sec = g_ra_dev_sec[M];
@@ -2778,11 +2776,11 @@ static void test_readahead_auto(void)
 	 * wakes the worker once - nothing else does */
 	CHECK(vm_stage_ra_delete("PCSE00001") == VM_OK);
 	vm_stage_worker_tick();
-	CHECK(g_ra_learning && g_ra_dev == -1 && vm_stage_tick_us() >= 60000000u);
+	CHECK(g_ra_learning && g_ra_dev == -1 && vm_stage_tick_us() == 0);
 	g_problem_calls = 0;
 	streams(u, RA_LEARN_STREAMS + 1, 8, 256);
-	/* its storage, every RA_SAVE_EVERY streams (to keep them), the target */
-	CHECK(g_problem_calls == 1 + RA_LEARN_STREAMS / RA_SAVE_EVERY);
+	/* its storage, then the target - nothing kept on the way */
+	CHECK(g_problem_calls == 2);
 	vm_stage_worker_tick();
 	CHECK(!g_ra_learning && vm_stage_tick_us() == 0);
 	vm_stage_on_problem(NULL);
@@ -3452,10 +3450,10 @@ static void test_readahead_auto(void)
 	}
 	vm_stage_fini();
 
-	/* learning over sessions, and by time: a game seen in short sessions
-	 * goes on from each; one that seldom reads in streams is learnt after
-	 * RA_LEARN_MS in front (homebrew RA_LEARN_MS_HB); time at the home
-	 * screen does not count; kept progress is checked like the rest */
+	/* learning over sessions: a game seen in short sessions goes on from
+	 * each; it is counted in memory and written once a session, as it
+	 * leaves, only if it saw something new; no time limit; an app that
+	 * reads only single reads is learnt (to never) from them */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3467,39 +3465,41 @@ static void test_readahead_auto(void)
 	for (int sess = 0; sess < 3; sess++) {
 		as_app(0x44);
 		vm_stage_worker_tick();
+		__atomic_store_n(&fake_prof_writes, 0, __ATOMIC_RELAXED);
 		streams(u, 20, 8, 256);
-		__sync_fetch_and_add(&fake_now_us, 60u * 1000000u);                /* a minute in front */
+		__sync_fetch_and_add(&fake_now_us, 60u * 60u * 1000000u);        /* an hour in front */
 		vm_stage_worker_tick();
+		CHECK(g_ra_learning);                         /* time does not end it */
+		CHECK(__atomic_load_n(&fake_prof_writes, __ATOMIC_RELAXED) == 0); /* in memory only */
 		ra_proc_event(0x44, 3);                       /* exits */
 		vm_stage_worker_tick();
+		CHECK(__atomic_load_n(&fake_prof_writes, __ATOMIC_RELAXED) == 1); /* written once */
 		{
 			RaProf pf;
 			VmRaNow now;
 			CHECK(ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_PARTIAL) &&
-			      pf.streams >= (uint32_t)(19 * (sess + 1)) && pf.secs >= (uint32_t)(60 * (sess + 1)));
+			      pf.streams >= (uint32_t)(19 * (sess + 1)) && !pf.secs);
 			vm_stage_ra_now(&now);
 			CHECK(!now.title[0]);
 		}
 	}
+	/* a session that saw nothing new: nothing written */
+	as_app(0x44);
+	vm_stage_worker_tick();
+	__atomic_store_n(&fake_prof_writes, 0, __ATOMIC_RELAXED);
+	ra_proc_event(0x44, 3);
+	vm_stage_worker_tick();
+	CHECK(__atomic_load_n(&fake_prof_writes, __ATOMIC_RELAXED) == 0);
 	as_app(0x44);
 	vm_stage_worker_tick();
 	{
 		VmRaNow now;
 
 		vm_stage_ra_now(&now);
-		CHECK(now.learning && now.streams >= 57 && now.minutes >= 3 && now.percent >= 19 &&
-		      now.percent < 100);
+		CHECK(now.learning && now.streams >= 57 && now.percent >= 19 && now.percent < 100);
 	}
-	/* the home screen: not counted; back in front: the rest of the time */
-	ra_proc_event(0x44, 4);
-	vm_stage_worker_tick();
-	__sync_fetch_and_add(&fake_now_us, 60u * 60u * 1000000u);
-	vm_stage_worker_tick();
-	CHECK(g_ra_learning && g_ra_learn_ms < 4u * 60000u);
-	ra_proc_event(0x44, 5);
-	vm_stage_worker_tick();
-	CHECK(vm_stage_tick_us() > 0 && vm_stage_tick_us() <= 600000000u);   /* woken then */
-	__sync_fetch_and_add(&fake_now_us, RA_LEARN_MS * 1000u);
+	CHECK(vm_stage_tick_us() == 0);                   /* nothing to wake it for */
+	streams(u, RA_LEARN_STREAMS, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(!g_ra_learning && ra_profile_load("PCSB00777", thr, &dev) && thr[0] == 2);
 	{
@@ -3508,14 +3508,27 @@ static void test_readahead_auto(void)
 		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_LEARNT && !pf.secs &&
 		      !pf.hist[0][8]);                     /* what it saw no longer kept */
 	}
-	/* homebrew that hardly reads in streams: learnt (to never) after
-	 * RA_LEARN_MS_HB in front */
-	as_app(0x46);
-	vm_stage_worker_tick();
-	CHECK(g_ra_learning && !strcmp(g_ra_title, "VITASHELL"));
-	streams(u, 3, 1, 256);                            /* single reads */
-	__sync_fetch_and_add(&fake_now_us, RA_LEARN_MS_HB * 1000u + 1000000u);
-	vm_stage_worker_tick();
+	/* homebrew reading single reads only (one "stream" a session): each
+	 * counts, over sessions, and it is learnt to never */
+	{
+		int sess = 0;
+		uint32_t last = 0;
+
+		for (; sess < 2 * RA_LEARN_HB; sess++) {
+			as_app(0x46);
+			vm_stage_worker_tick();
+			CHECK(g_ra_learning && !strcmp(g_ra_title, "VITASHELL") && g_ra_hstreams >= last);
+			streams(u, 2, 1, 256);                    /* the 2nd ends the 1st */
+			vm_stage_worker_tick();
+			if (!g_ra_learning)
+				break;
+			CHECK(g_ra_hstreams > last);              /* each session counts */
+			last = g_ra_hstreams;
+			ra_proc_event(0x46, 3);
+			vm_stage_worker_tick();
+		}
+		CHECK(sess >= RA_LEARN_HB / 2 - 1 && sess < RA_LEARN_HB);
+	}
 	CHECK(!g_ra_learning && ra_profile_load("VITASHELL", thr, &dev) && thr[0] == RA_THR_NONE &&
 	      thr[1] == RA_THR_NONE);
 	vm_stage_fini();
@@ -3674,9 +3687,8 @@ static void test_readahead_auto(void)
 	}
 	vm_stage_fini();
 
-	/* what counts for learning: single reads only in the histogram (a
-	 * video read between other reads must not fill it), and at most
-	 * RA_RATE_MAX streams a second */
+	/* what counts for learning: every stream, single reads too, but at
+	 * most RA_RATE_MAX streams a second (a video must not fill it) */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3692,7 +3704,7 @@ static void test_readahead_auto(void)
 		const uint32_t n = g_ra_hstreams, ones = g_ra_hcnt[0][1];
 
 		streams(u, 50, 1, 256);                       /* single reads, here and there */
-		CHECK(g_ra_hstreams <= n + 1 && g_ra_hcnt[0][1] >= ones + 49);
+		CHECK(g_ra_hstreams >= n + 49 && g_ra_hcnt[0][1] >= ones + 49);
 	}
 	g_ra_rate_max = RA_RATE_MAX;
 	__atomic_store_n(&fake_now_us, 5000000, __ATOMIC_SEQ_CST);

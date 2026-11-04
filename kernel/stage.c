@@ -1421,6 +1421,7 @@ static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a writ
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
 #define RA_TICK_US        (2u * 1000u * 1000u)
+#define RA_LOG_LEARN_US   (10u * 1000u * 1000u)   /* test branch: with the log on */
 #define RA_GAIN_US        2700            /* per read served from the pieces   */
 #define RA_COST_US        8000            /* per stream that started it        */
 #define RA_THR_NONE       0xFFFFu         /* learnt: never start               */
@@ -2537,8 +2538,8 @@ static void ra_game_forget(void)
  * the worker is woken to follow the change. */
 /* The last process events and what came of them, for the log (the worker
  * writes them; the hook only fills this ring). */
-#define EV_LOG_N 16
-enum { EV_TAKEN = 0, EV_NOID, EV_SYSTEM, EV_EXCLUSIVE, EV_LEFT, EV_OTHER };
+#define EV_LOG_N 64
+enum { EV_TAKEN = 0, EV_NOID, EV_SYSTEM, EV_EXCLUSIVE, EV_LEFT, EV_OTHER, EV_RESULT };
 typedef struct EvLog {
 	SceUID pid;
 	int    ev, verdict, r;
@@ -2616,9 +2617,20 @@ static void ra_proc_event(SceUID pid, int ev)
 static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 {
 	const tai_hook_ref_t ref = vm_hook_ref(&g_proc_ref);
+	int r;
 
 	ra_proc_event(pid, ev);
-	return ref ? TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6) : 0;
+	if (!ref) {
+		ev_note(pid, ev, EV_RESULT, VM_HOOK_NO_REF, NULL);   /* the event went unhandled */
+		ra_wake();
+		return 0;
+	}
+	r = TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6);
+	if (r < 0) {                              /* the system's handlers refused it */
+		ev_note(pid, ev, EV_RESULT, r, NULL);
+		ra_wake();
+	}
+	return r;
 }
 
 /* Auto: whether this device reads ahead for the stream it has - only the
@@ -4332,7 +4344,7 @@ void vm_stage_worker_tick(void)
 		static uint32_t logged;
 		static int was_on;
 		static const char *const k_verdict[] = { "in front", "no title id", "system app",
-		                                         "a game runs", "left", "-" };
+		                                         "a game runs", "left", "-", "the system's result" };
 		const uint32_t n = __atomic_load_n(&g_ev_n, __ATOMIC_ACQUIRE);
 		const int on = LD(g_log_diag);
 
@@ -4353,7 +4365,7 @@ void vm_stage_worker_tick(void)
 
 				VM_KLOGI("stage: process event %d pid 0x%08x title '%s' (0x%08x): %s", e->ev,
 				         (unsigned)e->pid, e->title, (unsigned)e->r,
-				         e->verdict >= 0 && e->verdict <= EV_OTHER ? k_verdict[e->verdict] : "?");
+				         e->verdict >= 0 && e->verdict <= EV_RESULT ? k_verdict[e->verdict] : "?");
 			}
 		}
 	}
@@ -4372,6 +4384,33 @@ void vm_stage_worker_tick(void)
 		else if (fg != last_fg)
 			eff_update();
 		last_fg = fg;
+	}
+	/* test branch: how learning goes, in the log, every 10 s */
+	{
+		static uint32_t last_us, last_streams, last_reads;
+		const uint32_t st = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED),
+		               rd = __atomic_load_n(&g_ra_hreads, __ATOMIC_RELAXED);
+
+		if (LD(g_log_diag) && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) &&
+		    now_us - last_us >= RA_LOG_LEARN_US && (st != last_streams || rd != last_reads)) {
+			const Dev *const m = &g_dev[LD(g_ra_dev) >= 0 ? LD(g_ra_dev) : 0];
+
+			last_us = now_us;
+			last_streams = st;
+			last_reads = rd;
+			VM_KLOGI("stage: learning %s: %u streams, %u reads; 1=%u 2=%u long=%u; large stream %u, "
+			         "32 KiB stream %u, video %u, rate %u, busy %u", g_ra_title, (unsigned)st, (unsigned)rd,
+			         (unsigned)(__atomic_load_n(&g_ra_hcnt[0][1], __ATOMIC_RELAXED) +
+			                    __atomic_load_n(&g_ra_hcnt[1][1], __ATOMIC_RELAXED)),
+			         (unsigned)(__atomic_load_n(&g_ra_hcnt[0][2], __ATOMIC_RELAXED) +
+			                    __atomic_load_n(&g_ra_hcnt[1][2], __ATOMIC_RELAXED)),
+			         (unsigned)(st - __atomic_load_n(&g_ra_hcnt[0][2], __ATOMIC_RELAXED) -
+			                    __atomic_load_n(&g_ra_hcnt[1][2], __ATOMIC_RELAXED)),
+			         (unsigned)LD(m->ra_streak), (unsigned)LD(m->rs_streak),
+			         (unsigned)__atomic_load_n(&g_ra_video_left, __ATOMIC_RELAXED),
+			         (unsigned)__atomic_load_n(&g_ra_rate_n, __ATOMIC_RELAXED),
+			         (unsigned)LD(m->st.passthru));
+		}
 	}
 	/* the game followed has exited: kept if learnt enough, then gone */
 	{
@@ -4679,6 +4718,8 @@ unsigned vm_stage_tick_us(void)
 
 	if (!LD(g_ra_measure) || !LD(g_live) || !g_title_fn)
 		return 0;
+	if (LD(g_log_diag) && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE))
+		return RA_LOG_LEARN_US;               /* test branch: its line in the log */
 	if (LD(g_ra_relearn))
 		return RA_TICK_US;
 	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid)

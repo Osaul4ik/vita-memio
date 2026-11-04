@@ -113,6 +113,8 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_seen_n = 0;
+	g_ra_rate_max = 0;                         /* no rate limit (but its test) */
+	g_ra_rate_us = g_ra_rate_n = 0;
 	g_ra_fg = g_ra_exited = 0;
 	g_ra_paused = 0;
 	g_ra_relearn = 0;
@@ -3553,6 +3555,40 @@ static void test_readahead_auto(void)
 		ra_proc_event(0, 1);                          /* no process: nothing */
 		CHECK(g_ev_n == n + 4);
 	}
+	vm_stage_fini();
+
+	/* what counts for learning: single reads only in the histogram (a
+	 * video read between other reads must not fill it), and at most
+	 * RA_RATE_MAX streams a second */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	as_app(0x44);
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning);
+	{
+		const uint32_t n = g_ra_hstreams, ones = g_ra_hcnt[0][1];
+
+		streams(u, 50, 1, 256);                       /* single reads, here and there */
+		CHECK(g_ra_hstreams <= n + 1 && g_ra_hcnt[0][1] >= ones + 49);
+	}
+	g_ra_rate_max = RA_RATE_MAX;
+	fake_now_us = 5000000;
+	{
+		const uint32_t n = g_ra_hstreams;
+
+		streams(u, 60, 3, 256);                       /* a burst in one second */
+		CHECK(g_ra_hstreams <= n + RA_RATE_MAX + 1 && g_ra_hstreams >= n + RA_RATE_MAX - 1);
+		fake_now_us += 1000000;                       /* the next second: counts again */
+		streams(u, 5, 3, 256);
+		CHECK(g_ra_hstreams >= n + RA_RATE_MAX + 4);
+	}
+	g_ra_rate_max = 0;
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */

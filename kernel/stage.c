@@ -1463,6 +1463,18 @@ static void ra_dev_add(int dev, uint32_t n)
 		ra_wake();
 }
 
+/* What a stream counts for in learning:
+ *  - a single read (a "stream" of 1) only in the histogram: read ahead
+ *    never starts before the 2nd read, so it tells nothing about when to,
+ *    and a video played in small reads between others' - hundreds of them
+ *    a minute - must not fill the learning;
+ *  - at most g_ra_rate_max streams a second (0: no limit; the tests), so a
+ *    burst of any kind (a video, a long scripted scene) is a sample of the
+ *    game, not most of it. */
+#define RA_RATE_MAX  20
+static uint32_t g_ra_rate_max = RA_RATE_MAX;
+static uint32_t g_ra_rate_us, g_ra_rate_n;    /* atomics: this second's window */
+
 static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 {
 	const uint32_t b = L < RA_HBINS - 1 ? L : RA_HBINS - 1;
@@ -1471,6 +1483,20 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 	if (!pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	    (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && !LD(g_ra_stats)))
 		return;
+	if (L < 2) {
+		__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
+		return;
+	}
+	if (g_ra_rate_max) {
+		const uint32_t now = ksceKernelGetSystemTimeLow();
+
+		if (now - __atomic_load_n(&g_ra_rate_us, __ATOMIC_RELAXED) >= 1000000u) {
+			__atomic_store_n(&g_ra_rate_us, now, __ATOMIC_RELAXED);
+			__atomic_store_n(&g_ra_rate_n, 0, __ATOMIC_RELAXED);
+		}
+		if (__atomic_add_fetch(&g_ra_rate_n, 1, __ATOMIC_RELAXED) > g_ra_rate_max)
+			return;                           /* over this second's share */
+	}
 	__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
 	n = __atomic_add_fetch(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
 	/* learnt enough: the worker woken to finish it (it does not poll) */

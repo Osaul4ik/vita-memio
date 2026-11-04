@@ -114,7 +114,8 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_rate_max = 0;                         /* no rate limit (but its test) */
-	g_ra_rate_us = g_ra_rate_n = g_ra_rate_n1 = 0;
+	g_ra_rate_us = g_ra_rate_n = 0;
+	g_ra_video_us = 0;
 	g_ra_fg = g_ra_exited = 0;
 	g_ra_saved_n = 0;
 	g_ra_relearn = 0;
@@ -3508,19 +3509,8 @@ static void test_readahead_auto(void)
 		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_LEARNT && !pf.secs &&
 		      !pf.hist[0][8]);                     /* what it saw no longer kept */
 	}
-	/* homebrew reading single reads only: the fallback. A short session
-	 * counts nothing (and writes nothing); one that ran RA_DRY_US without a
-	 * longer stream counts its single reads, over sessions, until it is
-	 * learnt to never */
-	as_app(0x46);
-	vm_stage_worker_tick();
-	CHECK(g_ra_learning && !strcmp(g_ra_title, "VITASHELL"));
-	__atomic_store_n(&fake_prof_writes, 0, __ATOMIC_RELAXED);
-	streams(u, 2, 1, 256);
-	__sync_fetch_and_add(&fake_now_us, 60u * 1000000u);
-	ra_proc_event(0x46, 3);
-	vm_stage_worker_tick();
-	CHECK(__atomic_load_n(&fake_prof_writes, __ATOMIC_RELAXED) == 0);
+	/* homebrew reading single reads only: they count, over sessions, until
+	 * it is learnt to never */
 	{
 		int sess = 0;
 		uint32_t last = 0;
@@ -3530,19 +3520,16 @@ static void test_readahead_auto(void)
 			as_app(0x46);
 			vm_stage_worker_tick();
 			CHECK(g_ra_learning && g_ra_hstreams == last);
-			streams(u, 2, 1, 256);                    /* the 2nd ends the 1st */
-			vm_stage_worker_tick();
-			CHECK(g_ra_hstreams == last);             /* not yet */
-			__sync_fetch_and_add(&fake_now_us, 6u * 60u * 1000000u);
+			streams(u, 3, 1, 256);                    /* each ends the one before */
 			ra_proc_event(0x46, 3);
 			vm_stage_worker_tick();
 			if (ra_prof_load("VITASHELL", &pf) && (pf.flags & RA_PF_LEARNT))
 				break;
 			CHECK(ra_prof_load("VITASHELL", &pf) && (pf.flags & RA_PF_PARTIAL) &&
-			      pf.streams > last);                 /* each such session counts */
+			      pf.streams > last);                 /* each session counts */
 			last = pf.streams;
 		}
-		CHECK(sess >= RA_LEARN_HB / 2 - 1 && sess < RA_LEARN_HB);
+		CHECK(sess < RA_LEARN_HB);
 	}
 	CHECK(!g_ra_learning && ra_profile_load("VITASHELL", thr, &dev) && thr[0] == RA_THR_NONE &&
 	      thr[1] == RA_THR_NONE);
@@ -3702,9 +3689,7 @@ static void test_readahead_auto(void)
 	}
 	vm_stage_fini();
 
-	/* what counts for learning: streams of 2 reads or more; single reads
-	 * only as the fallback (none next to longer streams, however long); at
-	 * most RA_RATE_MAX streams a second */
+	/* what counts for learning: every stream; at most RA_RATE_MAX a second */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3720,24 +3705,7 @@ static void test_readahead_auto(void)
 		const uint32_t n = g_ra_hstreams, ones = g_ra_hcnt[0][1];
 
 		streams(u, 50, 1, 256);                       /* single reads, here and there */
-		CHECK(g_ra_hstreams <= n + 1 && g_ra_hcnt[0][1] >= ones + 49);
-		/* a video between the game's streams: ten minutes of it */
-		for (int k = 0; k < 10; k++) {
-			streams(u, 20, 1, 256);
-			streams(u, 1, 2, 256);
-			__sync_fetch_and_add(&fake_now_us, 60u * 1000000u);
-			vm_stage_worker_tick();
-		}
-		CHECK(g_ra_learning && g_ra_hstreams <= n + 12);
-		/* then no longer stream for RA_DRY_US: its single reads count (the
-		 * last pair ends with the first of them: the time from there) */
-		streams(u, 30, 1, 256);
-		vm_stage_worker_tick();
-		CHECK(g_ra_hstreams <= n + 12);
-		__sync_fetch_and_add(&fake_now_us, 6u * 60u * 1000000u);
-		streams(u, 10, 1, 256);
-		vm_stage_worker_tick();
-		CHECK(g_ra_learning && g_ra_hstreams >= n + 30);
+		CHECK(g_ra_hstreams >= n + 49 && g_ra_hcnt[0][1] >= ones + 49);
 	}
 	g_ra_rate_max = RA_RATE_MAX;
 	__atomic_store_n(&fake_now_us, 5000000, __ATOMIC_SEQ_CST);
@@ -4043,39 +4011,46 @@ static void test_review_fixes(void)
 	vm_stage_count_hud(0);
 	CHECK(g_count_all);
 
-	/* singles count after RA_DRY_US with no worker tick in between (the HUD
-	 * off), as the app leaves; a longer stream since starts it over */
+	/* every stream counts, single reads too; a video does not: read ahead
+	 * serves it read after read, that run and what ends around it count for
+	 * nothing, until it has been over for a while */
 	auto_game(&s, 0x44);
-	streams(u, 1, 3, 256);
-	streams(u, 1, 1, 256);
-	fake_now_us += (uint32_t)RA_DRY_US + 1000;
 	streams(u, 20, 1, 256);
-	CHECK(g_ra_hstreams == 1 && g_ra_pend >= 20);
-	ra_learn_keep();
-	CHECK(g_ra_hstreams >= 21 && g_ra_pend == 0);
-	streams(u, 5, 1, 256);
-	streams(u, 1, 3, 256);
-	streams(u, 1, 1, 256);
-	CHECK(g_ra_pend <= 1);
-	fake_now_us += 1000;
+	CHECK(g_ra_hstreams >= 19);
 	{
-		const uint32_t n = g_ra_hstreams, p = g_ra_pend;
+		const uint32_t n = g_ra_hstreams;
+		uint32_t at = 0;
 
-		ra_learn_dry();
-		CHECK(g_ra_hstreams == n && g_ra_pend == p);  /* not dry */
+		d->ra_streak = 0;
+		for (uint32_t k = 0; k < RA_VIDEO_READS + 2; k++) {
+			d->ra_hit = 1;
+			ra_note(d, NULL, at, 256, 0);
+			at += 256;
+		}
+		CHECK(d->ra_run >= RA_VIDEO_READS && g_ra_video_us);
+		fake_now_us += 1000;
+		ra_note(d, NULL, 3000, 256, 0);               /* it ends: not counted */
+		CHECK(g_ra_hstreams == n && !d->ra_run);
+		ra_note(d, NULL, 200, 256, 0);                /* what reads around it: neither */
+		CHECK(g_ra_hstreams == n);
+		fake_now_us += RA_VIDEO_US / 2;
+		d->ra_hit = 1;                                /* a piece of it: still a video */
+		ra_note(d, NULL, 456, 256, 0);
+		fake_now_us += RA_VIDEO_US - 1000;
+		ra_note(d, NULL, 1000, 256, 0);
+		CHECK(g_ra_hstreams == n);
+		fake_now_us += RA_VIDEO_US + 1000;            /* over: the game's again */
+		ra_note(d, NULL, 2000, 256, 0);
+		CHECK(g_ra_hstreams == n + 1);
+		/* a run of a game's, shorter: counts */
+		d->ra_streak = 0;
+		for (uint32_t k = 0; k < 8; k++) {
+			d->ra_hit = 1;
+			ra_note(d, NULL, 4 * k * 64, 256, 0);
+		}
+		ra_note(d, NULL, 3500, 256, 0);
+		CHECK(g_ra_hstreams == n + 2 && g_ra_learning);
 	}
-	vm_stage_fini();
-
-	/* singles do not use up the longer streams' share */
-	auto_game(&s, 0x44);
-	g_ra_rate_max = 2;
-	g_ra_rate_us = fake_now_us;
-	g_ra_rate_n = g_ra_rate_n1 = 0;
-	for (int i = 0; i < 6; i++)
-		ra_hist_note(0x44, 0, 1);
-	ra_hist_note(0x44, 0, 4);
-	CHECK(g_ra_hcnt[0][1] == 2 && g_ra_hcnt[0][4] == 1 && g_ra_hstreams == 1);
-	g_ra_rate_max = 0;
 	vm_stage_fini();
 
 	/* a large write ends a stream, and the stream is noted */

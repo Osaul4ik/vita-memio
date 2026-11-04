@@ -208,6 +208,8 @@ typedef struct Dev {
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
+	int           ra_hit;                 /* this read came whole from the pieces */
+	uint32_t      ra_run;                 /* reads in a row that did (see "video") */
 	SceUID        ra_pid;                 /* ... started by (auto only, else 0) */
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
@@ -1357,12 +1359,14 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  * Learning goes on over sessions: it is counted in memory only, and what was
  * seen is written to the app's profile (RA_PF_PARTIAL) once, when the app
  * leaves (or Auto is switched off) - and only if it saw something new -
- * then taken up again when it comes back. It ends at RA_LEARN_STREAMS
- * streams of 2 reads or more (RA_LEARN_HB for homebrew). Single reads are
- * the fallback: they count only once the app has read no longer stream
- * for RA_DRY_US while it runs, so an app that hardly ever reads in streams
- * is learnt too (to "never"), and a video read between a game's streams
- * does not fill it.
+ * then taken up again when it comes back. It ends at RA_LEARN_STREAMS streams
+ * (RA_LEARN_HB for homebrew), of any length: a single read is a stream too.
+ *
+ * A video is left out: read ahead serves it without a miss, read after read,
+ * which a game's loading seldom keeps up for long. From RA_VIDEO_READS such
+ * reads in a row, that stream and all that end within RA_VIDEO_US of the last
+ * such read count for nothing (what else reads between a video's reads breaks
+ * it into pieces; those are not the game's way of reading either).
  *
  * Auto reads ahead only for the game, and only on its storage: the device
  * that served most of its large reads (decided after RA_DEV_DECIDE sectors,
@@ -1384,7 +1388,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
-#define RA_DRY_US         (5ll * 60 * 1000 * 1000)  /* no stream this long: singles count */
+#define RA_VIDEO_READS    64              /* served whole in a row: a video    */
+#define RA_VIDEO_US       (10u * 1000u * 1000u)   /* ... and its surroundings      */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
 #define RA_TICK_US        (2u * 1000u * 1000u)
@@ -1406,10 +1411,8 @@ static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
 static uint32_t g_ra_saved_n;             /* streams in its profile (worker)  */
-/* the fallback: single reads not counted yet, and since when no longer
- * stream (atomics) */
-static uint32_t g_ra_pend;
-static int64_t  g_ra_dry_us;
+/* a video: when the last read of its run was served (atomic; 0: none) */
+static uint32_t g_ra_video_us;
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
 static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
@@ -1475,16 +1478,12 @@ static void ra_dev_add(int dev, uint32_t n)
 		ra_wake();
 }
 
-/* What a stream counts for in learning: a stream of 2 reads or more at
- * once; a single read only as the fallback (g_ra_pend: counted by the
- * worker once no longer stream was seen for RA_DRY_US; one next to longer
- * streams never). At most g_ra_rate_max a second of each of the two (0: no
- * limit; the tests), so a burst of any kind (a video, a long scripted scene)
- * is a sample of the app, not most of it, and singles do not use up the share
- * of longer streams. Atomics and a clock read, once per stream. */
+/* What a stream counts for in learning: one, of any length, unless it is a
+ * video's (see the top). At most g_ra_rate_max a second (0: no limit; the
+ * tests), so a burst of any kind is a sample of the app, not most of it. */
 #define RA_RATE_MAX  20
 static uint32_t g_ra_rate_max = RA_RATE_MAX;
-static uint32_t g_ra_rate_us, g_ra_rate_n, g_ra_rate_n1;    /* atomics: this second's window */
+static uint32_t g_ra_rate_us, g_ra_rate_n;    /* atomics: this second's window */
 
 static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 {
@@ -1494,11 +1493,11 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 	if (!pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	    (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && !LD(g_ra_stats)))
 		return;
-	if (L >= 2) {
-		/* no longer dry, also when over the share below */
-		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
-		if (__atomic_load_n(&g_ra_pend, __ATOMIC_RELAXED))
-			__atomic_store_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
+	{
+		const uint32_t v = __atomic_load_n(&g_ra_video_us, __ATOMIC_RELAXED);
+
+		if (v && ksceKernelGetSystemTimeLow() - v < RA_VIDEO_US)
+			return;
 	}
 	if (g_ra_rate_max) {
 		const uint32_t now = ksceKernelGetSystemTimeLow();
@@ -1506,18 +1505,11 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 		if (now - __atomic_load_n(&g_ra_rate_us, __ATOMIC_RELAXED) >= 1000000u) {
 			__atomic_store_n(&g_ra_rate_us, now, __ATOMIC_RELAXED);
 			__atomic_store_n(&g_ra_rate_n, 0, __ATOMIC_RELAXED);
-			__atomic_store_n(&g_ra_rate_n1, 0, __ATOMIC_RELAXED);
 		}
-		if (__atomic_add_fetch(L < 2 ? &g_ra_rate_n1 : &g_ra_rate_n, 1, __ATOMIC_RELAXED) >
-		    g_ra_rate_max)
+		if (__atomic_add_fetch(&g_ra_rate_n, 1, __ATOMIC_RELAXED) > g_ra_rate_max)
 			return;                           /* over this second's share */
 	}
 	__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
-	if (L < 2) {
-		if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE))
-			__atomic_fetch_add(&g_ra_pend, 1, __ATOMIC_RELAXED);
-		return;
-	}
 	n = __atomic_add_fetch(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
 	/* learnt enough: the worker woken (it does not poll) */
 	if (n == __atomic_load_n(&g_ra_target, __ATOMIC_RELAXED) &&
@@ -1988,30 +1980,14 @@ static uint32_t ra_learn_target(const char *t)
  * nothing new: no writes the storage does not need). */
 static void ra_learn_finish(void);
 
-/* The fallback (worker, as it runs anyway, at the latest as the app leaves;
- * no timer of its own): no stream of 2 reads or more for RA_DRY_US while the
- * app runs - its single reads since then count. */
-static void ra_learn_dry(void)
-{
-	const int64_t now = ksceKernelGetSystemTimeWide();
-
-	if (now - __atomic_load_n(&g_ra_dry_us, __ATOMIC_RELAXED) >= RA_DRY_US) {
-		const uint32_t p = __atomic_exchange_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
-
-		if (p)
-			__atomic_fetch_add(&g_ra_hstreams, p, __ATOMIC_RELAXED);
-	}
-}
-
 static void ra_learn_keep(void)
 {
 	RaProf pf;
 
 	if (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) || !g_ra_title[0])
 		return;
-	ra_learn_dry();
 	if (__atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= ra_learn_target(g_ra_title)) {
-		ra_learn_finish();                    /* the fallback made it */
+		ra_learn_finish();                    /* it has them, not woken yet */
 		return;
 	}
 	if (__atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) == g_ra_saved_n)
@@ -2064,7 +2040,6 @@ static void ra_hist_clear(void)
 		for (int b = 0; b < RA_HBINS; b++)
 			__atomic_store_n(&g_ra_hcnt[k][b], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_hstreams, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_ra_pend, 0, __ATOMIC_RELAXED);
 }
 
 static void ra_thr_text(char *out, size_t n, uint32_t t)
@@ -2217,7 +2192,6 @@ static void ra_auto_begin(void)
 				ST(g_ra_dev, pf.dev);
 		}
 		g_ra_saved_n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
-		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		if (partial)
@@ -2281,7 +2255,6 @@ static void ra_auto_tick(void)
 		ra_dev_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
 		g_ra_saved_n = 0;
-		__atomic_store_n(&g_ra_dry_us, (int64_t)ksceKernelGetSystemTimeWide(), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
@@ -2344,12 +2317,8 @@ static void ra_auto_tick(void)
 		}
 	}
 	if (is_auto && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0]) {
-		uint32_t n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+		const uint32_t n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
 
-		if (n < ra_learn_target(g_ra_title)) {
-			ra_learn_dry();
-			n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
-		}
 		if (n >= ra_learn_target(g_ra_title))
 			ra_learn_finish();                /* enough streams */
 	}
@@ -2780,6 +2749,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		if (pc->off >= pc->n)
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 	}
+	d->ra_hit = cov == n;
 	ADD(g_ra_hits, 1);
 	ADD(g_ra_kib, cov / 2);
 	if (stats) {
@@ -2791,10 +2761,21 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	return cov;
 }
 
+/* The stream so far has ended: noted, unless it was a video's run. */
+static void ra_stream_end(Dev *d)
+{
+	if (d->ra_streak && d->ra_run < RA_VIDEO_READS)
+		ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
+	d->ra_run = 0;
+}
+
 /* A read [sector, sector + n) has completed: the stream so far. 1 if it
  * counts (then the pieces may be refilled after it). */
 static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 {
+	const int hit = d->ra_hit;
+
+	d->ra_hit = 0;
 	if (n < RA_MIN_SECTORS)
 		return 0;                           /* neither part of a stream nor a break */
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc) {
@@ -2803,8 +2784,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 			ra_dev_add((int)(d - g_dev), n);
 	} else {
 		/* the last stream is over: noted for auto; a new one starts */
-		if (d->ra_streak)
-			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
+		ra_stream_end(d);
 		d->ra_streak = 1;
 		d->ra_pid = 0;
 		if (LD(g_ra_measure)) {
@@ -2822,8 +2802,20 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	d->ra_nc = nc;
 	d->ra_last_part = part;
 	d->ra_last_end = sector + n;
-	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))     /* no clock read otherwise */
-		__atomic_store_n(&d->ra_last_us, ksceKernelGetSystemTimeLow(), __ATOMIC_RELAXED);
+	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {   /* no clock read otherwise */
+		const uint32_t now = ksceKernelGetSystemTimeLow();
+
+		__atomic_store_n(&d->ra_last_us, now, __ATOMIC_RELAXED);
+		if (hit) {
+			const uint32_t v = __atomic_load_n(&g_ra_video_us, __ATOMIC_RELAXED);
+
+			/* a video's run, or a piece of one still going on */
+			if (++d->ra_run >= RA_VIDEO_READS || (v && now - v < RA_VIDEO_US))
+				__atomic_store_n(&g_ra_video_us, now ? now : 1, __ATOMIC_RELAXED);
+		} else {
+			d->ra_run = 0;
+		}
+	}
 	return 1;
 }
 
@@ -3323,8 +3315,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
 		/* a write ends the stream: noted, as any other end */
-		if (d->ra_streak)
-			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
+		ra_stream_end(d);
 		d->ra_streak = 0;
 	}
 	if (ra_any(d)) {

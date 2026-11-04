@@ -71,6 +71,7 @@ add_executable(vitamemio_kernel
   kernel/stage.c
   kernel/hud.c
   kernel/hud_i18n.c
+  kernel/overlay.c
 )
 
 target_link_libraries(vitamemio_kernel

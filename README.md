@@ -116,9 +116,26 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 | Statistics | Collects timings and data counts for the tester app. Also has read ahead measure and learn each game as *Auto* does, with read ahead *On* or *Off* too (what is learnt is kept, and used once *Auto* is chosen); with *Auto* that is one and the same measuring, not done twice. Overlapped reads on *Auto* and read ahead on *Auto* measure what they need either way | On |
 | Storage HUD | Live speed of each storage in the top right corner: Off, Compact, or Extended (adds totals and errors) | Off |
 | HUD style | Classic (white text) or PSVshell (black panel, coloured values) | PSVshell |
+| Overlay (SELECT + arrows) | A small menu over any game, opened with keys (see *Overlay* below). While it is on, the HUD shows only through these keys | Off |
 | Reset safe mode | Ends safe mode; the plugin starts normally after the next restart | |
 
 Settings, logs and tester results live in `ur0:data/vita-memio/`.
+
+**Read ahead Auto profiles** (next to *Advanced*). One entry per game Auto has learnt, by title ID. Open one to see when read ahead starts for reads into cached memory (*C*) and into non-cacheable memory (*NC*), which storage the game is on, and how many streams it was learnt from; *Delete* makes Auto learn that game again (at once, if it is running). The list is read when the Devices page opens.
+
+**Emulators and Adrenaline.** Auto follows the process that reads, by its title ID. An emulator (RetroArch and the like) or Adrenaline is one process for every game it runs, so all of them share that one profile and that one storage (the one the ISOs or ROMs are read from). That works well when they are read the same way; to have it learnt again, delete its profile.
+
+**Overlay.** With *Overlay* on in *Advanced*:
+
+| Keys | |
+|---|---|
+| SELECT + Right | opens the overlay; again: closes it and shows the HUD (PSVshell style; *Extended* if the HUD setting is *Off*) |
+| SELECT + Left | from the HUD back to the overlay; again: closes it |
+| SELECT + Up or Down | closes the overlay and the HUD |
+| Up / Down | (overlay open) choose a line |
+| Left / Right, Cross | change the setting on it; on *Reset Auto profile*, Cross deletes the running game's profile so it is learnt again |
+
+While the overlay is open the game gets no buttons. It shows the game being followed and its storage, whether Auto is learning it (and how far) or has learnt it, after how many reads read ahead starts for *C* and *NC* reads, and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Changes made there are saved, as in Settings. The overlay is in English.
 
 **Safe mode.** If the console does not reach the home screen and stay there for 30 seconds, the next start installs nothing, so a bad setting cannot trap you in a reboot loop. The *Driver* row then says *safe mode*. You can still change settings: switch off whatever caused it, select **Reset safe mode** and restart. (Restarting by hand within 30 seconds of the home screen also counts, once.) Holding **L** while the console starts skips all plugins.
 

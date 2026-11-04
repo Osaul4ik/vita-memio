@@ -33,6 +33,9 @@ static tai_hook_ref_t g_ref;
 /* Double-buffered: the worker fills the back copy, then flips g_front. */
 static HudText      g_text[2];
 static volatile int g_front = 0;
+/* The overlay's, the same way; drawn without the cache (it is open briefly). */
+static HudText      g_ov[2];
+static volatile int g_ov_front = 0;
 
 /* The PSVshell style keeps the composed panel in g_cache (ordinary cached
  * memory, allocated by the worker while the HUD is on), so a frame only copies
@@ -77,7 +80,8 @@ static int hook_set_framebuf(int head, int index,
 	if (head != 0 || !pParam || !pParam->base)
 		return ret;
 	t = &g_text[g_front];
-	if (t->n <= 0)
+	const HudText *ov = &g_ov[g_ov_front];
+	if (t->n <= 0 && ov->n <= 0)
 		return ret;
 	int w = (int)pParam->width, h = (int)pParam->height,
 	    pitch = (int)pParam->pitch;
@@ -89,7 +93,9 @@ static int hook_set_framebuf(int head, int index,
 		return ret;
 
 	uint32_t prev_dacr = hud_dacr_open();
-	if (t->style == VM_HUD_STYLE_PSVSHELL) {
+	if (t->n <= 0) {
+		/* only the overlay */
+	} else if (t->style == VM_HUD_STYLE_PSVSHELL) {
 		if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
 			if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache))
 				hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
@@ -98,6 +104,10 @@ static int hook_set_framebuf(int head, int index,
 	} else {
 		hud_draw_classic((uint32_t *)pParam->base, pitch, w, h, t);
 	}
+	if (ov->n > 0 && !__sync_lock_test_and_set(&g_row_busy, 1)) {
+		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, g_row);
+		__sync_lock_release(&g_row_busy);
+	}
 	hud_dacr_restore(prev_dacr);
 	return ret;
 }
@@ -105,6 +115,7 @@ static int hook_set_framebuf(int head, int index,
 int vm_hud_init(void)
 {
 	memset(g_text, 0, sizeof(g_text));
+	memset(g_ov, 0, sizeof(g_ov));
 
 	/* NIDs from the VitaSDK db (vita-headers db/360/SceDisplay.yml), present
 	 * unchanged in 3.65 and 3.68:
@@ -177,6 +188,7 @@ static void cache_fit(const HudText *t)
 void vm_hud_fini(void)
 {
 	g_text[0].n = g_text[1].n = 0;
+	g_ov[0].n = g_ov[1].n = 0;
 	if (g_hook >= 0) {
 		taiHookReleaseForKernel(g_hook, g_ref);
 		g_hook = -1;
@@ -223,4 +235,31 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 	cache_fit(t);
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
+}
+
+void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n)
+{
+	int back = g_ov_front ^ 1;
+	HudText *t = &g_ov[back];
+
+	if (n < 0) n = 0;
+	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
+	t->maxlen = 0;
+	for (int i = 0; i < n; i++) {
+		int len = 0;
+		while (len < VM_HUD_LINE_MAX - 1 && lines[i][len]) {
+			t->lines[i][len] = lines[i][len];
+			len++;
+		}
+		t->lines[i][len] = 0;
+		len = hud_visible_len(t->lines[i]);
+		if (len > t->maxlen)
+			t->maxlen = len;
+	}
+	t->style = VM_HUD_STYLE_PSVSHELL;
+	t->left = 1;
+	t->n = n;
+	t->gen = ++g_gen;
+	__sync_synchronize();   /* the text must be visible before the flip */
+	g_ov_front = back;
 }

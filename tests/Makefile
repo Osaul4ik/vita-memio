@@ -11,7 +11,7 @@ CFLAGS  ?= -std=gnu99 -g -O1 -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer
 CFLAGS  += -Istubs -pthread
 
-TESTS := test_stage test_settings test_hud test_util test_i18n test_bench test_fastcopy
+TESTS := test_stage test_settings test_hud test_util test_i18n test_bench test_fastcopy test_overlay
 
 .PHONY: all run clean
 all: run
@@ -38,6 +38,9 @@ TESTER := ../tester/bench.c ../tester/report.c ../tester/results.c
 
 test_bench: test_bench.c fakes.c fakes.h vm_test.h $(TESTER) ../tester/bench.h ../tester/pattern.h ../tester/report.h ../tester/results.h
 	$(CC) $(CFLAGS) -o $@ test_bench.c $(TESTER) fakes.c
+
+test_overlay: test_overlay.c vm_test.h ../kernel/overlay_logic.h
+	$(CC) $(CFLAGS) -o $@ test_overlay.c
 
 test_fastcopy: test_fastcopy.c vm_test.h ../kernel/fastcopy.h
 	$(CC) $(CFLAGS) -o $@ test_fastcopy.c

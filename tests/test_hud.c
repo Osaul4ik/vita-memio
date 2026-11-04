@@ -232,8 +232,35 @@ static void test_corner(void)
 	CHECK(hud_visible_len(HUD_C_TEXT "ab" HUD_C_BAD "c") == 3);
 }
 
+/* The overlay's panel: the top left corner, as many lines as it has (12). */
+static void test_overlay_left(void)
+{
+	static const char *const lines[12] = {
+		"vita-memio", "Game PCSE00001", "Auto: learning 3/300", "Starts after C 5 NC 5",
+		"On core 3 C 98% NC 100%", "> Read ahead       Auto", "  Copy on core 3   C + NC",
+		"  Overlapped reads Auto", "  GPU-safe reads   On", "  Reset Auto profile (X)",
+		"Up/Down Left/Right X", "12",
+	};
+	static uint32_t row[HUD_ROW_MAX];
+	const int w = 960, h = 544;
+	uint32_t *fb = calloc((size_t)w * h, 4);
+	HudText t;
+	HudGeom g;
+
+	set_text(&t, VM_HUD_STYLE_PSVSHELL, lines, 12);
+	t.left = 1;
+	CHECK(hud_panel_geom(w, h, &t, &g) && g.x0 == w / 96 && g.y0 + g.box_h <= h);
+	hud_draw_panel(fb, w, w, h, &t, row);
+	CHECK(fb[(g.y0 + g.box_h / 2) * w + g.x0 + 2] == HUD_PANEL_BG);   /* drawn there */
+	CHECK(fb[(g.y0 + g.box_h / 2) * w + w - 4] == 0);                   /* not on the right */
+	t.left = 0;
+	CHECK(hud_panel_geom(w, h, &t, &g) && g.x0 + g.box_w == w - w / 96);
+	free(fb);
+}
+
 int main(void)
 {
+	RUN(test_overlay_left);
 	RUN(test_panel_sizes);
 	RUN(test_panel_limits);
 	RUN(test_panel_cache);

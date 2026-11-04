@@ -110,6 +110,7 @@ static const char *offload_text(int v)
 {
 	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_CACHED ? "cached"
 	     : v == VM_OFFLOAD_NC ? "non-cacheable" : v == VM_OFFLOAD_ALL ? "cached and non-cacheable"
+	     : v == VM_OFFLOAD_FULL ? "all, also non-cacheable reads themselves"
 	     : "unknown";
 }
 

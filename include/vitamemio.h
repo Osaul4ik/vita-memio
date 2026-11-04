@@ -100,14 +100,19 @@ enum vm_key {
 #define VM_OFFLOAD_CACHED  2   /* reads into cached memory                       */
 #define VM_OFFLOAD_ALL     3   /* C + NC                                         */
 #define VM_OFFLOAD_NC      4   /* what read ahead holds for non-cacheable memory */
+#define VM_OFFLOAD_FULL    5   /* C + NC, and non-cacheable reads themselves     */
 
 static inline int vm_offload_cached(int v)
 {
-	return v == VM_OFFLOAD_CACHED || v == VM_OFFLOAD_ALL;
+	return v == VM_OFFLOAD_CACHED || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
 }
 static inline int vm_offload_nc(int v)
 {
-	return v == VM_OFFLOAD_NC || v == VM_OFFLOAD_ALL;
+	return v == VM_OFFLOAD_NC || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
+}
+static inline int vm_offload_direct(int v)
+{
+	return v == VM_OFFLOAD_FULL;
 }
 
 #define VM_RA_OFF          0
@@ -180,7 +185,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_CACHED && v <= VM_OFFLOAD_NC);
+		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_CACHED && v <= VM_OFFLOAD_FULL);
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

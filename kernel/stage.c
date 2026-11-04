@@ -475,6 +475,8 @@ static int          g_offload_logged;      /* the state the worker last logged *
 static uint32_t     g_offload_type;        /* the first mapping's memblock type */
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
+static volatile int g_nc_off_refused;      /* no fitting mapping of non-cacheable memory */
+static uint32_t     g_nc_off_type;
 
 /* The caller's buffer for one request, mapped for the copier (see the top of
  * "copy on the system core"). */
@@ -487,6 +489,8 @@ typedef struct OffMap {
 	int      tried;
 	int      mt;               /* the buffer's memory type at both ends (read by
 	                            * the caller: an address of its own space), or -1 */
+	int      nc;               /* a non-cacheable buffer (read ahead): a mapping
+	                            * that does not fit refuses only those */
 } OffMap;
 static void off_map(OffMap *m);
 
@@ -1151,7 +1155,10 @@ static void off_map(OffMap *m)
 	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
 	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != mt) {
 		ksceKernelUserUnmap(uid);
-		off_refuse(-2, -2, 0);
+		if (m->nc)
+			ST(g_nc_off_refused, 1);
+		else
+			off_refuse(-2, -2, 0);
 		return;
 	}
 	memset(&info, 0, sizeof(info));
@@ -1159,10 +1166,15 @@ static void off_map(OffMap *m)
 	r = ksceKernelMemBlockGetInfoEx(uid, &info);
 	if (r < 0 || (int)(info.type & 0xFF00) != mt || (info.type & 0x6) != 0x6) {
 		ksceKernelUserUnmap(uid);
-		off_refuse(-1, r < 0 ? r : -1, info.type);
+		if (m->nc) {
+			ST(g_nc_off_type, info.type);
+			ST(g_nc_off_refused, 1);
+		} else {
+			off_refuse(-1, r < 0 ? r : -1, info.type);
+		}
 		return;
 	}
-	{
+	if (!m->nc) {
 		int zero = 0;                       /* first usable one: for the log */
 
 		if (__atomic_compare_exchange_n(&g_offload_state, &zero, 1, 0, __ATOMIC_ACQ_REL,
@@ -1919,9 +1931,10 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                       uint8_t *p, uint32_t nsec)
 {
-	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
+	/* the caller found it non-cacheable at both ends */
+	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = MEMTYPE_NC, .nc = 1 };
 	uint32_t got = 0, own = 0;
-	int ret = 0, stats, bad = 0;
+	int ret = 0, stats, off, offload, bad = 0;
 	void *shadow;
 
 	if (!take(d, 1, nsec)) {
@@ -1937,13 +1950,22 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	}
 	shadow = take_shadow();                     /* verify mode: compared after */
 	stats = LD(g_stats);
+	offload = LD(g_offload);
+	/* the same setting as for cached reads. Only what the pieces hold has a
+	 * copy to move: the rest is read straight into the buffer */
+	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
+	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
+	      (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && LD(g_gpu_safe))) &&
+	      (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	/* a 32 KiB read leaves the large reads' pieces alone: it goes straight
 	 * into its own buffer, they are not in its way */
 	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small))) {
-		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, 0, &om, nsec, &own);
+		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
 		if (got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
 	}
+	if (om.uid >= 0)
+		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
 	if (got && shadow)
 		bad = ra_verify(d, io, ref, part, sector, p, got, 0, shadow);
 	if (got < nsec) {
@@ -2426,6 +2448,7 @@ void vm_stage_apply(const VmSettings *s)
 	if (offload != LD(g_offload)) {
 		__atomic_store_n(&g_offload_state, 0, __ATOMIC_RELEASE);   /* checked afresh */
 		ST(g_offload_logged, 0);
+		ST(g_nc_off_refused, 0);                  /* checked afresh */
 	}
 	ST(g_offload, offload);
 	if (!ra != !LD(g_readahead))
@@ -2483,11 +2506,13 @@ void vm_stage_worker_tick(void)
 		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
 		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
 			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable), dropped %u "
-			         "(%u MiB unused), unusable %u, tiny reads from their block %u",
+			         "(%u MiB unused), unusable %u, tiny reads from their block %u, "
+			         "NC copier refused %d (0x%08x)",
 			         (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
-			         (unsigned)LD(g_ra_tiny_reads));
+			         (unsigned)LD(g_ra_tiny_reads), (int)LD(g_nc_off_refused),
+			         (unsigned)LD(g_nc_off_type));
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),

@@ -15,13 +15,14 @@ vita-memio sits between the system's storage driver and the program that reads o
 - **The storage works exactly as before.** What a program reads is byte-for-byte what it would read without the plugin, and what it writes ends up on the card unchanged.
 - **Writes are never cached or delayed.** When a write returns, the data is on the card, just like without the plugin.
 - **Anything unusual falls back to normal.** An error switches that storage back to the standard path for the rest of the session and finishes the request the standard way. On a firmware it does not know, the plugin installs nothing at all.
+- **Nothing is read before it is asked for,** unless you switch on the experimental *Read ahead*. Then, while a file is read from start to end, the next part is read from the card a little early. What was read early is only used for the very next read of that file, never once anything was written over it, and never on the internal storage.
 - **Small transfers are left alone** (under 32 KiB: mostly the file system's own bookkeeping), unless you switch on *Small transfers too*.
 - **Only the three storages below are touched,** and only while switched on: a microSD in an SD2Vita, the Sony memory card and the internal storage. Game cards, USB storage and Wi-Fi never are.
 
 **Cached and non-cacheable memory.** A program reads into a buffer, and that buffer is in one of two kinds of memory:
 
 - **Ordinary (cached) memory**, where most program data lives: file copies, installs, most of what a game loads. These reads get the speed-up described below.
-- **Non-cacheable memory**, which a program sets aside for data the graphics chip reads directly. The system already reads into it at full speed, so the plugin leaves these reads exactly as they are: same speed, no change at all. The tester shows them as the **NC** rows.
+- **Non-cacheable memory**, which a program sets aside for data the graphics chip reads directly. The system already reads into it at full speed, so the plugin leaves these reads exactly as they are: same speed, no change at all. The one exception is *Read ahead*: when a game reads such data in long runs, the card can already be busy with the next part. The tester shows them as the **NC** rows.
 
 The plugin decides this per read, from the buffer itself, so the same program can do both in one session. Which kind a given program uses for a given file is up to that program.
 
@@ -60,7 +61,7 @@ My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), th
   | 4 KiB (the system reads 32 KiB from the card) | 276 | **105** |
 
   Reads into non-cacheable memory cost it about 1.5 ms per MiB. Small reads are about 4% slower with the copy on the system core (387 → 371 reads per second at 4 KiB); big reads are as fast as before.
-- These figures are for reads into ordinary (cached) memory. Reads into non-cacheable memory are not changed by the plugin (see *What the plugin does*); on my console the system reads those from the SD2Vita at about 21 MiB/s on its own.
+- These figures are for reads into ordinary (cached) memory. Reads into non-cacheable memory are not changed by the plugin unless *Read ahead* is on (see *What the plugin does*); on my console the system reads those from the SD2Vita at about 21 MiB/s on its own.
 - The original's figures are from [its README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures): PCH-1000, firmware 3.60, a 128 GB microSD, an official 4 GB memory card, 64 MiB per run.
 - The memory card and internal storage rows were measured with an earlier version; the current one should be a little faster still.
 - microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Your numbers will depend on your console, card and game.
@@ -107,6 +108,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 | GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). If the firmware cannot do this, reads simply take the normal way | On |
 | Overlapped reads | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and two helper threads per storage in use; all are given back when this and *Copy on the system core* are off, or the storage is switched off. Not used while *Verify transfers* is on | Auto |
 | Copy on the system core | Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads. **Off**: the game's own core copies, as without the plugin. **GPU-safe only**: only while *GPU-safe reads* are on, where the copy costs the most. **Always** (recommended): every faster read of a game or app of 16 KiB or more into ordinary memory, with or without *GPU-safe reads*. Big reads stay as fast as before; reads of 16–32 KiB are about 4% slower, for less than half the work on the game's core. Reads into non-cacheable memory have nothing to copy (the card writes straight into the game's buffer while its thread sleeps), so they stay as they are. If the console does not allow it, games copy as before (the log says why) | Always |
+| Read ahead (experimental) | While a file is read in order, the system core reads the next part from the card before it is asked for, so the card does not wait between reads. Also for games loading graphics data (non-cacheable memory). It starts after five reads in a row of 64 KiB or more, or sixteen of 32 KiB, reading just a little ahead at first, so little is read past the end of a file. Reads under 32 KiB in order (some apps read whole files a sector at a time) are read in 32 KiB blocks from the eighth on, on the program's own thread. A read elsewhere in the meantime may wait a few ms for the card. A write to the same place always wins: what was read early is then not used. Covered by *Verify transfers*. Never used on the internal storage. Needs 32 KiB more per storage on top of the *Overlapped reads* buffers | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
 | Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only. Overlapped reads are not used while it is on | Off |
 | Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
@@ -136,7 +138,8 @@ Pick the storage the test folder is on. On most setups both the SD2Vita and the 
 ## Limitations
 
 - Most game loading is not limited by storage, so a game gains less than a file copy does.
-- Reads into non-cacheable memory (graphics data) are not sped up; they run as the system does them.
+- Reads into non-cacheable memory (graphics data) are not sped up, unless the experimental *Read ahead* is on and a game reads them in long runs.
+- *Read ahead* bets that a file read from start to end goes on being read: when a game jumps elsewhere instead, that read can wait a few ms for the card.
 - Writes are limited mostly by the card itself, and cards differ a lot.
 - Memory use: 256 KiB per storage you switch on, plus 128 KiB for *Overlapped reads* while they are used.
 - Tested on one console so far (see below). Treat it as experimental and keep a backup.
@@ -164,6 +167,7 @@ Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://git
 - **Driver status row** in Settings, also shown when the kernel module is missing.
 - **Overlapped reads**, **Small transfers too**, **Verify transfers** and **Statistics** as Settings options.
 - **Copy on the system core**: a game's or app's reads can be copied on the console's spare core instead of its own.
+- **Read ahead** (experimental, off by default): files read in order come from the card before they are asked for.
 - **PSVshell-style HUD** next to the original look.
 - **Safe mode you can recover from**: settings can be changed in safe mode, and a start only counts as good after 30 seconds on the home screen.
 - **Host tests** for the storage path, settings, HUD and tester, run on every push.

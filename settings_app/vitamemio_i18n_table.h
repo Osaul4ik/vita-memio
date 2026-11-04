@@ -1232,3 +1232,47 @@
 	"Always",   /* engb */
 	"Her zaman",   /* tr */
 },
+[VM_I18N_ROW_READAHEAD] = {
+	"先読み（試験的）",   /* ja */
+	"Read ahead (experimental)",   /* en */
+	"Lecture anticipée (expérimental)",   /* fr */
+	"Lectura anticipada (experimental)",   /* es */
+	"Vorauslesen (experimentell)",   /* de */
+	"Lettura anticipata (sperimentale)",   /* it */
+	"Vooruitlezen (experimenteel)",   /* nl */
+	"Leitura antecipada (experimental)",   /* pt */
+	"Упреждающее чтение (эксперимент)",   /* ru */
+	"미리 읽기 (실험적)",   /* ko */
+	"預先讀取（實驗性）",   /* zht */
+	"预读（实验性）",   /* zhs */
+	"Ennakkoluku (kokeellinen)",   /* fi */
+	"Läs i förväg (experimentell)",   /* sv */
+	"Læs forud (eksperimentel)",   /* da */
+	"Les på forhånd (eksperimentell)",   /* no */
+	"Odczyt z wyprzedzeniem (eksperymentalny)",   /* pl */
+	"Leitura antecipada (experimental)",   /* ptbr */
+	"Read ahead (experimental)",   /* engb */
+	"Önden okuma (deneysel)",   /* tr */
+},
+[VM_I18N_HINT_READAHEAD] = {
+	"ファイルが順番に読み込まれている間、次の部分を要求される前にシステムコアがカードから読み込むため、カードが待つことはありません。読み込みやコピーが速くなります。別の場所の読み込みは数ミリ秒待つことがあります。書き込みには影響しません。内蔵ストレージには使いません。",   /* ja */
+	"While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage.",   /* en */
+	"Pendant qu'un fichier est lu dans l'ordre, le cœur système lit la suite sur la carte avant qu'elle soit demandée : la carte n'attend jamais. Chargements et copies plus rapides ; une lecture ailleurs peut attendre quelques ms. Les écritures ne sont pas affectées. Pas utilisé pour le stockage interne.",   /* fr */
+	"Mientras un archivo se lee en orden, el núcleo del sistema lee de la tarjeta la parte siguiente antes de que se pida, así la tarjeta nunca espera. Cargas y copias más rápidas; una lectura en otro lugar puede esperar unos ms. Las escrituras no se ven afectadas. No se usa en el almacenamiento interno.",   /* es */
+	"Während eine Datei der Reihe nach gelesen wird, liest der Systemkern den nächsten Teil von der Karte, bevor er angefordert wird, sodass die Karte nie wartet. Schnelleres Laden und Kopieren; ein Lesen an anderer Stelle kann einige ms warten. Schreibvorgänge sind nicht betroffen. Nicht für den internen Speicher.",   /* de */
+	"Mentre un file viene letto in ordine, il core di sistema legge dalla scheda la parte successiva prima che venga richiesta, così la scheda non aspetta mai. Caricamenti e copie più veloci; una lettura altrove può attendere qualche ms. Le scritture non sono interessate. Non usato per la memoria interna.",   /* it */
+	"Terwijl een bestand op volgorde wordt gelezen, leest de systeemkern het volgende deel van de kaart voordat erom wordt gevraagd, zodat de kaart nooit wacht. Sneller laden en kopiëren; een leesactie elders kan enkele ms wachten. Schrijven wordt niet beïnvloed. Niet voor de interne opslag.",   /* nl */
+	"Enquanto um ficheiro é lido por ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, por isso o cartão nunca espera. Carregamentos e cópias mais rápidos; uma leitura noutro local pode esperar alguns ms. As escritas não são afetadas. Não é usado no armazenamento interno.",   /* pt */
+	"Пока файл читается по порядку, системное ядро заранее читает с карты следующую часть, поэтому карта не простаивает. Загрузка и копирование быстрее; чтение в другом месте может подождать несколько мс. На запись не влияет. Не используется для внутренней памяти.",   /* ru */
+	"파일을 순서대로 읽는 동안 시스템 코어가 요청 전에 다음 부분을 카드에서 미리 읽어 카드가 기다리지 않습니다. 로딩과 복사가 빨라집니다. 다른 위치의 읽기는 몇 ms 기다릴 수 있습니다. 쓰기에는 영향이 없습니다. 내부 저장소에는 사용되지 않습니다.",   /* ko */
+	"依序讀取檔案時，系統核心會在要求之前先從記憶卡讀取下一部分，因此記憶卡不必等待。載入與複製更快；其他位置的讀取可能等待數毫秒。不影響寫入。不用於內部儲存空間。",   /* zht */
+	"按顺序读取文件时，系统核心会在请求之前先从存储卡读取下一部分，因此存储卡无需等待。加载和复制更快；其他位置的读取可能等待几毫秒。不影响写入。不用于内部存储。",   /* zhs */
+	"Kun tiedostoa luetaan järjestyksessä, järjestelmäydin lukee seuraavan osan kortilta ennen pyyntöä, joten kortti ei koskaan odota. Nopeammat lataukset ja kopiot; muualta lukeminen voi odottaa muutaman ms. Ei vaikuta kirjoituksiin. Ei käytetä sisäiselle tallennustilalle.",   /* fi */
+	"När en fil läses i ordning läser systemkärnan nästa del från kortet innan den begärs, så kortet aldrig väntar. Snabbare laddning och kopiering; en läsning på annan plats kan vänta några ms. Skrivningar påverkas inte. Används inte för internminnet.",   /* sv */
+	"Mens en fil læses i rækkefølge, læser systemkernen næste del fra kortet, før den bliver bedt om, så kortet aldrig venter. Hurtigere indlæsning og kopiering; en læsning andetsteds kan vente nogle ms. Skrivninger påvirkes ikke. Bruges ikke til det interne lager.",   /* da */
+	"Mens en fil leses i rekkefølge, leser systemkjernen neste del fra kortet før den blir bedt om, så kortet aldri venter. Raskere lasting og kopiering; en lesing andre steder kan vente noen ms. Skriving påvirkes ikke. Brukes ikke for intern lagring.",   /* no */
+	"Gdy plik jest czytany po kolei, rdzeń systemowy z wyprzedzeniem czyta z karty kolejną część, więc karta nigdy nie czeka. Szybsze wczytywanie i kopiowanie; odczyt w innym miejscu może poczekać kilka ms. Nie wpływa na zapis. Nie dotyczy pamięci wewnętrznej.",   /* pl */
+	"Enquanto um arquivo é lido em ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, assim o cartão nunca espera. Carregamentos e cópias mais rápidos; uma leitura em outro lugar pode esperar alguns ms. As gravações não são afetadas. Não é usado no armazenamento interno.",   /* ptbr */
+	"While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage.",   /* engb */
+	"Bir dosya sırayla okunurken sistem çekirdeği sonraki bölümü istenmeden önce karttan okur, böylece kart hiç beklemez. Daha hızlı yükleme ve kopyalama; başka yerdeki bir okuma birkaç ms bekleyebilir. Yazmalar etkilenmez. Dahili depolamada kullanılmaz.",   /* tr */
+},

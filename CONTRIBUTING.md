@@ -16,6 +16,11 @@ non-negotiable:
   driver internals.
 - **Never cache or defer writes.** A write must have reached the card before the
   call returns, as it does without the plugin.
+- **Read ahead only what cannot be stale.** Data read before it is asked for
+  (*Read ahead*, opt-in) is handed out only to the read that continues it, never
+  after a write touched those sectors or ran while they were read, never after
+  the storage was switched, and never on the internal storage. Every write path
+  must keep that true; anything doubtful drops it and reads the standard way.
 - **Fail to standard.** Any error or doubt switches that storage back to the
   standard path and finishes the request the standard way. Unknown firmware means
   nothing is installed.

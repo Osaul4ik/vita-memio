@@ -167,7 +167,7 @@ static void test_invalid_set_is_rejected(void)
 
 static void test_corrupt_file_gives_defaults(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	VmSettings s;
 	size_t n;
 
@@ -197,7 +197,7 @@ static void test_corrupt_file_gives_defaults(void)
 
 static void test_older_file_with_fewer_keys(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 6 keys: no memcard yet */
 	VmSettings s;
 	size_t n;
@@ -282,6 +282,31 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.offload == VM_OFFLOAD_ALWAYS);
+	/* read ahead: off by default, also for a file from before it existed; on
+	 * and off only */
+	CHECK(VM_DEF_READAHEAD == VM_RA_OFF && VM_KEY_READAHEAD == 12);
+	CHECK(vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_OFF));
+	CHECK(!vm_setting_valid(VM_KEY_READAHEAD, 2) && !vm_setting_valid(VM_KEY_READAHEAD, -1));
+	clean();
+	n = make_file(buf, 12, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.readahead == VM_RA_OFF);
+	v[VM_KEY_READAHEAD] = VM_RA_ON;
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.readahead == VM_RA_ON);
+	v[VM_KEY_READAHEAD] = 2;
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.readahead == VM_DEF_READAHEAD);
 }
 
 /* A save to do keeps the worker waking: pending after a change, not after a
@@ -338,7 +363,7 @@ static void test_file_with_more_keys(void)
 
 static void test_one_bad_value_keeps_the_rest(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 0, 0, 1 };
 	VmSettings s;
 	size_t n;
@@ -356,7 +381,7 @@ static void test_one_bad_value_keeps_the_rest(void)
  * not used. */
 static void test_other_version_gives_defaults(void)
 {
-	uint8_t buf[64];
+	uint8_t buf[128];
 	const int32_t v[7] = { 1, 0, 0, 2, 0, 1, 1 };
 	VmSettings s;
 	size_t n;

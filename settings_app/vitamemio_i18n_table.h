@@ -948,14 +948,14 @@
 },
 [VM_I18N_HINT_STATS] = {
 	"テスターアプリ用に、高速化された転送ごとの時間（システムコールとコピー）と転送量を記録します。オフ：これらを行わないため、転送ごとの処理が少し減ります。HUDはオンの間、自分で速度を数えます。 読み込みの並行処理（自動）は、分割の大きさを決めるため、この設定に関係なく自分で時間を測ります。",   /* ja */
-	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads and read ahead on Auto measure what they need either way.",   /* en */
+	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Full: also what read ahead Auto learns from (the game, its storage, its read streams), written to ur0:data/vita-memio/ra_stats/, whatever read ahead is set to; it changes nothing, and with Auto on the same data is collected once. Overlapped reads and read ahead on Auto measure what they need either way.",   /* en */
 	"Chronomètre chaque transfert accéléré (appel système et copie) et compte les données déplacées, pour l'application de test. Désactivé : rien de tout cela, ce qui économise un peu de travail à chaque transfert. Le HUD compte ses propres vitesses tant qu'il est activé. Les lectures en parallèle en mode Auto se chronomètrent de toute façon, pour dimensionner leurs parties.",   /* fr */
 	"Mide el tiempo de cada transferencia acelerada (llamada al sistema y copia) y cuenta los datos movidos, para la aplicación de prueba. Desactivado: no se hace nada de eso, lo que ahorra un poco de trabajo en cada transferencia. El HUD cuenta sus propias velocidades mientras está activado. Las lecturas solapadas en Automático se cronometran igualmente, para dimensionar sus partes.",   /* es */
 	"Misst bei jeder beschleunigten Übertragung die Zeit (Systemaufruf und Kopie) und zählt die bewegten Daten, für die Tester-App. Aus: nichts davon, das spart bei jeder Übertragung etwas Arbeit. Das HUD zählt seine eigenen Geschwindigkeiten, solange es an ist. Überlappendes Lesen im Modus Automatisch misst seine Zeiten in jedem Fall selbst, um seine Teile zu bemessen.",   /* de */
 	"Cronometra ogni trasferimento accelerato (chiamata di sistema e copia) e conta i dati spostati, per l'app di test. Disattivato: niente di tutto ciò, risparmiando un po' di lavoro a ogni trasferimento. L'HUD conta le proprie velocità finché è attivo. Le letture sovrapposte in Automatico si cronometrano comunque, per dimensionare le loro parti.",   /* it */
 	"Meet bij elke versnelde overdracht de tijd (systeemaanroep en kopie) en telt de verplaatste gegevens, voor de test-app. Uit: niets daarvan, wat bij elke overdracht wat werk bespaart. De HUD telt zijn eigen snelheden zolang hij aan staat. Overlappend lezen op Automatisch meet zichzelf hoe dan ook, om de delen te bepalen.",   /* nl */
 	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para a aplicação de teste. Desligado: nada disso é feito, o que poupa um pouco de trabalho em cada transferência. O HUD conta as suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o seu próprio tempo de qualquer forma, para dimensionar as partes.",   /* pt */
-	"Замеряет время каждой ускоренной передачи (системный вызов и копирование) и считает объём данных — для приложения-тестера. Выключено: ничего из этого не делается, на каждой передаче немного меньше работы. HUD, пока включён, сам считает свои скорости. Параллельное чтение и упреждающее чтение в режиме «Авто» сами измеряют то, что им нужно.",   /* ru */
+	"Замеряет время ускоренных передач и считает объём данных для тестера. Выкл.: ничего из этого, чуть меньше работы. Полная: ещё и данные, по которым учится «Авто» (игра, накопитель, потоки чтения), в ur0:data/vita-memio/ra_stats/ при любом режиме упреждающего чтения; ничего не меняет, а с «Авто» данные собираются один раз. HUD считает свои скорости сам; «Авто» параллельного и упреждающего чтения измеряют нужное сами.",   /* ru */
 	"테스터 앱을 위해 가속된 전송마다 시간(시스템 호출과 복사)을 재고 옮긴 데이터를 셉니다. 끔: 이런 작업을 하지 않아 전송마다 처리가 조금 줄어듭니다. HUD는 켜져 있는 동안 자체적으로 속도를 셉니다. 자동 모드의 겹친 읽기는 부분 크기를 정하기 위해 이 설정과 관계없이 스스로 시간을 잽니다.",   /* ko */
 	"為測試程式記錄每次加速傳輸的時間（系統呼叫與複製）並統計傳輸量。關閉：完全不做這些，每次傳輸可省下一點工作。HUD 開啟時會自行計算速度。 重疊讀取（自動）無論如何都會自行計時，以決定各段的大小。",   /* zht */
 	"为测试程序记录每次加速传输的时间（系统调用与复制）并统计传输量。关闭：完全不做这些，每次传输可省下一点工作。HUD 开启时会自行计算速度。 重叠读取（自动）无论如何都会自行计时，以决定各段的大小。",   /* zhs */
@@ -965,7 +965,7 @@
 	"Tar tiden på hver raskere overføring (systemkall og kopiering) og teller dataene som flyttes, for testappen. Av: ingenting av det gjøres, noe som sparer litt arbeid ved hver overføring. HUD-en teller sine egne hastigheter mens den er på. Overlappende lesinger på Auto tar tiden på seg selv uansett, for å bestemme størrelsen på delene.",   /* no */
 	"Mierzy czas każdego przyspieszonego transferu (wywołanie systemowe i kopiowanie) i liczy przesłane dane, dla aplikacji testowej. Wyłączone: nic z tego, co oszczędza trochę pracy przy każdym transferze. HUD, gdy jest włączony, sam liczy swoje prędkości. Nakładane odczyty w trybie Auto i tak mierzą swój czas, aby dobrać rozmiar części.",   /* pl */
 	"Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para o app de teste. Desligado: nada disso é feito, o que economiza um pouco de trabalho em cada transferência. O HUD conta suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o próprio tempo de qualquer forma, para dimensionar as partes.",   /* ptbr */
-	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads and read ahead on Auto measure what they need either way.",   /* engb */
+	"Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Full: also what read ahead Auto learns from (the game, its storage, its read streams), written to ur0:data/vita-memio/ra_stats/, whatever read ahead is set to; it changes nothing, and with Auto on the same data is collected once. Overlapped reads and read ahead on Auto measure what they need either way.",   /* engb */
 	"Test uygulaması için hızlandırılmış her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş tasarrufu sağlar. HUD açıkken kendi hızlarını kendisi sayar. Otomatik moddaki örtüşen okuma, parçalarının boyutunu belirlemek için her durumda kendi süresini ölçer.",   /* tr */
 },
 [VM_I18N_ROW_GPUSAFE] = {
@@ -1649,4 +1649,26 @@
 	"aprendido de %u fluxos",   /* ptbr */
 	"learnt from %u streams",   /* engb */
 	"%u akıştan öğrenildi",   /* tr */
+},
+[VM_I18N_ITEM_STATS_FULL] = {
+	"フル",   /* ja */
+	"Full",   /* en */
+	"Complète",   /* fr */
+	"Completa",   /* es */
+	"Voll",   /* de */
+	"Completa",   /* it */
+	"Volledig",   /* nl */
+	"Completa",   /* pt */
+	"Полная",   /* ru */
+	"전체",   /* ko */
+	"完整",   /* zht */
+	"完整",   /* zhs */
+	"Täysi",   /* fi */
+	"Full",   /* sv */
+	"Fuld",   /* da */
+	"Full",   /* no */
+	"Pełna",   /* pl */
+	"Completa",   /* ptbr */
+	"Full",   /* engb */
+	"Tam",   /* tr */
 },

@@ -72,7 +72,7 @@ enum vm_key {
 	VM_KEY_LOG,            /* 0/1: write kernel.log / user.log at all        */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
-	VM_KEY_STATS,          /* 0/1: per-transfer timers and data counters     */
+	VM_KEY_STATS,          /* VM_STATS_*: timers and counters (full: + read ahead data) */
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
@@ -114,6 +114,14 @@ static inline int vm_offload_nc(int v)
 {
 	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_NC;
 }
+
+/* Statistics: off; on (per-transfer timers and data counters, for the
+ * tester); full (also what read ahead Auto learns from, written to
+ * ur0:data/vita-memio/ra_stats/<title>.txt, whatever read ahead is set to).
+ * 1 was "on" before the choice existed. */
+#define VM_STATS_OFF       0
+#define VM_STATS_ON        1
+#define VM_STATS_FULL      2
 
 /* Read ahead (experimental): off; on from five large reads in a row; auto -
  * learns, per game (title id), from when on to start and keeps that. */
@@ -183,12 +191,13 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_MEMCARD:
 	case VM_KEY_LOG:
 	case VM_KEY_SMALL:
-	case VM_KEY_STATS:
 	case VM_KEY_GPUSAFE:
 	case VM_KEY_OVERLAY:
 		return v == 0 || v == 1;
 	case VM_KEY_READAHEAD:
 		return v >= VM_RA_OFF && v <= VM_RA_AUTO;
+	case VM_KEY_STATS:
+		return v >= VM_STATS_OFF && v <= VM_STATS_FULL;
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:

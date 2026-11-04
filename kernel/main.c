@@ -505,7 +505,7 @@ static void overlay_feed(void)
 		         "   SEL+> HUD  SEL+< close");
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Game " HUD_C_TEXT "%s" HUD_C_DIM
 		         "  storage " HUD_C_TEXT "%s", now.title[0] ? now.title : "-", dev);
-		if (!now.measure)
+		if (now.mode != VM_RA_AUTO)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: off (Read ahead %s)",
 			         k_ov_ra[s.readahead]);
 		else if (!now.title[0])

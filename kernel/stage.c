@@ -1364,7 +1364,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  * read ahead off.
  *
  * Measuring (the game followed, its storage, its streams: g_ra_measure) is
- * on with Auto or with Statistics. Statistics only collects (the streams of
+ * on with Auto or with Statistics "Full", one switch for both (nothing is
+ * collected twice). Statistics only collects (the streams of
  * the game, whatever Auto does) and writes them to
  * ur0:data/vita-memio/ra_stats/<title>.txt - when the game ends, once a
  * minute while it runs, and when Statistics is switched off; it never
@@ -1387,8 +1388,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
 static volatile int g_ra_mode;            /* VM_RA_*                          */
-static volatile int g_ra_measure;         /* auto or statistics: follow       */
-static volatile int g_ra_stats;           /* statistics: collect, write file  */
+static volatile int g_ra_measure;         /* auto or full statistics: follow  */
+static volatile int g_ra_stats;           /* full statistics: collect, write  */
 /* the game being learnt or served (a process id; 0: none), its thresholds
  * (0: the fixed one) and its histogram while it learns - all atomics */
 static SceUID   g_ra_pid, g_ra_seen;      /* g_ra_seen: the last game with a stream */
@@ -1674,7 +1675,8 @@ static void ra_stats_flush(int force)
  * keeps what it learnt if enough; Statistics writes what it saw. */
 static void ra_game_end(void)
 {
-	if (LD(g_ra_mode) == VM_RA_AUTO && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) &&
+	/* g_ra_auto_was: Auto as the game was learnt (the setting may be off by now) */
+	if (g_ra_auto_was && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) &&
 	    g_ra_title[0] && __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
 		ra_learn_finish();
 	if (g_ra_stats_was)
@@ -2193,6 +2195,19 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	return 1;
 }
 
+/* Full statistics with read ahead not ready on this device: a non-cacheable
+ * read is still noted (ra_nc_read notes it otherwise), so the streams it
+ * collects are all there whatever read ahead is set to. Only if the device
+ * is free at once (the stream fields are the request holder's). */
+static void ra_note_nc(Dev *d, void *part, uint32_t sector, uint32_t n, int ret)
+{
+	if (ret < 0 || n < RA_MIN_SECTORS || !LD(g_ra_stats) ||
+	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) || __sync_lock_test_and_set(&d->busy, 1))
+		return;
+	ra_note(d, part, sector, n, 1);
+	__sync_lock_release(&d->busy);
+}
+
 /* Queue the free pieces after the stream (after the last piece queued, or
  * where the stream is). */
 static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
@@ -2612,10 +2627,15 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
 		/* EXPERIMENT: "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
-		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
+		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r)) {
+			ra_note_nc(d, part, sector, nsec, r);
 			return r;
+		}
 		ADD(g_nc_stock_kib, nsec / 2);
-		return io(ref, part, sector, buf, nsec);
+		r = io(ref, part, sector, buf, nsec);
+		if (!write)
+			ra_note_nc(d, part, sector, nsec, r);
+		return r;
 	}
 	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
@@ -3030,8 +3050,8 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
 	/* follow the game: for Auto, and for Statistics (which only collects
 	 * and writes; it starts nothing of read ahead's own) */
-	ST(g_ra_stats, s->stats ? 1 : 0);
-	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats ? 1 : 0);
+	ST(g_ra_stats, s->stats == VM_STATS_FULL ? 1 : 0);
+	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats == VM_STATS_FULL ? 1 : 0);
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || LD(g_readahead)))

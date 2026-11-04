@@ -95,7 +95,9 @@ static const char X_HEAD[] =
 		ROW_TOGGLE("small")
 		ROW_TOGGLE("verify")
 		ROW_TOGGLE("log")
-		ROW_TOGGLE("stats")
+		ROW_LIST("stats")
+			ITEM("vm_i_st0", "0") ITEM("vm_i_st1", "1") ITEM("vm_i_st2", "2")
+		"</list>"
 		ROW_LIST("hud")
 			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
 		"</list>"
@@ -526,6 +528,9 @@ static const vm_u16 *vm_text(const char *id)
 	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '2' && !id[8])
 		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
 		                : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_PIPE_AUTO);
+	if (s_pfx(id, "vm_i_st") && id[7] >= '0' && id[7] <= '2' && !id[8])
+		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
+		                : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_STATS_FULL);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '4' && !id[9])

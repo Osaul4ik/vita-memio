@@ -77,6 +77,7 @@ enum vm_key {
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
 	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read (EXPERIMENT) */
+	VM_KEY_OVERLAY,        /* 0/1: the SELECT + arrows overlay (and HUD by keys) */
 	VM_KEY_COUNT
 };
 
@@ -139,6 +140,7 @@ static inline int vm_offload_nc(int v)
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
 #define VM_DEF_OFFLOAD   2   /* VM_OFFLOAD_ALWAYS: with GPU-safe reads or not  */
 #define VM_DEF_READAHEAD 0   /* experimental: opt-in                           */
+#define VM_DEF_OVERLAY   0   /* opt-in: it takes SELECT + arrows from games    */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -155,6 +157,7 @@ typedef struct VmSettings {
 	int32_t pipeline;
 	int32_t offload;
 	int32_t readahead;
+	int32_t overlay;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -182,6 +185,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_STATS:
 	case VM_KEY_GPUSAFE:
+	case VM_KEY_OVERLAY:
 		return v == 0 || v == 1;
 	case VM_KEY_READAHEAD:
 		return v >= VM_RA_OFF && v <= VM_RA_AUTO;

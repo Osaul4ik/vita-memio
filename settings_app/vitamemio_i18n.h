@@ -71,6 +71,20 @@ enum vm_i18n_id {
 	VM_I18N_ROW_READAHEAD,      /* Advanced > Read ahead (experimental)           */
 	VM_I18N_HINT_READAHEAD,
 	VM_I18N_ITEM_RA_ON,         /* its "On" (Off and Auto: the pipeline's)        */
+	VM_I18N_ROW_OVERLAY,        /* Advanced > Overlay (SELECT + arrows)           */
+	VM_I18N_HINT_OVERLAY,
+	VM_I18N_ROW_RAPROF,         /* Read ahead Auto profiles (a sub-page)          */
+	VM_I18N_HINT_RAPROF,
+	VM_I18N_RP_NONE,            /* ... none yet                                   */
+	VM_I18N_RP_DELETE,          /* ... a profile's delete button                  */
+	VM_I18N_MSG_RP_DELETED,
+	VM_I18N_MSG_RP_ERR,
+	VM_I18N_RP_AFTER,           /* "after %u reads"                               */
+	VM_I18N_RP_NEVER,
+	VM_I18N_RP_STORAGE,
+	VM_I18N_RP_UNKNOWN,
+	VM_I18N_RP_MEMCARD,
+	VM_I18N_RP_STREAMS,         /* "learnt from %u streams"                       */
 	VM_I18N_COUNT
 };
 

@@ -1342,3 +1342,311 @@
 	"On",   /* engb */
 	"Açık",   /* tr */
 },
+[VM_I18N_ROW_OVERLAY] = {
+	"オーバーレイ（SELECT＋方向キー）",   /* ja */
+	"Overlay (SELECT + arrows)",   /* en */
+	"Overlay (SELECT + flèches)",   /* fr */
+	"Overlay (SELECT + flechas)",   /* es */
+	"Overlay (SELECT + Pfeile)",   /* de */
+	"Overlay (SELECT + frecce)",   /* it */
+	"Overlay (SELECT + pijlen)",   /* nl */
+	"Overlay (SELECT + setas)",   /* pt */
+	"Оверлей (SELECT + стрелки)",   /* ru */
+	"오버레이 (SELECT + 방향키)",   /* ko */
+	"疊加選單（SELECT + 方向鍵）",   /* zht */
+	"叠加菜单（SELECT + 方向键）",   /* zhs */
+	"Overlay (SELECT + nuolet)",   /* fi */
+	"Overlay (SELECT + pilar)",   /* sv */
+	"Overlay (SELECT + pile)",   /* da */
+	"Overlay (SELECT + piler)",   /* no */
+	"Nakładka (SELECT + strzałki)",   /* pl */
+	"Overlay (SELECT + setas)",   /* ptbr */
+	"Overlay (SELECT + arrows)",   /* engb */
+	"Kaplama (SELECT + oklar)",   /* tr */
+},
+[VM_I18N_HINT_OVERLAY] = {
+	"SELECT＋→：オーバーレイを開く。もう一度：閉じてHUDを表示。SELECT＋←：オーバーレイに戻る（HUDを閉じる）。もう一度：閉じる。SELECT＋↑/↓：すべて閉じる。開いている間はゲームに操作が届きません。オンの間、HUDはこの操作でのみ表示されます。",   /* ja */
+	"SELECT + Right opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. While this is on, the HUD only shows through these keys.",   /* en */
+	"SELECT + Droite ouvre l'overlay ; encore : le ferme et affiche le HUD. SELECT + Gauche revient à l'overlay (HUD fermé) ; encore : le ferme. SELECT + Haut ou Bas ferme tout. Overlay ouvert, le jeu ne reçoit aucune touche. Activé, le HUD ne s'affiche que par ces touches.",   /* fr */
+	"SELECT + Derecha abre el overlay; otra vez: lo cierra y muestra el HUD. SELECT + Izquierda vuelve al overlay (HUD cerrado); otra vez: lo cierra. SELECT + Arriba o Abajo cierra todo. Con el overlay abierto, el juego no recibe botones. Activado, el HUD solo aparece con estas teclas.",   /* es */
+	"SELECT + Rechts öffnet das Overlay; nochmal: schließt es und zeigt das HUD. SELECT + Links zurück zum Overlay (HUD zu); nochmal: schließt es. SELECT + Hoch oder Runter schließt beides. Bei offenem Overlay bekommt das Spiel keine Tasten. Wenn an, erscheint das HUD nur über diese Tasten.",   /* de */
+	"SELECT + Destra apre l'overlay; di nuovo: lo chiude e mostra l'HUD. SELECT + Sinistra torna all'overlay (HUD chiuso); di nuovo: lo chiude. SELECT + Su o Giù chiude tutto. Con l'overlay aperto il gioco non riceve tasti. Se attivo, l'HUD appare solo con questi tasti.",   /* it */
+	"SELECT + Rechts opent de overlay; nogmaals: sluit hem en toont de HUD. SELECT + Links terug naar de overlay (HUD dicht); nogmaals: sluit hem. SELECT + Omhoog of Omlaag sluit alles. Met de overlay open krijgt het spel geen knoppen. Aan: de HUD verschijnt alleen via deze toetsen.",   /* nl */
+	"SELECT + Direita abre o overlay; de novo: fecha-o e mostra o HUD. SELECT + Esquerda volta ao overlay (HUD fechado); de novo: fecha-o. SELECT + Cima ou Baixo fecha tudo. Com o overlay aberto, o jogo não recebe botões. Ligado, o HUD só aparece por estas teclas.",   /* pt */
+	"SELECT + вправо открывает оверлей; ещё раз: закрывает его и показывает HUD. SELECT + влево возвращает оверлей (HUD закрывается); ещё раз: закрывает его. SELECT + вверх или вниз закрывает всё. Пока оверлей открыт, игра не получает кнопок. Пока включено, HUD показывается только этими клавишами.",   /* ru */
+	"SELECT + → 오버레이 열기; 다시: 닫고 HUD 표시. SELECT + ← 오버레이로 돌아가기(HUD 닫힘); 다시: 닫기. SELECT + ↑/↓ 모두 닫기. 오버레이가 열려 있는 동안 게임은 버튼을 받지 않습니다. 켜져 있으면 HUD는 이 키로만 표시됩니다.",   /* ko */
+	"SELECT + → 開啟疊加選單；再按：關閉並顯示 HUD。SELECT + ← 回到疊加選單（關閉 HUD）；再按：關閉。SELECT + ↑ 或 ↓ 全部關閉。選單開啟時遊戲收不到按鍵。開啟此項時，HUD 只透過這些按鍵顯示。",   /* zht */
+	"SELECT + → 打开叠加菜单；再按：关闭并显示 HUD。SELECT + ← 回到叠加菜单（关闭 HUD）；再按：关闭。SELECT + ↑ 或 ↓ 全部关闭。菜单打开时游戏收不到按键。开启此项时，HUD 只通过这些按键显示。",   /* zhs */
+	"SELECT + oikea avaa overlayn; uudelleen: sulkee sen ja näyttää HUDin. SELECT + vasen palaa overlayhin (HUD kiinni); uudelleen: sulkee sen. SELECT + ylös tai alas sulkee kaiken. Overlayn ollessa auki peli ei saa painalluksia. Päällä HUD näkyy vain näillä näppäimillä.",   /* fi */
+	"SELECT + höger öppnar overlayen; igen: stänger den och visar HUD. SELECT + vänster tillbaka till overlayen (HUD stängd); igen: stänger den. SELECT + upp eller ned stänger allt. Med overlayen öppen får spelet inga knappar. På: HUD visas bara via dessa knappar.",   /* sv */
+	"SELECT + højre åbner overlayet; igen: lukker det og viser HUD. SELECT + venstre tilbage til overlayet (HUD lukket); igen: lukker det. SELECT + op eller ned lukker alt. Med overlayet åbent får spillet ingen knapper. Til: HUD vises kun via disse taster.",   /* da */
+	"SELECT + høyre åpner overlayet; igjen: lukker det og viser HUD. SELECT + venstre tilbake til overlayet (HUD lukket); igjen: lukker det. SELECT + opp eller ned lukker alt. Med overlayet åpent får spillet ingen knapper. På: HUD vises bare via disse tastene.",   /* no */
+	"SELECT + prawo otwiera nakładkę; ponownie: zamyka ją i pokazuje HUD. SELECT + lewo wraca do nakładki (HUD zamknięty); ponownie: zamyka ją. SELECT + góra lub dół zamyka wszystko. Gdy nakładka jest otwarta, gra nie dostaje przycisków. Włączone: HUD pokazuje się tylko tymi klawiszami.",   /* pl */
+	"SELECT + Direita abre o overlay; de novo: fecha-o e mostra o HUD. SELECT + Esquerda volta ao overlay (HUD fechado); de novo: fecha-o. SELECT + Cima ou Baixo fecha tudo. Com o overlay aberto, o jogo não recebe botões. Ligado, o HUD só aparece por estas teclas.",   /* ptbr */
+	"SELECT + Right opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. While this is on, the HUD only shows through these keys.",   /* engb */
+	"SELECT + Sağ kaplamayı açar; tekrar: kapatır ve HUD'u gösterir. SELECT + Sol kaplamaya döner (HUD kapanır); tekrar: kapatır. SELECT + Yukarı veya Aşağı hepsini kapatır. Kaplama açıkken oyun tuş almaz. Açıkken HUD yalnızca bu tuşlarla görünür.",   /* tr */
+},
+[VM_I18N_ROW_RAPROF] = {
+	"先読み自動のプロファイル",   /* ja */
+	"Read ahead Auto profiles",   /* en */
+	"Profils de lecture anticipée auto",   /* fr */
+	"Perfiles de lectura anticipada auto",   /* es */
+	"Auto-Profile für Vorauslesen",   /* de */
+	"Profili lettura anticipata auto",   /* it */
+	"Auto-profielen vooruitlezen",   /* nl */
+	"Perfis de leitura antecipada auto",   /* pt */
+	"Профили упреждающего чтения (авто)",   /* ru */
+	"미리 읽기 자동 프로필",   /* ko */
+	"預先讀取自動設定檔",   /* zht */
+	"预读自动配置文件",   /* zhs */
+	"Ennakkoluvun automaattiprofiilit",   /* fi */
+	"Auto-profiler för förhandsläsning",   /* sv */
+	"Auto-profiler for forudlæsning",   /* da */
+	"Auto-profiler for forhåndslesing",   /* no */
+	"Profile auto odczytu z wyprzedzeniem",   /* pl */
+	"Perfis de leitura antecipada auto",   /* ptbr */
+	"Read ahead Auto profiles",   /* engb */
+	"Önden okuma otomatik profilleri",   /* tr */
+},
+[VM_I18N_HINT_RAPROF] = {
+	"自動がゲームごとに学習した内容です。開くと内容の確認と削除ができます（削除したゲームは再学習されます）。",   /* ja */
+	"What Auto has learnt, per game. Open one to see it, or to delete it: that game is then learnt again.",   /* en */
+	"Ce qu'Auto a appris, par jeu. Ouvrez-en un pour le voir ou le supprimer : ce jeu est alors réappris.",   /* fr */
+	"Lo que Auto ha aprendido, por juego. Abre uno para verlo o borrarlo: ese juego se aprende de nuevo.",   /* es */
+	"Was Auto pro Spiel gelernt hat. Öffnen zum Ansehen oder Löschen: das Spiel wird dann neu gelernt.",   /* de */
+	"Ciò che Auto ha imparato, per gioco. Aprine uno per vederlo o eliminarlo: quel gioco viene reimparato.",   /* it */
+	"Wat Auto per spel heeft geleerd. Open er een om het te zien of te wissen: dat spel wordt dan opnieuw geleerd.",   /* nl */
+	"O que o Auto aprendeu, por jogo. Abra um para ver ou apagar: esse jogo é aprendido de novo.",   /* pt */
+	"Что режим «Авто» узнал для каждой игры. Откройте профиль, чтобы посмотреть или удалить его: игра будет изучена заново.",   /* ru */
+	"자동이 게임별로 학습한 내용입니다. 열어서 확인하거나 삭제할 수 있으며, 삭제하면 다시 학습합니다.",   /* ko */
+	"自動模式為每款遊戲學到的內容。開啟即可查看或刪除：刪除後該遊戲會重新學習。",   /* zht */
+	"自动模式为每款游戏学到的内容。打开即可查看或删除：删除后该游戏会重新学习。",   /* zhs */
+	"Mitä automaattinen on oppinut pelikohtaisesti. Avaa nähdäksesi tai poistaaksesi: peli opitaan silloin uudelleen.",   /* fi */
+	"Vad Auto har lärt sig per spel. Öppna för att se eller ta bort: spelet lärs då in igen.",   /* sv */
+	"Hvad Auto har lært pr. spil. Åbn for at se eller slette: spillet læres så igen.",   /* da */
+	"Hva Auto har lært per spill. Åpne for å se eller slette: spillet læres da på nytt.",   /* no */
+	"Czego Auto nauczyło się dla każdej gry. Otwórz, aby zobaczyć lub usunąć: gra zostanie nauczona od nowa.",   /* pl */
+	"O que o Auto aprendeu, por jogo. Abra um para ver ou apagar: esse jogo é aprendido de novo.",   /* ptbr */
+	"What Auto has learnt, per game. Open one to see it, or to delete it: that game is then learnt again.",   /* engb */
+	"Otomatiğin oyun başına öğrendikleri. Görmek veya silmek için açın: o oyun yeniden öğrenilir.",   /* tr */
+},
+[VM_I18N_RP_NONE] = {
+	"プロファイルはまだありません",   /* ja */
+	"No profiles yet",   /* en */
+	"Aucun profil pour l'instant",   /* fr */
+	"Aún no hay perfiles",   /* es */
+	"Noch keine Profile",   /* de */
+	"Nessun profilo per ora",   /* it */
+	"Nog geen profielen",   /* nl */
+	"Ainda sem perfis",   /* pt */
+	"Профилей пока нет",   /* ru */
+	"아직 프로필이 없습니다",   /* ko */
+	"尚無設定檔",   /* zht */
+	"暂无配置文件",   /* zhs */
+	"Ei vielä profiileja",   /* fi */
+	"Inga profiler än",   /* sv */
+	"Ingen profiler endnu",   /* da */
+	"Ingen profiler ennå",   /* no */
+	"Brak profili",   /* pl */
+	"Ainda sem perfis",   /* ptbr */
+	"No profiles yet",   /* engb */
+	"Henüz profil yok",   /* tr */
+},
+[VM_I18N_RP_DELETE] = {
+	"削除（再学習）",   /* ja */
+	"Delete (learn again)",   /* en */
+	"Supprimer (réapprendre)",   /* fr */
+	"Borrar (aprender de nuevo)",   /* es */
+	"Löschen (neu lernen)",   /* de */
+	"Elimina (reimpara)",   /* it */
+	"Wissen (opnieuw leren)",   /* nl */
+	"Apagar (aprender de novo)",   /* pt */
+	"Удалить (изучить заново)",   /* ru */
+	"삭제 (다시 학습)",   /* ko */
+	"刪除（重新學習）",   /* zht */
+	"删除（重新学习）",   /* zhs */
+	"Poista (opi uudelleen)",   /* fi */
+	"Ta bort (lär in igen)",   /* sv */
+	"Slet (lær igen)",   /* da */
+	"Slett (lær på nytt)",   /* no */
+	"Usuń (naucz od nowa)",   /* pl */
+	"Apagar (aprender de novo)",   /* ptbr */
+	"Delete (learn again)",   /* engb */
+	"Sil (yeniden öğren)",   /* tr */
+},
+[VM_I18N_MSG_RP_DELETED] = {
+	"削除しました。次回の起動時（実行中なら今から）再学習します。",   /* ja */
+	"Deleted. The game is learnt again the next time it runs (now, if it is running).",   /* en */
+	"Supprimé. Le jeu sera réappris à son prochain lancement (dès maintenant s'il tourne).",   /* fr */
+	"Borrado. El juego se aprende de nuevo la próxima vez (ya mismo, si está en marcha).",   /* es */
+	"Gelöscht. Das Spiel wird beim nächsten Start neu gelernt (sofort, falls es läuft).",   /* de */
+	"Eliminato. Il gioco viene reimparato al prossimo avvio (subito, se è in esecuzione).",   /* it */
+	"Gewist. Het spel wordt bij de volgende start opnieuw geleerd (nu al, als het draait).",   /* nl */
+	"Apagado. O jogo é aprendido de novo na próxima vez (já, se estiver a correr).",   /* pt */
+	"Удалено. Игра будет изучена заново при следующем запуске (сразу, если она запущена).",   /* ru */
+	"삭제했습니다. 다음 실행 때(실행 중이면 지금부터) 다시 학습합니다.",   /* ko */
+	"已刪除。遊戲下次執行時（若正在執行則立即）重新學習。",   /* zht */
+	"已删除。游戏下次运行时（若正在运行则立即）重新学习。",   /* zhs */
+	"Poistettu. Peli opitaan uudelleen seuraavalla kerralla (heti, jos se on käynnissä).",   /* fi */
+	"Borttagen. Spelet lärs in igen nästa gång (nu, om det körs).",   /* sv */
+	"Slettet. Spillet læres igen næste gang (nu, hvis det kører).",   /* da */
+	"Slettet. Spillet læres på nytt neste gang (nå, hvis det kjører).",   /* no */
+	"Usunięto. Gra zostanie nauczona od nowa przy następnym uruchomieniu (od razu, jeśli działa).",   /* pl */
+	"Apagado. O jogo é aprendido de novo na próxima vez (já, se estiver a correr).",   /* ptbr */
+	"Deleted. The game is learnt again the next time it runs (now, if it is running).",   /* engb */
+	"Silindi. Oyun bir sonraki çalıştırmada (çalışıyorsa hemen) yeniden öğrenilir.",   /* tr */
+},
+[VM_I18N_MSG_RP_ERR] = {
+	"削除できませんでした。",   /* ja */
+	"Could not delete it.",   /* en */
+	"Suppression impossible.",   /* fr */
+	"No se pudo borrar.",   /* es */
+	"Konnte nicht gelöscht werden.",   /* de */
+	"Impossibile eliminarlo.",   /* it */
+	"Kon niet worden gewist.",   /* nl */
+	"Não foi possível apagar.",   /* pt */
+	"Не удалось удалить.",   /* ru */
+	"삭제할 수 없습니다.",   /* ko */
+	"無法刪除。",   /* zht */
+	"无法删除。",   /* zhs */
+	"Poisto epäonnistui.",   /* fi */
+	"Kunde inte ta bort.",   /* sv */
+	"Kunne ikke slettes.",   /* da */
+	"Kunne ikke slettes.",   /* no */
+	"Nie udało się usunąć.",   /* pl */
+	"Não foi possível apagar.",   /* ptbr */
+	"Could not delete it.",   /* engb */
+	"Silinemedi.",   /* tr */
+},
+[VM_I18N_RP_AFTER] = {
+	"%u回の読み込み後",   /* ja */
+	"after %u reads",   /* en */
+	"après %u lectures",   /* fr */
+	"tras %u lecturas",   /* es */
+	"nach %u Lesevorgängen",   /* de */
+	"dopo %u letture",   /* it */
+	"na %u leesacties",   /* nl */
+	"após %u leituras",   /* pt */
+	"после %u чтений",   /* ru */
+	"%u회 읽기 후",   /* ko */
+	"%u 次讀取後",   /* zht */
+	"%u 次读取后",   /* zhs */
+	"%u luvun jälkeen",   /* fi */
+	"efter %u läsningar",   /* sv */
+	"efter %u læsninger",   /* da */
+	"etter %u lesinger",   /* no */
+	"po %u odczytach",   /* pl */
+	"após %u leituras",   /* ptbr */
+	"after %u reads",   /* engb */
+	"%u okumadan sonra",   /* tr */
+},
+[VM_I18N_RP_NEVER] = {
+	"使わない",   /* ja */
+	"never",   /* en */
+	"jamais",   /* fr */
+	"nunca",   /* es */
+	"nie",   /* de */
+	"mai",   /* it */
+	"nooit",   /* nl */
+	"nunca",   /* pt */
+	"никогда",   /* ru */
+	"사용 안 함",   /* ko */
+	"不使用",   /* zht */
+	"不使用",   /* zhs */
+	"ei koskaan",   /* fi */
+	"aldrig",   /* sv */
+	"aldrig",   /* da */
+	"aldri",   /* no */
+	"nigdy",   /* pl */
+	"nunca",   /* ptbr */
+	"never",   /* engb */
+	"asla",   /* tr */
+},
+[VM_I18N_RP_STORAGE] = {
+	"ストレージ",   /* ja */
+	"Storage",   /* en */
+	"Stockage",   /* fr */
+	"Almacenamiento",   /* es */
+	"Speicher",   /* de */
+	"Memoria",   /* it */
+	"Opslag",   /* nl */
+	"Armazenamento",   /* pt */
+	"Накопитель",   /* ru */
+	"저장소",   /* ko */
+	"儲存空間",   /* zht */
+	"存储",   /* zhs */
+	"Tallennustila",   /* fi */
+	"Lagring",   /* sv */
+	"Lager",   /* da */
+	"Lagring",   /* no */
+	"Pamięć",   /* pl */
+	"Armazenamento",   /* ptbr */
+	"Storage",   /* engb */
+	"Depolama",   /* tr */
+},
+[VM_I18N_RP_UNKNOWN] = {
+	"未確定",   /* ja */
+	"not known yet",   /* en */
+	"pas encore connu",   /* fr */
+	"aún no se sabe",   /* es */
+	"noch unbekannt",   /* de */
+	"non ancora noto",   /* it */
+	"nog onbekend",   /* nl */
+	"ainda desconhecido",   /* pt */
+	"пока неизвестен",   /* ru */
+	"아직 모름",   /* ko */
+	"尚未確定",   /* zht */
+	"尚未确定",   /* zhs */
+	"ei vielä tiedossa",   /* fi */
+	"inte känt än",   /* sv */
+	"endnu ukendt",   /* da */
+	"ikke kjent ennå",   /* no */
+	"jeszcze nieznana",   /* pl */
+	"ainda desconhecido",   /* ptbr */
+	"not known yet",   /* engb */
+	"henüz bilinmiyor",   /* tr */
+},
+[VM_I18N_RP_MEMCARD] = {
+	"メモリーカード",   /* ja */
+	"Memory card",   /* en */
+	"Carte mémoire",   /* fr */
+	"Tarjeta de memoria",   /* es */
+	"Speicherkarte",   /* de */
+	"Memory card",   /* it */
+	"Geheugenkaart",   /* nl */
+	"Cartão de memória",   /* pt */
+	"Карта памяти",   /* ru */
+	"메모리 카드",   /* ko */
+	"記憶卡",   /* zht */
+	"记忆卡",   /* zhs */
+	"Muistikortti",   /* fi */
+	"Minneskort",   /* sv */
+	"Hukommelseskort",   /* da */
+	"Minnekort",   /* no */
+	"Karta pamięci",   /* pl */
+	"Cartão de memória",   /* ptbr */
+	"Memory card",   /* engb */
+	"Hafıza kartı",   /* tr */
+},
+[VM_I18N_RP_STREAMS] = {
+	"%u回の連続読み込みから学習",   /* ja */
+	"learnt from %u streams",   /* en */
+	"appris sur %u flux",   /* fr */
+	"aprendido de %u flujos",   /* es */
+	"aus %u Datenströmen gelernt",   /* de */
+	"appreso da %u flussi",   /* it */
+	"geleerd uit %u stromen",   /* nl */
+	"aprendido de %u fluxos",   /* pt */
+	"изучено по %u потокам",   /* ru */
+	"%u개 스트림에서 학습",   /* ko */
+	"從 %u 個串流學習",   /* zht */
+	"从 %u 个数据流学习",   /* zhs */
+	"opittu %u virrasta",   /* fi */
+	"inlärt från %u strömmar",   /* sv */
+	"lært af %u strømme",   /* da */
+	"lært fra %u strømmer",   /* no */
+	"nauczone z %u strumieni",   /* pl */
+	"aprendido de %u fluxos",   /* ptbr */
+	"learnt from %u streams",   /* engb */
+	"%u akıştan öğrenildi",   /* tr */
+},

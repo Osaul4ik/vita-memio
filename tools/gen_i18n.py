@@ -655,10 +655,132 @@ items("VM_I18N_ITEM_OFF_GPU", dict(**{k: "GPU-safe (C)" for k in LANGS}))
 items("VM_I18N_ITEM_OFF_ALWAYS", dict(**{k: "Cached only" for k in LANGS}))
 items("VM_I18N_ITEM_OFF_ALL", dict(**{k: "C + NC" for k in LANGS}))
 items("VM_I18N_ITEM_OFF_NC", dict(**{k: "NCached only" for k in LANGS}))
+
+# ---- the overlay and the read ahead profiles ---------------------------------
+def L(ja, en, fr, es, de, it, nl, pt, ru, ko, zht, zhs, fi, sv, da, no, pl, tr, ptbr=None, engb=None):
+    return dict(ja=ja, en=en, fr=fr, es=es, de=de, it=it, nl=nl, pt=pt, ru=ru, ko=ko, zht=zht,
+                zhs=zhs, fi=fi, sv=sv, da=da, no=no, pl=pl, tr=tr,
+                ptbr=ptbr or pt, engb=engb or en)
+
+s("VM_I18N_ROW_OVERLAY", **L(
+  "オーバーレイ（SELECT＋方向キー）", "Overlay (SELECT + arrows)", "Overlay (SELECT + flèches)",
+  "Overlay (SELECT + flechas)", "Overlay (SELECT + Pfeile)", "Overlay (SELECT + frecce)",
+  "Overlay (SELECT + pijlen)", "Overlay (SELECT + setas)", "Оверлей (SELECT + стрелки)",
+  "오버레이 (SELECT + 방향키)", "疊加選單（SELECT + 方向鍵）", "叠加菜单（SELECT + 方向键）",
+  "Overlay (SELECT + nuolet)", "Overlay (SELECT + pilar)", "Overlay (SELECT + pile)",
+  "Overlay (SELECT + piler)", "Nakładka (SELECT + strzałki)", "Kaplama (SELECT + oklar)"))
+s("VM_I18N_HINT_OVERLAY", **L(
+  "SELECT＋→：オーバーレイを開く。もう一度：閉じてHUDを表示。SELECT＋←：オーバーレイに戻る（HUDを閉じる）。もう一度：閉じる。SELECT＋↑/↓：すべて閉じる。開いている間はゲームに操作が届きません。オンの間、HUDはこの操作でのみ表示されます。",
+  "SELECT + Right opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. While this is on, the HUD only shows through these keys.",
+  "SELECT + Droite ouvre l'overlay ; encore : le ferme et affiche le HUD. SELECT + Gauche revient à l'overlay (HUD fermé) ; encore : le ferme. SELECT + Haut ou Bas ferme tout. Overlay ouvert, le jeu ne reçoit aucune touche. Activé, le HUD ne s'affiche que par ces touches.",
+  "SELECT + Derecha abre el overlay; otra vez: lo cierra y muestra el HUD. SELECT + Izquierda vuelve al overlay (HUD cerrado); otra vez: lo cierra. SELECT + Arriba o Abajo cierra todo. Con el overlay abierto, el juego no recibe botones. Activado, el HUD solo aparece con estas teclas.",
+  "SELECT + Rechts öffnet das Overlay; nochmal: schließt es und zeigt das HUD. SELECT + Links zurück zum Overlay (HUD zu); nochmal: schließt es. SELECT + Hoch oder Runter schließt beides. Bei offenem Overlay bekommt das Spiel keine Tasten. Wenn an, erscheint das HUD nur über diese Tasten.",
+  "SELECT + Destra apre l'overlay; di nuovo: lo chiude e mostra l'HUD. SELECT + Sinistra torna all'overlay (HUD chiuso); di nuovo: lo chiude. SELECT + Su o Giù chiude tutto. Con l'overlay aperto il gioco non riceve tasti. Se attivo, l'HUD appare solo con questi tasti.",
+  "SELECT + Rechts opent de overlay; nogmaals: sluit hem en toont de HUD. SELECT + Links terug naar de overlay (HUD dicht); nogmaals: sluit hem. SELECT + Omhoog of Omlaag sluit alles. Met de overlay open krijgt het spel geen knoppen. Aan: de HUD verschijnt alleen via deze toetsen.",
+  "SELECT + Direita abre o overlay; de novo: fecha-o e mostra o HUD. SELECT + Esquerda volta ao overlay (HUD fechado); de novo: fecha-o. SELECT + Cima ou Baixo fecha tudo. Com o overlay aberto, o jogo não recebe botões. Ligado, o HUD só aparece por estas teclas.",
+  "SELECT + вправо открывает оверлей; ещё раз: закрывает его и показывает HUD. SELECT + влево возвращает оверлей (HUD закрывается); ещё раз: закрывает его. SELECT + вверх или вниз закрывает всё. Пока оверлей открыт, игра не получает кнопок. Пока включено, HUD показывается только этими клавишами.",
+  "SELECT + → 오버레이 열기; 다시: 닫고 HUD 표시. SELECT + ← 오버레이로 돌아가기(HUD 닫힘); 다시: 닫기. SELECT + ↑/↓ 모두 닫기. 오버레이가 열려 있는 동안 게임은 버튼을 받지 않습니다. 켜져 있으면 HUD는 이 키로만 표시됩니다.",
+  "SELECT + → 開啟疊加選單；再按：關閉並顯示 HUD。SELECT + ← 回到疊加選單（關閉 HUD）；再按：關閉。SELECT + ↑ 或 ↓ 全部關閉。選單開啟時遊戲收不到按鍵。開啟此項時，HUD 只透過這些按鍵顯示。",
+  "SELECT + → 打开叠加菜单；再按：关闭并显示 HUD。SELECT + ← 回到叠加菜单（关闭 HUD）；再按：关闭。SELECT + ↑ 或 ↓ 全部关闭。菜单打开时游戏收不到按键。开启此项时，HUD 只通过这些按键显示。",
+  "SELECT + oikea avaa overlayn; uudelleen: sulkee sen ja näyttää HUDin. SELECT + vasen palaa overlayhin (HUD kiinni); uudelleen: sulkee sen. SELECT + ylös tai alas sulkee kaiken. Overlayn ollessa auki peli ei saa painalluksia. Päällä HUD näkyy vain näillä näppäimillä.",
+  "SELECT + höger öppnar overlayen; igen: stänger den och visar HUD. SELECT + vänster tillbaka till overlayen (HUD stängd); igen: stänger den. SELECT + upp eller ned stänger allt. Med overlayen öppen får spelet inga knappar. På: HUD visas bara via dessa knappar.",
+  "SELECT + højre åbner overlayet; igen: lukker det og viser HUD. SELECT + venstre tilbage til overlayet (HUD lukket); igen: lukker det. SELECT + op eller ned lukker alt. Med overlayet åbent får spillet ingen knapper. Til: HUD vises kun via disse taster.",
+  "SELECT + høyre åpner overlayet; igjen: lukker det og viser HUD. SELECT + venstre tilbake til overlayet (HUD lukket); igjen: lukker det. SELECT + opp eller ned lukker alt. Med overlayet åpent får spillet ingen knapper. På: HUD vises bare via disse tastene.",
+  "SELECT + prawo otwiera nakładkę; ponownie: zamyka ją i pokazuje HUD. SELECT + lewo wraca do nakładki (HUD zamknięty); ponownie: zamyka ją. SELECT + góra lub dół zamyka wszystko. Gdy nakładka jest otwarta, gra nie dostaje przycisków. Włączone: HUD pokazuje się tylko tymi klawiszami.",
+  "SELECT + Sağ kaplamayı açar; tekrar: kapatır ve HUD'u gösterir. SELECT + Sol kaplamaya döner (HUD kapanır); tekrar: kapatır. SELECT + Yukarı veya Aşağı hepsini kapatır. Kaplama açıkken oyun tuş almaz. Açıkken HUD yalnızca bu tuşlarla görünür."))
+s("VM_I18N_ROW_RAPROF", **L(
+  "先読み自動のプロファイル", "Read ahead Auto profiles", "Profils de lecture anticipée auto",
+  "Perfiles de lectura anticipada auto", "Auto-Profile für Vorauslesen", "Profili lettura anticipata auto",
+  "Auto-profielen vooruitlezen", "Perfis de leitura antecipada auto", "Профили упреждающего чтения (авто)",
+  "미리 읽기 자동 프로필", "預先讀取自動設定檔", "预读自动配置文件",
+  "Ennakkoluvun automaattiprofiilit", "Auto-profiler för förhandsläsning", "Auto-profiler for forudlæsning",
+  "Auto-profiler for forhåndslesing", "Profile auto odczytu z wyprzedzeniem", "Önden okuma otomatik profilleri"))
+s("VM_I18N_HINT_RAPROF", **L(
+  "自動がゲームごとに学習した内容です。開くと内容の確認と削除ができます（削除したゲームは再学習されます）。",
+  "What Auto has learnt, per game. Open one to see it, or to delete it: that game is then learnt again.",
+  "Ce qu'Auto a appris, par jeu. Ouvrez-en un pour le voir ou le supprimer : ce jeu est alors réappris.",
+  "Lo que Auto ha aprendido, por juego. Abre uno para verlo o borrarlo: ese juego se aprende de nuevo.",
+  "Was Auto pro Spiel gelernt hat. Öffnen zum Ansehen oder Löschen: das Spiel wird dann neu gelernt.",
+  "Ciò che Auto ha imparato, per gioco. Aprine uno per vederlo o eliminarlo: quel gioco viene reimparato.",
+  "Wat Auto per spel heeft geleerd. Open er een om het te zien of te wissen: dat spel wordt dan opnieuw geleerd.",
+  "O que o Auto aprendeu, por jogo. Abra um para ver ou apagar: esse jogo é aprendido de novo.",
+  "Что режим «Авто» узнал для каждой игры. Откройте профиль, чтобы посмотреть или удалить его: игра будет изучена заново.",
+  "자동이 게임별로 학습한 내용입니다. 열어서 확인하거나 삭제할 수 있으며, 삭제하면 다시 학습합니다.",
+  "自動模式為每款遊戲學到的內容。開啟即可查看或刪除：刪除後該遊戲會重新學習。",
+  "自动模式为每款游戏学到的内容。打开即可查看或删除：删除后该游戏会重新学习。",
+  "Mitä automaattinen on oppinut pelikohtaisesti. Avaa nähdäksesi tai poistaaksesi: peli opitaan silloin uudelleen.",
+  "Vad Auto har lärt sig per spel. Öppna för att se eller ta bort: spelet lärs då in igen.",
+  "Hvad Auto har lært pr. spil. Åbn for at se eller slette: spillet læres så igen.",
+  "Hva Auto har lært per spill. Åpne for å se eller slette: spillet læres da på nytt.",
+  "Czego Auto nauczyło się dla każdej gry. Otwórz, aby zobaczyć lub usunąć: gra zostanie nauczona od nowa.",
+  "Otomatiğin oyun başına öğrendikleri. Görmek veya silmek için açın: o oyun yeniden öğrenilir."))
+s("VM_I18N_RP_NONE", **L(
+  "プロファイルはまだありません", "No profiles yet", "Aucun profil pour l'instant", "Aún no hay perfiles",
+  "Noch keine Profile", "Nessun profilo per ora", "Nog geen profielen", "Ainda sem perfis",
+  "Профилей пока нет", "아직 프로필이 없습니다", "尚無設定檔", "暂无配置文件", "Ei vielä profiileja",
+  "Inga profiler än", "Ingen profiler endnu", "Ingen profiler ennå", "Brak profili", "Henüz profil yok"))
+s("VM_I18N_RP_DELETE", **L(
+  "削除（再学習）", "Delete (learn again)", "Supprimer (réapprendre)", "Borrar (aprender de nuevo)",
+  "Löschen (neu lernen)", "Elimina (reimpara)", "Wissen (opnieuw leren)", "Apagar (aprender de novo)",
+  "Удалить (изучить заново)", "삭제 (다시 학습)", "刪除（重新學習）", "删除（重新学习）",
+  "Poista (opi uudelleen)", "Ta bort (lär in igen)", "Slet (lær igen)", "Slett (lær på nytt)",
+  "Usuń (naucz od nowa)", "Sil (yeniden öğren)"))
+s("VM_I18N_MSG_RP_DELETED", **L(
+  "削除しました。次回の起動時（実行中なら今から）再学習します。",
+  "Deleted. The game is learnt again the next time it runs (now, if it is running).",
+  "Supprimé. Le jeu sera réappris à son prochain lancement (dès maintenant s'il tourne).",
+  "Borrado. El juego se aprende de nuevo la próxima vez (ya mismo, si está en marcha).",
+  "Gelöscht. Das Spiel wird beim nächsten Start neu gelernt (sofort, falls es läuft).",
+  "Eliminato. Il gioco viene reimparato al prossimo avvio (subito, se è in esecuzione).",
+  "Gewist. Het spel wordt bij de volgende start opnieuw geleerd (nu al, als het draait).",
+  "Apagado. O jogo é aprendido de novo na próxima vez (já, se estiver a correr).",
+  "Удалено. Игра будет изучена заново при следующем запуске (сразу, если она запущена).",
+  "삭제했습니다. 다음 실행 때(실행 중이면 지금부터) 다시 학습합니다.",
+  "已刪除。遊戲下次執行時（若正在執行則立即）重新學習。",
+  "已删除。游戏下次运行时（若正在运行则立即）重新学习。",
+  "Poistettu. Peli opitaan uudelleen seuraavalla kerralla (heti, jos se on käynnissä).",
+  "Borttagen. Spelet lärs in igen nästa gång (nu, om det körs).",
+  "Slettet. Spillet læres igen næste gang (nu, hvis det kører).",
+  "Slettet. Spillet læres på nytt neste gang (nå, hvis det kjører).",
+  "Usunięto. Gra zostanie nauczona od nowa przy następnym uruchomieniu (od razu, jeśli działa).",
+  "Silindi. Oyun bir sonraki çalıştırmada (çalışıyorsa hemen) yeniden öğrenilir."))
+s("VM_I18N_MSG_RP_ERR", **L(
+  "削除できませんでした。", "Could not delete it.", "Suppression impossible.", "No se pudo borrar.",
+  "Konnte nicht gelöscht werden.", "Impossibile eliminarlo.", "Kon niet worden gewist.",
+  "Não foi possível apagar.", "Не удалось удалить.", "삭제할 수 없습니다.", "無法刪除。", "无法删除。",
+  "Poisto epäonnistui.", "Kunde inte ta bort.", "Kunne ikke slettes.", "Kunne ikke slettes.",
+  "Nie udało się usunąć.", "Silinemedi."))
+s("VM_I18N_RP_AFTER", **L(
+  "%u回の読み込み後", "after %u reads", "après %u lectures", "tras %u lecturas", "nach %u Lesevorgängen",
+  "dopo %u letture", "na %u leesacties", "após %u leituras", "после %u чтений", "%u회 읽기 후",
+  "%u 次讀取後", "%u 次读取后", "%u luvun jälkeen", "efter %u läsningar", "efter %u læsninger",
+  "etter %u lesinger", "po %u odczytach", "%u okumadan sonra"))
+s("VM_I18N_RP_NEVER", **L(
+  "使わない", "never", "jamais", "nunca", "nie", "mai", "nooit", "nunca", "никогда", "사용 안 함",
+  "不使用", "不使用", "ei koskaan", "aldrig", "aldrig", "aldri", "nigdy", "asla"))
+s("VM_I18N_RP_STORAGE", **L(
+  "ストレージ", "Storage", "Stockage", "Almacenamiento", "Speicher", "Memoria", "Opslag", "Armazenamento",
+  "Накопитель", "저장소", "儲存空間", "存储", "Tallennustila", "Lagring", "Lager", "Lagring",
+  "Pamięć", "Depolama"))
+s("VM_I18N_RP_UNKNOWN", **L(
+  "未確定", "not known yet", "pas encore connu", "aún no se sabe", "noch unbekannt", "non ancora noto",
+  "nog onbekend", "ainda desconhecido", "пока неизвестен", "아직 모름", "尚未確定", "尚未确定",
+  "ei vielä tiedossa", "inte känt än", "endnu ukendt", "ikke kjent ennå", "jeszcze nieznana",
+  "henüz bilinmiyor"))
+s("VM_I18N_RP_MEMCARD", **L(
+  "メモリーカード", "Memory card", "Carte mémoire", "Tarjeta de memoria", "Speicherkarte", "Memory card",
+  "Geheugenkaart", "Cartão de memória", "Карта памяти", "메모리 카드", "記憶卡", "记忆卡", "Muistikortti",
+  "Minneskort", "Hukommelseskort", "Minnekort", "Karta pamięci", "Hafıza kartı"))
+s("VM_I18N_RP_STREAMS", **L(
+  "%u回の連続読み込みから学習", "learnt from %u streams", "appris sur %u flux", "aprendido de %u flujos",
+  "aus %u Datenströmen gelernt", "appreso da %u flussi", "geleerd uit %u stromen", "aprendido de %u fluxos",
+  "изучено по %u потокам", "%u개 스트림에서 학습", "從 %u 個串流學習", "从 %u 个数据流学习",
+  "opittu %u virrasta", "inlärt från %u strömmar", "lært af %u strømme", "lært fra %u strømmer",
+  "nauczone z %u strumieni", "%u akıştan öğrenildi"))
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE', 'VM_I18N_ROW_PIPELINE', 'VM_I18N_HINT_PIPELINE', 'VM_I18N_ITEM_PIPE_OFF', 'VM_I18N_ITEM_PIPE_AUTO', 'VM_I18N_ITEM_PIPE_FIXED', 'VM_I18N_ROW_OFFLOAD', 'VM_I18N_HINT_OFFLOAD', 'VM_I18N_ITEM_OFF_OFF', 'VM_I18N_ITEM_OFF_GPU', 'VM_I18N_ITEM_OFF_ALWAYS', 'VM_I18N_ITEM_OFF_ALL', 'VM_I18N_ITEM_OFF_NC', 'VM_I18N_ROW_READAHEAD', 'VM_I18N_HINT_READAHEAD', 'VM_I18N_ITEM_RA_ON']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE', 'VM_I18N_ROW_PIPELINE', 'VM_I18N_HINT_PIPELINE', 'VM_I18N_ITEM_PIPE_OFF', 'VM_I18N_ITEM_PIPE_AUTO', 'VM_I18N_ITEM_PIPE_FIXED', 'VM_I18N_ROW_OFFLOAD', 'VM_I18N_HINT_OFFLOAD', 'VM_I18N_ITEM_OFF_OFF', 'VM_I18N_ITEM_OFF_GPU', 'VM_I18N_ITEM_OFF_ALWAYS', 'VM_I18N_ITEM_OFF_ALL', 'VM_I18N_ITEM_OFF_NC', 'VM_I18N_ROW_READAHEAD', 'VM_I18N_HINT_READAHEAD', 'VM_I18N_ITEM_RA_ON', 'VM_I18N_ROW_OVERLAY', 'VM_I18N_HINT_OVERLAY', 'VM_I18N_ROW_RAPROF', 'VM_I18N_HINT_RAPROF', 'VM_I18N_RP_NONE', 'VM_I18N_RP_DELETE', 'VM_I18N_MSG_RP_DELETED', 'VM_I18N_MSG_RP_ERR', 'VM_I18N_RP_AFTER', 'VM_I18N_RP_NEVER', 'VM_I18N_RP_STORAGE', 'VM_I18N_RP_UNKNOWN', 'VM_I18N_RP_MEMCARD', 'VM_I18N_RP_STREAMS']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

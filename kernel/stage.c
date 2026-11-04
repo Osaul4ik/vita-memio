@@ -2035,6 +2035,8 @@ static int ra_learn_enough(void)
  * nothing new: no writes the storage does not need). */
 static void ra_learn_finish(void);
 
+static void ra_streams_close(void);
+
 static void ra_learn_keep(void)
 {
 	RaProf pf;
@@ -2114,7 +2116,12 @@ static void ra_thr_text(char *out, size_t n, uint32_t t)
 static void ra_learn_finish(void)
 {
 	uint32_t thr[2];
-	const uint32_t n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+	uint32_t n;
+
+	/* a long stream still open is the best evidence there is: in, first (a
+	 * game may read one all session, with its 32 KiB streams beside it) */
+	ra_streams_close();
+	n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
 	char a[8], b[8];
 
 	thr[0] = ra_choose(g_ra_hcnt[0]);
@@ -2211,8 +2218,6 @@ static void ra_stats_flush(int force)
 
 /* The game followed has ended (another one reads, or measuring stops): Auto
  * keeps what it has learnt so far; Statistics writes what it saw. */
-static void ra_streams_close(void);
-
 /* ---- trace (a test branch only, not for main) ------------------------------
  *
  * With Full statistics: every read and write of the app followed, while it is
@@ -2626,7 +2631,9 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 		return 0;
 	}
 	r = TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6);
-	if (r < 0) {                              /* the system's handlers refused it */
+	/* (a suspend is asked again and again while the app winds down: -1 is
+	 * normal there, for games too) */
+	if (r < 0 && !(ev == 4 && r == -1)) {     /* the system's handlers refused it */
 		ev_note(pid, ev, EV_RESULT, r, NULL);
 		ra_wake();
 	}

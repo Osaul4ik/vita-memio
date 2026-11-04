@@ -4187,6 +4187,20 @@ static void test_review_fixes(void)
 	}
 	vm_stage_fini();
 
+	/* a long stream still open when learning ends counts: learnt from it */
+	auto_game(&s, 0x44);
+	g_ra_by_reads = 1;
+	g_ra_target_reads = RA_LEARN_READS;
+	g_ra_dev = M;
+	for (uint32_t k = 0; k < 27; k++)
+		CHECK(rd_ok(u, k * 128, 128));
+	CHECK(d->ra_streak == 27 && g_ra_hstreams == 0);
+	__atomic_store_n(&g_ra_hreads, RA_LEARN_READS, __ATOMIC_RELAXED);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && g_ra_hcnt[0][27] == 1 && !d->ra_streak && g_ra_thr[0] != RA_THR_NONE);
+	g_ra_by_reads = 0;
+	vm_stage_fini();
+
 	/* the trace: with Full statistics, the followed app's transfers into its
 	 * file, a mark first, each session after the last */
 	auto_game(&s, 0x44);

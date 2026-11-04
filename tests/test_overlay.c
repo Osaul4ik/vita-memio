@@ -140,10 +140,10 @@ static void test_menu(void)
 	CHECK(OV_OP_DIR(o.op) == 1);
 	o.op = 0;
 	/* actions: only Cross */
-	CHECK(ov_item_action(OV_ITEM_SAVE) && ov_item_action(OV_ITEM_RELEARN) &&
+	CHECK(ov_item_action(OV_ITEM_SAVE) &&
 	      ov_item_action(OV_ITEM_CLOSE) && !ov_item_action(OV_ITEM_RA) &&
 	      !ov_item_action(OV_ITEM_C) && !ov_item_action(OV_ITEM_GPUSAFE));
-	for (int it = OV_ITEM_RELEARN; it <= OV_ITEM_SAVE; it++) {
+	for (int it = OV_ITEM_SAVE; it <= OV_ITEM_SAVE; it++) {
 		o.cursor = it;
 		tap(&o, 0, OV_BTN_RIGHT);
 		tap(&o, 0, OV_BTN_LEFT);
@@ -154,7 +154,7 @@ static void test_menu(void)
 	}
 	/* the lines not shown are skipped: no thresholds (not On), no Learn
 	 * it again (not Auto) */
-	g_mask = OV_MASK_ALL & ~((1u << OV_ITEM_C) | (1u << OV_ITEM_NC) | (1u << OV_ITEM_RELEARN));
+	g_mask = OV_MASK_ALL & ~((1u << OV_ITEM_C) | (1u << OV_ITEM_NC));
 	o.cursor = OV_ITEM_RA;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_OFFLOAD);

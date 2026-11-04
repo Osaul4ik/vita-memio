@@ -20,9 +20,8 @@
  *
  * The exported functions are the user->kernel boundary. The state is copied out
  * with ksceKernelMemcpyKernelToUser, which fails cleanly on a bad pointer; key
- * ids and values are validated before anything changes. Settings do no file
- * I/O or logging there - the worker saves and logs within a second; only the
- * read ahead profiles' list and delete touch their files.
+ * ids and values are validated before anything changes. They do no file
+ * I/O and no logging themselves - the worker saves and logs within a second.
  */
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem.h>    /* ksceKernelMemcpy{User,Kernel} macros */
@@ -87,9 +86,7 @@ static uint64_t g_t0_us;             /* ... from this system time          */
  *   - every 5 s while a failed settings save is to be retried;
  *   - every 250 ms while the overlay is open (its live values);
  *   - once a minute while the log is on (the stage's statistics line);
- *   - every 2 s while read ahead has a game to follow or to learn again
- *     (woken when an app comes to the front, when its storage can be told,
- *     when it has streams enough); once a minute with Full statistics;
+ *   - also woken when an app comes to the front (its own settings);
  *   - otherwise not at all, until it is woken: by a changed setting (saved
  *     and applied at once: buffers, helper threads) or by a device error or
  *     verify mismatch (logged at once). */
@@ -343,8 +340,8 @@ static void hud_thr(char *o, int cap, uint32_t t, int compact)
 }
 
 /* Read ahead in the HUD, for the app in front:
- *   compact   RA Auto 37/300 C 5 NC no
- *   extended  RA Auto  PCSB00777  learning 37/300
+ *   compact   RA On C 5 NC no
+ *   extended  RA On  PCSB00777
  *               start after  C 5  NC never
  *               core 3       C 98%  NC 100%   (since the HUD came up)
  * Off: just "RA Off". Returns the lines added (at most `room`). */
@@ -354,7 +351,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	static int counting;
 	static uint32_t base_core[4], base_ncs, base_nco;
 	const int ext = s->hud == VM_HUD_EXTENDED;
-	char st[32], c[16], nc[16];
+	char c[16], nc[16];
 	const char *mode;
 	VmRaNow now;
 	int n = 0;
@@ -372,31 +369,18 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 		return 0;
 	vm_stage_ra_now(&now);
 	/* in effect for the app in front (its own, or the global one) */
-	mode = now.mode == VM_RA_AUTO ? HUD_C_ACCENT "Auto"
-	     : now.mode == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
-	/* Auto's state for the app: learning / learnt */
-	st[0] = 0;
-	if (now.mode == VM_RA_AUTO) {
-		if (!now.title[0])
-			snprintf(st, sizeof(st), HUD_C_DIM "-");
-		else if (now.learning)
-			snprintf(st, sizeof(st), HUD_C_WARN "%s%u%%", ext ? "learning " : "",
-			         (unsigned)now.percent);
-		else
-			snprintf(st, sizeof(st), HUD_C_GOOD "learnt");
-	}
+	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
 	hud_thr(c, sizeof(c), now.thr[0], !ext);
 	hud_thr(nc, sizeof(nc), now.thr[1], !ext);
 	if (!ext) {
 		if (now.mode == VM_RA_OFF)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s", mode);
 		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s%s%.20s " HUD_C_DIM "C %.7s "
-			         HUD_C_DIM "NC %.7s", mode, st[0] ? " " : "", st, c, nc);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s " HUD_C_DIM "C %.7s "
+			         HUD_C_DIM "NC %.7s", mode, c, nc);
 		return n;
 	}
-	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s  %.24s", mode,
-	         fg->title, st);
+	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room)
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  start after  C %.7s" HUD_C_DIM
 		         "  NC %.7s", c, nc);
@@ -514,26 +498,17 @@ static void hud_feed(const VmDevState *now)
 
 /* ---- the overlay (SELECT + arrows) ------------------------------------------ */
 
-static const char *const k_ov_ra[] = { "Off", "On", "Auto" };
+static const char *const k_ov_ra[] = { "Off", "On" };
 static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C + NC",
                                         "NCached only" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 static const char *const k_ov_onoff[] = { "Off", "On" };
 
-/* A threshold: "5" / "never". */
-static void ov_thr(char *o, int cap, uint32_t t)
-{
-	if (t == VM_RA_NEVER)
-		snprintf(o, cap, "never");
-	else
-		snprintf(o, cap, "%u", (unsigned)(t > 99 ? 99 : t));
-}
-
 /* A change asked for in the overlay, made here: the app in front's own
  * settings (in effect at once; kept only by Save), or an action. */
 static void overlay_op(uint32_t op, char *msg, int cap)
 {
-	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON, VM_RA_AUTO };
+	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON };
 	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS,
 	                           VM_OFFLOAD_NC, VM_OFFLOAD_ALL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
@@ -549,7 +524,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	a = an.cur;
 	switch (item) {
 	case OV_ITEM_RA:
-		a.ra = ov_step(ra, 4, a.ra, dir);
+		a.ra = ov_step(ra, 3, a.ra, dir);
 		break;
 	case OV_ITEM_C:
 	case OV_ITEM_NC: {
@@ -572,15 +547,10 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		if (r == VM_OK)
 			snprintf(msg, cap, HUD_C_GOOD "%.15s: saved", an.title);
 		break;
-	case OV_ITEM_RELEARN:
-		r = vm_stage_app_relearn();
-		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: learnt again", an.title);
-		break;
 	default:
 		return;
 	}
-	if (item != OV_ITEM_SAVE && item != OV_ITEM_RELEARN)
+	if (item != OV_ITEM_SAVE)
 		r = vm_stage_app_set(&a);
 	if (r == VM_ERR_NOT_READY)
 		snprintf(msg, cap, HUD_C_WARN "No app in front");
@@ -658,7 +628,6 @@ static void overlay_feed(void)
 	}
 	{
 		VmAppNow an;
-		VmRaNow now;
 		VmFg fg;
 		uint32_t core[4], ncs, nco, other = 0, mask;
 		char a[16], b[16], v[40];
@@ -666,7 +635,6 @@ static void overlay_feed(void)
 		int ra;
 
 		vm_stage_app_now(&an);
-		vm_stage_ra_now(&now);
 		vm_stage_fg(&fg);
 		vm_stage_core_stats(core, &ncs, &nco);
 		ra = an.cur.ra == VM_APP_GLOBAL ? an.global.ra : an.cur.ra;   /* in effect */
@@ -689,7 +657,7 @@ static void overlay_feed(void)
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_PIPE) |
 			       (1u << OV_ITEM_GPUSAFE) | (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
-			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
+			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 2);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
 			        ov_color(an.cur.ra, an.saved.ra), v);
 			if (ra == VM_RA_ON) {                 /* its thresholds: On only */
@@ -717,25 +685,6 @@ static void overlay_feed(void)
 			ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_onoff, 2);
 			ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 0, "GPU-safe reads",
 			        ov_color(an.cur.gpusafe, an.saved.gpusafe), v);
-			if (ra == VM_RA_AUTO) {               /* Auto's for it */
-				char c[8], d[8];
-
-				snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Read ahead Auto --");
-				ov_thr(c, sizeof(c), now.thr[0]);
-				ov_thr(d, sizeof(d), now.thr[1]);
-				if (now.title[0] && now.learning)
-					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_WARN
-					         "learning %u%%" HUD_C_DIM " (%u/%u)",
-					         (unsigned)now.percent, (unsigned)(now.streams > 9999 ? 9999 :
-					         now.streams), (unsigned)now.target);
-				else if (now.title[0])
-					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  " HUD_C_GOOD "learnt"
-					         HUD_C_DIM "  start after C %s NC %s", c, d);
-				else
-					snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  waiting for it to read");
-				ov_line(L[n++], cur, OV_ITEM_RELEARN, 0, "Learn it again", HUD_C_TEXT, "(X)");
-				mask |= 1u << OV_ITEM_RELEARN;
-			}
 			{
 				const int dirty = memcmp(&an.cur, &an.saved, sizeof(an.cur)) != 0;
 
@@ -784,12 +733,6 @@ static int worker(SceSize args, void *argp)
 			wait = VM_WORKER_RETRY_US;      /* a save or a helper release to retry */
 		else if (__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED) && running)
 			wait = VM_WORKER_LOG_US;
-		if (running) {
-			const SceUInt t = vm_stage_tick_us();   /* read ahead learning a game */
-
-			if (t && (!wait || t < wait))
-				wait = t;
-		}
 		if (g_wake >= 0)
 			ksceKernelWaitSema(g_wake, 1, wait ? &wait : NULL);   /* 0: until woken */
 		else
@@ -911,41 +854,6 @@ int vmGetBuild(char *out, int size)
 int vmResetSafeMode(void)
 {
 	return guard_write('0', "settings");
-}
-
-/* At most this many profiles per call (a kernel buffer of 64 x 36 bytes). */
-#define VM_RA_LIST_MAX 64
-
-int vmRaProfileList(VmRaProfile *out, int max)
-{
-	static VmRaProfile k[VM_RA_LIST_MAX];   /* one caller at a time: `lock` */
-	static volatile int lock;
-	int n;
-
-	if (!out || max < 0)
-		return VM_ERR_ARG;
-	if (max > VM_RA_LIST_MAX)
-		max = VM_RA_LIST_MAX;
-	while (__sync_lock_test_and_set(&lock, 1))
-		ksceKernelDelayThread(1000);
-	n = vm_stage_ra_list(k, max);
-	if (n > 0 && ksceKernelMemcpyKernelToUser(out, k, (SceSize)n * sizeof(k[0])) < 0)
-		n = VM_ERR_ARG;
-	__sync_lock_release(&lock);
-	return n;
-}
-
-int vmRaProfileDelete(const char *title)
-{
-	char t[16];
-
-	if (!title)
-		return VM_ERR_ARG;
-	memset(t, 0, sizeof(t));
-	if (ksceKernelStrncpyUserToKernel(t, title, sizeof(t) - 1) < 0)
-		return VM_ERR_ARG;
-	t[sizeof(t) - 1] = 0;
-	return vm_stage_ra_delete(t);
 }
 
 int vmSelfTestPing(void)

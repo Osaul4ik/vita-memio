@@ -485,26 +485,26 @@ s("VM_I18N_ROW_STATS", en="Statistics", engb="Statistics", ja="統計", fr="Stat
   ko="통계", zht="統計資料", zhs="统计", fi="Tilastot", sv="Statistik", da="Statistik", no="Statistikk",
   pl="Statystyki", tr="İstatistikler")
 s("VM_I18N_HINT_STATS",
-  en="Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Full: also what read ahead Auto learns from (the game, its storage, its read streams), written to ur0:data/vita-memio/ra_stats/, whatever read ahead is set to; it changes nothing, and with Auto on the same data is collected once. Overlapped reads and read ahead on Auto measure what they need either way.",
-  engb="Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Full: also what read ahead Auto learns from (the game, its storage, its read streams), written to ur0:data/vita-memio/ra_stats/, whatever read ahead is set to; it changes nothing, and with Auto on the same data is collected once. Overlapped reads and read ahead on Auto measure what they need either way.",
-  ja="テスターアプリ用に、高速化された転送ごとの時間（システムコールとコピー）と転送量を記録します。オフ：これらを行わないため、転送ごとの処理が少し減ります。HUDはオンの間、自分で速度を数えます。 読み込みの並行処理（自動）は、分割の大きさを決めるため、この設定に関係なく自分で時間を測ります。",
-  fr="Chronomètre chaque transfert accéléré (appel système et copie) et compte les données déplacées, pour l'application de test. Désactivé : rien de tout cela, ce qui économise un peu de travail à chaque transfert. Le HUD compte ses propres vitesses tant qu'il est activé. Les lectures en parallèle en mode Auto se chronomètrent de toute façon, pour dimensionner leurs parties.",
-  es="Mide el tiempo de cada transferencia acelerada (llamada al sistema y copia) y cuenta los datos movidos, para la aplicación de prueba. Desactivado: no se hace nada de eso, lo que ahorra un poco de trabajo en cada transferencia. El HUD cuenta sus propias velocidades mientras está activado. Las lecturas solapadas en Automático se cronometran igualmente, para dimensionar sus partes.",
-  de="Misst bei jeder beschleunigten Übertragung die Zeit (Systemaufruf und Kopie) und zählt die bewegten Daten, für die Tester-App. Aus: nichts davon, das spart bei jeder Übertragung etwas Arbeit. Das HUD zählt seine eigenen Geschwindigkeiten, solange es an ist. Überlappendes Lesen im Modus Automatisch misst seine Zeiten in jedem Fall selbst, um seine Teile zu bemessen.",
-  it="Cronometra ogni trasferimento accelerato (chiamata di sistema e copia) e conta i dati spostati, per l'app di test. Disattivato: niente di tutto ciò, risparmiando un po' di lavoro a ogni trasferimento. L'HUD conta le proprie velocità finché è attivo. Le letture sovrapposte in Automatico si cronometrano comunque, per dimensionare le loro parti.",
-  nl="Meet bij elke versnelde overdracht de tijd (systeemaanroep en kopie) en telt de verplaatste gegevens, voor de test-app. Uit: niets daarvan, wat bij elke overdracht wat werk bespaart. De HUD telt zijn eigen snelheden zolang hij aan staat. Overlappend lezen op Automatisch meet zichzelf hoe dan ook, om de delen te bepalen.",
-  pt="Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para a aplicação de teste. Desligado: nada disso é feito, o que poupa um pouco de trabalho em cada transferência. O HUD conta as suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o seu próprio tempo de qualquer forma, para dimensionar as partes.",
-  ptbr="Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para o app de teste. Desligado: nada disso é feito, o que economiza um pouco de trabalho em cada transferência. O HUD conta suas próprias velocidades enquanto estiver ligado. As leituras sobrepostas em Automático medem o próprio tempo de qualquer forma, para dimensionar as partes.",
-  ru="Замеряет время ускоренных передач и считает объём данных для тестера. Выкл.: ничего из этого, чуть меньше работы. Полная: ещё и данные, по которым учится «Авто» (игра, накопитель, потоки чтения), в ur0:data/vita-memio/ra_stats/ при любом режиме упреждающего чтения; ничего не меняет, а с «Авто» данные собираются один раз. HUD считает свои скорости сам; «Авто» параллельного и упреждающего чтения измеряют нужное сами.",
-  ko="테스터 앱을 위해 가속된 전송마다 시간(시스템 호출과 복사)을 재고 옮긴 데이터를 셉니다. 끔: 이런 작업을 하지 않아 전송마다 처리가 조금 줄어듭니다. HUD는 켜져 있는 동안 자체적으로 속도를 셉니다. 자동 모드의 겹친 읽기는 부분 크기를 정하기 위해 이 설정과 관계없이 스스로 시간을 잽니다.",
-  zht="為測試程式記錄每次加速傳輸的時間（系統呼叫與複製）並統計傳輸量。關閉：完全不做這些，每次傳輸可省下一點工作。HUD 開啟時會自行計算速度。 重疊讀取（自動）無論如何都會自行計時，以決定各段的大小。",
-  zhs="为测试程序记录每次加速传输的时间（系统调用与复制）并统计传输量。关闭：完全不做这些，每次传输可省下一点工作。HUD 开启时会自行计算速度。 重叠读取（自动）无论如何都会自行计时，以决定各段的大小。",
-  fi="Ajastaa jokaisen nopeutetun siirron (järjestelmäkutsu ja kopiointi) ja laskee siirretyn datan testisovellusta varten. Pois: mitään tästä ei tehdä, mikä säästää vähän työtä jokaisessa siirrossa. HUD laskee omat nopeutensa, kun se on päällä. Automaattiset limitetyt luvut ajoittavat itsensä joka tapauksessa osien koon määrittämiseksi.",
-  sv="Tar tid på varje snabbare överföring (systemanrop och kopiering) och räknar flyttade data, för testappen. Av: inget av det görs, vilket sparar lite arbete vid varje överföring. HUD:en räknar sina egna hastigheter medan den är på. Överlappade läsningar på Auto tar tid på sig själva i vilket fall, för att bestämma delarnas storlek.",
-  da="Tager tid på hver hurtigere overførsel (systemkald og kopiering) og tæller de flyttede data, til testappen. Fra: intet af det gøres, hvilket sparer lidt arbejde ved hver overførsel. HUD'en tæller sine egne hastigheder, mens den er slået til. Overlappende læsninger på Auto tager tid på sig selv under alle omstændigheder for at bestemme delenes størrelse.",
-  no="Tar tiden på hver raskere overføring (systemkall og kopiering) og teller dataene som flyttes, for testappen. Av: ingenting av det gjøres, noe som sparer litt arbeid ved hver overføring. HUD-en teller sine egne hastigheter mens den er på. Overlappende lesinger på Auto tar tiden på seg selv uansett, for å bestemme størrelsen på delene.",
-  pl="Mierzy czas każdego przyspieszonego transferu (wywołanie systemowe i kopiowanie) i liczy przesłane dane, dla aplikacji testowej. Wyłączone: nic z tego, co oszczędza trochę pracy przy każdym transferze. HUD, gdy jest włączony, sam liczy swoje prędkości. Nakładane odczyty w trybie Auto i tak mierzą swój czas, aby dobrać rozmiar części.",
-  tr="Test uygulaması için hızlandırılmış her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş tasarrufu sağlar. HUD açıkken kendi hızlarını kendisi sayar. Otomatik moddaki örtüşen okuma, parçalarının boyutunu belirlemek için her durumda kendi süresini ölçer.")
+  en='Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way.',
+  engb='Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way.',
+  ja='高速化された転送ごとに時間（システムコールとコピー）を測り、移動したデータを数えます（テスターアプリ用）。オフにすると行われず、転送ごとの処理が少し減ります。HUDは表示中に自身の速度を数えます。重複読み込みは必要な値をいずれにせよ測定します。',
+  fr="Chronomètre chaque transfert accéléré (appel système et copie) et compte les données déplacées, pour l'application de test. Désactivé : rien de cela n'est fait, ce qui économise un peu de travail à chaque transfert. Le HUD compte ses propres vitesses quand il est actif. Les lectures chevauchées mesurent ce qu'il leur faut dans tous les cas.",
+  es='Mide el tiempo de cada transferencia acelerada (llamada al sistema y copia) y cuenta los datos movidos, para la app de pruebas. Desactivado: no se hace nada de eso, lo que ahorra algo de trabajo en cada transferencia. El HUD cuenta sus propias velocidades mientras está activo. Las lecturas solapadas miden lo que necesitan en cualquier caso.',
+  de='Misst bei jeder beschleunigten Übertragung die Zeit (Systemaufruf und Kopie) und zählt die bewegten Daten, für die Tester-App. Aus: nichts davon, das spart bei jeder Übertragung etwas Arbeit. Das HUD zählt seine Geschwindigkeiten selbst, solange es an ist. Überlappendes Lesen misst in jedem Fall, was es braucht.',
+  it="Cronometra ogni trasferimento accelerato (chiamata di sistema e copia) e conta i dati spostati, per l'app di test. Disattivato: nulla di tutto ciò, risparmiando un po' di lavoro a ogni trasferimento. L'HUD conta le proprie velocità quando è attivo. Le letture sovrapposte misurano comunque ciò che serve.",
+  nl='Meet bij elke versnelde overdracht de tijd (systeemaanroep en kopie) en telt de verplaatste gegevens, voor de test-app. Uit: niets daarvan, wat bij elke overdracht wat werk bespaart. De HUD telt zijn eigen snelheden zolang hij aan is. Overlappend lezen meet hoe dan ook wat het nodig heeft.',
+  pt='Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para a app de teste. Desativado: nada disso é feito, poupando algum trabalho em cada transferência. O HUD conta as suas velocidades enquanto está ativo. As leituras sobrepostas medem o que precisam em qualquer caso.',
+  ptbr='Cronometra cada transferência acelerada (chamada de sistema e cópia) e conta os dados movidos, para o app de teste. Desativado: nada disso é feito, poupando algum trabalho em cada transferência. O HUD conta suas velocidades enquanto está ativo. As leituras sobrepostas medem o que precisam em qualquer caso.',
+  ru='Замеряет время каждой ускоренной передачи (системный вызов и копирование) и считает перемещённые данные для приложения-тестера. Выкл.: ничего этого не делается, что немного экономит работу при каждой передаче. HUD считает свои скорости, пока включён. Перекрывающееся чтение в любом случае измеряет то, что ему нужно.',
+  ko='가속된 전송마다 시간(시스템 호출과 복사)을 재고 이동한 데이터를 셉니다(테스터 앱용). 끄면 이를 하지 않아 전송마다 작업이 약간 줄어듭니다. HUD는 켜져 있는 동안 자체 속도를 셉니다. 겹침 읽기는 어느 경우든 필요한 값을 측정합니다.',
+  zht='記錄每次加速傳輸的時間（系統呼叫與複製）並統計移動的資料，供測試應用程式使用。關閉時不進行這些工作，每次傳輸可省下一點處理。HUD 開啟時會自行計算速度。重疊讀取無論如何都會測量所需的數值。',
+  zhs='记录每次加速传输的时间（系统调用和复制）并统计移动的数据，供测试应用使用。关闭时不做这些工作，每次传输可节省一点处理。HUD 开启时会自行计算速度。重叠读取无论如何都会测量所需的数值。',
+  fi='Ajastaa jokaisen nopeutetun siirron (järjestelmäkutsu ja kopiointi) ja laskee siirretyn datan testisovellusta varten. Pois: mitään tästä ei tehdä, mikä säästää hieman työtä joka siirrossa. HUD laskee omat nopeutensa ollessaan päällä. Päällekkäiset luvut mittaavat tarvitsemansa joka tapauksessa.',
+  sv='Tar tid på varje snabbare överföring (systemanrop och kopiering) och räknar flyttade data, för testappen. Av: inget av detta görs, vilket sparar lite arbete vid varje överföring. HUD:en räknar sina egna hastigheter när den är på. Överlappande läsningar mäter vad de behöver i vilket fall som helst.',
+  da="Tager tid på hver hurtigere overførsel (systemkald og kopiering) og tæller de flyttede data, til testappen. Fra: intet af dette sker, hvilket sparer lidt arbejde ved hver overførsel. HUD'en tæller sine egne hastigheder, mens den er til. Overlappende læsninger måler det, de behøver, under alle omstændigheder.",
+  no='Tar tiden på hver raskere overføring (systemkall og kopiering) og teller dataene som flyttes, for testappen. Av: ingenting av dette gjøres, noe som sparer litt arbeid ved hver overføring. HUD-en teller sine egne hastigheter mens den er på. Overlappende lesing måler det den trenger uansett.',
+  pl='Mierzy czas każdego przyspieszonego transferu (wywołanie systemowe i kopiowanie) i liczy przeniesione dane dla aplikacji testowej. Wył.: nic z tego nie jest robione, co oszczędza trochę pracy przy każdym transferze. HUD liczy własne prędkości, gdy jest włączony. Odczyty nakładające się i tak mierzą to, czego potrzebują.',
+  tr='Hızlandırılan her aktarımın süresini (sistem çağrısı ve kopyalama) ölçer ve taşınan veriyi sayar; test uygulaması içindir. Kapalı: bunların hiçbiri yapılmaz, her aktarımda biraz iş kazandırır. HUD açıkken kendi hızlarını sayar. Örtüşen okumalar gereken değerleri her durumda ölçer.')
 s("VM_I18N_ROW_GPUSAFE", en="GPU-safe reads", engb="GPU-safe reads", ja="GPU対応の読み込み",
   fr="Lectures sûres pour le GPU", es="Lecturas seguras para la GPU", de="GPU-sichere Lesevorgänge",
   it="Letture sicure per la GPU", nl="GPU-veilig lezen", pt="Leituras seguras para a GPU",
@@ -629,26 +629,26 @@ s("VM_I18N_ROW_READAHEAD", en="Read ahead (experimental)", engb="Read ahead (exp
   da="Læs forud (eksperimentel)", no="Les på forhånd (eksperimentell)", pl="Odczyt z wyprzedzeniem (eksperymentalny)",
   tr="Önden okuma (deneysel)")
 s("VM_I18N_HINT_READAHEAD",
-  en="While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster large loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage. On: after five large reads in a row. Auto: only for the game being played and on its storage; learns for each game (homebrew too) whether and when it pays off, and keeps that.",
-  engb="While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster large loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage. On: after five large reads in a row. Auto: only for the game being played and on its storage; learns for each game (homebrew too) whether and when it pays off, and keeps that.",
-  ja="ファイルが順番に読み込まれている間、次の部分を要求される前にシステムコアがカードから読み込むため、カードが待つことがありません。大きな読み込みやコピーが速くなります。別の場所の読み込みは数ミリ秒カードを待つことがあります。書き込みには影響しません。内部ストレージには使用されません。オン：大きな読み込みが5回続いた後。自動：ゲームごとに効果があるか、いつ始めるかを学習して保存します。",
-  fr="Pendant qu'un fichier est lu dans l'ordre, le cœur système lit la suite sur la carte avant qu'elle soit demandée : la carte n'attend jamais. Chargements et copies volumineux plus rapides ; une lecture ailleurs peut attendre la carte quelques ms. Les écritures ne changent pas. Non utilisé pour le stockage interne. Activé : après cinq grandes lectures à la suite. Auto : apprend pour chaque jeu si et quand cela vaut la peine, et le garde.",
-  es="Mientras un archivo se lee en orden, el núcleo del sistema lee de la tarjeta la parte siguiente antes de que se pida, así la tarjeta nunca espera. Cargas y copias grandes más rápidas; una lectura en otro lugar puede esperar unos ms a la tarjeta. Las escrituras no cambian. No se usa en el almacenamiento interno. Activado: tras cinco lecturas grandes seguidas. Auto: aprende para cada juego si compensa y cuándo, y lo guarda.",
-  de="Während eine Datei der Reihe nach gelesen wird, liest der Systemkern den nächsten Teil von der Karte, bevor er angefordert wird, sodass die Karte nie wartet. Schnellere große Ladevorgänge und Kopien; ein Lesen an anderer Stelle kann einige ms auf die Karte warten. Schreiben bleibt unverändert. Nicht für den internen Speicher. An: nach fünf großen Lesevorgängen in Folge. Auto: lernt für jedes Spiel, ob und wann es sich lohnt, und merkt es sich.",
-  it="Mentre un file viene letto in ordine, il core di sistema legge dalla scheda la parte successiva prima che venga richiesta, così la scheda non aspetta mai. Caricamenti e copie grandi più veloci; una lettura altrove può attendere la scheda qualche ms. Le scritture non cambiano. Non usato per la memoria interna. Attivato: dopo cinque letture grandi di fila. Auto: impara per ogni gioco se e quando conviene, e lo memorizza.",
-  nl="Terwijl een bestand op volgorde wordt gelezen, leest de systeemkern het volgende deel van de kaart voordat erom wordt gevraagd, zodat de kaart nooit wacht. Snellere grote laadacties en kopieën; een leesactie elders kan enkele ms op de kaart wachten. Schrijven verandert niet. Niet gebruikt voor de interne opslag. Aan: na vijf grote leesacties op rij. Auto: leert per game of en wanneer het loont, en onthoudt dat.",
-  pt="Enquanto um ficheiro é lido por ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, por isso o cartão nunca espera. Carregamentos e cópias grandes mais rápidos; uma leitura noutro sítio pode esperar alguns ms pelo cartão. As escritas não mudam. Não é usado no armazenamento interno. Ligado: após cinco leituras grandes seguidas. Auto: aprende para cada jogo se e quando compensa, e guarda isso.",
-  ptbr="Enquanto um arquivo é lido em ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, então o cartão nunca espera. Carregamentos e cópias grandes mais rápidos; uma leitura em outro lugar pode esperar alguns ms pelo cartão. As gravações não mudam. Não é usado no armazenamento interno. Ligado: após cinco leituras grandes seguidas. Auto: aprende para cada jogo se e quando compensa, e salva isso.",
-  ru="Пока файл читается по порядку, системное ядро заранее читает с карты следующую часть, и карта не простаивает. Большие загрузки и копирование быстрее; чтение в другом месте может подождать карту несколько мс. Запись не затрагивается. Не используется для внутренней памяти. Вкл.: после пяти больших чтений подряд. Авто: только для запущенной игры и только на её накопителе; для каждой игры (и homebrew) узнаёт, выгодно ли и когда начинать, и запоминает это.",
-  ko="파일을 순서대로 읽는 동안 시스템 코어가 다음 부분을 요청되기 전에 카드에서 미리 읽으므로 카드가 기다리지 않습니다. 큰 로딩과 복사가 빨라지며, 다른 위치의 읽기는 카드를 몇 ms 기다릴 수 있습니다. 쓰기에는 영향이 없습니다. 내부 저장소에는 사용되지 않습니다. 켬: 큰 읽기가 5번 연속된 후. 자동: 게임마다 효과가 있는지, 언제 시작할지 학습하여 저장합니다.",
-  zht="檔案依序讀取時，系統核心會在請求之前先從卡片讀取下一部分，卡片永遠不必等待。大型載入與複製更快；其他位置的讀取可能需等待卡片幾毫秒。寫入不受影響。不用於內部儲存空間。開啟：連續五次大型讀取後。自動：為每款遊戲學習是否值得、何時開始，並保存設定。",
-  zhs="文件按顺序读取时，系统核心会在请求之前先从卡上读取下一部分，卡永远不必等待。大型加载和复制更快；其他位置的读取可能需要等待卡几毫秒。写入不受影响。不用于内部存储。开启：连续五次大型读取后。自动：为每款游戏学习是否值得、何时开始，并保存设置。",
-  fi="Kun tiedostoa luetaan järjestyksessä, järjestelmäydin lukee kortilta seuraavan osan ennen kuin sitä pyydetään, joten kortti ei koskaan odota. Suuret lataukset ja kopiot nopeutuvat; lukeminen muualta voi odottaa korttia muutaman ms. Kirjoitukset eivät muutu. Ei käytetä sisäiseen tallennustilaan. Päällä: viiden suuren peräkkäisen luvun jälkeen. Automaattinen: oppii jokaiselle pelille, kannattaako ja milloin, ja muistaa sen.",
-  sv="Medan en fil läses i ordning läser systemkärnan nästa del från kortet innan den efterfrågas, så kortet väntar aldrig. Snabbare stora laddningar och kopieringar; en läsning någon annanstans kan vänta några ms på kortet. Skrivningar påverkas inte. Används inte för det interna lagringsutrymmet. På: efter fem stora läsningar i rad. Auto: lär sig för varje spel om och när det lönar sig, och sparar det.",
-  da="Mens en fil læses i rækkefølge, læser systemkernen den næste del fra kortet, før der bedes om den, så kortet aldrig venter. Hurtigere store indlæsninger og kopier; en læsning et andet sted kan vente nogle ms på kortet. Skrivninger påvirkes ikke. Bruges ikke til det interne lager. Til: efter fem store læsninger i træk. Auto: lærer for hvert spil, om og hvornår det betaler sig, og gemmer det.",
-  no="Mens en fil leses i rekkefølge, leser systemkjernen neste del fra kortet før den blir bedt om, så kortet aldri venter. Raskere store lastinger og kopier; en lesing et annet sted kan vente noen ms på kortet. Skriving påvirkes ikke. Brukes ikke for den interne lagringen. På: etter fem store lesinger på rad. Auto: lærer for hvert spill om og når det lønner seg, og lagrer det.",
-  pl="Gdy plik jest czytany po kolei, rdzeń systemowy wczytuje z karty kolejną część, zanim zostanie zażądana, więc karta nigdy nie czeka. Szybsze duże wczytywanie i kopiowanie; odczyt w innym miejscu może czekać kilka ms na kartę. Zapis bez zmian. Nie dotyczy pamięci wewnętrznej. Włączony: po pięciu dużych odczytach z rzędu. Auto: uczy się dla każdej gry, czy i kiedy to się opłaca, i zapamiętuje.",
-  tr="Bir dosya sırayla okunurken sistem çekirdeği sonraki bölümü istenmeden önce karttan okur, böylece kart hiç beklemez. Büyük yüklemeler ve kopyalar hızlanır; başka bir yerdeki okuma kartı birkaç ms bekleyebilir. Yazmalar etkilenmez. Dahili depolama için kullanılmaz. Açık: art arda beş büyük okumadan sonra. Otomatik: her oyun için işe yarayıp yaramadığını ve ne zaman başlayacağını öğrenir ve saklar.")
+  en='While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage.',
+  engb='While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. Not used for the internal storage.',
+  ja='ファイルが順番に読み込まれている間、次の部分を要求される前にシステムコアがカードから読み込むため、カードが待つことはありません。読み込みやコピーが速くなります。別の場所の読み込みは数ミリ秒待つことがあります。書き込みには影響しません。内蔵ストレージには使いません。',
+  fr="Pendant qu'un fichier est lu dans l'ordre, le cœur système lit la suite sur la carte avant qu'elle soit demandée : la carte n'attend jamais. Chargements et copies plus rapides ; une lecture ailleurs peut attendre quelques ms. Les écritures ne sont pas affectées. Pas utilisé pour le stockage interne.",
+  es='Mientras un archivo se lee en orden, el núcleo del sistema lee de la tarjeta la parte siguiente antes de que se pida, así la tarjeta nunca espera. Cargas y copias más rápidas; una lectura en otro lugar puede esperar unos ms. Las escrituras no se ven afectadas. No se usa en el almacenamiento interno.',
+  de='Während eine Datei der Reihe nach gelesen wird, liest der Systemkern den nächsten Teil von der Karte, bevor er angefordert wird, sodass die Karte nie wartet. Schnelleres Laden und Kopieren; ein Lesen an anderer Stelle kann einige ms warten. Schreibvorgänge sind nicht betroffen. Nicht für den internen Speicher.',
+  it='Mentre un file viene letto in ordine, il core di sistema legge dalla scheda la parte successiva prima che venga richiesta, così la scheda non aspetta mai. Caricamenti e copie più veloci; una lettura altrove può attendere qualche ms. Le scritture non sono interessate. Non usato per la memoria interna.',
+  nl='Terwijl een bestand op volgorde wordt gelezen, leest de systeemkern het volgende deel van de kaart voordat erom wordt gevraagd, zodat de kaart nooit wacht. Sneller laden en kopiëren; een leesactie elders kan enkele ms wachten. Schrijven wordt niet beïnvloed. Niet voor de interne opslag.',
+  pt='Enquanto um ficheiro é lido por ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, por isso o cartão nunca espera. Carregamentos e cópias mais rápidos; uma leitura noutro local pode esperar alguns ms. As escritas não são afetadas. Não é usado no armazenamento interno.',
+  ptbr='Enquanto um arquivo é lido em ordem, o núcleo do sistema lê do cartão a parte seguinte antes de ser pedida, assim o cartão nunca espera. Carregamentos e cópias mais rápidos; uma leitura em outro lugar pode esperar alguns ms. As gravações não são afetadas. Não é usado no armazenamento interno.',
+  ru='Пока файл читается по порядку, системное ядро заранее читает с карты следующую часть, поэтому карта не простаивает. Загрузка и копирование быстрее; чтение в другом месте может подождать несколько мс. На запись не влияет. Не используется для внутренней памяти.',
+  ko='파일을 순서대로 읽는 동안 시스템 코어가 요청 전에 다음 부분을 카드에서 미리 읽어 카드가 기다리지 않습니다. 로딩과 복사가 빨라집니다. 다른 위치의 읽기는 몇 ms 기다릴 수 있습니다. 쓰기에는 영향이 없습니다. 내부 저장소에는 사용되지 않습니다.',
+  zht='依序讀取檔案時，系統核心會在要求之前先從記憶卡讀取下一部分，因此記憶卡不必等待。載入與複製更快；其他位置的讀取可能等待數毫秒。不影響寫入。不用於內部儲存空間。',
+  zhs='按顺序读取文件时，系统核心会在请求之前先从存储卡读取下一部分，因此存储卡无需等待。加载和复制更快；其他位置的读取可能等待几毫秒。不影响写入。不用于内部存储。',
+  fi='Kun tiedostoa luetaan järjestyksessä, järjestelmäydin lukee seuraavan osan kortilta ennen pyyntöä, joten kortti ei koskaan odota. Nopeammat lataukset ja kopiot; muualta lukeminen voi odottaa muutaman ms. Ei vaikuta kirjoituksiin. Ei käytetä sisäiselle tallennustilalle.',
+  sv='När en fil läses i ordning läser systemkärnan nästa del från kortet innan den begärs, så kortet aldrig väntar. Snabbare laddning och kopiering; en läsning på annan plats kan vänta några ms. Skrivningar påverkas inte. Används inte för internminnet.',
+  da='Mens en fil læses i rækkefølge, læser systemkernen næste del fra kortet, før den bliver bedt om, så kortet aldrig venter. Hurtigere indlæsning og kopiering; en læsning andetsteds kan vente nogle ms. Skrivninger påvirkes ikke. Bruges ikke til det interne lager.',
+  no='Mens en fil leses i rekkefølge, leser systemkjernen neste del fra kortet før den blir bedt om, så kortet aldri venter. Raskere lasting og kopiering; en lesing andre steder kan vente noen ms. Skriving påvirkes ikke. Brukes ikke for intern lagring.',
+  pl='Gdy plik jest czytany po kolei, rdzeń systemowy z wyprzedzeniem czyta z karty kolejną część, więc karta nigdy nie czeka. Szybsze wczytywanie i kopiowanie; odczyt w innym miejscu może poczekać kilka ms. Nie wpływa na zapis. Nie dotyczy pamięci wewnętrznej.',
+  tr='Bir dosya sırayla okunurken sistem çekirdeği sonraki bölümü istenmeden önce karttan okur, böylece kart hiç beklemez. Daha hızlı yükleme ve kopyalama; başka yerdeki bir okuma birkaç ms bekleyebilir. Yazmalar etkilenmez. Dahili depolamada kullanılmaz.')
 items("VM_I18N_ITEM_RA_ON", dict(en="On", engb="On", ja="オン", fr="Activé", es="Activado", de="An", it="Attivato", nl="Aan", pt="Ligado", ptbr="Ligado", ru="Вкл.", ko="켬", zht="開啟", zhs="开启", fi="Päällä", sv="På", da="Til", no="På", pl="Włączony", tr="Açık"))
 items("VM_I18N_ITEM_OFF_OFF", dict(en="Off", engb="Off", ja="オフ", fr="Désactivé", es="Desactivado", de="Aus", it="Disattivato", nl="Uit", pt="Desligado", ptbr="Desligado", ru="Выкл.", ko="끔", zht="關閉", zhs="关闭", fi="Pois", sv="Av", da="Fra", no="Av", pl="Wyłączony", tr="Kapalı"))
 items("VM_I18N_ITEM_OFF_GPU", dict(**{k: "GPU-safe (C)" for k in LANGS}))
@@ -688,118 +688,10 @@ s("VM_I18N_HINT_OVERLAY", **L(
   "SELECT + høyre åpner overlayet; igjen: lukker det og viser HUD. SELECT + venstre tilbake til overlayet (HUD lukket); igjen: lukker det. SELECT + opp eller ned lukker alt. Med overlayet åpent får spillet ingen knapper. På: HUD vises bare via disse tastene.",
   "SELECT + prawo otwiera nakładkę; ponownie: zamyka ją i pokazuje HUD. SELECT + lewo wraca do nakładki (HUD zamknięty); ponownie: zamyka ją. SELECT + góra lub dół zamyka wszystko. Gdy nakładka jest otwarta, gra nie dostaje przycisków. Włączone: HUD pokazuje się tylko tymi klawiszami.",
   "SELECT + Sağ kaplamayı açar; tekrar: kapatır ve HUD'u gösterir. SELECT + Sol kaplamaya döner (HUD kapanır); tekrar: kapatır. SELECT + Yukarı veya Aşağı hepsini kapatır. Kaplama açıkken oyun tuş almaz. Açıkken HUD yalnızca bu tuşlarla görünür."))
-s("VM_I18N_ROW_RAPROF", **L(
-  "先読み自動のプロファイル", "Read ahead Auto profiles", "Profils de lecture anticipée auto",
-  "Perfiles de lectura anticipada auto", "Auto-Profile für Vorauslesen", "Profili lettura anticipata auto",
-  "Auto-profielen vooruitlezen", "Perfis de leitura antecipada auto", "Профили упреждающего чтения (авто)",
-  "미리 읽기 자동 프로필", "預先讀取自動設定檔", "预读自动配置文件",
-  "Ennakkoluvun automaattiprofiilit", "Auto-profiler för förhandsläsning", "Auto-profiler for forudlæsning",
-  "Auto-profiler for forhåndslesing", "Profile auto odczytu z wyprzedzeniem", "Önden okuma otomatik profilleri"))
-s("VM_I18N_HINT_RAPROF", **L(
-  "自動がゲームごとに学習した内容です。開くと内容の確認と削除ができます（削除したゲームは再学習されます）。",
-  "What Auto has learnt, per game. Open one to see it, or to delete it: that game is then learnt again.",
-  "Ce qu'Auto a appris, par jeu. Ouvrez-en un pour le voir ou le supprimer : ce jeu est alors réappris.",
-  "Lo que Auto ha aprendido, por juego. Abre uno para verlo o borrarlo: ese juego se aprende de nuevo.",
-  "Was Auto pro Spiel gelernt hat. Öffnen zum Ansehen oder Löschen: das Spiel wird dann neu gelernt.",
-  "Ciò che Auto ha imparato, per gioco. Aprine uno per vederlo o eliminarlo: quel gioco viene reimparato.",
-  "Wat Auto per spel heeft geleerd. Open er een om het te zien of te wissen: dat spel wordt dan opnieuw geleerd.",
-  "O que o Auto aprendeu, por jogo. Abra um para ver ou apagar: esse jogo é aprendido de novo.",
-  "Что режим «Авто» узнал для каждой игры. Откройте профиль, чтобы посмотреть или удалить его: игра будет изучена заново.",
-  "자동이 게임별로 학습한 내용입니다. 열어서 확인하거나 삭제할 수 있으며, 삭제하면 다시 학습합니다.",
-  "自動模式為每款遊戲學到的內容。開啟即可查看或刪除：刪除後該遊戲會重新學習。",
-  "自动模式为每款游戏学到的内容。打开即可查看或删除：删除后该游戏会重新学习。",
-  "Mitä automaattinen on oppinut pelikohtaisesti. Avaa nähdäksesi tai poistaaksesi: peli opitaan silloin uudelleen.",
-  "Vad Auto har lärt sig per spel. Öppna för att se eller ta bort: spelet lärs då in igen.",
-  "Hvad Auto har lært pr. spil. Åbn for at se eller slette: spillet læres så igen.",
-  "Hva Auto har lært per spill. Åpne for å se eller slette: spillet læres da på nytt.",
-  "Czego Auto nauczyło się dla każdej gry. Otwórz, aby zobaczyć lub usunąć: gra zostanie nauczona od nowa.",
-  "Otomatiğin oyun başına öğrendikleri. Görmek veya silmek için açın: o oyun yeniden öğrenilir."))
-s("VM_I18N_RP_NONE", **L(
-  "プロファイルはまだありません", "No profiles yet", "Aucun profil pour l'instant", "Aún no hay perfiles",
-  "Noch keine Profile", "Nessun profilo per ora", "Nog geen profielen", "Ainda sem perfis",
-  "Профилей пока нет", "아직 프로필이 없습니다", "尚無設定檔", "暂无配置文件", "Ei vielä profiileja",
-  "Inga profiler än", "Ingen profiler endnu", "Ingen profiler ennå", "Brak profili", "Henüz profil yok"))
-s("VM_I18N_RP_DELETE", **L(
-  "削除（再学習）", "Delete (learn again)", "Supprimer (réapprendre)", "Borrar (aprender de nuevo)",
-  "Löschen (neu lernen)", "Elimina (reimpara)", "Wissen (opnieuw leren)", "Apagar (aprender de novo)",
-  "Удалить (изучить заново)", "삭제 (다시 학습)", "刪除（重新學習）", "删除（重新学习）",
-  "Poista (opi uudelleen)", "Ta bort (lär in igen)", "Slet (lær igen)", "Slett (lær på nytt)",
-  "Usuń (naucz od nowa)", "Sil (yeniden öğren)"))
-s("VM_I18N_MSG_RP_DELETED", **L(
-  "削除しました。次回の起動時（実行中なら今から）再学習します。",
-  "Deleted. The game is learnt again the next time it runs (now, if it is running).",
-  "Supprimé. Le jeu sera réappris à son prochain lancement (dès maintenant s'il tourne).",
-  "Borrado. El juego se aprende de nuevo la próxima vez (ya mismo, si está en marcha).",
-  "Gelöscht. Das Spiel wird beim nächsten Start neu gelernt (sofort, falls es läuft).",
-  "Eliminato. Il gioco viene reimparato al prossimo avvio (subito, se è in esecuzione).",
-  "Gewist. Het spel wordt bij de volgende start opnieuw geleerd (nu al, als het draait).",
-  "Apagado. O jogo é aprendido de novo na próxima vez (já, se estiver a correr).",
-  "Удалено. Игра будет изучена заново при следующем запуске (сразу, если она запущена).",
-  "삭제했습니다. 다음 실행 때(실행 중이면 지금부터) 다시 학습합니다.",
-  "已刪除。遊戲下次執行時（若正在執行則立即）重新學習。",
-  "已删除。游戏下次运行时（若正在运行则立即）重新学习。",
-  "Poistettu. Peli opitaan uudelleen seuraavalla kerralla (heti, jos se on käynnissä).",
-  "Borttagen. Spelet lärs in igen nästa gång (nu, om det körs).",
-  "Slettet. Spillet læres igen næste gang (nu, hvis det kører).",
-  "Slettet. Spillet læres på nytt neste gang (nå, hvis det kjører).",
-  "Usunięto. Gra zostanie nauczona od nowa przy następnym uruchomieniu (od razu, jeśli działa).",
-  "Silindi. Oyun bir sonraki çalıştırmada (çalışıyorsa hemen) yeniden öğrenilir."))
-s("VM_I18N_MSG_RP_ERR", **L(
-  "削除できませんでした。", "Could not delete it.", "Suppression impossible.", "No se pudo borrar.",
-  "Konnte nicht gelöscht werden.", "Impossibile eliminarlo.", "Kon niet worden gewist.",
-  "Não foi possível apagar.", "Не удалось удалить.", "삭제할 수 없습니다.", "無法刪除。", "无法删除。",
-  "Poisto epäonnistui.", "Kunde inte ta bort.", "Kunne ikke slettes.", "Kunne ikke slettes.",
-  "Nie udało się usunąć.", "Silinemedi."))
-s("VM_I18N_RP_AFTER", **L(
-  "%u回の読み込み後", "after %u reads", "après %u lectures", "tras %u lecturas", "nach %u Lesevorgängen",
-  "dopo %u letture", "na %u leesacties", "após %u leituras", "после %u чтений", "%u회 읽기 후",
-  "%u 次讀取後", "%u 次读取后", "%u luvun jälkeen", "efter %u läsningar", "efter %u læsninger",
-  "etter %u lesinger", "po %u odczytach", "%u okumadan sonra"))
-s("VM_I18N_RP_NEVER", **L(
-  "使わない", "never", "jamais", "nunca", "nie", "mai", "nooit", "nunca", "никогда", "사용 안 함",
-  "不使用", "不使用", "ei koskaan", "aldrig", "aldrig", "aldri", "nigdy", "asla"))
-s("VM_I18N_RP_STORAGE", **L(
-  "ストレージ", "Storage", "Stockage", "Almacenamiento", "Speicher", "Memoria", "Opslag", "Armazenamento",
-  "Накопитель", "저장소", "儲存空間", "存储", "Tallennustila", "Lagring", "Lager", "Lagring",
-  "Pamięć", "Depolama"))
-s("VM_I18N_RP_UNKNOWN", **L(
-  "未確定", "not known yet", "pas encore connu", "aún no se sabe", "noch unbekannt", "non ancora noto",
-  "nog onbekend", "ainda desconhecido", "пока неизвестен", "아직 모름", "尚未確定", "尚未确定",
-  "ei vielä tiedossa", "inte känt än", "endnu ukendt", "ikke kjent ennå", "jeszcze nieznana",
-  "henüz bilinmiyor"))
-s("VM_I18N_RP_MEMCARD", **L(
-  "メモリーカード", "Memory card", "Carte mémoire", "Tarjeta de memoria", "Speicherkarte", "Memory card",
-  "Geheugenkaart", "Cartão de memória", "Карта памяти", "메모리 카드", "記憶卡", "记忆卡", "Muistikortti",
-  "Minneskort", "Hukommelseskort", "Minnekort", "Karta pamięci", "Hafıza kartı"))
-s("VM_I18N_RP_STREAMS", **L(
-  "%u回の連続読み込みから学習", "learnt from %u streams", "appris sur %u flux", "aprendido de %u flujos",
-  "aus %u Datenströmen gelernt", "appreso da %u flussi", "geleerd uit %u stromen", "aprendido de %u fluxos",
-  "изучено по %u потокам", "%u개 스트림에서 학습", "從 %u 個串流學習", "从 %u 个数据流学习",
-  "opittu %u virrasta", "inlärt från %u strömmar", "lært af %u strømme", "lært fra %u strømmer",
-  "nauczone z %u strumieni", "%u akıştan öğrenildi"))
-s("VM_I18N_ITEM_STATS_FULL", **L(
-  "フル", "Full", "Complète", "Completa", "Voll", "Completa", "Volledig", "Completa", "Полная", "전체",
-  "完整", "完整", "Täysi", "Full", "Fuld", "Full", "Pełna", "Tam"))
-s("VM_I18N_RP_LEARNT", **L(
-  "自動で学習済み", "Learnt by Auto", "Appris par Auto", "Aprendido por Auto", "Von Auto gelernt",
-  "Appreso da Auto", "Geleerd door Auto", "Aprendido pelo Auto", "Изучено «Авто»", "자동으로 학습됨",
-  "由自動模式學習", "由自动模式学习", "Automaattisen oppima", "Inlärt av Auto", "Lært af Auto",
-  "Lært av Auto", "Nauczone przez Auto", "Otomatik tarafından öğrenildi"))
-s("VM_I18N_RP_MANUAL", **L(
-  "手動で設定", "Set by hand", "Réglé à la main", "Ajustado a mano", "Von Hand eingestellt",
-  "Impostato a mano", "Met de hand ingesteld", "Definido à mão", "Задано вручную", "직접 설정함",
-  "手動設定", "手动设置", "Asetettu käsin", "Inställt för hand", "Indstillet manuelt",
-  "Satt manuelt", "Ustawione ręcznie", "Elle ayarlandı"))
-s("VM_I18N_RP_IGNORED", **L(
-  "自動はこのアプリを無視", "Auto ignores this app", "Auto ignore cette appli", "Auto ignora esta app",
-  "Auto ignoriert diese App", "Auto ignora questa app", "Auto negeert deze app", "O Auto ignora esta app",
-  "«Авто» игнорирует это приложение", "자동이 이 앱을 무시함", "自動模式忽略此應用程式", "自动模式忽略此应用",
-  "Automaattinen ohittaa tämän sovelluksen", "Auto ignorerar appen", "Auto ignorerer appen",
-  "Auto ignorerer appen", "Auto ignoruje tę aplikację", "Otomatik bu uygulamayı yok sayar"))
 def esc(t):
     return t.replace("\\", "\\\\").replace('"', '\\"')
 
-ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE', 'VM_I18N_ROW_PIPELINE', 'VM_I18N_HINT_PIPELINE', 'VM_I18N_ITEM_PIPE_OFF', 'VM_I18N_ITEM_PIPE_AUTO', 'VM_I18N_ITEM_PIPE_FIXED', 'VM_I18N_ROW_OFFLOAD', 'VM_I18N_HINT_OFFLOAD', 'VM_I18N_ITEM_OFF_OFF', 'VM_I18N_ITEM_OFF_GPU', 'VM_I18N_ITEM_OFF_ALWAYS', 'VM_I18N_ITEM_OFF_ALL', 'VM_I18N_ITEM_OFF_NC', 'VM_I18N_ROW_READAHEAD', 'VM_I18N_HINT_READAHEAD', 'VM_I18N_ITEM_RA_ON', 'VM_I18N_ROW_OVERLAY', 'VM_I18N_HINT_OVERLAY', 'VM_I18N_ROW_RAPROF', 'VM_I18N_HINT_RAPROF', 'VM_I18N_RP_NONE', 'VM_I18N_RP_DELETE', 'VM_I18N_MSG_RP_DELETED', 'VM_I18N_MSG_RP_ERR', 'VM_I18N_RP_AFTER', 'VM_I18N_RP_NEVER', 'VM_I18N_RP_STORAGE', 'VM_I18N_RP_UNKNOWN', 'VM_I18N_RP_MEMCARD', 'VM_I18N_RP_STREAMS', 'VM_I18N_ITEM_STATS_FULL', 'VM_I18N_RP_LEARNT', 'VM_I18N_RP_MANUAL', 'VM_I18N_RP_IGNORED']
+ORDER = ['VM_I18N_TITLE', 'VM_I18N_ROW_SD2VITA', 'VM_I18N_ROW_INTERNAL', 'VM_I18N_ROW_HUD', 'VM_I18N_ROW_MEMCARD', 'VM_I18N_ROW_VERIFY', 'VM_I18N_HINT_SD2VITA', 'VM_I18N_HINT_INTERNAL', 'VM_I18N_HINT_HUD', 'VM_I18N_HINT_MEMCARD', 'VM_I18N_HINT_VERIFY', 'VM_I18N_ITEM_HUD_OFF', 'VM_I18N_ITEM_HUD_COMPACT', 'VM_I18N_ITEM_HUD_EXTENDED', 'VM_I18N_ST_FALLBACK', 'VM_I18N_ST_NO_BUFFER', 'VM_I18N_ST_FIRMWARE', 'VM_I18N_ST_HOOKS', 'VM_I18N_ST_SAFE', 'VM_I18N_ST_NO_KERNEL', 'VM_I18N_ST_SLOW', 'VM_I18N_TITLE_ADVANCED', 'VM_I18N_ROW_LOG', 'VM_I18N_HINT_LOG', 'VM_I18N_ROW_HUD_STYLE', 'VM_I18N_HINT_HUD_STYLE', 'VM_I18N_ITEM_STYLE_CLASSIC', 'VM_I18N_ITEM_STYLE_PSVSHELL', 'VM_I18N_ROW_SAFE', 'VM_I18N_HINT_SAFE_ON', 'VM_I18N_HINT_SAFE_OFF', 'VM_I18N_MSG_SAFE_OK', 'VM_I18N_MSG_SAFE_ERR', 'VM_I18N_STATUS_ACTIVE', 'VM_I18N_STATUS_NO_KERNEL', 'VM_I18N_STATUS_SAFE', 'VM_I18N_STATUS_FIRMWARE', 'VM_I18N_STATUS_HOOKS', 'VM_I18N_HINT_STATUS_ACTIVE', 'VM_I18N_HINT_STATUS_NO_KERNEL', 'VM_I18N_ROW_SMALL', 'VM_I18N_HINT_SMALL', 'VM_I18N_ROW_STATS', 'VM_I18N_HINT_STATS', 'VM_I18N_ROW_GPUSAFE', 'VM_I18N_HINT_GPUSAFE', 'VM_I18N_ROW_PIPELINE', 'VM_I18N_HINT_PIPELINE', 'VM_I18N_ITEM_PIPE_OFF', 'VM_I18N_ITEM_PIPE_AUTO', 'VM_I18N_ITEM_PIPE_FIXED', 'VM_I18N_ROW_OFFLOAD', 'VM_I18N_HINT_OFFLOAD', 'VM_I18N_ITEM_OFF_OFF', 'VM_I18N_ITEM_OFF_GPU', 'VM_I18N_ITEM_OFF_ALWAYS', 'VM_I18N_ITEM_OFF_ALL', 'VM_I18N_ITEM_OFF_NC', 'VM_I18N_ROW_READAHEAD', 'VM_I18N_HINT_READAHEAD', 'VM_I18N_ITEM_RA_ON', 'VM_I18N_ROW_OVERLAY', 'VM_I18N_HINT_OVERLAY']
 assert set(ORDER) == set(T), set(ORDER) ^ set(T)
 out = ["/* Generated by tools/gen_i18n.py - edit that, not this file. */",
        "/* clang-format off */"]

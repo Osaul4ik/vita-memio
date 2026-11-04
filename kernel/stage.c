@@ -1388,7 +1388,7 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
-#define RA_VIDEO_READS    64              /* served whole in a row: a video    */
+#define RA_VIDEO_READS    36              /* served whole in a row: a video    */
 #define RA_VIDEO_US       (10u * 1000u * 1000u)   /* ... and its surroundings      */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */

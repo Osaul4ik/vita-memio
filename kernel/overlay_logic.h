@@ -12,11 +12,10 @@
  *   SELECT + Right   closed -> overlay -> HUD (the overlay closes, the HUD shows)
  *   SELECT + Left    HUD -> overlay -> closed
  *   SELECT + Up/Down everything closed
- * Only opening it takes a hold: with nothing shown, SELECT + Right held for
- * OV_HOLD_US, and the buttons are looked at every OV_SAMPLE_US only
- * (overlay.c), so a game's own polling costs next to nothing. Everything
- * else (the overlay open, or the HUD shown) acts at once on a newly
- * pressed arrow with SELECT held.
+ * With nothing shown, the buttons are looked at every OV_SAMPLE_US only
+ * (overlay.c), so a game's own polling costs next to nothing. SELECT + Right
+ * opens it at once, once per press; everything else (the overlay open, or the
+ * HUD shown) acts at once on a newly pressed arrow with SELECT held.
  * While the overlay is open, the game gets no buttons, and without SELECT:
  *   Up / Down        the cursor (over the lines shown: see `mask`)
  *   Left / Right     the value under it, back / on (Cross: on)
@@ -33,8 +32,7 @@
 #define OV_MENU    1
 #define OV_HUD     2
 
-#define OV_HOLD_US    (500u * 1000u)   /* closed: hold SELECT + Right this long */
-#define OV_SAMPLE_US  (100u * 1000u)   /* closed: look at the buttons this often */
+#define OV_SAMPLE_US  (20u * 1000u)    /* closed: look at the buttons this often */
 #define OV_HUD_SAMPLE_US (20u * 1000u) /* the HUD shown: this often (a press lasts longer) */
 #define OV_PORTS      5                /* controller ports: 0, and 1..4 on a PS TV */
 
@@ -56,6 +54,7 @@ enum {
 	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
+	OV_ITEM_TEST,        /* the read ahead test: start / stop                 */
 	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
 	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS
@@ -65,7 +64,7 @@ enum {
 /* Items done with Cross only (an action, not a value). */
 static inline int ov_item_action(int i)
 {
-	return i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
+	return i == OV_ITEM_TEST || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
 }
 
 /* The next item shown from `i`, `dir` -1 / +1 (wrapping); `i` itself if
@@ -89,8 +88,7 @@ static inline int ov_next(int i, int dir, uint32_t mask)
 typedef struct OvLogic {
 	uint32_t prev;       /* the buttons last seen                              */
 	uint32_t hold;       /* closed: the combination being held (0: none) ...   */
-	uint32_t hold_us;    /* ... since                                          */
-	int      held;       /* ... and it has acted (once per hold)               */
+	int      held;       /* ... and it has acted (once per press)              */
 	int      state;      /* OV_*                                               */
 	int      cursor;     /* OV_ITEM_*                                          */
 	uint32_t op;         /* 0, or an OV_OP not yet taken by the worker         */
@@ -127,6 +125,7 @@ static inline int ov_combo(int state, uint32_t arrow)
  * OV_MENU means: hide the buttons from the game. */
 static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 {
+	(void)now;
 	const uint32_t down = b & ~o->prev;
 	const int was_state = o->state, was_cursor = o->cursor;
 	const uint32_t was_op = o->op;
@@ -134,15 +133,15 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 	o->prev = b;
 	o->hide &= b;
 	if (o->state == OV_CLOSED) {
-		/* nothing shown: SELECT + Right (and no other arrow), held OV_HOLD_US */
+		/* nothing shown: SELECT + Right (and no other arrow) */
 		const uint32_t arrows = b & (OV_BTN_UP | OV_BTN_DOWN | OV_BTN_LEFT | OV_BTN_RIGHT);
 		const uint32_t combo = (b & OV_BTN_SELECT) && arrows == OV_BTN_RIGHT ? arrows : 0;
 
 		if (combo != o->hold) {
 			o->hold = combo;
-			o->hold_us = now;
 			o->held = 0;
-		} else if (combo && !o->held && now - o->hold_us >= OV_HOLD_US) {
+		}
+		if (combo && !o->held) {
 			o->held = 1;
 			o->state = OV_MENU;
 		}

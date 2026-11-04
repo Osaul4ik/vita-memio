@@ -49,14 +49,12 @@ static void test_states(void)
 
 	memset(&o, 0, sizeof(o));
 	CHECK(o.state == OV_CLOSED);
-	/* nothing shown: only SELECT + Right held half a second opens it */
-	CHECK(!hold(&o, OV_BTN_RIGHT, 400) && o.state == OV_CLOSED);
-	CHECK(!tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_CLOSED);   /* a tap: no */
+	/* nothing shown: only SELECT + Right opens it, at once */
 	hold(&o, OV_BTN_LEFT, 600);
 	hold(&o, OV_BTN_UP, 600);
 	hold(&o, OV_BTN_DOWN, 600);
 	CHECK(o.state == OV_CLOSED);                                          /* nothing else */
-	CHECK(hold(&o, OV_BTN_RIGHT, 500) && o.state == OV_MENU);             /* opens */
+	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_MENU);    /* opens */
 	/* open: a press acts at once */
 	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_HUD);      /* HUD */
 	/* the HUD shown: at once too */
@@ -72,7 +70,8 @@ static void test_states(void)
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
 	CHECK(o.state == OV_HUD);
 	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_DOWN) && o.state == OV_CLOSED);
-	/* held on after it opened: once per hold - not then the HUD */
+	/* held on after it opened: once per press - not then the HUD */
+	in(&o, 0);
 	for (int i = 0; i < 20; i++) {
 		T += OV_SAMPLE_US;
 		ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
@@ -92,21 +91,6 @@ static void test_states(void)
 		ov_input(&o, OV_BTN_RIGHT, T, g_mask);
 	}
 	CHECK(o.state == OV_CLOSED && !o.op);
-	/* the hold broken (another arrow) starts over */
-	T += OV_SAMPLE_US;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
-	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_UP, T, g_mask);
-	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
-	CHECK(o.state == OV_CLOSED);
-	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
-	CHECK(o.state == OV_CLOSED);
-	T += 300000;
-	ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T, g_mask);
-	CHECK(o.state == OV_MENU);
-	ov_input(&o, 0, T, g_mask);
 }
 
 static void test_menu(void)
@@ -161,6 +145,14 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_RA);
 	o.cursor = OV_ITEM_GPUSAFE;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_TEST);
+	/* the test: an action, Cross only */
+	tap(&o, 0, OV_BTN_LEFT);
+	CHECK(!o.op);
+	tap(&o, 0, OV_BTN_CROSS);
+	CHECK(o.op == OV_OP(OV_ITEM_TEST, 0));
+	o.op = 0;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_SAVE);
 	/* the cursor on a line that went away (read ahead changed): the next
@@ -252,7 +244,7 @@ static void test_hide_and_ports(void)
 
 	ov_input(&o, ov_merge(&o, 0, combo), 0, OV_MASK_ALL);
 	ov_input(&o, ov_merge(&o, 1, 0), 100000, OV_MASK_ALL);
-	ov_input(&o, ov_merge(&o, 0, combo), OV_HOLD_US + 1, OV_MASK_ALL);
+	ov_input(&o, ov_merge(&o, 0, combo), 200000, OV_MASK_ALL);
 	CHECK(o.state == OV_MENU);
 }
 

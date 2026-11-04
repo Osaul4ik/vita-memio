@@ -1398,6 +1398,14 @@ static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomic
 static uint32_t       g_fg_noid;            /* atomic: processes with no title id (log) */
 static void eff_update(void);
 static SceUID g_app_pid;
+
+/* The overlay's read ahead test (ra_test.h): while on, reads of the app it was
+ * started for are followed, nothing else changes. */
+#include "ra_test.h"
+static RaTest       g_rt;
+static volatile int g_rt_on;
+static volatile int g_rt_lock;
+static SceUID       g_rt_pid;
 static VmApp  g_app_cur;
 
 /* A stream of `pid` has ended: L reads. */
@@ -2475,6 +2483,22 @@ static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 	return done;
 }
 
+/* The test's look at a transfer (a moment; another thread at it: this one lost). */
+static void rt_note(const Dev *d, void *part, uint32_t sector, const void *p, uint32_t nsec, int write)
+{
+	int nc;
+
+	if (d == &g_dev[VM_DEV_INTERNAL] ||
+	    __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED) != __atomic_load_n(&g_rt_pid, __ATOMIC_RELAXED))
+		return;
+	nc = !write && nsec >= RA_SMALL_SECTORS && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC;
+	if (__sync_lock_test_and_set(&g_rt_lock, 1))
+		return;
+	ra_test_note(&g_rt, part ? part : (const void *)d, sector, nsec, nc, write,
+	             ksceKernelGetSystemTimeLow());
+	__sync_lock_release(&g_rt_lock);
+}
+
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
 static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
@@ -2499,6 +2523,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				__atomic_fetch_add(&g_fg_sec[d - g_dev], nsec, __ATOMIC_RELAXED);
 		}
 	}
+	if (mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED))
+		rt_note(d, part, sector, p, nsec, write);
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
 	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret))
@@ -3110,6 +3136,60 @@ int vm_stage_app_set(const VmApp *a)
 	__sync_lock_release(&g_eff_lock);
 	eff_update();
 	return VM_OK;
+}
+
+int vm_stage_ratest_start(void)
+{
+	if (!app_in_front())
+		return VM_ERR_NOT_READY;
+	__atomic_store_n(&g_rt_on, 0, __ATOMIC_RELEASE);
+	while (__sync_lock_test_and_set(&g_rt_lock, 1))
+		ksceKernelDelayThread(100);
+	memset(&g_rt, 0, sizeof(g_rt));
+	__atomic_store_n(&g_rt_pid, __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE), __ATOMIC_RELAXED);
+	__sync_lock_release(&g_rt_lock);
+	__atomic_store_n(&g_rt_on, 1, __ATOMIC_RELEASE);
+	return VM_OK;
+}
+
+int vm_stage_ratest_running(uint32_t *mib)
+{
+	const int on = __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
+
+	if (on && mib)
+		*mib = __atomic_load_n(&g_rt.total_sectors, __ATOMIC_RELAXED) / 2048u;
+	return on;
+}
+
+int vm_stage_ratest_stale(void)
+{
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+	return __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) && fg &&
+	       fg != __atomic_load_n(&g_rt_pid, __ATOMIC_RELAXED);
+}
+
+void vm_stage_ratest_cancel(void)
+{
+	__atomic_store_n(&g_rt_on, 0, __ATOMIC_RELEASE);
+}
+
+void vm_stage_ratest_stop(VmRaTestPick *o)
+{
+	RaPick p;
+
+	__atomic_store_n(&g_rt_on, 0, __ATOMIC_RELEASE);
+	while (__sync_lock_test_and_set(&g_rt_lock, 1))
+		ksceKernelDelayThread(100);
+	ra_test_pick(&g_rt, &p);
+	o->mib = g_rt.total_sectors / 2048u;
+	__sync_lock_release(&g_rt_lock);
+	o->little = p.little;
+	o->ra = p.ra ? VM_RA_ON : VM_RA_OFF;
+	o->thr[0] = p.thr[0];
+	o->thr[1] = p.thr[1];
+	o->offload = p.copy_nc ? VM_OFFLOAD_ALL : VM_OFFLOAD_ALWAYS;
+	o->pct = p.pct;
 }
 
 int vm_stage_app_save(void)

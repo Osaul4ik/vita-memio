@@ -59,9 +59,9 @@ static void on_pad(int port, SceCtrlData *pad, int count, int negative)
 
 	if (!pad || count <= 0 || count > 64)
 		return;
-	/* closed: a look every OV_SAMPLE_US is enough (a combination is held
-	 * for OV_HOLD_US), the HUD shown every OV_HUD_SAMPLE_US; the polls in
-	 * between cost a clock read. Every poll while something is to be hidden. */
+	/* closed: a look every OV_SAMPLE_US is enough (a press lasts longer), the
+	 * HUD shown every OV_HUD_SAMPLE_US; the polls in between cost a clock
+	 * read. Every poll while something is to be hidden. */
 	const uint32_t now = ksceKernelGetSystemTimeLow();
 	const int st = __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED);
 

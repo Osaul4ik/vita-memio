@@ -401,6 +401,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 
 #define VM_LANG_EVERY_US  (30ull * 1000u * 1000u)
 
+static int rt_line(char *o);
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
@@ -491,6 +493,8 @@ static void hud_feed(const VmDevState *now)
 		         s.verify ? " " : "", HUD_C_WARN, s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
 	}
 	n += hud_ra_lines(&L[n], VM_HUD_LINES - n, &s, &fg, s.hud != VM_HUD_OFF);
+	if (s.hud != VM_HUD_OFF && n < VM_HUD_LINES)
+		n += rt_line(L[n]);
 	if (vm_hud_installed())
 		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_style);
 }
@@ -503,6 +507,77 @@ static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C
                                         "C + NC" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 static const char *const k_ov_onoff[] = { "Off", "On" };
+
+/* The read ahead test's line (running: from the state; after it: its answer, a
+ * while). */
+#define RT_RESULT_US (30u * 1000u * 1000u)
+static char     g_rt_line[VM_HUD_LINE_MAX];
+static uint32_t g_rt_us;
+
+static int rt_line(char *o)
+{
+	uint32_t mib = 0;
+
+	if (vm_stage_ratest_running(&mib)) {
+		snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "RA test" HUD_C_TEXT " %u MiB" HUD_C_DIM
+		         "  overlay: Stop", (unsigned)mib);
+		return 1;
+	}
+	if (g_rt_line[0] && ksceKernelGetSystemTimeLow() - g_rt_us < RT_RESULT_US) {
+		snprintf(o, VM_HUD_LINE_MAX, "%s", g_rt_line);
+		return 1;
+	}
+	return 0;
+}
+
+static const char *rt_thr(char *o, int cap, uint32_t t)
+{
+	if (t == VM_RA_NEVER)
+		snprintf(o, cap, "never");
+	else if (!t)
+		snprintf(o, cap, "fixed");
+	else
+		snprintf(o, cap, "%u", (unsigned)t);
+	return o;
+}
+
+/* Start, or stop and put in what it found (in effect at once; kept by Save). */
+static int rt_toggle(VmApp *a, char *msg, int cap)
+{
+	VmRaTestPick p;
+	char c[12], n[12];
+
+	if (!vm_stage_ratest_running(NULL)) {
+		const int r = vm_stage_ratest_start();
+
+		g_rt_line[0] = 0;
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "Test on: play, SEL+> shows the HUD");
+		return r;
+	}
+	vm_stage_ratest_stop(&p);
+	p.mib %= 100000u;                         /* for the line */
+	p.pct %= 1000u;
+	g_rt_us = ksceKernelGetSystemTimeLow();
+	if (p.little) {
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "RA test: %u MiB is too little, play more",
+		         (unsigned)p.mib);
+		return VM_OK;
+	}
+	a->ra = p.ra;
+	a->offload = p.offload;
+	a->thr[0] = p.ra == VM_RA_ON ? p.thr[0] : 0;
+	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
+	if (p.ra == VM_RA_ON)
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_GOOD "RA On" HUD_C_TEXT " C %s NC %s %s" HUD_C_DIM
+		         " %u%% of %u MiB", rt_thr(c, sizeof(c), p.thr[0]), rt_thr(n, sizeof(n), p.thr[1]),
+		         k_ov_off[p.offload], (unsigned)p.pct, (unsigned)p.mib);
+	else
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "RA Off" HUD_C_DIM ": no gain in %u MiB",
+		         (unsigned)p.mib);
+	snprintf(msg, cap, HUD_C_GOOD "Picked: Save keeps it");
+	return VM_OK;
+}
 
 /* A change asked for in the overlay, made here: the app in front's own
  * settings (in effect at once; kept only by Save), or an action. */
@@ -541,6 +616,9 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		break;
 	case OV_ITEM_GPUSAFE:
 		a.gpusafe = ov_step(onoff, 3, a.gpusafe, dir);
+		break;
+	case OV_ITEM_TEST:
+		r = rt_toggle(&a, msg, cap);
 		break;
 	case OV_ITEM_SAVE:
 		r = vm_stage_app_save();
@@ -612,6 +690,11 @@ static void overlay_feed(void)
 		overlay_op(op, msg, sizeof(msg));
 		msg_us = ksceKernelGetSystemTimeLow();
 	}
+	if (vm_stage_ratest_stale()) {            /* it was for another app */
+		vm_stage_ratest_cancel();
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "RA test: another app, stopped");
+		g_rt_us = ksceKernelGetSystemTimeLow();
+	}
 	if (vm_overlay_state() != OV_MENU) {
 		if (shown) {
 			count_cores_want(&g_cnt_ov, 0);
@@ -655,7 +738,8 @@ static void overlay_feed(void)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
 		} else {
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_PIPE) |
-			       (1u << OV_ITEM_GPUSAFE) | (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
+			       (1u << OV_ITEM_GPUSAFE) | (1u << OV_ITEM_TEST) | (1u << OV_ITEM_SAVE) |
+			       (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
 			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 2);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
@@ -686,6 +770,15 @@ static void overlay_feed(void)
 			ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 0, "GPU-safe reads",
 			        ov_color(an.cur.gpusafe, an.saved.gpusafe), v);
 			{
+				uint32_t mib = 0;
+
+				if (vm_stage_ratest_running(&mib))
+					snprintf(v, sizeof(v), "(X) stop, %u MiB", (unsigned)mib);
+				else
+					snprintf(v, sizeof(v), "(X) start");
+				ov_line(L[n++], cur, OV_ITEM_TEST, 0, "Read ahead test", HUD_C_TEXT, v);
+			}
+			{
 				const int dirty = memcmp(&an.cur, &an.saved, sizeof(an.cur)) != 0;
 
 				ov_line(L[n++], cur, OV_ITEM_SAVE, 0, "Save",
@@ -693,6 +786,8 @@ static void overlay_feed(void)
 			}
 		}
 		ov_line(L[n++], cur, OV_ITEM_CLOSE, 0, "Close", HUD_C_TEXT, "(X)");
+		if (!vm_stage_ratest_running(NULL) && n < VM_HUD_LINES - 1)
+			n += rt_line(L[n]);
 		vm_overlay_set_mask(mask);
 		if (msg[0] && ksceKernelGetSystemTimeLow() - msg_us < 4u * 1000u * 1000u)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);

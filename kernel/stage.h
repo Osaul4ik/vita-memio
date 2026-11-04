@@ -70,6 +70,20 @@ void vm_stage_app_now(VmAppNow *out);
 int  vm_stage_app_set(const VmApp *a);
 int  vm_stage_app_save(void);
 
+/* The overlay's read ahead test. Worker thread, but for _running and _stale. */
+typedef struct VmRaTestPick {
+	int      little;        /* too little was read to tell: nothing picked    */
+	int      ra;            /* VM_RA_*                                        */
+	uint32_t thr[2];        /* C, NC: 2..8, VM_RA_NEVER, 0 the fixed          */
+	int      offload;       /* VM_OFFLOAD_*                                   */
+	uint32_t mib, pct;      /* read during it, the share from read ahead      */
+} VmRaTestPick;
+int  vm_stage_ratest_start(void);              /* VM_OK, VM_ERR_NOT_READY */
+int  vm_stage_ratest_running(uint32_t *mib);
+int  vm_stage_ratest_stale(void);              /* another app came to the front */
+void vm_stage_ratest_cancel(void);
+void vm_stage_ratest_stop(VmRaTestPick *out);
+
 /* The app in front (process events) and the storage it reads from most
  * since it came to the front (-1: none in front, or too little read yet;
  * counted while the HUD or Statistics counts transfers). */

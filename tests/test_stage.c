@@ -3043,6 +3043,58 @@ static void test_review_fixes(void)
 	vm_stage_fini();
 }
 
+/* The overlay's read ahead test: only the app it was started for, nothing
+ * changed by it; a stream gets read ahead picked whatever read ahead is set to. */
+static void test_ra_test_hook(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	VmRaTestPick p;
+	Dev *const d = &g_dev[M];
+	uint32_t mib = 0;
+
+	reset();
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	/* no app in front: not started */
+	CHECK(vm_stage_ratest_start() == VM_ERR_NOT_READY && !vm_stage_ratest_running(NULL));
+	as_app(0x42);
+	vm_stage_worker_tick();
+	CHECK(vm_stage_ratest_start() == VM_OK && vm_stage_ratest_running(&mib) && mib == 0);
+	/* read ahead Off for it, reads as ever: a long stream, cached */
+	for (uint32_t i = 0; i < 12; i++)
+		CHECK(rd(u, i * 256, 256) == 0);
+	CHECK(!d->ra_made);
+	CHECK(vm_stage_ratest_running(&mib) && mib > 0);
+	CHECK(!vm_stage_ratest_stale());
+	vm_stage_ratest_stop(&p);
+	CHECK(!vm_stage_ratest_running(NULL));
+	CHECK(p.little && p.mib == mib);                  /* too little to tell */
+	vm_stage_ratest_start();
+	for (uint32_t k = 0; k < 60; k++)
+		for (uint32_t i = 0; i < 12; i++) {
+			__sync_fetch_and_add(&fake_now_us, 1000);
+			CHECK(rd(u, k * 7 + i * 256, 256) == 0);
+		}
+	vm_stage_ratest_stop(&p);
+	CHECK(!p.little && p.ra == VM_RA_ON && p.thr[0] >= 2 && p.thr[0] <= 8 && p.offload == VM_OFFLOAD_ALWAYS);
+	/* another app in front: its reads do not count, and the test is stale */
+	vm_stage_ratest_start();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(vm_stage_ratest_stale());
+	CHECK(rd(u, 0, 256) == 0);
+	CHECK(g_rt.total_sectors == 0);
+	vm_stage_ratest_cancel();
+	CHECK(!vm_stage_ratest_running(NULL) && !vm_stage_ratest_stale());
+	/* off: its look costs nothing, and counts nothing */
+	CHECK(rd(u, 0, 256) == 0 && g_rt.total_sectors == 0);
+	g_title_fn = NULL;
+	vm_stage_fini();
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -3069,6 +3121,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
+	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_app_settings);
 	RUN(test_profiles);

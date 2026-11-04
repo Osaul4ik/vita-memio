@@ -1455,6 +1455,9 @@ static void ra_dev_add(int dev, uint32_t n)
 {
 	uint32_t old;
 
+	/* known, and no Full statistics to write it in: nothing more to count */
+	if (LD(g_ra_dev) >= 0 && !LD(g_ra_stats))
+		return;
 	__atomic_fetch_add(&g_ra_dev_sec[dev], n, __ATOMIC_RELAXED);
 	if (LD(g_ra_dev) >= 0)
 		return;

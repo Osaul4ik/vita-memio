@@ -2746,8 +2746,12 @@ static void test_readahead_auto(void)
 	vm_stage_worker_tick();
 	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE && vm_stage_tick_us() == 0);
 	g_problem_calls = 0;
-	streams(u, 2, 8, 256);                            /* known: no more wake-ups */
-	CHECK(g_problem_calls == 0);
+	{
+		const uint32_t sec = g_ra_dev_sec[M];
+
+		streams(u, 2, 8, 256);                        /* known: no more wake-ups, */
+		CHECK(g_problem_calls == 0 && g_ra_dev_sec[M] == sec);   /* nor counting */
+	}
 	/* a short session (homebrew): learnt when the next game starts */
 	streams(u, RA_LEARN_MIN, 8, 256);
 	vm_stage_worker_tick();

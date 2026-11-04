@@ -65,7 +65,6 @@ enum vm_i18n_id {
 	VM_I18N_HINT_OFFLOAD,
 	VM_I18N_ITEM_OFF_OFF,       /* its choices, as the list shows them            */
 	VM_I18N_ITEM_OFF_CACHED,
-	VM_I18N_ITEM_OFF_NC,
 	VM_I18N_ITEM_OFF_ALL,
 	VM_I18N_ITEM_OFF_FULL,
 	VM_I18N_ROW_READAHEAD,

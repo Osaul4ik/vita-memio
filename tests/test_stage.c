@@ -1664,13 +1664,13 @@ static void test_ncd(void)
 	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
 
-	/* NCached: cached reads copied by the game's thread; without read ahead
-	 * non-cacheable reads stay standard */
-	s.offload = VM_OFFLOAD_NC;
+	/* C + NC R/A: cached reads on the copier; without read ahead non-cacheable
+	 * reads stay standard */
+	s.offload = VM_OFFLOAD_ALL;
 	vm_stage_apply(&s);
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 27, 256) == 0 && memcmp(u, disk + 27 * 512, 256 * 512) == 0);
-	CHECK(copies_here >= 1 && copies_elsewhere == 0);
+	CHECK(copies_here == 0 && copies_elsewhere >= 1);
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
 	{
@@ -1769,9 +1769,9 @@ static void test_offload(void)
 	CHECK(d->pipe_made);
 	vm_stage_fini();
 
-	/* NCached: a cached read stays with the caller; Cached and C + NC not */
+	/* Off: a cached read stays with the caller; Cached and the rest not */
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_NC, 1);
+	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);
 	fake_pid = 0x42;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
 	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 0 && g_off_reads == 0);
@@ -2052,9 +2052,8 @@ static void test_readahead(void)
 	 * reads straight into the buffer as before, then from the pieces, copied
 	 * by the copier through its non-cacheable mapping as the setting says,
 	 * nothing cleaned */
-	for (int mode = 0; mode < 5; mode++) {
-		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_CACHED, VM_OFFLOAD_NC, VM_OFFLOAD_ALL,
-		                             VM_OFFLOAD_FULL };
+	for (int mode = 0; mode < 4; mode++) {
+		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_CACHED, VM_OFFLOAD_ALL, VM_OFFLOAD_FULL };
 		const int direct = modes[mode] == VM_OFFLOAD_FULL;
 		const int offl = vm_offload_nc(modes[mode]);
 
@@ -2127,7 +2126,7 @@ static void test_readahead(void)
 	/* a read larger than the pieces hold: the mapping is given back all the
 	 * same, the rest straight into the buffer */
 	reset();
-	ra_settings(&s, 1, VM_OFFLOAD_NC, VM_PIPE_AUTO);
+	ra_settings(&s, 1, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;

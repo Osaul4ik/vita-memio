@@ -98,9 +98,9 @@ enum vm_key {
  * copy costs the most); always. */
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_CACHED  2   /* reads into cached memory                       */
-#define VM_OFFLOAD_ALL     3   /* C + NC                                         */
-#define VM_OFFLOAD_NC      4   /* what read ahead holds for non-cacheable memory */
-#define VM_OFFLOAD_FULL    5   /* C + NC, and non-cacheable reads themselves     */
+#define VM_OFFLOAD_ALL     3   /* "C + NC R/A": and what read ahead holds for
+                                * non-cacheable memory                           */
+#define VM_OFFLOAD_FULL    5   /* "full C + NC": and non-cacheable reads themselves */
 
 static inline int vm_offload_cached(int v)
 {
@@ -108,7 +108,7 @@ static inline int vm_offload_cached(int v)
 }
 static inline int vm_offload_nc(int v)
 {
-	return v == VM_OFFLOAD_NC || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
+	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
 }
 static inline int vm_offload_direct(int v)
 {
@@ -135,7 +135,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
-#define VM_DEF_OFFLOAD   VM_OFFLOAD_CACHED
+#define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL
 #define VM_DEF_READAHEAD 0   /* VM_RA_OFF: opt-in                              */
 
 /* One int per key, in enum vm_key order. */
@@ -185,7 +185,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_CACHED && v <= VM_OFFLOAD_FULL);
+		return v == VM_OFFLOAD_OFF || v == VM_OFFLOAD_CACHED || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

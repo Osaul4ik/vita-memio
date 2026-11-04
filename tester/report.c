@@ -109,8 +109,8 @@ static const char *pipe_text(int v)
 static const char *offload_text(int v)
 {
 	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_CACHED ? "cached"
-	     : v == VM_OFFLOAD_NC ? "non-cacheable" : v == VM_OFFLOAD_ALL ? "cached and non-cacheable"
-	     : v == VM_OFFLOAD_FULL ? "all, also non-cacheable reads themselves"
+	     : v == VM_OFFLOAD_ALL ? "cached and non-cacheable read ahead (C + NC R/A)"
+	     : v == VM_OFFLOAD_FULL ? "cached and non-cacheable, also the reads themselves (full C + NC)"
 	     : "unknown";
 }
 

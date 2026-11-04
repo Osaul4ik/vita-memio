@@ -665,7 +665,7 @@ static void test_small_files(void)
 	CHECK(strstr(text, "files create     files/s"));
 	CHECK(strstr(text, "plugin small transfers too: on"));
 	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
-	CHECK(strstr(text, "plugin copy on the system core: cached and non-cacheable\n"));
+	CHECK(strstr(text, "plugin copy on the system core: cached and non-cacheable read ahead (C + NC R/A)\n"));
 	CHECK(strstr(text, "plugin GPU-safe reads: on\n"));
 	CHECK(strstr(text, "plugin read ahead: on\n"));
 	CHECK(r->plugin0.offload == VM_OFFLOAD_ALL);
@@ -675,7 +675,7 @@ static void test_small_files(void)
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)
-		found |= !strcmp(lines[i], "copy on the system core: cached and non-cacheable");
+		found |= !strcmp(lines[i], "copy on the system core: cached and non-cacheable read ahead (C + NC R/A)");
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)

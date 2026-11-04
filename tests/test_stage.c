@@ -113,6 +113,8 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_seen_n = 0;
+	g_ra_paused = 0;
+	g_ra_ev = 0;
 	g_ra_relearn = 0;
 	g_count_cores = 0;
 	g_ra_measure = 0;
@@ -2769,7 +2771,9 @@ static void test_readahead_auto(void)
 		CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
 		      g_ra_dev_sec[M] == 0 && g_ra_hstreams == 0);
 	}
-	/* Auto on, a game followed and learning; Auto off: nothing left behind */
+	/* Auto on, a game followed and learning; Auto off: paused (too little
+	 * learnt to keep): nothing measured or ticked meanwhile, only that
+	 * game's learning kept in memory */
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 1);
@@ -2780,14 +2784,15 @@ static void test_readahead_auto(void)
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
-	      g_ra_dev == -1 && g_ra_thr[0] == 0 && g_ra_hstreams == 0);
+	CHECK(g_ra_paused && !g_ra_learning && g_ra_pid == 0x44 && g_ra_relearn == 0);
 	{
-		const SceUID seen = g_ra_seen;
+		const uint32_t sec = g_ra_dev_sec[M], n = g_ra_hstreams;
 
 		fake_pid = 0x42;                              /* not measured: not followed */
 		streams(u, RA_SWITCH, 8, 256);
-		CHECK(g_ra_seen == seen && g_ra_dev_sec[M] == 0);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0x44 && g_ra_dev_sec[M] == sec && g_ra_hstreams == n &&
+		      vm_stage_tick_us() == 0);
 	}
 	vm_stage_fini();
 
@@ -3197,6 +3202,74 @@ static void test_readahead_auto(void)
 			CHECK(!ra_prof_load("PCSE00009", &pf));
 		}
 	}
+
+	/* Auto off and on again while it learns, too little for a profile:
+	 * paused, not dropped - the same game goes on from where it was; a
+	 * reset ("learn it again") starts over, with or without a profile; and
+	 * the end of learning is told once (the worker's notice) */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.stats = VM_STATS_ON;
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	streams(u, 10, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning && g_ra_hstreams == 10);
+	for (int m = 0; m < 2; m++) {
+		const uint32_t n = g_ra_hstreams;
+
+		s.readahead = m ? VM_RA_OFF : VM_RA_ON;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		vm_stage_worker_tick();                       /* stays paused */
+		CHECK(g_ra_paused && !g_ra_learning && g_ra_hstreams == n &&
+		      !strcmp(g_ra_title, "PCSB00777"));
+		streams(u, 5, 8, 256);                        /* not counted meanwhile */
+		CHECK(g_ra_hstreams == n);
+		s.readahead = VM_RA_AUTO;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(!g_ra_paused && g_ra_learning && g_ra_pid == 0x44);
+		streams(u, 10, 8, 256);
+		CHECK(g_ra_hstreams >= n + 9);                /* goes on (the last one runs) */
+	}
+	{
+		char t[16];
+		uint32_t th[2];
+
+		CHECK(!vm_stage_ra_take_learnt(t, th));
+		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);   /* no profile yet: starts over */
+		vm_stage_worker_tick();
+		CHECK(g_ra_learning && g_ra_hstreams == 0);
+		CHECK(vm_stage_ra_delete("PCSE00099") == VM_ERR_IO);
+		streams(u, RA_LEARN_STREAMS + 1, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(!g_ra_learning && vm_stage_ra_take_learnt(t, th) && !strcmp(t, "PCSB00777") &&
+		      th[0] == 2 && th[1] == VM_RA_NEVER);
+		CHECK(!vm_stage_ra_take_learnt(t, th));      /* once */
+		/* reset with a profile: learnt again */
+		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);
+		vm_stage_worker_tick();
+		CHECK(g_ra_learning && !ra_profile_load("PCSB00777", thr, &dev));
+	}
+	/* paused, then another game: the paused one dropped */
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(g_ra_paused);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	fake_pid = 0x46;
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x46 && g_ra_learning && g_ra_hstreams == 0);
+	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */
 	reset();

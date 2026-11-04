@@ -370,6 +370,44 @@ static int hud_auto_line(char *o, int on)
 	return 1;
 }
 
+/* Auto finished learning a game: "R/A: Complete. C: n NC: n" at the top
+ * centre for NOTICE_US, over whatever is on screen. */
+#define NOTICE_US (4u * 1000u * 1000u)
+static uint32_t g_notice_us;
+static int      g_notice_on;
+
+static void notice_feed(void)
+{
+	static char L[2][VM_HUD_LINE_MAX];
+	static int hud_failed;
+	char title[16], c[8], nc[8];
+	uint32_t thr[2];
+
+	if (vm_stage_ra_take_learnt(title, thr)) {
+		if (!vm_hud_installed() && !hud_failed && vm_hud_init() != VM_OK)
+			hud_failed = 1;
+		if (vm_hud_installed()) {
+			for (int k = 0; k < 2; k++) {
+				char *o = k ? nc : c;
+
+				if (thr[k] == VM_RA_NEVER)
+					snprintf(o, sizeof(c), "never");
+				else
+					snprintf(o, sizeof(c), "%u", (unsigned)(thr[k] > 99 ? 99 : thr[k]));
+			}
+			snprintf(L[0], VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A" HUD_C_TEXT ": Complete. "
+			         HUD_C_DIM "C: " HUD_C_GOOD "%s " HUD_C_DIM "NC: " HUD_C_GOOD "%s", c, nc);
+			snprintf(L[1], VM_HUD_LINE_MAX, HUD_C_DIM "%.15s", title);
+			vm_hud_set_notice(L, 2);
+			g_notice_us = ksceKernelGetSystemTimeLow();
+			g_notice_on = 1;
+		}
+	} else if (g_notice_on && ksceKernelGetSystemTimeLow() - g_notice_us >= NOTICE_US) {
+		vm_hud_set_notice(L, 0);
+		g_notice_on = 0;
+	}
+}
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
@@ -676,7 +714,7 @@ static int worker(SceSize args, void *argp)
 
 		if (running && vm_overlay_state() == OV_MENU)
 			wait = VM_WORKER_OVERLAY_US;
-		else if (running && (!g_guard_done || hud_shown()))
+		else if (running && (!g_guard_done || hud_shown() || g_notice_on))
 			wait = VM_WORKER_FAST_US;
 		else if (vm_settings_pending() || vm_stage_pending())
 			wait = VM_WORKER_RETRY_US;      /* a save or a helper release to retry */
@@ -709,6 +747,7 @@ static int worker(SceSize args, void *argp)
 		vm_stage_get(now, 1);
 		hud_feed(now);
 		overlay_feed();
+		notice_feed();
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			int fell_back = now[i].status == VM_ST_FALLBACK && prev[i].status != VM_ST_FALLBACK;
 			int new_err = now[i].errors != prev[i].errors ||

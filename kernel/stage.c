@@ -1406,6 +1406,7 @@ static SceUID   g_ra_skip_pid;
 static char     g_ra_skip_title[16];
 static int      g_ra_skip_sys, g_ra_skip_last;
 static int      g_ra_manual;              /* the game's thresholds: set by hand */
+static int      g_ra_paused;              /* worker: see ra_auto_stop           */
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
 static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
@@ -1689,6 +1690,11 @@ static void ra_thr_text(char *out, size_t n, uint32_t t)
 }
 
 /* The game's learning is over: the thresholds that pay most, kept. */
+/* Auto finished learning a game (for the worker's notice), worker only. */
+static int      g_ra_ev;
+static char     g_ra_ev_title[16];
+static uint32_t g_ra_ev_thr[2];
+
 static void ra_learn_finish(void)
 {
 	uint32_t thr[2];
@@ -1701,6 +1707,10 @@ static void ra_learn_finish(void)
 	__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
 	ra_profile_save(g_ra_title, thr, n, LD(g_ra_dev));
+	memcpy(g_ra_ev_title, g_ra_title, sizeof(g_ra_ev_title));
+	g_ra_ev_thr[0] = thr[0];
+	g_ra_ev_thr[1] = thr[1];
+	g_ra_ev = 1;
 	ra_thr_text(a, sizeof(a), thr[0]);
 	ra_thr_text(b, sizeof(b), thr[1]);
 	VM_KLOGI("stage: read ahead auto: %s - learnt from %u streams: starts after %s / %s "
@@ -1846,6 +1856,7 @@ static void ra_auto_tick(void)
 	const SceUID seen = __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE);
 	const int is_auto = LD(g_ra_mode) == VM_RA_AUTO, stats = LD(g_ra_stats);
 
+	g_ra_paused = 0;                          /* measuring again: see ra_auto_stop */
 	if (!g_title_fn) {
 		if (!g_ra_auto_logged && is_auto) {
 			g_ra_auto_logged = 1;
@@ -1966,6 +1977,28 @@ static void ra_auto_tick(void)
  * behind - switched on again, it starts afresh. Worker thread. */
 static void ra_auto_stop(void)
 {
+	if (g_ra_paused)
+		return;
+	/* Auto switched off while it learns a game, with too little for a
+	 * profile yet: paused, not dropped - Auto on again with the same game
+	 * goes on from here; another game drops it then. Only memory is kept. */
+	if (g_ra_auto_was && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+	    __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
+	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) < RA_LEARN_MIN) {
+		if (g_ra_stats_was)
+			ra_stats_flush(1);
+		g_ra_paused = 1;
+		g_ra_auto_was = 0;
+		g_ra_stats_was = 0;
+		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+		__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
+		__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_seen, __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE),
+		                 __ATOMIC_RELEASE);
+		VM_KLOGI("stage: read ahead auto: %s - paused at %u streams", g_ra_title,
+		         (unsigned)__atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED));
+		return;
+	}
 	ra_game_end();
 	g_ra_stats_was = 0;
 	g_ra_auto_was = 0;
@@ -3286,8 +3319,9 @@ void vm_stage_worker_tick(void)
 	}
 	if (LD(g_ra_measure) && LD(g_live))
 		ra_auto_tick();
-	else if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
-	         __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) || g_ra_stats_was || g_ra_auto_was)
+	else if (!g_ra_paused && (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
+	                          __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) || g_ra_stats_was ||
+	                          g_ra_auto_was))
 		ra_auto_stop();
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
@@ -3453,21 +3487,34 @@ int vm_stage_ra_delete(const char *title)
 	t[i] = 0;
 	if (!ra_title_ok(t))
 		return VM_ERR_ARG;
-	ra_profile_path(path, sizeof(path), t);
-	if (ksceIoRemove(path) < 0)
-		return VM_ERR_IO;
+	const int gone = (ra_profile_path(path, sizeof(path), t), ksceIoRemove(path)) >= 0;
 	/* that game running (the worker's g_ra_title; a racy read of a string
-	 * that changes only on a new game is fine for this) */
-	if (!LD(g_ra_skip_sys) && !strncmp(t, g_ra_skip_title, sizeof(t)))
+	 * that changes only on a new game is fine for this): learnt again from
+	 * nothing, also when it had no profile yet (learning starts over) */
+	const int running = LD(g_ra_mode) == VM_RA_AUTO && !strncmp(t, g_ra_title, sizeof(t));
+
+	if (gone && !LD(g_ra_skip_sys) && !strncmp(t, g_ra_skip_title, sizeof(t)))
 		__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);   /* no longer ignored */
-	if (LD(g_ra_mode) == VM_RA_AUTO && !strncmp(t, g_ra_title, sizeof(t))) {
+	if (running) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
 		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);
 		if (fn)
 			fn();
 	}
-	return VM_OK;
+	return gone || running ? VM_OK : VM_ERR_IO;
+}
+
+int vm_stage_ra_take_learnt(char title[16], uint32_t thr[2])
+{
+	if (!g_ra_ev)
+		return 0;
+	g_ra_ev = 0;
+	memcpy(title, g_ra_ev_title, 16);
+	title[15] = 0;
+	thr[0] = g_ra_ev_thr[0];
+	thr[1] = g_ra_ev_thr[1];
+	return 1;
 }
 
 void vm_stage_ra_now(VmRaNow *o)

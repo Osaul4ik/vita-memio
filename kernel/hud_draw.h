@@ -21,7 +21,8 @@ typedef struct {
 	int      n;
 	int      style;    /* VM_HUD_STYLE_*                                    */
 	int      maxlen;   /* longest line in characters, codes not counted     */
-	int      left;     /* 1: the top left corner (the overlay)              */
+	int      left;     /* 1: the top left corner (the overlay); 2: the top
+	                    * centre (a notice)                                 */
 	uint32_t gen;      /* changes whenever the text does (for the cache)    */
 } HudText;
 
@@ -165,7 +166,7 @@ static inline int hud_panel_geom(int w, int h, const HudText *t, HudGeom *g)
 	g->radius = g->f.h / 3;
 	g->box_w = t->maxlen * g->f.w + 2 * g->pad_x;
 	g->box_h = t->n * g->f.h + 2 * g->pad_y;
-	g->x0 = t->left ? margin : w - margin - g->box_w;
+	g->x0 = t->left == 2 ? (w - g->box_w) / 2 : t->left ? margin : w - margin - g->box_w;
 	g->y0 = h * 36 / 544;
 	return t->n > 0 && g->box_w <= HUD_ROW_MAX && g->x0 >= 0 && g->y0 + g->box_h <= h;
 }

@@ -255,6 +255,8 @@ static void test_overlay_left(void)
 	CHECK(fb[(g.y0 + g.box_h / 2) * w + w - 4] == 0);                   /* not on the right */
 	t.left = 0;
 	CHECK(hud_panel_geom(w, h, &t, &g) && g.x0 + g.box_w == w - w / 96);
+	t.left = 2;                                   /* a notice: the top centre */
+	CHECK(hud_panel_geom(w, h, &t, &g) && g.x0 == (w - g.box_w) / 2);
 	free(fb);
 }
 

@@ -124,6 +124,7 @@ static void reset(void)
 	g_ra_title[0] = 0;
 	g_ra_auto_logged = 0;
 	g_title_fn = NULL;
+	fake_main_nid = 0;
 	ra_hist_clear();
 	g_nc_off_refused = 0;
 	g_nc_off_type = 0;
@@ -3287,6 +3288,64 @@ static void test_readahead_auto(void)
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x46 && g_ra_learning && g_ra_hstreams == 0);
+	vm_stage_fini();
+
+	/* without a title id function (a firmware whose NIDs are not known):
+	 * the id from the main module - a game ("M" + its module NID) is
+	 * followed and learnt as a game; a system app ("Sce..." -> NPXS...) is
+	 * ignored; nothing from taiHEN: as without an id. The function found
+	 * failing for a process falls back the same way. */
+	{
+		char t[32];
+
+		memset(t, 0, sizeof(t));
+		fake_main_nid = 0;
+		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) < 0);
+		fake_main_nid = 0x1A2B3C4D;
+		snprintf(fake_main_name, sizeof(fake_main_name), "GameMain");
+		CHECK(ra_title_from_module(0x44, t, 12) < 0);          /* too small */
+		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "M1A2B3C4D"));
+		CHECK(ra_title_ok(t) && !ra_title_system(t) && ra_learn_target(t) == RA_LEARN_STREAMS);
+		snprintf(fake_main_name, sizeof(fake_main_name), "SceShell");
+		CHECK(ra_title_from_module(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "NPXS1A2B3C4D"));
+		CHECK(ra_title_ok(t) && ra_title_system(t));
+		CHECK(!ra_title_module("M1A2B3C4") && !ra_title_module("M1A2B3C4G") &&
+		      !ra_title_module("PCSE00001") && ra_title_module("M00000000"));
+		/* a title id function that fails for this one: the module's id */
+		g_title_fn = fake_title;
+		snprintf(fake_main_name, sizeof(fake_main_name), "GameMain");
+		memset(t, 0, sizeof(t));
+		CHECK(ra_get_title(0x99, t, sizeof(t) - 1) == 0 && !strcmp(t, "M1A2B3C4D"));
+		CHECK(ra_get_title(0x44, t, sizeof(t) - 1) == 0 && !strcmp(t, "PCSB00777"));
+	}
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = ra_title_from_module;                /* as on such a firmware */
+	fake_main_nid = 0x00C0FFEE;
+	snprintf(fake_main_name, sizeof(fake_main_name), "SceSettings");
+	fake_pid = 0x47;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x47);     /* a system app: ignored */
+	snprintf(fake_main_name, sizeof(fake_main_name), "eboot");
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && !strcmp(g_ra_title, "M00C0FFEE") && g_ra_learning);
+	{
+		VmRaNow now;
+
+		vm_stage_ra_now(&now);
+		CHECK(now.target == RA_LEARN_STREAMS && !strcmp(now.app, "M00C0FFEE"));
+	}
+	streams(u, RA_LEARN_STREAMS + 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && ra_profile_load("M00C0FFEE", thr, &dev) && dev == M);
+	fake_main_nid = 0;
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */

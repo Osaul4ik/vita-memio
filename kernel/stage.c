@@ -1419,6 +1419,7 @@ static int      g_ra_auto_logged;
 #define LIB_SYSROOT_KERNEL   0x3691DA45
 #define NID_PROCESS_TITLE_ID 0xEC3124A3
 static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
+static const char *g_title_src = "none";   /* where title ids come from (log) */
 
 /* A stream of `pid` has ended: L reads. */
 /* The worker, now (from a request: only a semaphore signal, and rarely). */
@@ -1676,6 +1677,64 @@ static int ra_title_system(const char *t)
 	       (t[0] == 'm' && t[1] == 'a' && t[2] == 'i' && t[3] == 'n' && !t[4]);
 }
 
+/* An id made from the main module (ra_title_from_module): "M" + 8 hex
+ * digits. Not known to be a game or homebrew: learnt as a game. */
+static int ra_title_module(const char *t)
+{
+	int n = 0;
+
+	if (t[0] != 'M')
+		return 0;
+	for (n = 1; t[n]; n++)
+		if (!((t[n] >= '0' && t[n] <= '9') || (t[n] >= 'A' && t[n] <= 'F')))
+			return 0;
+	return n == 9;
+}
+
+/* Without a title id function (a firmware whose NIDs are not known): an id
+ * from the process's main module, which taiHEN tells by name - "M" and its
+ * module NID (one per executable, so one per game build), or, for the
+ * system's own apps (main module "Sce..."), "NPXS" and it, so they are
+ * ignored as system apps are. */
+static int ra_title_from_module(SceUID pid, char *t, SceSize len)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	tai_module_info_t info;
+	int n = 0;
+
+	if (len < 13)
+		return -1;
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	if (taiGetModuleInfoForKernel(pid, TAI_MAIN_MODULE, &info) < 0)
+		return -1;
+	if (info.name[0] == 'S' && info.name[1] == 'c' && info.name[2] == 'e') {
+		t[n++] = 'N';
+		t[n++] = 'P';
+		t[n++] = 'X';
+		t[n++] = 'S';
+	} else {
+		t[n++] = 'M';
+	}
+	for (int i = 7; i >= 0; i--)
+		t[n++] = hex[(info.module_nid >> (i * 4)) & 15];
+	t[n] = 0;
+	return 0;
+}
+
+/* The title id of `pid`; if the function found gives none, the main
+ * module's id. */
+static int ra_get_title(SceUID pid, char *t, SceSize len)
+{
+	int r = g_title_fn ? g_title_fn(pid, t, len) : -1;
+
+	if ((r < 0 || !t[0]) && g_title_fn != ra_title_from_module) {
+		memset(t, 0, len);
+		r = ra_title_from_module(pid, t, len);
+	}
+	return r;
+}
+
 /* A retail game's title id (4 letters + 5 digits): PCSA..PCSH (the regions'
  * games) and the Japanese / Asian cartridge ones (VCJS, VLJM, VCAS, ...).
  * Anything else - homebrew, emulators, Adrenaline - is not. */
@@ -1696,7 +1755,7 @@ static int ra_title_retail(const char *t)
 /* Streams to learn from: a game reads more, and longer, than homebrew. */
 static uint32_t ra_learn_target(const char *t)
 {
-	return t[0] && ra_title_retail(t) ? RA_LEARN_STREAMS : RA_LEARN_HB;
+	return t[0] && (ra_title_retail(t) || ra_title_module(t)) ? RA_LEARN_STREAMS : RA_LEARN_HB;
 }
 
 /* Title ids are letters and digits; anything else is not used as a file name. */
@@ -1931,7 +1990,7 @@ static void ra_auto_tick(void)
 
 		/* an app Auto ignores: the game followed stays; this one is noted */
 		memset(t, 0, sizeof(t));
-		if (g_title_fn(seen, t, sizeof(t) - 1) >= 0 && ra_title_ok(t) &&
+		if (ra_get_title(seen, t, sizeof(t) - 1) >= 0 && ra_title_ok(t) &&
 		    (ra_title_system(t) || (ra_prof_load(t, &pf) && (pf.flags & RA_PF_IGNORE)))) {
 			memcpy(g_ra_skip_title, t, sizeof(g_ra_skip_title) - 1);
 			g_ra_skip_title[sizeof(g_ra_skip_title) - 1] = 0;
@@ -3122,10 +3181,28 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CLEAN,
 		                           &f) >= 0)
 			g_dcache_clean = (void (*)(void *, unsigned int))f;
+		/* Title ids: ksceKernelSysrootGetProcessTitleId by its 3.60 NIDs;
+		 * by its NID in any library (3.63 and later renumbered the
+		 * ForKernel libraries); else from the main module (no NID needed) */
 		f = 0;
 		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_SYSROOT_KERNEL,
-		                           NID_PROCESS_TITLE_ID, &f) >= 0)
+		                           NID_PROCESS_TITLE_ID, &f) >= 0 && f)
+			g_title_src = "sysroot";
+		else if ((f = 0, module_get_export_func(KERNEL_PID, "SceSysmem", TAI_ANY_LIBRARY,
+		                                        NID_PROCESS_TITLE_ID, &f)) >= 0 && f)
+			g_title_src = "SceSysmem";
+		else if ((f = 0, module_get_export_func(KERNEL_PID, "SceProcessmgr", TAI_ANY_LIBRARY,
+		                                        NID_PROCESS_TITLE_ID, &f)) >= 0 && f)
+			g_title_src = "SceProcessmgr";
+		else
+			f = 0;
+		if (f) {
 			g_title_fn = (int (*)(SceUID, char *, SceSize))f;
+		} else {
+			g_title_fn = ra_title_from_module;
+			g_title_src = "main module";
+		}
+		VM_KLOGI("stage: title ids from %s", g_title_src);
 	}
 	/* Buffers for the devices already switched on, now at boot while
 	 * contiguous memory is easy to find; the others get theirs when they are

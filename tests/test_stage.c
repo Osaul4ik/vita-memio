@@ -114,8 +114,10 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_rate_max = 0;                         /* no rate limit (but its test) */
+	g_ra_by_reads = 0;                         /* streams only (but its test) */
 	g_ra_rate_us = g_ra_rate_n = 0;
-	g_ra_video_us = 0;
+	g_ra_video_us = g_ra_video_runs = g_ra_video_left = 0;
+	g_ra_hreads = g_ra_target_reads = g_ra_saved_r = 0;
 	g_ra_fg = g_ra_exited = 0;
 	g_ra_saved_n = 0;
 	g_ra_relearn = 0;
@@ -2936,14 +2938,14 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_ON;                           /* Auto off, Full on */
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_thr[0] == 0 && g_ra_hstreams == 10);
+	CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_thr[0] == 0 && g_ra_hstreams == 11);
 	CHECK(!ra_profile_load("PCSB00777", thr, &dev));  /* not learnt: only begun */
 	streams(u, 32, 8, 256);                           /* Full goes on collecting */
 	CHECK(g_ra_hstreams >= 41);
 	s.readahead = VM_RA_AUTO;                         /* Auto on again: from what it kept */
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_hstreams == 10);
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_hstreams == 11);
 	vm_stage_fini();
 
 	/* Auto switched off mid-learning: kept if it had enough, then afresh */
@@ -3431,7 +3433,7 @@ static void test_readahead_auto(void)
 		s.readahead = VM_RA_AUTO;
 		vm_stage_apply(&s);
 		vm_stage_worker_tick();
-		CHECK(g_ra_learning && g_ra_pid == 0x44 && g_ra_hstreams == n);   /* goes on */
+		CHECK(g_ra_learning && g_ra_pid == 0x44 && g_ra_hstreams == n + 1);   /* goes on: the open one ended */
 		streams(u, 10, 8, 256);
 		CHECK(g_ra_hstreams >= n + 9);
 	}
@@ -3479,7 +3481,7 @@ static void test_readahead_auto(void)
 			RaProf pf;
 			VmRaNow now;
 			CHECK(ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_PARTIAL) &&
-			      pf.streams >= (uint32_t)(19 * (sess + 1)) && !pf.secs);
+			      pf.streams >= (uint32_t)(19 * (sess + 1)) && pf.reads);
 			vm_stage_ra_now(&now);
 			CHECK(!now.title[0]);
 		}
@@ -3506,7 +3508,7 @@ static void test_readahead_auto(void)
 	{
 		RaProf pf;
 
-		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_LEARNT && !pf.secs &&
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_LEARNT && !pf.reads &&
 		      !pf.hist[0][8]);                     /* what it saw no longer kept */
 	}
 	/* homebrew reading single reads only: they count, over sessions, until
@@ -3544,7 +3546,7 @@ static void test_readahead_auto(void)
 		pf.flags = RA_PF_PARTIAL;
 		pf.hist[1][5] = 7;
 		pf.streams = 7;
-		pf.secs = 300;
+		pf.reads = 300;
 		ra_prof_save("PCSE00077", &pf);
 		CHECK(ra_prof_load("PCSE00077", &pf) && pf.hist[1][5] == 7);
 		pf.streams = 8;                               /* not the histogram's */
@@ -4011,9 +4013,9 @@ static void test_review_fixes(void)
 	vm_stage_count_hud(0);
 	CHECK(g_count_all);
 
-	/* every stream counts, single reads too; a video does not: read ahead
-	 * serves it read after read, that run and what ends around it count for
-	 * nothing, until it has been over for a while */
+	/* every stream counts, single reads too; a slow run read ahead serves
+	 * whole is a video: it counts itself, the short streams around it do not,
+	 * until it has been over for a while */
 	auto_game(&s, 0x44);
 	streams(u, 20, 1, 256);
 	CHECK(g_ra_hstreams >= 19);
@@ -4026,31 +4028,65 @@ static void test_review_fixes(void)
 			d->ra_hit = 1;
 			ra_note(d, NULL, at, 256, 0);
 			at += 256;
+			fake_now_us += 100000;                    /* 128 KiB per 100 ms: slow */
 		}
-		CHECK(d->ra_run >= RA_VIDEO_READS && g_ra_video_us);
-		fake_now_us += 1000;
-		ra_note(d, NULL, 3000, 256, 0);               /* it ends: not counted */
-		CHECK(g_ra_hstreams == n && !d->ra_run);
-		ra_note(d, NULL, 200, 256, 0);                /* what reads around it: neither */
-		CHECK(g_ra_hstreams == n);
+		CHECK(d->ra_run >= RA_VIDEO_READS && g_ra_video_us && g_ra_video_runs == 1);
+		ra_note(d, NULL, 3000, 256, 0);               /* it ends: it counts */
+		CHECK(g_ra_hstreams == n + 1 && !d->ra_run);
+		ra_note(d, NULL, 200, 256, 0);                /* a short one around it: no */
+		CHECK(g_ra_hstreams == n + 1 && g_ra_video_left == 1);
 		fake_now_us += RA_VIDEO_US / 2;
 		d->ra_hit = 1;                                /* a piece of it: still a video */
 		ra_note(d, NULL, 456, 256, 0);
 		fake_now_us += RA_VIDEO_US - 1000;
 		ra_note(d, NULL, 1000, 256, 0);
-		CHECK(g_ra_hstreams == n);
+		CHECK(g_ra_hstreams == n + 1);
 		fake_now_us += RA_VIDEO_US + 1000;            /* over: the game's again */
 		ra_note(d, NULL, 2000, 256, 0);
-		CHECK(g_ra_hstreams == n + 1);
-		/* a run of a game's, shorter: counts */
-		d->ra_streak = 0;
-		for (uint32_t k = 0; k < 8; k++) {
-			d->ra_hit = 1;
-			ra_note(d, NULL, 4 * k * 64, 256, 0);
-		}
-		ra_note(d, NULL, 3500, 256, 0);
-		CHECK(g_ra_hstreams == n + 2 && g_ra_learning);
+		CHECK(g_ra_hstreams == n + 2);
 	}
+	vm_stage_fini();
+
+	/* as fast a run, a game's loading: nothing left out around it */
+	auto_game(&s, 0x44);
+	{
+		uint32_t at = 0;
+
+		d->ra_streak = 0;
+		for (uint32_t k = 0; k < RA_VIDEO_READS + 2; k++) {
+			d->ra_hit = 1;
+			ra_note(d, NULL, at, 256, 0);
+			at += 256;
+			fake_now_us += 5000;                      /* 128 KiB per 5 ms */
+		}
+		CHECK(d->ra_run >= RA_VIDEO_READS && !g_ra_video_us && !g_ra_video_runs);
+	}
+	vm_stage_fini();
+
+	/* a game on one long stream: the stream still open counts as it leaves,
+	 * reads carry over sessions, and enough reads end the learning */
+	auto_game(&s, 0x44);
+	g_ra_by_reads = 1;
+	g_ra_target_reads = RA_LEARN_READS;
+	streams(u, 1, 8, 256);
+	CHECK(g_ra_hstreams == 0 && g_ra_hreads == 8 && d->ra_streak == 8);
+	ra_proc_event(0x44, 3);
+	vm_stage_worker_tick();
+	CHECK(!d->ra_streak && ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_PARTIAL) &&
+	      pf.streams == 1 && pf.reads == 8 && pf.hist[0][8] == 1);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning && g_ra_hreads == 8 && g_ra_hstreams == 1);
+	g_problem_calls = 0;
+	vm_stage_on_problem(count_problem);
+	g_ra_hreads = RA_LEARN_READS - 1;
+	ra_note(d, NULL, 100, 256, 0);
+	ra_note(d, NULL, 356, 256, 0);
+	CHECK(g_problem_calls >= 1);                      /* woken at the target */
+	vm_stage_on_problem(NULL);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_LEARNT));
+	g_ra_by_reads = 0;
 	vm_stage_fini();
 
 	/* a large write ends a stream, and the stream is noted */

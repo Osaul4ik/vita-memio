@@ -66,14 +66,9 @@
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
 #include <psp2kern/io/dirent.h>
-#include <psp2kern/kernel/sysroot.h>   /* ksceKernelSysrootGetProcessTitleId */
 #include <taihen.h>
 
 #include "stage.h"
-
-/* SceAppMgrForDriver: 1 if an exclusive app (a game) runs; title_id NULL:
- * any. Declared here: the pinned VitaSDK's appmgr.h does not have it yet. */
-int ksceAppMgrIsExclusiveProcessRunning(const char *title_id);
 #include "klog.h"
 
 /* The CPU copies between the caller's buffer and the staging buffer (the host
@@ -1421,6 +1416,10 @@ static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
  * system thread reading for it). 0: the home screen / none. */
 #define LIB_PROCMGR_KERNEL     0x887F19D0
 #define NID_PROC_EVENT         0x414CC813   /* ksceKernelInvokeProcEventHandler */
+#define LIB_SYSROOT_KERNEL     0x3691DA45   /* SceSysrootForKernel (SceSysmem) */
+#define NID_PROCESS_TITLE_ID   0xEC3124A3   /* ksceKernelSysrootGetProcessTitleId */
+#define LIB_APPMGR_DRIVER      0xDCE180F8   /* SceAppMgrForDriver */
+#define NID_EXCLUSIVE_RUNNING  0xA888C2DC   /* ksceAppMgrIsExclusiveProcessRunning */
 static int (*g_exclusive_fn)(const char *title_id);
 static SceUID         g_proc_hook = -1;
 static tai_hook_ref_t g_proc_ref;
@@ -3308,9 +3307,18 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CLEAN,
 		                           &f) >= 0)
 			g_dcache_clean = (void (*)(void *, unsigned int))f;
-		/* the app in front and its title id, as PSVshell has them */
-		g_title_fn = ksceKernelSysrootGetProcessTitleId;
-		g_exclusive_fn = ksceAppMgrIsExclusiveProcessRunning;
+		/* title ids (ksceKernelSysrootGetProcessTitleId) and whether an
+		 * exclusive app runs (ksceAppMgrIsExclusiveProcessRunning: 1 if one
+		 * does; title_id NULL: any), looked up by their NIDs - the way that
+		 * found them on the console */
+		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_SYSROOT_KERNEL,
+		                           NID_PROCESS_TITLE_ID, &f) >= 0 && f)
+			g_title_fn = (int (*)(SceUID, char *, SceSize))f;
+		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceAppMgr", LIB_APPMGR_DRIVER,
+		                           NID_EXCLUSIVE_RUNNING, &f) >= 0 && f)
+			g_exclusive_fn = (int (*)(const char *))f;
 
 	}
 	/* Buffers for the devices already switched on, now at boot while

@@ -1552,7 +1552,7 @@ static int sems_empty(const Dev *d)
 	       fake_sema_count(d->sem_fin) == 0;
 }
 
-/* EXPERIMENT "Always + NC": a game's read into non-cacheable memory is
+/* EXPERIMENT "C + NC": a game's read into non-cacheable memory is
  * read by the helper straight into the game's buffer (mapped, non-cacheable
  * too); the game's thread reads nothing itself. Small reads, system threads,
  * other settings, verify, a busy device, a cached or unwritable mapping: the
@@ -1669,14 +1669,14 @@ static void test_ncd(void)
 	CHECK(ncd_rd(u, 23, 256) == 0 && memcmp(u, disk + 23 * 512, 256 * 512) == 0);
 	CHECK(g_ncd_state == -1 && fake_usermap_live == 0);
 
-	/* cached reads with "Always + NC": copied on the system core */
+	/* cached reads with "C + NC": copied on the system core */
 	fake_meminfo_type = 0x1020D006;
 	fake_memtype = 0xD000;
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
 
-	/* "NC only": cached reads copied by the game's thread, uncached ones
+	/* "NCached only": cached reads copied by the game's thread, uncached ones
 	 * read on the system core */
 	s.offload = VM_OFFLOAD_NC;
 	vm_stage_apply(&s);

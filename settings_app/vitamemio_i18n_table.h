@@ -1146,14 +1146,14 @@
 },
 [VM_I18N_HINT_OFFLOAD] = {
 	"ゲームが読み込んだデータのコピーを、ゲーム自身のコアではなく本体のシステムコアで行います。読み込み中のゲームのコアが早く空き、読み込み速度は変わりません。GPU対応時のみ：コピーの負担が最も大きいGPU対応読み込みがオンのときだけ。常に：ゲームの高速化されたすべての読み込み。本体が許可しない場合、ゲームは従来どおりコピーします（ログを参照）。",   /* ja */
-	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. GPU-safe only: just while GPU-safe reads are on, where the copy costs the most. Always: every faster read of a game. If the console does not allow it, games copy as before (see the log).",   /* en */
+	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. C = reads into cached (ordinary) memory, NC = into non-cacheable memory. GPU-safe (C): cached reads, just while GPU-safe reads are on, where the copy costs the most. Cached only: every faster cached read. NCached only: non-cacheable reads only. C + NC: both. Read ahead copies the same way. If the console does not allow it, games copy as before (see the log).",   /* en */
 	"Copie ce qu'un jeu lit sur le cœur système de la console au lieu du cœur du jeu, qui se libère plus vite pendant le chargement ; la vitesse de lecture ne change pas. GPU seulement : uniquement avec les lectures sûres pour le GPU, où la copie coûte le plus. Toujours : chaque lecture accélérée d'un jeu. Si la console ne le permet pas, les jeux copient comme avant (voir le journal).",   /* fr */
 	"Copia lo que lee un juego en el núcleo del sistema de la consola en lugar del núcleo del propio juego, que queda libre antes durante la carga; la velocidad de lectura no cambia. Solo con GPU: solo con las lecturas seguras para la GPU activadas, donde la copia cuesta más. Siempre: cada lectura acelerada de un juego. Si la consola no lo permite, los juegos copian como antes (ver el registro).",   /* es */
 	"Kopiert, was ein Spiel liest, auf dem Systemkern der Konsole statt auf dem Kern des Spiels, der beim Laden so früher frei wird; die Lesegeschwindigkeit bleibt gleich. Nur mit GPU: nur bei GPU-sicherem Lesen, wo das Kopieren am meisten kostet. Immer: jedes beschleunigte Lesen eines Spiels. Erlaubt die Konsole es nicht, kopieren Spiele wie bisher (siehe Protokoll).",   /* de */
 	"Copia ciò che un gioco legge sul core di sistema della console invece che sul core del gioco, che si libera prima durante il caricamento; la velocità di lettura non cambia. Solo GPU: solo con le letture sicure per la GPU attive, dove la copia costa di più. Sempre: ogni lettura accelerata di un gioco. Se la console non lo consente, i giochi copiano come prima (vedi il registro).",   /* it */
 	"Kopieert wat een game leest op de systeemkern van de console in plaats van op de kern van de game, die zo eerder vrij is tijdens het laden; de leessnelheid blijft gelijk. Alleen GPU: alleen met GPU-veilig lezen aan, waar het kopiëren het meest kost. Altijd: elke versnelde leesactie van een game. Staat de console het niet toe, dan kopiëren games zoals vroeger (zie het logboek).",   /* nl */
 	"Copia o que um jogo lê no núcleo do sistema da consola em vez do núcleo do próprio jogo, que fica livre mais cedo durante o carregamento; a velocidade de leitura não muda. Só com GPU: só com as leituras seguras para a GPU ligadas, onde a cópia custa mais. Sempre: cada leitura acelerada de um jogo. Se a consola não o permitir, os jogos copiam como antes (ver o registo).",   /* pt */
-	"Копирует прочитанное игрой на системном ядре консоли, а не на ядре самой игры, которое так раньше освобождается во время загрузки; скорость чтения не меняется. Только с GPU: только при включённом безопасном для GPU чтении, где копирование обходится дороже всего. Всегда: каждое ускоренное чтение игры. Если консоль этого не позволяет, игры копируют как раньше (см. журнал).",   /* ru */
+	"Копирует прочитанное игрой на системном ядре консоли, а не на ядре самой игры, которое так раньше освобождается во время загрузки; скорость чтения не меняется. C — чтение в кэшируемую (обычную) память, NC — в некэшируемую. GPU-safe (C): кэшируемое чтение, только при включённом безопасном для GPU чтении, где копирование обходится дороже всего. Cached only: каждое ускоренное кэшируемое чтение. NCached only: только некэшируемое. C + NC: оба. Упреждающее чтение копирует так же. Если консоль этого не позволяет, игры копируют как раньше (см. журнал).",   /* ru */
 	"게임이 읽은 데이터를 게임 자신의 코어 대신 본체의 시스템 코어에서 복사하므로 로딩 중 게임 코어가 더 빨리 비며, 읽기 속도는 그대로입니다. GPU 안전 시에만: 복사 부담이 가장 큰 GPU 안전 읽기가 켜져 있을 때만. 항상: 게임의 모든 가속 읽기. 본체가 허용하지 않으면 게임은 이전처럼 복사합니다(로그 참조).",   /* ko */
 	"將遊戲讀取的資料改在主機的系統核心複製，而非遊戲自己的核心，讓遊戲核心在載入時更早空出；讀取速度不變。僅 GPU 安全時：只在開啟 GPU 安全讀取時（複製負擔最大）。一律：遊戲的每次加速讀取。若主機不允許，遊戲會照舊複製（請見記錄）。",   /* zht */
 	"将游戏读取的数据改在主机的系统核心复制，而不是游戏自己的核心，让游戏核心在加载时更早空出；读取速度不变。仅 GPU 安全时：只在开启 GPU 安全读取时（复制负担最大）。始终：游戏的每次加速读取。若主机不允许，游戏会照旧复制（见日志）。",   /* zhs */
@@ -1163,7 +1163,7 @@
 	"Kopierer det et spill leser på konsollens systemkjerne i stedet for spillets egen kjerne, så spillets kjerne blir ledig tidligere under lasting; lesehastigheten er den samme. Kun GPU: bare når GPU-sikre lesinger er på, der kopieringen koster mest. Alltid: hver raskere lesing av et spill. Tillater ikke konsollen det, kopierer spill som før (se loggen).",   /* no */
 	"Kopiuje to, co czyta gra, na rdzeniu systemowym konsoli zamiast na rdzeniu samej gry, który dzięki temu szybciej się zwalnia podczas wczytywania; prędkość odczytu się nie zmienia. Tylko z GPU: tylko przy włączonych bezpiecznych odczytach dla GPU, gdzie kopiowanie kosztuje najwięcej. Zawsze: każdy przyspieszony odczyt gry. Jeśli konsola na to nie pozwala, gry kopiują jak dotąd (zob. dziennik).",   /* pl */
 	"Copia o que um jogo lê no núcleo do sistema do console em vez do núcleo do próprio jogo, que fica livre mais cedo durante o carregamento; a velocidade de leitura não muda. Só com GPU: só com as leituras seguras para a GPU ligadas, onde a cópia custa mais. Sempre: cada leitura acelerada de um jogo. Se o console não permitir, os jogos copiam como antes (veja o log).",   /* ptbr */
-	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. GPU-safe only: just while GPU-safe reads are on, where the copy costs the most. Always: every faster read of a game. If the console does not allow it, games copy as before (see the log).",   /* engb */
+	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads; the reading speed stays the same. C = reads into cached (ordinary) memory, NC = into non-cacheable memory. GPU-safe (C): cached reads, just while GPU-safe reads are on, where the copy costs the most. Cached only: every faster cached read. NCached only: non-cacheable reads only. C + NC: both. Read ahead copies the same way. If the console does not allow it, games copy as before (see the log).",   /* engb */
 	"Bir oyunun okuduğunu oyunun kendi çekirdeği yerine konsolun sistem çekirdeğinde kopyalar; böylece yükleme sırasında oyunun çekirdeği daha erken boşalır, okuma hızı aynı kalır. Yalnızca GPU: yalnızca GPU için güvenli okuma açıkken, kopyalamanın en pahalı olduğu yerde. Her zaman: bir oyunun her hızlandırılmış okuması. Konsol izin vermezse oyunlar eskisi gibi kopyalar (günlüğe bakın).",   /* tr */
 },
 [VM_I18N_ITEM_OFF_OFF] = {
@@ -1189,92 +1189,92 @@
 	"Kapalı",   /* tr */
 },
 [VM_I18N_ITEM_OFF_GPU] = {
-	"GPU対応時のみ",   /* ja */
-	"GPU-safe only",   /* en */
-	"GPU seulement",   /* fr */
-	"Solo con GPU",   /* es */
-	"Nur mit GPU",   /* de */
-	"Solo GPU",   /* it */
-	"Alleen GPU",   /* nl */
-	"Só com GPU",   /* pt */
-	"Только с GPU",   /* ru */
-	"GPU 안전 시에만",   /* ko */
-	"僅 GPU 安全時",   /* zht */
-	"仅 GPU 安全时",   /* zhs */
-	"Vain GPU",   /* fi */
-	"Endast GPU",   /* sv */
-	"Kun GPU",   /* da */
-	"Kun GPU",   /* no */
-	"Tylko z GPU",   /* pl */
-	"Só com GPU",   /* ptbr */
-	"GPU-safe only",   /* engb */
-	"Yalnızca GPU",   /* tr */
+	"GPU-safe (C)",   /* ja */
+	"GPU-safe (C)",   /* en */
+	"GPU-safe (C)",   /* fr */
+	"GPU-safe (C)",   /* es */
+	"GPU-safe (C)",   /* de */
+	"GPU-safe (C)",   /* it */
+	"GPU-safe (C)",   /* nl */
+	"GPU-safe (C)",   /* pt */
+	"GPU-safe (C)",   /* ru */
+	"GPU-safe (C)",   /* ko */
+	"GPU-safe (C)",   /* zht */
+	"GPU-safe (C)",   /* zhs */
+	"GPU-safe (C)",   /* fi */
+	"GPU-safe (C)",   /* sv */
+	"GPU-safe (C)",   /* da */
+	"GPU-safe (C)",   /* no */
+	"GPU-safe (C)",   /* pl */
+	"GPU-safe (C)",   /* ptbr */
+	"GPU-safe (C)",   /* engb */
+	"GPU-safe (C)",   /* tr */
 },
 [VM_I18N_ITEM_OFF_ALWAYS] = {
-	"常に",   /* ja */
-	"Always",   /* en */
-	"Toujours",   /* fr */
-	"Siempre",   /* es */
-	"Immer",   /* de */
-	"Sempre",   /* it */
-	"Altijd",   /* nl */
-	"Sempre",   /* pt */
-	"Всегда",   /* ru */
-	"항상",   /* ko */
-	"一律",   /* zht */
-	"始终",   /* zhs */
-	"Aina",   /* fi */
-	"Alltid",   /* sv */
-	"Altid",   /* da */
-	"Alltid",   /* no */
-	"Zawsze",   /* pl */
-	"Sempre",   /* ptbr */
-	"Always",   /* engb */
-	"Her zaman",   /* tr */
+	"Cached only",   /* ja */
+	"Cached only",   /* en */
+	"Cached only",   /* fr */
+	"Cached only",   /* es */
+	"Cached only",   /* de */
+	"Cached only",   /* it */
+	"Cached only",   /* nl */
+	"Cached only",   /* pt */
+	"Cached only",   /* ru */
+	"Cached only",   /* ko */
+	"Cached only",   /* zht */
+	"Cached only",   /* zhs */
+	"Cached only",   /* fi */
+	"Cached only",   /* sv */
+	"Cached only",   /* da */
+	"Cached only",   /* no */
+	"Cached only",   /* pl */
+	"Cached only",   /* ptbr */
+	"Cached only",   /* engb */
+	"Cached only",   /* tr */
 },
 [VM_I18N_ITEM_OFF_ALL] = {
-	"常に+NC",   /* ja */
-	"Always + NC",   /* en */
-	"Toujours + NC",   /* fr */
-	"Siempre + NC",   /* es */
-	"Immer + NC",   /* de */
-	"Sempre + NC",   /* it */
-	"Altijd + NC",   /* nl */
-	"Sempre + NC",   /* pt */
-	"Всегда + NC",   /* ru */
-	"항상 + NC",   /* ko */
-	"一律 + NC",   /* zht */
-	"始终 + NC",   /* zhs */
-	"Aina + NC",   /* fi */
-	"Alltid + NC",   /* sv */
-	"Altid + NC",   /* da */
-	"Alltid + NC",   /* no */
-	"Zawsze + NC",   /* pl */
-	"Sempre + NC",   /* ptbr */
-	"Always + NC",   /* engb */
-	"Her zaman + NC",   /* tr */
+	"C + NC",   /* ja */
+	"C + NC",   /* en */
+	"C + NC",   /* fr */
+	"C + NC",   /* es */
+	"C + NC",   /* de */
+	"C + NC",   /* it */
+	"C + NC",   /* nl */
+	"C + NC",   /* pt */
+	"C + NC",   /* ru */
+	"C + NC",   /* ko */
+	"C + NC",   /* zht */
+	"C + NC",   /* zhs */
+	"C + NC",   /* fi */
+	"C + NC",   /* sv */
+	"C + NC",   /* da */
+	"C + NC",   /* no */
+	"C + NC",   /* pl */
+	"C + NC",   /* ptbr */
+	"C + NC",   /* engb */
+	"C + NC",   /* tr */
 },
 [VM_I18N_ITEM_OFF_NC] = {
-	"NCのみ",   /* ja */
-	"NC only",   /* en */
-	"NC seulement",   /* fr */
-	"Solo NC",   /* es */
-	"Nur NC",   /* de */
-	"Solo NC",   /* it */
-	"Alleen NC",   /* nl */
-	"Só NC",   /* pt */
-	"Только NC",   /* ru */
-	"NC만",   /* ko */
-	"僅 NC",   /* zht */
-	"仅 NC",   /* zhs */
-	"Vain NC",   /* fi */
-	"Endast NC",   /* sv */
-	"Kun NC",   /* da */
-	"Kun NC",   /* no */
-	"Tylko NC",   /* pl */
-	"Só NC",   /* ptbr */
-	"NC only",   /* engb */
-	"Yalnızca NC",   /* tr */
+	"NCached only",   /* ja */
+	"NCached only",   /* en */
+	"NCached only",   /* fr */
+	"NCached only",   /* es */
+	"NCached only",   /* de */
+	"NCached only",   /* it */
+	"NCached only",   /* nl */
+	"NCached only",   /* pt */
+	"NCached only",   /* ru */
+	"NCached only",   /* ko */
+	"NCached only",   /* zht */
+	"NCached only",   /* zhs */
+	"NCached only",   /* fi */
+	"NCached only",   /* sv */
+	"NCached only",   /* da */
+	"NCached only",   /* no */
+	"NCached only",   /* pl */
+	"NCached only",   /* ptbr */
+	"NCached only",   /* engb */
+	"NCached only",   /* tr */
 },
 [VM_I18N_ROW_READAHEAD] = {
 	"先読み（試験的）",   /* ja */

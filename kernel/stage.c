@@ -466,7 +466,7 @@ static void diag_note(uint32_t nsec, uint32_t own)
  * system reads in 32 KiB pieces, so this covers most of a game's small reads.
  * Under 16 KiB the copy is too short to be worth a hand-off. */
 #define OFFLOAD_MIN_SECTORS 32
-/* "Always + NC": the game's thread maps its own buffer for the helper,
+/* "C + NC": the game's thread maps its own buffer for the helper,
  * so only reads of 64 KiB and up. */
 #define NCD_MIN_SECTORS     128
 static volatile int g_offload;             /* the setting, VM_OFFLOAD_*       */
@@ -497,7 +497,7 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
-/* VM_OFFLOAD_ALL ("Always + NC") and VM_OFFLOAD_NC ("NC only"): a game's read into
+/* VM_OFFLOAD_ALL ("C + NC") and VM_OFFLOAD_NC ("NCached only"): a game's read into
  * NON-cacheable memory, which otherwise takes the standard path on the game's
  * own thread, is read by the helper on the system core straight into the
  * game's buffer through a kernel mapping of it - no staging, no copy - while
@@ -2098,7 +2098,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	if (got && shadow)
 		bad = ra_verify(d, io, ref, part, sector, p, got, 0, shadow);
 	if (got < nsec) {
-		/* the rest: "Always + NC" on the system core, else the standard way */
+		/* the rest: "C + NC" on the system core, else the standard way */
 		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - got);
 
 		if (pid == KERNEL_PID ||
@@ -2236,7 +2236,7 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 	return 1;
 }
 
-/* Whether "Always + NC" takes an n-sector read: the process to map for, or
+/* Whether "C + NC" takes an n-sector read: the process to map for, or
  * KERNEL_PID if not. */
 static SceUID ncd_wanted(uint32_t nsec)
 {
@@ -2294,12 +2294,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data (what the pieces do not
-		 * cover goes to the system core there too, with "Always + NC") */
+		 * cover goes to the system core there too, with "C + NC") */
 		if (!write && nsec >= RA_MIN_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
 		    ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC &&
 		    ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1) == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
-		/* EXPERIMENT: "Always + NC": read on the system core instead */
+		/* EXPERIMENT: "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
 		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
 			return r;

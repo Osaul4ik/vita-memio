@@ -97,10 +97,10 @@ enum vm_key {
  * (whose core is then free sooner): off; only with GPU-safe reads (where the
  * copy costs the most); always. */
 #define VM_OFFLOAD_OFF     0
-#define VM_OFFLOAD_GPU     1
-#define VM_OFFLOAD_ALWAYS  2
-#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: "Always + NC", non-cacheable reads too */
-#define VM_OFFLOAD_NC      4   /* EXPERIMENT: "NC only", non-cacheable reads only     */
+#define VM_OFFLOAD_GPU     1   /* "GPU-safe (C)"                                     */
+#define VM_OFFLOAD_ALWAYS  2   /* "Cached only"                                      */
+#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: "C + NC", non-cacheable reads too      */
+#define VM_OFFLOAD_NC      4   /* EXPERIMENT: "NCached only" (shown before "C + NC") */
 
 /* Which reads a VM_OFFLOAD_* setting puts on the system core: reads into
  * ordinary (cached) memory (GPU-safe only: while GPU-safe reads are on), and

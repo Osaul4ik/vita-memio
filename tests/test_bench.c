@@ -679,7 +679,7 @@ static void test_small_files(void)
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)
-		found |= !strcmp(lines[i], "copy on the system core: GPU-safe only");
+		found |= !strcmp(lines[i], "copy on the system core: GPU-safe (C)");
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)

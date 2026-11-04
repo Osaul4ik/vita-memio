@@ -376,6 +376,14 @@ static int hud_auto_line(char *o, int on)
 static uint32_t g_notice_us;
 static int      g_notice_on;
 
+static void notice_thr(char *o, int cap, uint32_t t)
+{
+	if (t == VM_RA_NEVER)
+		snprintf(o, cap, "never");
+	else
+		snprintf(o, cap, "%u", (unsigned)(t > 99 ? 99 : t));
+}
+
 static void notice_feed(void)
 {
 	static char L[2][VM_HUD_LINE_MAX];
@@ -387,14 +395,8 @@ static void notice_feed(void)
 		if (!vm_hud_installed() && !hud_failed && vm_hud_init() != VM_OK)
 			hud_failed = 1;
 		if (vm_hud_installed()) {
-			for (int k = 0; k < 2; k++) {
-				char *o = k ? nc : c;
-
-				if (thr[k] == VM_RA_NEVER)
-					snprintf(o, sizeof(c), "never");
-				else
-					snprintf(o, sizeof(c), "%u", (unsigned)(thr[k] > 99 ? 99 : thr[k]));
-			}
+			notice_thr(c, sizeof(c), thr[0]);
+			notice_thr(nc, sizeof(nc), thr[1]);
 			snprintf(L[0], VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A" HUD_C_TEXT ": Complete. "
 			         HUD_C_DIM "C: " HUD_C_GOOD "%s " HUD_C_DIM "NC: " HUD_C_GOOD "%s", c, nc);
 			snprintf(L[1], VM_HUD_LINE_MAX, HUD_C_DIM "%.15s", title);

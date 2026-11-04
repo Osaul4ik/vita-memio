@@ -523,7 +523,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	                           VM_OFFLOAD_NC, VM_OFFLOAD_ALL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
 	static const int onoff[] = { VM_APP_GLOBAL, 0, 1 };
-	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };
+	static const int thr[] = { 0, 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };   /* 0: the fixed */
 	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
 	VmAppNow an;
 	VmApp a;
@@ -539,9 +539,8 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	case OV_ITEM_C:
 	case OV_ITEM_NC: {
 		const int k = item == OV_ITEM_NC;
-		const int cur = a.thr[k] ? (int)a.thr[k] : k ? 5 : 5;   /* the fixed: 5 */
 
-		a.thr[k] = (uint32_t)ov_step(thr, 8, cur, dir);
+		a.thr[k] = (uint32_t)ov_step(thr, 9, (int)a.thr[k], dir);
 		break;
 	}
 	case OV_ITEM_OFFLOAD:
@@ -557,18 +556,23 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		r = vm_stage_app_save();
 		if (r == VM_OK)
 			snprintf(msg, cap, HUD_C_GOOD "%.15s: saved", an.title);
-		return;
+		break;
 	case OV_ITEM_RELEARN:
 		r = vm_stage_app_relearn();
 		if (r == VM_OK)
 			snprintf(msg, cap, HUD_C_GOOD "%.15s: learnt again", an.title);
-		return;
+		break;
 	default:
 		return;
 	}
-	r = vm_stage_app_set(&a);
+	if (item != OV_ITEM_SAVE && item != OV_ITEM_RELEARN)
+		r = vm_stage_app_set(&a);
 	if (r == VM_ERR_NOT_READY)
 		snprintf(msg, cap, HUD_C_WARN "No app in front");
+	else if (r == VM_ERR_IO)
+		snprintf(msg, cap, HUD_C_BAD "Not saved (the card?)");
+	else if (r != VM_OK)
+		snprintf(msg, cap, HUD_C_WARN "Not done (%d)", r);
 }
 
 /* The colour of an app's value: as the global one (not its own, nothing to
@@ -599,7 +603,7 @@ static void ov_line(char *o, int cur, int i, int indent, const char *name, const
 {
 	char nm[24];
 
-	pad(nm, sizeof(nm), name, 18 - indent, 18, 0);
+	pad(nm, sizeof(nm), name, 18 - 2 * indent, 18, 0);
 	snprintf(o, VM_HUD_LINE_MAX, "%s%s%s" HUD_C_TEXT "%s%s%.24s",
 	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ",
 	         indent ? "  " : "", nm, color, val);
@@ -675,7 +679,7 @@ static void overlay_feed(void)
 			        ov_color(an.cur.ra, an.saved.ra), v);
 			if (ra == VM_RA_ON) {                 /* its thresholds: On only */
 				for (int k = 0; k < 2; k++) {
-					const uint32_t t = an.cur.thr[k] ? an.cur.thr[k] : 5;
+					const uint32_t t = an.cur.thr[k] ? an.cur.thr[k] : an.global.thr[k];
 
 					if (t == VM_RA_NEVER)
 						snprintf(v, sizeof(v), "never");

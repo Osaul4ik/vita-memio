@@ -145,8 +145,17 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 	} else if (o->state == OV_MENU) {
 		if (!(mask & OV_MASK_ALL))
 			mask = 1u << OV_ITEM_CLOSE;
-		if (!(mask & (1u << o->cursor)))      /* its line is gone: the next one shown */
-			o->cursor = ov_next(o->cursor, 1, mask);
+		if (!(mask & (1u << o->cursor))) {
+			/* its line is gone (read ahead changed): a press only moves
+			 * the cursor to the next one shown, so nothing acts on a line
+			 * that was never under it */
+			if (down & (OV_BTN_UP | OV_BTN_DOWN | OV_BTN_LEFT | OV_BTN_RIGHT | OV_BTN_CROSS)) {
+				o->cursor = ov_next(o->cursor, (down & OV_BTN_UP) ? -1 : 1, mask);
+				if (!(mask & (1u << o->cursor)))
+					o->cursor = OV_ITEM_CLOSE;
+			}
+			return o->state != was_state || o->cursor != was_cursor;
+		}
 		if (down & OV_BTN_UP)
 			o->cursor = ov_next(o->cursor, -1, mask);
 		else if (down & OV_BTN_DOWN)

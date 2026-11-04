@@ -3132,10 +3132,25 @@ static void test_readahead_auto(void)
 			CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL &&
 			      pl[0].thr[0] == 3 && pl[0].thr[1] == VM_RA_NEVER);
 		}
-		/* the home screen: the global ones again */
+		/* the event alone changes nothing: the worker puts them in effect */
 		ra_proc_event(0x44, 4);
+		CHECK(g_ra_mode == VM_RA_ON);
+		/* the home screen: the global ones again */
 		vm_stage_worker_tick();
 		CHECK(g_ra_mode == VM_RA_AUTO && g_offload == VM_OFFLOAD_GPU && g_pipeline == VM_PIPE_AUTO);
+		/* a change not saved survives the home screen (suspended, back) */
+		as_app(0x44);
+		vm_stage_worker_tick();
+		a.pipe = VM_PIPE_FIXED;
+		CHECK(vm_stage_app_set(&a) == VM_OK && g_pipeline == VM_PIPE_FIXED);
+		ra_proc_event(0x44, 4);
+		vm_stage_worker_tick();
+		CHECK(g_pipeline == VM_PIPE_AUTO);
+		ra_proc_event(0x44, 5);
+		vm_stage_worker_tick();
+		CHECK(g_pipeline == VM_PIPE_FIXED);
+		a.pipe = VM_PIPE_OFF;
+		CHECK(vm_stage_app_set(&a) == VM_OK);
 		/* back: its own, as saved */
 		as_app(0x44);
 		vm_stage_worker_tick();
@@ -3149,14 +3164,27 @@ static void test_readahead_auto(void)
 		as_app(0x44);
 		vm_stage_worker_tick();
 		CHECK(g_ra_mode == VM_RA_ON);                 /* as saved, not Off */
-		/* Off for it (as an ignore list): nothing measured or read ahead */
+		/* Off for it (as an ignore list): nothing measured or read ahead;
+		 * its thresholds go with On */
 		a.ra = VM_RA_OFF;
 		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
 		CHECK(!g_readahead && !g_ra_measure);
+		vm_stage_app_now(&an);
+		CHECK(an.cur.thr[0] == 0 && an.cur.thr[1] == 0 && an.global.thr[0] == RA_STREAK);
 		{
 			VmRaProfile pl[4];
 
 			CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_IGNORE);
+		}
+		/* its own other settings only: listed as set by hand, no thresholds */
+		ra_app_global(&a);
+		a.offload = VM_OFFLOAD_ALWAYS;
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+		{
+			VmRaProfile pl[4];
+
+			CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL &&
+			      pl[0].thr[0] == 0 && pl[0].thr[1] == 0);
 		}
 		/* all back to the global ones and saved: no profile left */
 		ra_app_global(&a);

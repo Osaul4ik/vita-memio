@@ -2183,18 +2183,15 @@ static void ra_proc_event(SceUID pid, int ev)
 			g_fg_title[sizeof(g_fg_title) - 1] = 0;
 		}
 		__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
-		if (pid != fg) {
-			eff_update();                     /* the global settings until its own load */
-			ra_wake();
-		}
+		if (pid != fg)
+			ra_wake();                        /* the worker puts its settings in effect */
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
 
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
 		                                __ATOMIC_RELAXED)) {
 			g_fg_title[0] = 0;
-			eff_update();                     /* the global settings again */
-			ra_wake();
+			ra_wake();                        /* the worker: the global settings again */
 		}
 		if (ev == 3 && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_ra_exited, pid, __ATOMIC_RELEASE);
@@ -2227,7 +2224,9 @@ static uint32_t ra_threshold(SceUID pid, int nc)
 	const uint32_t base = nc ? RA_STREAK_NC : RA_STREAK;
 	uint32_t t;
 
-	/* On: the app in front's own thresholds, if it has them */
+	/* On: the app in front's own thresholds, if it has them - for every
+	 * stream while it is in front (its reads, whichever thread does them:
+	 * `pid` is only known while Auto or Full statistics follows the app) */
 	if (LD(g_ra_mode) == VM_RA_ON) {
 		const SceUID app = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE);
 
@@ -3521,6 +3520,8 @@ void vm_stage_app_now(VmAppNow *o)
 		ra_app_global(&o->saved);
 	}
 	__sync_lock_release(&g_eff_lock);
+	o->global.thr[0] = RA_STREAK;                 /* the fixed thresholds (On) */
+	o->global.thr[1] = RA_STREAK_NC;
 	o->global.ra = LD(g_glob_ra);
 	o->global.offload = LD(g_glob_offload);
 	o->global.pipe = LD(g_glob_pipe);
@@ -3536,12 +3537,18 @@ static int app_in_front(void)
 
 int vm_stage_app_set(const VmApp *a)
 {
+	VmApp v;
+
 	if (!a || !ra_app_ok(a))
 		return VM_ERR_ARG;
 	if (!app_in_front())
 		return VM_ERR_NOT_READY;
+	v = *a;
+	/* its thresholds only mean something with read ahead On for it */
+	if ((v.ra == VM_APP_GLOBAL ? LD(g_glob_ra) : v.ra) != VM_RA_ON)
+		v.thr[0] = v.thr[1] = 0;
 	eff_lock();
-	g_app_cur = *a;
+	g_app_cur = v;
 	__sync_lock_release(&g_eff_lock);
 	eff_update();
 	return VM_OK;
@@ -3558,6 +3565,8 @@ int vm_stage_app_save(void)
 		memset(&pf, 0, sizeof(pf));
 		pf.dev = -1;
 	}
+	if (pf.dev < 0 && LD(g_ra_dev) >= 0 && !strncmp(g_app_title, g_ra_title, sizeof(g_app_title)))
+		pf.dev = LD(g_ra_dev);                 /* its storage, if Auto knows it */
 	pf.app = g_app_cur;
 	if (!ra_app_set_any(&pf.app) && !(pf.flags & RA_PF_LEARNT)) {
 		/* all global, nothing learnt: no profile at all */
@@ -3698,13 +3707,21 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
 		}
 	}
-	/* the app in front's own settings, when it changes (or its profile did) */
+	/* the app in front's own settings: loaded when another app comes to the
+	 * front (or its profile changed); kept while the home screen is in front
+	 * (suspended, it comes back with them, saved or not); in effect only
+	 * while it is in front */
 	{
+		static SceUID last_fg;
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
-		if (fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) ||
-		    __atomic_exchange_n(&g_app_reload, 0, __ATOMIC_ACQ_REL))
+		if (__atomic_exchange_n(&g_app_reload, 0, __ATOMIC_ACQ_REL))
+			app_load(fg ? fg : __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE));
+		else if (fg && fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE))
 			app_load(fg);
+		else if (fg != last_fg)
+			eff_update();
+		last_fg = fg;
 	}
 	/* the game followed has exited: kept if learnt enough, then gone */
 	{
@@ -3876,15 +3893,19 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 		memset(&out[at], 0, sizeof(out[at]));
 		memcpy(out[at].title, t, sizeof(t));
 		/* read ahead On for it: its thresholds (set by hand); Off: ignored;
-		 * else what Auto learnt (never if nothing) */
+		 * else what Auto learnt; its own other settings only: set by hand,
+		 * no thresholds (0: shown as "-") */
 		if (pf.app.ra == VM_RA_ON) {
 			out[at].thr[0] = (int32_t)(pf.app.thr[0] ? pf.app.thr[0] : RA_STREAK);
 			out[at].thr[1] = (int32_t)(pf.app.thr[1] ? pf.app.thr[1] : RA_STREAK_NC);
 			out[at].flags = VM_RA_PF_MANUAL;
+		} else if (pf.app.ra == VM_RA_OFF) {
+			out[at].flags = VM_RA_PF_IGNORE;
+		} else if (pf.flags & RA_PF_LEARNT) {
+			out[at].thr[0] = (int32_t)pf.thr[0];
+			out[at].thr[1] = (int32_t)pf.thr[1];
 		} else {
-			out[at].thr[0] = (int32_t)((pf.flags & RA_PF_LEARNT) ? pf.thr[0] : RA_THR_NONE);
-			out[at].thr[1] = (int32_t)((pf.flags & RA_PF_LEARNT) ? pf.thr[1] : RA_THR_NONE);
-			out[at].flags = pf.app.ra == VM_RA_OFF ? VM_RA_PF_IGNORE : 0;
+			out[at].flags = VM_RA_PF_MANUAL;
 		}
 		out[at].dev = pf.dev;
 		out[at].streams = pf.streams;

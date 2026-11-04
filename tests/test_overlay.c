@@ -167,7 +167,10 @@ static void test_menu(void)
 	 * one shown, before anything acts */
 	o.cursor = OV_ITEM_C;
 	tap(&o, 0, OV_BTN_CROSS);
-	CHECK(o.cursor == OV_ITEM_OFFLOAD && OV_OP_ITEM(o.op) == OV_ITEM_OFFLOAD);
+	CHECK(o.cursor == OV_ITEM_OFFLOAD && !o.op);     /* moved only */
+	o.cursor = OV_ITEM_NC;
+	tap(&o, 0, OV_BTN_UP);
+	CHECK(o.cursor == OV_ITEM_RA && !o.op);
 	o.op = 0;
 	/* no app in front: only Close; Cross on it closes */
 	g_mask = 1u << OV_ITEM_CLOSE;

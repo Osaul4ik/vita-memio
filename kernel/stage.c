@@ -1686,6 +1686,28 @@ static void ra_auto_tick(void)
 		ra_learn_finish();
 }
 
+/* Measuring switched off (Auto and Statistics both): what a game learnt so
+ * far is kept if it is enough (as when the game ends), then nothing is left
+ * behind - switched on again, it starts afresh. Worker thread. */
+static void ra_auto_stop(void)
+{
+	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
+		ra_learn_finish();
+	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+	ra_hist_clear();
+	__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
+	ST(g_ra_dev, -1);
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
+	g_ra_title[0] = 0;
+}
+
 /* Auto: whether this device reads ahead for the stream it has - only the
  * game's, on the game's storage. Without title ids, as on. */
 static int ra_auto_here(const Dev *d)
@@ -2867,7 +2889,10 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_ra_mode, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
 	                                                                    : VM_RA_OFF);
 	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
-	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats ? 1 : 0);
+	/* Statistics learns too while read ahead is On; with it Off there is
+	 * nothing to learn for (and non-cacheable streams are not seen) */
+	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || (s->stats && LD(g_ra_mode) == VM_RA_ON)
+	                 ? 1 : 0);
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || LD(g_readahead)))
@@ -2957,6 +2982,9 @@ void vm_stage_worker_tick(void)
 	}
 	if (LD(g_ra_measure) && LD(g_live))
 		ra_auto_tick();
+	else if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
+	         __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE))
+		ra_auto_stop();
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
 
@@ -3125,7 +3153,7 @@ int vm_stage_ra_delete(const char *title)
 		return VM_ERR_IO;
 	/* that game running (the worker's g_ra_title; a racy read of a string
 	 * that changes only on a new game is fine for this) */
-	if (!strncmp(t, g_ra_title, sizeof(t))) {
+	if (LD(g_ra_measure) && !strncmp(t, g_ra_title, sizeof(t))) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
 		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);

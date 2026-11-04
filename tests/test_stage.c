@@ -2776,6 +2776,49 @@ static void test_readahead_auto(void)
 	s.stats = 0;
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
+	vm_stage_worker_tick();                           /* nothing left behind */
+	CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
+	      g_ra_dev == -1 && g_ra_thr[0] == 0 && g_ra_hstreams == 0);
+	{
+		const SceUID seen = g_ra_seen;
+
+		fake_pid = 0x42;                              /* not measured: not followed */
+		streams(u, RA_SWITCH, 8, 256);
+		CHECK(g_ra_seen == seen && g_ra_dev_sec[M] == 0);
+	}
+	/* Statistics with read ahead Off: nothing measured either */
+	s.readahead = VM_RA_OFF;
+	s.stats = 1;
+	vm_stage_apply(&s);
+	CHECK(g_ra_measure == 0);
+	vm_stage_fini();
+
+	/* Auto switched off mid-learning: kept if it had enough, then afresh */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	streams(u, RA_LEARN_MIN, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning && g_ra_dev == M);
+	s.readahead = VM_RA_ON;
+	s.stats = 0;                                      /* neither measures now */
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0 && !g_ra_learning && !g_ra_title[0]);
+	CHECK(ra_profile_load("PCSB00777", thr, &dev) && dev == M);
+	CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK && !g_ra_relearn);   /* not measuring */
+	s.readahead = VM_RA_AUTO;                         /* on again: afresh */
+	vm_stage_apply(&s);
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_hstreams == 0 && g_ra_dev == -1);
 	vm_stage_fini();
 
 	/* the profiles, listed (sorted, damaged ones left out) and deleted; a

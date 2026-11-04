@@ -105,6 +105,16 @@ void vm_overlay_enable(int on, void (*wake)(void))
 	if (on && !g_installed) {
 		int ok = 0;
 
+		/* afresh: nothing of an earlier time (a hook still running when they
+		 * were released may have left a state) */
+		while (__sync_lock_test_and_set(&g_lock, 1))
+			ksceKernelDelayThread(100);
+		g_ov.state = OV_CLOSED;
+		g_ov.op = 0;
+		g_ov.prev = 0;
+		g_ov.cursor = 0;
+		__sync_lock_release(&g_lock);
+
 		for (int i = 0; i < OV_FNS; i++) {
 			g_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, &g_ref[i], "SceCtrl",
 			                                           TAI_ANY_LIBRARY, k_fn[i].nid, k_hooks[i]);

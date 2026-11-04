@@ -453,7 +453,8 @@ static void ov_pct_text(char *o, int cap, int p)
 	if (p < 0)
 		snprintf(o, cap, HUD_C_DIM "-");
 	else
-		snprintf(o, cap, "%s%d%%", p >= 90 ? HUD_C_GOOD : p > 0 ? HUD_C_WARN : HUD_C_BAD, p);
+		snprintf(o, cap, "%s%u%%", p >= 90 ? HUD_C_GOOD : p > 0 ? HUD_C_WARN : HUD_C_BAD,
+		         (unsigned)(p > 100 ? 100 : p));
 }
 
 static void overlay_feed(void)
@@ -492,7 +493,7 @@ static void overlay_feed(void)
 	{
 		VmRaNow now;
 		uint32_t core[4], ncs, nco, other = 0;
-		char a[12], b[12];
+		char a[16], b[16];
 		const char *dev;
 		const int cur = vm_overlay_cursor();
 

@@ -3370,7 +3370,7 @@ static void test_readahead_auto(void)
 		ra_proc_event(0x46, 4);                       /* the home screen */
 		vm_stage_fg(&fg);
 		CHECK(!fg.title[0] && fg.dev == -1);
-		CHECK(rd_ok(u, 0, 2048));                     /* not counted for anyone */
+		CHECK(rd_ok(u, 0, 1024) && rd_ok(u, 1024, 1024));   /* not counted for anyone */
 		as_app(0x46);
 		vm_stage_fg(&fg);
 		CHECK(fg.dev == -1);                          /* same app back: kept (none read) */

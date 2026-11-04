@@ -205,7 +205,7 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 		s = vmGetSetting(VM_KEY_PIPELINE);
 		out->pipeline = s >= VM_PIPE_OFF && s <= VM_PIPE_FIXED ? s : -1;
 		s = vmGetSetting(VM_KEY_OFFLOAD);
-		out->offload = s >= VM_OFFLOAD_OFF && s <= VM_OFFLOAD_ALWAYS ? s : -1;
+		out->offload = vm_setting_valid(VM_KEY_OFFLOAD, s) ? s : -1;
 		s = vmGetSetting(VM_KEY_READAHEAD);
 		out->readahead = s == VM_RA_OFF || s == VM_RA_ON ? s : -1;
 		s = vmGetSetting(VM_KEY_GPUSAFE);

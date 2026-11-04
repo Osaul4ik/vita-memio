@@ -1553,7 +1553,7 @@ static void test_offload(void)
 	/* made with overlapped reads off too: the helper reads, the copier copies */
 	for (int pipeline = 0; pipeline <= 1; pipeline++) {
 		reset();
-		offload_on(&s, 1, VM_OFFLOAD_GPU, pipeline);
+		offload_on(&s, 1, VM_OFFLOAD_CACHED, pipeline);
 		CHECK(d->pipe_made && fake_threads_live == 2 && fake_semas_live == 5);
 		fake_pid = 0x42;
 		g_log_diag = 1;
@@ -1598,21 +1598,21 @@ static void test_offload(void)
 	 * whichever of the two is switched on */
 	reset();
 	fake_alloc_fail = 1;
-	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 0);
+	offload_on(&s, 1, VM_OFFLOAD_CACHED, 0);
 	fake_alloc_fail = 0;
 	CHECK(!d->pipe_made && d->pipe_failed);
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	CHECK(!d->pipe_made);                           /* not wanted */
-	s.offload = VM_OFFLOAD_ALWAYS;
+	s.offload = VM_OFFLOAD_CACHED;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	CHECK(d->pipe_made && fake_threads_live == 2);
 	vm_stage_fini();
 	reset();
 	fake_alloc_fail = 1;
-	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	offload_on(&s, 1, VM_OFFLOAD_CACHED, 1);
 	fake_alloc_fail = 0;
 	CHECK(!d->pipe_made && d->pipe_failed);
 	s.pipeline = VM_PIPE_OFF;
@@ -1624,13 +1624,13 @@ static void test_offload(void)
 	CHECK(d->pipe_made);
 	vm_stage_fini();
 
-	/* "with GPU-safe only": a plain read stays with the caller; "always" not */
+	/* NCached: a cached read stays with the caller; Cached and C + NC not */
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_GPU, 1);
+	offload_on(&s, 0, VM_OFFLOAD_NC, 1);
 	fake_pid = 0x42;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
 	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 0 && g_off_reads == 0);
-	s.offload = VM_OFFLOAD_ALWAYS;
+	s.offload = VM_OFFLOAD_CACHED;
 	vm_stage_apply(&s);
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
@@ -1654,7 +1654,7 @@ static void test_offload(void)
 
 	/* the mapping fails: the caller copies; tried again on the next request */
 	reset();
-	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	offload_on(&s, 1, VM_OFFLOAD_CACHED, 1);
 	fake_pid = 0x42;
 	fake_usermap_err = (int)0x80020001;
 	fake_usermap_deny = 1 << VM_USERMAP_RW;
@@ -1668,7 +1668,7 @@ static void test_offload(void)
 
 	/* not writable: refused until switched again; the caller copies */
 	reset();
-	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	offload_on(&s, 1, VM_OFFLOAD_CACHED, 1);
 	fake_pid = 0x42;
 	fake_meminfo_type = 0x1020D004;           /* kernel read-only */
 	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
@@ -1679,7 +1679,7 @@ static void test_offload(void)
 	fake_meminfo_type = 0x1020D006;
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
-	s.offload = VM_OFFLOAD_ALWAYS;
+	s.offload = VM_OFFLOAD_CACHED;
 	vm_stage_apply(&s);                       /* switched again: checked afresh */
 	CHECK(g_offload_state == 0);
 	CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0 && g_offload_state == 1);
@@ -1687,7 +1687,7 @@ static void test_offload(void)
 	 * layout read wrong): refused, even with R and W in it */
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
-	s.offload = VM_OFFLOAD_ALWAYS;
+	s.offload = VM_OFFLOAD_CACHED;
 	vm_stage_apply(&s);
 	fake_meminfo_type = 0x10208006;           /* non-cacheable, but the buffer is cached */
 	copies_elsewhere = 0;
@@ -1697,7 +1697,7 @@ static void test_offload(void)
 	/* the type cannot be read: refused too */
 	s.offload = VM_OFFLOAD_OFF;
 	vm_stage_apply(&s);
-	s.offload = VM_OFFLOAD_ALWAYS;
+	s.offload = VM_OFFLOAD_CACHED;
 	vm_stage_apply(&s);
 	fake_meminfo_err = -5;
 	copies_elsewhere = 0;
@@ -1710,7 +1710,7 @@ static void test_offload(void)
 		static uint8_t elsewhere[600 * 512];
 
 		reset();
-		offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+		offload_on(&s, 1, VM_OFFLOAD_CACHED, 1);
 		fake_pid = 0x42;
 		fake_usermap_elsewhere = elsewhere;
 		fake_memtype_from = elsewhere;        /* the mapping: non-cacheable */
@@ -1733,7 +1733,7 @@ static void test_offload(void)
 		uint32_t before = 0;
 
 		reset();
-		offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+		offload_on(&s, 1, VM_OFFLOAD_CACHED, 1);
 		fake_pid = 0x42;
 		d->est_io_ns = 25000; d->est_cmd_ns = 600000;
 		d->est_cp_ns[0] = 4200; d->est_cp_ns[1] = 11100;
@@ -1752,7 +1752,7 @@ static void test_offload(void)
 
 	/* with Verify: copied on the system core in one piece, then compared */
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_ALWAYS, 1);
+	offload_on(&s, 0, VM_OFFLOAD_CACHED, 1);
 	fake_pid = 0x42;
 	g_shadow = malloc(STAGE_BYTES);
 	g_verify = 1;
@@ -1906,10 +1906,10 @@ static void test_readahead(void)
 	/* a stream into non-cacheable memory (a game's graphics data): the first
 	 * reads straight into the buffer as before, then from the pieces, copied
 	 * by the copier through its non-cacheable mapping as the setting says,
-	 * nothing cleaned (GPU-safe reads are on here: "GPU-safe only" counts) */
-	for (int mode = 0; mode < 3; mode++) {
-		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS };
-		const int offl = modes[mode] != VM_OFFLOAD_OFF;
+	 * nothing cleaned */
+	for (int mode = 0; mode < 4; mode++) {
+		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_CACHED, VM_OFFLOAD_NC, VM_OFFLOAD_ALL };
+		const int offl = vm_offload_nc(modes[mode]);
 
 		reset();
 		ra_settings(&s, 1, modes[mode], VM_PIPE_AUTO);
@@ -1943,7 +1943,7 @@ static void test_readahead(void)
 	/* one piece ahead after the fifth read, two after the sixth, then
 	 * three: little read past the end of a file */
 	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	ra_settings(&s, 0, VM_OFFLOAD_CACHED, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
@@ -1979,7 +1979,7 @@ static void test_readahead(void)
 	/* a read larger than the pieces hold: the mapping is given back all the
 	 * same, the rest straight into the buffer */
 	reset();
-	ra_settings(&s, 1, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	ra_settings(&s, 1, VM_OFFLOAD_NC, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
@@ -1990,24 +1990,10 @@ static void test_readahead(void)
 	CHECK(copies_elsewhere >= 1 && copies_here == 0 && fake_usermap_live == 0);
 	vm_stage_fini();
 
-	/* "GPU-safe only" with GPU-safe reads off: the caller copies */
-	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_GPU, VM_PIPE_AUTO);
-	fake_pid = 0x42;
-	fake_memtype = MEMTYPE_NC;
-	fake_meminfo_type = 0x10208006;
-	for (uint32_t i = 0; i < 12; i++) {
-		copies_here = copies_elsewhere = 0;
-		CHECK(rd_ok(u, i * 256, 256));
-		CHECK(copies_elsewhere == 0);
-	}
-	CHECK(g_ra_hits == 7 && fake_usermap_live == 0);
-	vm_stage_fini();
-
 	/* the non-cacheable mapping does not fit (here: cached): only those are
 	 * refused - the caller copies them; a cached read still goes to the copier */
 	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x1020D006;
@@ -2028,7 +2014,7 @@ static void test_readahead(void)
 
 		for (int k = 0; k < 3; k++) {
 			reset();
-			ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+			ra_settings(&s, 0, VM_OFFLOAD_CACHED, VM_PIPE_AUTO);
 			fake_memtype = kinds[k];
 			if (k == 2) {
 				s.readahead = 0;
@@ -2085,7 +2071,7 @@ static void test_readahead(void)
 	/* copy on the system core: a game's stream is copied by the copier from
 	 * the pieces, through its mapping, unmapped after */
 	reset();
-	ra_settings(&s, 1, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	ra_settings(&s, 1, VM_OFFLOAD_CACHED, VM_PIPE_AUTO);
 	fake_pid = 0x42;
 	CHECK(fake_threads_live == 3);
 	for (uint32_t i = 0; i < 7; i++) {
@@ -2243,7 +2229,7 @@ static void test_readahead(void)
 	 * bytes changed in the buffer) falls back, the caller gets the disk's */
 	for (int nc = 0; nc <= 1; nc++) {
 		reset();
-		ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+		ra_settings(&s, 0, VM_OFFLOAD_CACHED, VM_PIPE_AUTO);
 		fake_pid = 0x42;
 		if (nc) {
 			fake_memtype = MEMTYPE_NC;
@@ -2481,7 +2467,7 @@ static void test_stress_concurrency(void)
 	                             __atomic_load_n(&args[2].reads, __ATOMIC_RELAXED) < 40) &&
 	                            i < 20000); i++) {
 		s.pipeline = i % 3;                         /* off, auto, fixed */
-		s.offload = (i / 3) % 3 == 1 ? VM_OFFLOAD_ALWAYS : VM_OFFLOAD_OFF;
+		s.offload = (i / 3) % 3 == 1 ? VM_OFFLOAD_ALL : VM_OFFLOAD_OFF;
 		s.stats = (i / 9) & 1;
 		s.small = (i / 18) & 1;
 		s.readahead = (i / 5) % 4 == 0 ? VM_RA_OFF : VM_RA_ON;

@@ -1951,11 +1951,11 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	shadow = take_shadow();                     /* verify mode: compared after */
 	stats = LD(g_stats);
 	offload = LD(g_offload);
-	/* the same setting as for cached reads. Only what the pieces hold has a
-	 * copy to move: the rest is read straight into the buffer */
+	/* only what the pieces hold has a copy to move: the rest is read straight
+	 * into the buffer */
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
-	      (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && LD(g_gpu_safe))) &&
+	      vm_offload_nc(offload) &&
 	      (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	/* a 32 KiB read leaves the large reads' pieces alone: it goes straight
 	 * into its own buffer, they are not in its way */
@@ -2070,7 +2070,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
-	                (offload == VM_OFFLOAD_ALWAYS || (offload == VM_OFFLOAD_GPU && clean)) &&
+	                vm_offload_cached(offload) &&
 	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
@@ -2417,8 +2417,7 @@ void vm_stage_apply(const VmSettings *s)
 	const int ra = s->readahead == VM_RA_ON;
 	const int pipeline = s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED
 	                   ? s->pipeline : VM_PIPE_OFF;
-	const int offload = s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_ALWAYS
-	                  ? s->offload : VM_OFFLOAD_OFF;
+	const int offload = vm_setting_valid(VM_KEY_OFFLOAD, s->offload) ? s->offload : VM_OFFLOAD_OFF;
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];

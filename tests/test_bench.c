@@ -650,7 +650,7 @@ static void test_small_files(void)
 	fake_init(&f, 1);
 	f.small = 1;
 	f.pipeline = 1;
-	f.offload = VM_OFFLOAD_GPU;
+	f.offload = VM_OFFLOAD_ALL;
 	f.readahead = VM_RA_ON;
 	f.gpusafe = 1;
 	e = env_for(&f);
@@ -665,17 +665,17 @@ static void test_small_files(void)
 	CHECK(strstr(text, "files create     files/s"));
 	CHECK(strstr(text, "plugin small transfers too: on"));
 	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
-	CHECK(strstr(text, "plugin copy on the system core: with GPU-safe reads only\n"));
+	CHECK(strstr(text, "plugin copy on the system core: cached and non-cacheable\n"));
 	CHECK(strstr(text, "plugin GPU-safe reads: on\n"));
 	CHECK(strstr(text, "plugin read ahead: on\n"));
-	CHECK(r->plugin0.offload == VM_OFFLOAD_GPU);
+	CHECK(r->plugin0.offload == VM_OFFLOAD_ALL);
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "small transfers too: on");
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)
-		found |= !strcmp(lines[i], "copy on the system core: GPU-safe only");
+		found |= !strcmp(lines[i], "copy on the system core: cached and non-cacheable");
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)

@@ -64,6 +64,15 @@ typedef struct VmRaNow {
 } VmRaNow;
 void vm_stage_ra_now(VmRaNow *out);
 
+/* The app in front (process events) and the storage it reads from most
+ * since it came to the front (-1: none in front, or too little read yet;
+ * counted while the HUD or Statistics counts transfers). */
+typedef struct VmFg {
+	char title[16];
+	int  dev;
+} VmFg;
+void vm_stage_fg(VmFg *out);
+
 /* The overlay's changes (worker thread). VM_OK, VM_ERR_NOT_READY (no game
  * followed / no app ignored) or VM_ERR_ARG.
  *   tune:   the game's threshold for cached (0) / non-cacheable (1) reads,

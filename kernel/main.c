@@ -331,43 +331,91 @@ static void pct_text(char *o, int cap, int p)
 		         (unsigned)(p > 100 ? 100 : p));
 }
 
-/* Read ahead Auto in one HUD line: L (learning: streams so far of 300, or
- * done), and the share of copies (C) and of non-cacheable reads (NC) run on
- * core 3 since the line came up. `on`: the line is wanted. */
-static int hud_auto_line(char *o, int on)
+/* A threshold for the HUD: the number, or "no" / "never" (never starts). */
+static void hud_thr(char *o, int cap, uint32_t t, int compact)
 {
-	static int shown;
-	static uint32_t base_core[4], base_ncs, base_nco;
-	uint32_t core[4], ncs, nco, other = 0;
-	char l[24], c[16], nc[16];
-	VmRaNow now;
+	if (t == VM_RA_NEVER)
+		snprintf(o, cap, HUD_C_DIM "%s", compact ? "no" : "never");
+	else
+		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(t > 99 ? 99 : t));
+}
 
-	if (!on) {
-		if (shown)
-			count_cores_want(&g_cnt_hud, 0);
-		shown = 0;
-		return 0;
-	}
-	if (!shown) {
+/* Read ahead in the HUD, for the app in front:
+ *   compact   RA Auto 37/300 C 5 NC no
+ *   extended  RA Auto  PCSB00777  learning 37/300
+ *               start after  C 5  NC never
+ *               core 3       C 98%  NC 100%   (since the HUD came up)
+ * Off: just "RA Off". Returns the lines added (at most `room`). */
+static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *s,
+                        const VmFg *fg, int on)
+{
+	static int counting;
+	static uint32_t base_core[4], base_ncs, base_nco;
+	const int ext = s->hud == VM_HUD_EXTENDED;
+	const char *mode = s->readahead == VM_RA_AUTO ? HUD_C_ACCENT "Auto"
+	                 : s->readahead == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
+	char st[32], c[16], nc[16];
+	VmRaNow now;
+	int n = 0;
+
+	/* where copies run: counted only while the extended HUD shows it */
+	if (on && ext && !counting) {
 		count_cores_want(&g_cnt_hud, 1);
 		vm_stage_core_stats(base_core, &base_ncs, &base_nco);
-		shown = 1;
+		counting = 1;
+	} else if ((!on || !ext) && counting) {
+		count_cores_want(&g_cnt_hud, 0);
+		counting = 0;
 	}
+	if (!on || room <= 0)
+		return 0;
 	vm_stage_ra_now(&now);
-	vm_stage_core_stats(core, &ncs, &nco);
-	if (!now.title[0])
-		snprintf(l, sizeof(l), HUD_C_DIM "-");
-	else if (now.learning)
-		snprintf(l, sizeof(l), HUD_C_WARN "%u/%u", (unsigned)now.streams, (unsigned)now.target);
-	else
-		snprintf(l, sizeof(l), HUD_C_GOOD "done");
-	for (int i = 0; i < 3; i++)
-		other += core[i] - base_core[i];
-	pct_text(c, sizeof(c), ov_pct(core[3] - base_core[3], other));
-	pct_text(nc, sizeof(nc), ov_pct(ncs - base_ncs, nco - base_nco));
-	snprintf(o, VM_HUD_LINE_MAX, HUD_C_TEXT "AUTO " HUD_C_DIM "L: %.14s " HUD_C_DIM "C:%.7s "
-	         HUD_C_DIM "NC:%.7s", l, c, nc);
-	return 1;
+	/* Auto's state for the app: learning / learnt / set by hand / ignored */
+	st[0] = 0;
+	if (s->readahead == VM_RA_AUTO) {
+		if (!fg->title[0] && !now.app[0])
+			snprintf(st, sizeof(st), HUD_C_DIM "-");
+		else if (now.app_ignored)
+			snprintf(st, sizeof(st), HUD_C_WARN "ignored");
+		else if (!now.title[0])
+			snprintf(st, sizeof(st), HUD_C_DIM "-");
+		else if (now.manual)
+			snprintf(st, sizeof(st), HUD_C_ACCENT "%s", ext ? "set by hand" : "hand");
+		else if (now.learning)
+			snprintf(st, sizeof(st), HUD_C_WARN "%s%u/%u", ext ? "learning " : "",
+			         (unsigned)(now.streams > 9999 ? 9999 : now.streams),
+			         (unsigned)now.target);
+		else
+			snprintf(st, sizeof(st), HUD_C_GOOD "learnt");
+	}
+	hud_thr(c, sizeof(c), now.thr[0], !ext);
+	hud_thr(nc, sizeof(nc), now.thr[1], !ext);
+	if (!ext) {
+		if (s->readahead == VM_RA_OFF)
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s", mode);
+		else
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s%s%.20s " HUD_C_DIM "C %.7s "
+			         HUD_C_DIM "NC %.7s", mode, st[0] ? " " : "", st, c, nc);
+		return n;
+	}
+	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s  %.24s", mode,
+	         fg->title[0] ? fg->title : now.app[0] ? now.app : "", st);
+	if (s->readahead != VM_RA_OFF && n < room && !now.app_ignored)
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  start after  C %.7s" HUD_C_DIM
+		         "  NC %.7s", c, nc);
+	if (n < room) {
+		uint32_t core[4], ncs, nco, other = 0;
+		char a[16], b[16];
+
+		vm_stage_core_stats(core, &ncs, &nco);
+		for (int i = 0; i < 3; i++)
+			other += core[i] - base_core[i];
+		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
+		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  core 3       C %.7s" HUD_C_DIM
+		         "  NC %.7s", a, b);
+	}
+	return n;
 }
 
 static void hud_feed(const VmDevState *now)
@@ -397,8 +445,12 @@ static void hud_feed(const VmDevState *now)
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
 	 * or not they took the faster path, coloured by what the faster path is
-	 * doing. Extended adds totals and state. */
+	 * doing. Extended adds totals and state. With an app in front that has
+	 * read enough to tell, only the storage it reads from. */
 	int slow = vm_stage_memcard_slow() == 1;
+	VmFg fg;
+
+	vm_stage_fg(&fg);
 
 	for (int o = 0; o < VM_DEV_COUNT; o++) {
 		static uint64_t seen[VM_DEV_COUNT];
@@ -413,7 +465,8 @@ static void hud_feed(const VmDevState *now)
 		last_wr[i] = wr;
 		seen[i] |= rd | wr;
 		/* a storage switched off in Settings is not shown */
-		if (s.hud == VM_HUD_OFF || !seen[i] || now[i].status == VM_ST_OFF)
+		if (s.hud == VM_HUD_OFF || !seen[i] || now[i].status == VM_ST_OFF ||
+		    (fg.dev >= 0 && i != fg.dev))
 			continue;
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
 		const char *c = state_color(&now[i], dev_slow);
@@ -442,9 +495,7 @@ static void hud_feed(const VmDevState *now)
 		         (unsigned)now[i].errors,
 		         s.verify ? " " : "", HUD_C_WARN, s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
 	}
-	if (hud_auto_line(L[n], s.hud != VM_HUD_OFF && s.readahead == VM_RA_AUTO &&
-	                        n < VM_HUD_LINES))
-		n++;
+	n += hud_ra_lines(&L[n], VM_HUD_LINES - n, &s, &fg, s.hud != VM_HUD_OFF);
 	if (vm_hud_installed())
 		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_style);
 }

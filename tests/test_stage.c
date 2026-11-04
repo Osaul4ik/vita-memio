@@ -3342,6 +3342,41 @@ static void test_readahead_auto(void)
 	CHECK(g_ra_exited == 0);
 	vm_stage_fini();
 
+	/* the app in front and its storage, for the HUD: whatever read ahead
+	 * is set to; told after 1 MiB of its large reads; afresh for another
+	 * app; none at the home screen */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_OFF;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	{
+		VmFg fg;
+
+		vm_stage_fg(&fg);
+		CHECK(!fg.title[0] && fg.dev == -1);
+		as_app(0x44);
+		vm_stage_fg(&fg);
+		CHECK(!strcmp(fg.title, "PCSB00777") && fg.dev == -1);   /* nothing read yet */
+		CHECK(rd_ok(u, 0, 1024));                     /* 512 KiB: not yet */
+		vm_stage_fg(&fg);
+		CHECK(fg.dev == -1);
+		CHECK(rd_ok(u, 1024, 1024));                  /* 1 MiB */
+		vm_stage_fg(&fg);
+		CHECK(fg.dev == M);
+		as_app(0x46);                                 /* another app: afresh */
+		vm_stage_fg(&fg);
+		CHECK(!strcmp(fg.title, "VITASHELL") && fg.dev == -1);
+		ra_proc_event(0x46, 4);                       /* the home screen */
+		vm_stage_fg(&fg);
+		CHECK(!fg.title[0] && fg.dev == -1);
+		CHECK(rd_ok(u, 0, 2048));                     /* not counted for anyone */
+		as_app(0x46);
+		vm_stage_fg(&fg);
+		CHECK(fg.dev == -1);                          /* same app back: kept (none read) */
+	}
+	vm_stage_fini();
+
 	/* auto without title ids (an unknown firmware): as on, said once */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);

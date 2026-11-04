@@ -1380,6 +1380,7 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
 #define RA_LEARN_MIN      32              /* ... or this many, when it ends   */
 #define RA_SWITCH         3               /* streams of another process: a new game */
+#define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
 #define RA_TICK_US        (2u * 1000u * 1000u)
 #define RA_GAIN_US        2700            /* per read served from the pieces   */
@@ -1430,6 +1431,8 @@ static int (*g_exclusive_fn)(void);
 static SceUID         g_proc_hook = -1;
 static tai_hook_ref_t g_proc_ref;
 static SceUID         g_ra_fg;              /* atomic */
+static char           g_fg_title[16];       /* its title id ("" none / not known) */
+static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
 static SceUID         g_ra_exited;          /* atomic: the game followed has exited */
 
 /* A stream of `pid` has ended: L reads. */
@@ -2099,13 +2102,21 @@ static void ra_proc_event(SceUID pid, int ev)
 			return;
 		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn())
 			return;
+		if (pid != fg) {                      /* another app: its storage afresh */
+			for (int i = 0; i < VM_DEV_COUNT; i++)
+				__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
+			memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
+			g_fg_title[sizeof(g_fg_title) - 1] = 0;
+		}
 		__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
 		if (pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) && LD(g_ra_measure))
 			ra_wake();
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
 
-		__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
+		                                __ATOMIC_RELAXED))
+			g_fg_title[0] = 0;
 		if (ev == 3 && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_ra_exited, pid, __ATOMIC_RELEASE);
 			ra_wake();
@@ -2866,10 +2877,14 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		__atomic_store_n(&g_rd_max, nsec, __ATOMIC_RELAXED);
 
 	if (mine && LD(g_count_all)) {
-		if (write)
+		if (write) {
 			ADD(d->all_wr, (uint64_t)nsec * 512);
-		else
+		} else {
 			ADD(d->all_rd, (uint64_t)nsec * 512);
+			/* the app in front's reads, per storage (the HUD shows its own) */
+			if (nsec >= RA_MIN_SECTORS && __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED))
+				__atomic_fetch_add(&g_fg_sec[d - g_dev], nsec, __ATOMIC_RELAXED);
+		}
 	}
 	/* A non-cacheable caller buffer: the standard path is the faster one
 	 * (see the top). Looked at only for transfers that would be staged. */
@@ -3760,6 +3775,27 @@ int vm_stage_ra_ignore(int on)
 	ST(g_ra_skip_last, 0);
 	g_ra_skip_title[0] = 0;
 	return VM_OK;
+}
+
+void vm_stage_fg(VmFg *o)
+{
+	uint32_t best = 0;
+
+	memset(o, 0, sizeof(*o));
+	o->dev = -1;
+	if (!__atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE))
+		return;
+	memcpy(o->title, g_fg_title, sizeof(o->title) - 1);
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const uint32_t v = __atomic_load_n(&g_fg_sec[i], __ATOMIC_RELAXED);
+
+		if (v > best) {
+			best = v;
+			o->dev = i;
+		}
+	}
+	if (best < RA_FG_DEV_MIN)
+		o->dev = -1;                          /* too little read to tell */
 }
 
 void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib)

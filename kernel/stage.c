@@ -1371,9 +1371,10 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
  * ur0:data/vita-memio/ra_stats/<title>.txt - when the game ends, once a
  * minute while it runs, and when Statistics is switched off; it never
  * touches the profiles and reads nothing ahead. Only Auto learns, keeps and
- * uses profiles. The worker is woken for it (a new game), and ticks every
- * RA_TICK_US while a game is learnt or its storage not yet known - also
- * with the HUD and the log off. */
+ * uses profiles. The worker does not poll for it: it is woken when a new
+ * game reads, when the game's storage can be told (RA_DEV_DECIDE sectors),
+ * and when it has the streams to be learnt from - also with the HUD and the
+ * log off. Only Full statistics ticks it (its file, once a minute). */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
@@ -1410,6 +1411,8 @@ static int      g_ra_paused;              /* worker: see ra_auto_stop           
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
 static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
+static uint32_t g_ra_dev_total;           /* ... all of them (to wake the worker) */
+static uint32_t g_ra_target;              /* streams to learn the game from    */
 /* the worker's own */
 static char     g_ra_title[16];
 static int      g_ra_auto_logged;
@@ -1418,15 +1421,50 @@ static int      g_ra_auto_logged;
 static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
 
 /* A stream of `pid` has ended: L reads. */
+/* The worker, now (from a request: only a semaphore signal, and rarely). */
+static void ra_wake(void)
+{
+	void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
+
+	if (fn)
+		fn();
+}
+
+static void ra_dev_clear(void)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_dev_total, 0, __ATOMIC_RELAXED);
+}
+
+/* n sectors of the game's large reads on `dev`; the worker woken once there
+ * are enough to know its storage (it does not poll for it). */
+static void ra_dev_add(int dev, uint32_t n)
+{
+	uint32_t old;
+
+	__atomic_fetch_add(&g_ra_dev_sec[dev], n, __ATOMIC_RELAXED);
+	if (LD(g_ra_dev) >= 0)
+		return;
+	old = __atomic_fetch_add(&g_ra_dev_total, n, __ATOMIC_RELAXED);
+	if (old < RA_DEV_DECIDE && old + n >= RA_DEV_DECIDE)
+		ra_wake();
+}
+
 static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 {
 	const uint32_t b = L < RA_HBINS - 1 ? L : RA_HBINS - 1;
+	uint32_t n;
 
 	if (!pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	    (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && !LD(g_ra_stats)))
 		return;
 	__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
+	n = __atomic_add_fetch(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
+	/* learnt enough: the worker woken to finish it (it does not poll) */
+	if (n == __atomic_load_n(&g_ra_target, __ATOMIC_RELAXED) &&
+	    __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE))
+		ra_wake();
 }
 
 /* The threshold that would have paid most for one kind's histogram, or
@@ -1828,6 +1866,7 @@ static void ra_auto_begin(void)
 		ST(g_ra_manual, (pf.flags & RA_PF_MANUAL) ? 1 : 0);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 	} else {
+		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - learning", g_ra_title);
 	}
@@ -1886,10 +1925,10 @@ static void ra_auto_tick(void)
 		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 		ST(g_ra_dev, -1);
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		ra_dev_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
 		ST(g_ra_manual, 0);
+		__atomic_store_n(&g_ra_target, ra_learn_target(g_ra_title), __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
 	}
@@ -1921,8 +1960,7 @@ static void ra_auto_tick(void)
 		g_ra_stats_written = 0xFFFFFFFFu;
 		g_ra_stats_us = ksceKernelGetSystemTimeLow();
 		ST(g_ra_dev, -1);
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		ra_dev_clear();
 		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 		if (!t[0] || !ra_title_ok(t)) {
@@ -2008,8 +2046,7 @@ static void ra_auto_stop(void)
 	__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 	ST(g_ra_dev, -1);
-	for (int i = 0; i < VM_DEV_COUNT; i++)
-		__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+	ra_dev_clear();
 	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
@@ -2325,7 +2362,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc) {
 		d->ra_streak += d->ra_streak < 1000;
 		if (d->ra_pid && d->ra_pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
-			__atomic_fetch_add(&g_ra_dev_sec[d - g_dev], n, __ATOMIC_RELAXED);
+			ra_dev_add((int)(d - g_dev), n);
 	} else {
 		/* the last stream is over: noted for auto; a new one starts */
 		if (d->ra_streak)
@@ -2347,7 +2384,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 				} else if (pid == cur) {
 					/* the game again: another process's few streams were not one */
 					__atomic_store_n(&g_ra_skip_last, 0, __ATOMIC_RELAXED);
-					__atomic_fetch_add(&g_ra_dev_sec[d - g_dev], n, __ATOMIC_RELAXED);
+					ra_dev_add((int)(d - g_dev), n);
 					__atomic_store_n(&g_ra_seen, pid, __ATOMIC_RELEASE);
 				} else {
 					if (__atomic_exchange_n(&g_ra_seen, pid, __ATOMIC_ACQ_REL) != pid)
@@ -3623,8 +3660,7 @@ int vm_stage_ra_ignore(int on)
 		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 		ST(g_ra_dev, -1);
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		ra_dev_clear();
 		ST(g_ra_manual, 0);
 		__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
@@ -3680,8 +3716,6 @@ unsigned vm_stage_tick_us(void)
 	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid &&
 	    (!pid || __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH))
 		return RA_TICK_US;                  /* a game to follow */
-	if (pid && (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) || LD(g_ra_dev) < 0))
-		return RA_TICK_US;
 	if (pid && LD(g_ra_stats) && g_ra_title[0])
 		return RA_STATS_EVERY_US;             /* its file, once a minute */
 	return 0;

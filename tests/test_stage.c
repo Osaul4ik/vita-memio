@@ -2705,32 +2705,53 @@ static void test_readahead_auto(void)
 	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
+	g_problem_calls = 0;
+	vm_stage_on_problem(count_problem);               /* the worker's wake-up */
 	fake_pid = 0x44;                                  /* PCSB00777: no profile here */
 	streams(u, 1, 8, 256);
+	CHECK(g_problem_calls == 1);                      /* a new game: woken */
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_dev == -1);
-	CHECK(vm_stage_tick_us() == RA_TICK_US);         /* the worker comes back */
+	CHECK(vm_stage_tick_us() == 0);                  /* no polling while it learns */
 	{
 		const uint32_t hits = g_ra_hits;
 
+		g_problem_calls = 0;
 		streams(u, 3, 8, 256);                        /* 3 x 1 MiB: not yet */
+		CHECK(g_problem_calls == 0);
 		vm_stage_worker_tick();
 		CHECK(g_ra_dev == -1);
-		streams(u, 1, 8, 256);                        /* 4 MiB */
-		CHECK(g_ra_hits == hits);
+		streams(u, 1, 8, 256);                        /* 4 MiB: woken, once */
+		CHECK(g_ra_hits == hits && g_problem_calls == 1);
 	}
 	vm_stage_worker_tick();
-	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE);
+	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE && vm_stage_tick_us() == 0);
+	g_problem_calls = 0;
+	streams(u, 2, 8, 256);                            /* known: no more wake-ups */
+	CHECK(g_problem_calls == 0);
 	/* a short session (homebrew): learnt when the next game starts */
 	streams(u, RA_LEARN_MIN, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_learning);                             /* not yet RA_LEARN_STREAMS */
 	fake_pid = 0x42;
+	g_problem_calls = 0;
 	streams(u, RA_SWITCH, 8, 256);
-	CHECK(vm_stage_tick_us() == RA_TICK_US);         /* a new game: follow it */
+	CHECK(g_problem_calls == 1);                      /* a new game: woken once */
+	CHECK(vm_stage_tick_us() == RA_TICK_US);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x42);
 	CHECK(ra_profile_load("PCSB00777", thr, &dev) && thr[0] == 2 && dev == M);
+	/* learnt again: its storage, then the streams to learn from, each
+	 * wakes the worker once - nothing else does */
+	CHECK(vm_stage_ra_delete("PCSE00001") == VM_OK);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning && g_ra_dev == -1 && vm_stage_tick_us() == 0);
+	g_problem_calls = 0;
+	streams(u, RA_LEARN_STREAMS + 1, 8, 256);
+	CHECK(g_problem_calls == 2);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && vm_stage_tick_us() == 0);
+	vm_stage_on_problem(NULL);
 	vm_stage_fini();
 
 	/* a game ending with too little seen: nothing kept, learnt next time */

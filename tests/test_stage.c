@@ -113,6 +113,8 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_seen_n = 0;
+	g_ra_relearn = 0;
+	g_count_cores = 0;
 	g_ra_measure = 0;
 	g_ra_dev = -1;
 	memset(g_ra_dev_sec, 0, sizeof(g_ra_dev_sec));
@@ -2774,6 +2776,51 @@ static void test_readahead_auto(void)
 	s.stats = 0;
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
+	vm_stage_fini();
+
+	/* the profiles, listed (sorted, damaged ones left out) and deleted; a
+	 * deleted one of the running game is learnt again */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	{
+		VmRaProfile pl[8];
+		uint32_t t2[2] = { 3, RA_THR_NONE };
+		VmRaNow now;
+
+		CHECK(vm_stage_ra_list(pl, 8) == 0);           /* no folder yet */
+		ra_profile_save("PCSE00001", t2, 300, VM_DEV_SD2VITA);
+		t2[0] = 2;
+		ra_profile_save("PCSB00777", t2, 40, M);
+		ra_profile_save("PCSE00002", t2, 1, VM_DEV_INTERNAL);   /* unusable */
+		CHECK(vm_stage_ra_list(pl, 8) == 2);
+		CHECK(!strcmp(pl[0].title, "PCSB00777") && pl[0].thr[0] == 2 &&
+		      pl[0].thr[1] == VM_RA_NEVER && pl[0].dev == M && pl[0].streams == 40);
+		CHECK(!strcmp(pl[1].title, "PCSE00001") && pl[1].thr[0] == 3 &&
+		      pl[1].dev == VM_DEV_SD2VITA && pl[1].streams == 300);
+		CHECK(vm_stage_ra_list(pl, 1) == 1);
+		CHECK(vm_stage_ra_delete("../x") == VM_ERR_ARG);
+		CHECK(vm_stage_ra_delete("PCSE00099") == VM_ERR_IO);
+
+		fake_pid = 0x44;                              /* PCSB00777 runs */
+		streams(u, 1, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_thr[0] == 2 && g_ra_dev == M);
+		vm_stage_ra_now(&now);
+		CHECK(!strcmp(now.title, "PCSB00777") && now.mode == VM_RA_AUTO && !now.learning &&
+		      now.thr[0] == 2 && now.thr[1] == VM_RA_NEVER && now.dev == M);
+		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);
+		CHECK(vm_stage_tick_us() == RA_TICK_US);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_thr[0] == 0 && g_ra_dev == -1);
+		vm_stage_ra_now(&now);
+		CHECK(now.learning && now.thr[0] == RA_STREAK && now.dev == -1);
+		CHECK(vm_stage_ra_list(pl, 8) == 1 && !strcmp(pl[0].title, "PCSE00001"));
+	}
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */

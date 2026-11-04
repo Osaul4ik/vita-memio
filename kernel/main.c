@@ -512,6 +512,41 @@ int vmResetSafeMode(void)
 	return guard_write('0', "settings");
 }
 
+/* At most this many profiles per call (a kernel buffer of 64 x 32 bytes). */
+#define VM_RA_LIST_MAX 64
+
+int vmRaProfileList(VmRaProfile *out, int max)
+{
+	static VmRaProfile k[VM_RA_LIST_MAX];   /* one caller at a time: g_list_lock */
+	static volatile int lock;
+	int n;
+
+	if (!out || max < 0)
+		return VM_ERR_ARG;
+	if (max > VM_RA_LIST_MAX)
+		max = VM_RA_LIST_MAX;
+	while (__sync_lock_test_and_set(&lock, 1))
+		ksceKernelDelayThread(1000);
+	n = vm_stage_ra_list(k, max);
+	if (n > 0 && ksceKernelMemcpyKernelToUser(out, k, (SceSize)n * sizeof(k[0])) < 0)
+		n = VM_ERR_ARG;
+	__sync_lock_release(&lock);
+	return n;
+}
+
+int vmRaProfileDelete(const char *title)
+{
+	char t[16];
+
+	if (!title)
+		return VM_ERR_ARG;
+	memset(t, 0, sizeof(t));
+	if (ksceKernelStrncpyUserToKernel(t, title, sizeof(t) - 1) < 0)
+		return VM_ERR_ARG;
+	t[sizeof(t) - 1] = 0;
+	return vm_stage_ra_delete(t);
+}
+
 int vmSelfTestPing(void)
 {
 	return (int)VM_SELFTEST_MAGIC;

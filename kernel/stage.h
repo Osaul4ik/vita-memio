@@ -42,4 +42,26 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active);
 /* Where faster-path time goes: system read/write vs the CPU copy. */
 void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT]);
 
+/* Read ahead "Auto" profiles (kernel buffers; any thread). */
+int  vm_stage_ra_list(VmRaProfile *out, int max);
+int  vm_stage_ra_delete(const char *title);
+
+/* What read ahead is doing now, for the overlay. */
+typedef struct VmRaNow {
+	char     title[16];     /* the game followed ("" none / no title id)     */
+	int      mode;          /* VM_RA_*                                       */
+	int      measure;       /* learning switched on (auto or statistics)     */
+	int      learning;      /* 1 while it learns this game                   */
+	uint32_t streams;       /* ... streams seen so far                       */
+	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)  */
+	int      dev;           /* the game's storage, -1 not known              */
+} VmRaNow;
+void vm_stage_ra_now(VmRaNow *out);
+
+/* Where reads were copied / read, since boot (KiB; wrap-safe differences):
+ * the copies by core, and non-cacheable reads on the system core vs the
+ * caller's own. Counted while vm_stage_count_cores(1) or the log is on. */
+void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib);
+void vm_stage_count_cores(int on);
+
 #endif /* VITAMEMIO_STAGE_H */

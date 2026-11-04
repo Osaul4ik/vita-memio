@@ -100,6 +100,27 @@ int vmGetBuild(char *out, int size);
  * Returns VM_OK or VM_ERR_IO (the guard file could not be written). */
 int vmResetSafeMode(void);
 
+/* Read ahead "Auto": the profiles it has learnt (ur0:data/vita-memio/ra/),
+ * one per title id. */
+typedef struct VmRaProfile {
+	char     title[16];        /* title id, NUL-terminated                     */
+	int32_t  thr[2];           /* reads in a row before it starts: [0] cached
+	                            * memory, [1] non-cacheable; VM_RA_NEVER: never */
+	int32_t  dev;              /* the game's storage, VM_DEV_*; -1 not known    */
+	uint32_t streams;          /* streams it was learnt from                    */
+} VmRaProfile;
+#define VM_RA_NEVER  0xFFFF
+_Static_assert(sizeof(VmRaProfile) == 32, "VmRaProfile is part of the syscall ABI");
+
+/* Up to `max` profiles into out[] (user pointer), sorted by title id. Returns
+ * how many (0 .. max), or VM_ERR_ARG. */
+int vmRaProfileList(VmRaProfile *out, int max);
+
+/* Delete one game's profile (title: a user string of up to 15 characters).
+ * If that game is running, it is learnt again from now on. Returns VM_OK,
+ * VM_ERR_ARG (not a title id) or VM_ERR_IO (no such profile). */
+int vmRaProfileDelete(const char *title);
+
 /* Round-trip cookie: proves the syscall path reaches the kernel module.
  * Always returns VM_SELFTEST_MAGIC; changes nothing. 'TST1'. */
 #define VM_SELFTEST_MAGIC  0x54535431u

@@ -12,9 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
+#include <psp2kern/io/dirent.h>
 #include "../kernel/vm_memblock.h"
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/threadmgr.h>
@@ -466,6 +468,52 @@ int ksceIoRemove(const char *path)
 	char p[512];
 
 	return map(path, p, sizeof(p)) ? unlink(p) : -1;
+}
+
+/* Directories: a real one under the test's folder, read with readdir. */
+#define FAKE_DIRS 4
+static DIR *g_dirs[FAKE_DIRS];
+
+SceUID ksceIoDopen(const char *path)
+{
+	char p[512];
+
+	if (!map(path, p, sizeof(p)))
+		return -1;
+	for (int i = 0; i < FAKE_DIRS; i++)
+		if (!g_dirs[i]) {
+			g_dirs[i] = opendir(p);
+			return g_dirs[i] ? 0x1000 + i : -1;
+		}
+	return -1;
+}
+
+int ksceIoDread(SceUID fd, SceIoDirent *e)
+{
+	struct dirent *d;
+	const int i = fd - 0x1000;
+
+	if (i < 0 || i >= FAKE_DIRS || !g_dirs[i])
+		return -1;
+	do
+		d = readdir(g_dirs[i]);
+	while (d && d->d_name[0] == '.');
+	if (!d)
+		return 0;
+	memset(e, 0, sizeof(*e));
+	snprintf(e->d_name, sizeof(e->d_name), "%s", d->d_name);
+	return 1;
+}
+
+int ksceIoDclose(SceUID fd)
+{
+	const int i = fd - 0x1000;
+
+	if (i < 0 || i >= FAKE_DIRS || !g_dirs[i])
+		return -1;
+	closedir(g_dirs[i]);
+	g_dirs[i] = NULL;
+	return 0;
 }
 
 /* Strict like an exFAT rename: it does not replace an existing target. */

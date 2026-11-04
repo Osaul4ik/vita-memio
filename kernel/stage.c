@@ -65,6 +65,7 @@
 #include <psp2kern/kernel/threadmgr.h>
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
+#include <psp2kern/io/dirent.h>
 #include <taihen.h>
 
 #include "stage.h"
@@ -422,6 +423,8 @@ static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 mi
  * process) or a game (a user process). */
 static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
 static volatile int g_log_diag;            /* the log is on: count            */
+static volatile int g_count_cores;         /* the overlay is open: count too  */
+#define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
 
 static inline uint32_t cpu_id(void)
 {
@@ -880,7 +883,7 @@ static int pipe_copier(SceSize args, void *argp)
 				m->uid = -1;
 			}
 		}
-		if (done && LD(g_log_diag))
+		if (done && COUNT_CORES())
 			__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
 		d->cjob_ret = r;
 		d->cjob_done = done;
@@ -1385,6 +1388,7 @@ static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
 static uint32_t g_ra_seen_n;              /* g_ra_seen's streams so far       */
+static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
 static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
 /* the worker's own */
@@ -1488,6 +1492,23 @@ static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 	return 1;
 }
 
+/* The streams a usable profile was learnt from (0 if none / version 1). */
+static uint32_t ra_profile_streams(const char *title)
+{
+	char path[96];
+	RaProfile p;
+	SceUID fd;
+
+	ra_profile_path(path, sizeof(path), title);
+	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	if (fd < 0)
+		return 0;
+	memset(&p, 0, sizeof(p));
+	ksceIoRead(fd, &p, sizeof(p));
+	ksceIoClose(fd);
+	return p.magic == RA_PROFILE_MAGIC ? p.streams : 0;
+}
+
 static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams, int dev)
 {
 	char path[96];
@@ -1577,6 +1598,19 @@ static void ra_auto_tick(void)
 		}
 		return;
 	}
+	/* its profile deleted (Settings or the overlay): learnt again */
+	if (__atomic_exchange_n(&g_ra_relearn, 0, __ATOMIC_ACQ_REL) && g_ra_title[0] &&
+	    __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
+		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+		ra_hist_clear();
+		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
+		ST(g_ra_dev, -1);
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
+		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
+	}
 	if (seen && seen != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
 	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
@@ -1643,7 +1677,7 @@ static void ra_auto_tick(void)
 
 				thr[0] = __atomic_load_n(&g_ra_thr[0], __ATOMIC_RELAXED);
 				thr[1] = __atomic_load_n(&g_ra_thr[1], __ATOMIC_RELAXED);
-				ra_profile_save(g_ra_title, thr, 0, bi);   /* an old profile: now with it */
+				ra_profile_save(g_ra_title, thr, ra_profile_streams(g_ra_title), bi);   /* now with it */
 			}
 		}
 	}
@@ -2230,7 +2264,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		ADD(g_ra_nc_kib, got / 2);
 	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec, 1))
 		ra_refill(d, io, ref, part);
-	if (LD(g_log_diag) && own)
+	if (COUNT_CORES() && own)
 		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
 	__sync_lock_release(&d->busy);
 	if (bad) {
@@ -2609,7 +2643,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(d->st.writes, 1);
 	} else {
 		ADD(d->st.reads, 1);
-		if (LD(g_log_diag) && !left)
+		if (COUNT_CORES() && !left)
 			diag_note(nsec, own);
 	}
 	if (problem) {
@@ -3032,6 +3066,106 @@ int vm_stage_pending(void)
 	return 0;
 }
 
+/* ---- read ahead profiles, for Settings and the overlay --------------------- */
+
+int vm_stage_ra_list(VmRaProfile *out, int max)
+{
+	SceIoDirent e;
+	SceUID dfd;
+	int n = 0;
+
+	if (!out || max <= 0)
+		return 0;
+	dfd = ksceIoDopen(RA_PROFILE_DIR);
+	if (dfd < 0)
+		return 0;
+	while (n < max) {
+		char t[16];
+		uint32_t thr[2];
+		int dev, len = 0, at;
+
+		memset(&e, 0, sizeof(e));
+		if (ksceIoDread(dfd, &e) <= 0)
+			break;
+		while (len < (int)sizeof(e.d_name) && e.d_name[len])
+			len++;
+		if (len < 5 || len - 4 >= (int)sizeof(t) || memcmp(e.d_name + len - 4, ".bin", 4) != 0)
+			continue;
+		memcpy(t, e.d_name, (size_t)(len - 4));
+		t[len - 4] = 0;
+		if (!ra_title_ok(t) || !ra_profile_load(t, thr, &dev))
+			continue;
+		/* sorted by title id: insertion */
+		for (at = n; at > 0 && strncmp(out[at - 1].title, t, sizeof(t)) > 0; at--)
+			out[at] = out[at - 1];
+		memset(&out[at], 0, sizeof(out[at]));
+		memcpy(out[at].title, t, sizeof(t));
+		out[at].thr[0] = (int32_t)thr[0];
+		out[at].thr[1] = (int32_t)thr[1];
+		out[at].dev = dev;
+		out[at].streams = ra_profile_streams(t);
+		n++;
+	}
+	ksceIoDclose(dfd);
+	return n;
+}
+
+int vm_stage_ra_delete(const char *title)
+{
+	char path[96], t[16];
+	int i;
+
+	for (i = 0; i < (int)sizeof(t) - 1 && title[i]; i++)
+		t[i] = title[i];
+	t[i] = 0;
+	if (!ra_title_ok(t))
+		return VM_ERR_ARG;
+	ra_profile_path(path, sizeof(path), t);
+	if (ksceIoRemove(path) < 0)
+		return VM_ERR_IO;
+	/* that game running (the worker's g_ra_title; a racy read of a string
+	 * that changes only on a new game is fine for this) */
+	if (!strncmp(t, g_ra_title, sizeof(t))) {
+		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
+
+		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);
+		if (fn)
+			fn();
+	}
+	return VM_OK;
+}
+
+void vm_stage_ra_now(VmRaNow *o)
+{
+	memset(o, 0, sizeof(*o));
+	memcpy(o->title, g_ra_title, sizeof(o->title) - 1);
+	o->mode = LD(g_ra_mode);
+	o->measure = LD(g_ra_measure);
+	o->learning = __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE);
+	o->streams = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+	for (int k = 0; k < 2; k++) {
+		const uint32_t t = __atomic_load_n(&g_ra_thr[k], __ATOMIC_RELAXED);
+
+		/* in use: auto's learnt one, else the fixed one */
+		o->thr[k] = o->mode == VM_RA_AUTO && t && __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)
+		          ? t : k ? RA_STREAK_NC : RA_STREAK;
+	}
+	o->dev = LD(g_ra_dev);
+}
+
+void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib)
+{
+	for (int i = 0; i < 4; i++)
+		cp_core_kib[i] = __atomic_load_n(&g_cp_core_kib[i], __ATOMIC_RELAXED);
+	*nc_sys_kib = LD(g_ncd_kib);
+	*nc_own_kib = LD(g_nc_stock_kib);
+}
+
+void vm_stage_count_cores(int on)
+{
+	ST(g_count_cores, on ? 1 : 0);
+}
+
 /* Read ahead's measuring: how soon the worker should tick again (0: only
  * when woken). */
 unsigned vm_stage_tick_us(void)
@@ -3040,6 +3174,8 @@ unsigned vm_stage_tick_us(void)
 
 	if (!LD(g_ra_measure) || !LD(g_live) || !g_title_fn)
 		return 0;
+	if (LD(g_ra_relearn))
+		return RA_TICK_US;
 	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid &&
 	    (!pid || __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH))
 		return RA_TICK_US;                  /* a game to follow */

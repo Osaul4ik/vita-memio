@@ -3508,24 +3508,39 @@ static void test_readahead_auto(void)
 		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_LEARNT && !pf.secs &&
 		      !pf.hist[0][8]);                     /* what it saw no longer kept */
 	}
-	/* homebrew reading single reads only (one "stream" a session): each
-	 * counts, over sessions, and it is learnt to never */
+	/* homebrew reading single reads only: the fallback. A short session
+	 * counts nothing (and writes nothing); one that ran RA_DRY_US without a
+	 * longer stream counts its single reads, over sessions, until it is
+	 * learnt to never */
+	as_app(0x46);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning && !strcmp(g_ra_title, "VITASHELL"));
+	__atomic_store_n(&fake_prof_writes, 0, __ATOMIC_RELAXED);
+	streams(u, 2, 1, 256);
+	__sync_fetch_and_add(&fake_now_us, 60u * 1000000u);
+	ra_proc_event(0x46, 3);
+	vm_stage_worker_tick();
+	CHECK(__atomic_load_n(&fake_prof_writes, __ATOMIC_RELAXED) == 0);
 	{
 		int sess = 0;
 		uint32_t last = 0;
+		RaProf pf;
 
 		for (; sess < 2 * RA_LEARN_HB; sess++) {
 			as_app(0x46);
 			vm_stage_worker_tick();
-			CHECK(g_ra_learning && !strcmp(g_ra_title, "VITASHELL") && g_ra_hstreams >= last);
+			CHECK(g_ra_learning && g_ra_hstreams == last);
 			streams(u, 2, 1, 256);                    /* the 2nd ends the 1st */
 			vm_stage_worker_tick();
-			if (!g_ra_learning)
-				break;
-			CHECK(g_ra_hstreams > last);              /* each session counts */
-			last = g_ra_hstreams;
+			CHECK(g_ra_hstreams == last);             /* not yet */
+			__sync_fetch_and_add(&fake_now_us, 6u * 60u * 1000000u);
 			ra_proc_event(0x46, 3);
 			vm_stage_worker_tick();
+			if (ra_prof_load("VITASHELL", &pf) && (pf.flags & RA_PF_LEARNT))
+				break;
+			CHECK(ra_prof_load("VITASHELL", &pf) && (pf.flags & RA_PF_PARTIAL) &&
+			      pf.streams > last);                 /* each such session counts */
+			last = pf.streams;
 		}
 		CHECK(sess >= RA_LEARN_HB / 2 - 1 && sess < RA_LEARN_HB);
 	}
@@ -3687,8 +3702,9 @@ static void test_readahead_auto(void)
 	}
 	vm_stage_fini();
 
-	/* what counts for learning: every stream, single reads too, but at
-	 * most RA_RATE_MAX streams a second (a video must not fill it) */
+	/* what counts for learning: streams of 2 reads or more; single reads
+	 * only as the fallback (none next to longer streams, however long); at
+	 * most RA_RATE_MAX streams a second */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3704,7 +3720,24 @@ static void test_readahead_auto(void)
 		const uint32_t n = g_ra_hstreams, ones = g_ra_hcnt[0][1];
 
 		streams(u, 50, 1, 256);                       /* single reads, here and there */
-		CHECK(g_ra_hstreams >= n + 49 && g_ra_hcnt[0][1] >= ones + 49);
+		CHECK(g_ra_hstreams <= n + 1 && g_ra_hcnt[0][1] >= ones + 49);
+		/* a video between the game's streams: ten minutes of it */
+		for (int k = 0; k < 10; k++) {
+			streams(u, 20, 1, 256);
+			streams(u, 1, 2, 256);
+			__sync_fetch_and_add(&fake_now_us, 60u * 1000000u);
+			vm_stage_worker_tick();
+		}
+		CHECK(g_ra_learning && g_ra_hstreams <= n + 12);
+		/* then no longer stream for RA_DRY_US: its single reads count (the
+		 * last pair ends with the first of them: the time from there) */
+		streams(u, 30, 1, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_hstreams <= n + 12);
+		__sync_fetch_and_add(&fake_now_us, 6u * 60u * 1000000u);
+		streams(u, 10, 1, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_learning && g_ra_hstreams >= n + 30);
 	}
 	g_ra_rate_max = RA_RATE_MAX;
 	__atomic_store_n(&fake_now_us, 5000000, __ATOMIC_SEQ_CST);

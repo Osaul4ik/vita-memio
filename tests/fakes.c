@@ -45,6 +45,24 @@ uint32_t ksceKernelGetSystemTimeLow(void)
 	__sync_fetch_and_add(&fake_time_calls, 1);
 	return __sync_fetch_and_add(&fake_now_us, 0);
 }
+/* fake_now_us, carried on past its wrap (as long as it is read at least
+ * once per wrap) */
+long long ksceKernelGetSystemTimeWide(void)
+{
+	static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+	static uint32_t last;
+	static long long hi;
+	const uint32_t now = __sync_fetch_and_add(&fake_now_us, 0);
+	long long r;
+
+	pthread_mutex_lock(&m);
+	if (now < last)
+		hi += 1ll << 32;
+	last = now;
+	r = hi + now;
+	pthread_mutex_unlock(&m);
+	return r;
+}
 
 /* Real threads and counting semaphores (pthreads), so code that hands work to
  * another thread is tested with real concurrency. */

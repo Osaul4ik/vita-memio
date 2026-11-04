@@ -4,6 +4,7 @@ typedef unsigned int SceUInt;
 typedef int (*SceKernelThreadEntry)(SceSize args, void *argp);
 int ksceKernelDelayThread(unsigned us);
 uint32_t ksceKernelGetSystemTimeLow(void);
+long long ksceKernelGetSystemTimeWide(void);
 SceUID ksceKernelGetProcessId(void);
 SceUID ksceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int initPriority,
                               SceSize stackSize, SceUInt attr, int cpuAffinityMask,

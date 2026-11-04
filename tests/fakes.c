@@ -288,6 +288,20 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
 
 void *ksceSdifGetSdContextGlobal(int port) { (void)port; return NULL; }
 
+/* No process has a title id, and no exclusive app runs (the tests set
+ * stage.c's function pointers to their own fakes). */
+int ksceKernelSysrootGetProcessTitleId(SceUID pid, char *titleid, SceSize len)
+{
+	(void)pid; (void)titleid; (void)len;
+	return -1;
+}
+
+int ksceAppMgrIsExclusiveProcessRunning(const char *title_id)
+{
+	(void)title_id;
+	return 0;
+}
+
 /* ---- file system: ur0:data/vita-memio/<x> -> <tmpdir>/<x> ---------------- */
 static char g_tmp[256];
 

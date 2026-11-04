@@ -66,6 +66,8 @@
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
 #include <psp2kern/io/dirent.h>
+#include <psp2kern/kernel/sysroot.h>   /* ksceKernelSysrootGetProcessTitleId */
+#include <psp2kern/appmgr.h>           /* ksceAppMgrIsExclusiveProcessRunning */
 #include <taihen.h>
 
 #include "stage.h"
@@ -1417,23 +1419,20 @@ static uint32_t g_ra_target;              /* streams to learn the game from    *
 /* the worker's own */
 static char     g_ra_title[16];
 static int      g_ra_auto_logged;
-#define LIB_SYSROOT_KERNEL   0x3691DA45
-#define NID_PROCESS_TITLE_ID 0xEC3124A3
 static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
 /* The app in front, from the process events (ra_proc_event): reads while
  * it is in front are its, whichever thread does them (a game's own, or a
  * system thread reading for it). 0: the home screen / none. */
-#define LIB_APPMGR_DRIVER      0xDCE180F8
-#define NID_EXCLUSIVE_RUNNING  0xA888C2DC   /* ksceAppMgrIsExclusiveProcessRunning */
 #define LIB_PROCMGR_KERNEL     0x887F19D0
 #define NID_PROC_EVENT         0x414CC813   /* ksceKernelInvokeProcEventHandler */
-static int (*g_exclusive_fn)(void);
+static int (*g_exclusive_fn)(const char *title_id);
 static SceUID         g_proc_hook = -1;
 static tai_hook_ref_t g_proc_ref;
 static SceUID         g_ra_fg;              /* atomic */
 static char           g_fg_title[16];       /* its title id ("" none / not known) */
 static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
 static SceUID         g_ra_exited;          /* atomic: the game followed has exited */
+static uint32_t       g_fg_noid;            /* atomic: processes with no title id (log) */
 
 /* A stream of `pid` has ended: L reads. */
 /* The worker, now (from a request: only a semaphore signal, and rarely). */
@@ -2098,9 +2097,14 @@ static void ra_proc_event(SceUID pid, int ev)
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
 		memset(t, 0, sizeof(t));
-		if (g_title_fn && g_title_fn(pid, t, sizeof(t) - 1) >= 0 && ra_title_system(t))
+		/* no title id: not an app we can tell (never one in front) */
+		if (!g_title_fn || g_title_fn(pid, t, sizeof(t) - 1) < 0 || !ra_title_ok(t)) {
+			__atomic_fetch_add(&g_fg_noid, 1, __ATOMIC_RELAXED);
 			return;
-		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn())
+		}
+		if (ra_title_system(t))
+			return;
+		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0)
 			return;
 		if (pid != fg) {                      /* another app: its storage afresh */
 			for (int i = 0; i < VM_DEV_COUNT; i++)
@@ -3191,16 +3195,9 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CLEAN,
 		                           &f) >= 0)
 			g_dcache_clean = (void (*)(void *, unsigned int))f;
-		/* Title ids: ksceKernelSysrootGetProcessTitleId (the same NIDs on
-		 * 3.60 and 3.65, as PSVshell imports it) */
-		f = 0;
-		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_SYSROOT_KERNEL,
-		                           NID_PROCESS_TITLE_ID, &f) >= 0 && f)
-			g_title_fn = (int (*)(SceUID, char *, SceSize))f;
-		f = 0;
-		if (module_get_export_func(KERNEL_PID, "SceAppMgr", LIB_APPMGR_DRIVER,
-		                           NID_EXCLUSIVE_RUNNING, &f) >= 0 && f)
-			g_exclusive_fn = (int (*)(void))f;
+		/* the app in front and its title id, as PSVshell has them */
+		g_title_fn = ksceKernelSysrootGetProcessTitleId;
+		g_exclusive_fn = ksceAppMgrIsExclusiveProcessRunning;
 
 	}
 	/* Buffers for the devices already switched on, now at boot while
@@ -3250,8 +3247,7 @@ int vm_stage_init(void)
 	g_proc_hook = taiHookFunctionExportForKernel(KERNEL_PID, &g_proc_ref, "SceProcessmgr",
 	                                             LIB_PROCMGR_KERNEL, NID_PROC_EVENT,
 	                                             ra_proc_event_hook);
-	VM_KLOGI("stage: title ids %s, app events %s", g_title_fn ? "ok" : "not found",
-	         g_proc_hook >= 0 ? "ok" : "not hooked");
+	VM_KLOGI("stage: app events %s", g_proc_hook >= 0 ? "followed" : "not hooked");
 	return VM_OK;
 }
 
@@ -3430,6 +3426,26 @@ void vm_stage_worker_tick(void)
 			else if (st == -2)
 				VM_KLOGW("stage: copy on the system core refused: the mapping's memory type "
 				         "differs - games copy as before");
+		}
+	}
+	/* the app in front, in the log when it changes (and processes whose
+	 * title id could not be had) */
+	{
+		static SceUID last_fg;
+		static uint32_t last_noid;
+		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+		const uint32_t noid = __atomic_load_n(&g_fg_noid, __ATOMIC_RELAXED);
+
+		if (fg != last_fg) {
+			last_fg = fg;
+			if (fg)
+				VM_KLOGI("stage: in front: %s (pid 0x%08x)", g_fg_title, (unsigned)fg);
+			else
+				VM_KLOGI("stage: in front: the home screen");
+		}
+		if (noid != last_noid) {
+			last_noid = noid;
+			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
 		}
 	}
 	/* the game followed has exited: kept if learnt enough, then gone */

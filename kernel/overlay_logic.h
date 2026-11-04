@@ -7,11 +7,11 @@
  *   SELECT + Right   closed -> overlay -> HUD (the overlay closes, the HUD shows)
  *   SELECT + Left    HUD -> overlay -> closed
  *   SELECT + Up/Down everything closed
- * With the overlay closed (nothing, or the HUD shown) a combination counts
- * once it has been held for OV_HOLD_US, and the buttons are only looked at
- * every OV_SAMPLE_US (overlay.c), so a game's own polling costs next to
- * nothing. With the overlay open, every look counts and a newly pressed
- * arrow (SELECT held) acts at once.
+ * Only opening it takes a hold: with nothing shown, SELECT + Right held for
+ * OV_HOLD_US, and the buttons are looked at every OV_SAMPLE_US only
+ * (overlay.c), so a game's own polling costs next to nothing. Everything
+ * else (the overlay open, or the HUD shown) acts at once on a newly
+ * pressed arrow with SELECT held.
  * While the overlay is open, the game gets no buttons, and without SELECT:
  *   Up / Down        the cursor
  *   Left / Right     the value under it, back / on (Cross: on); on "Auto
@@ -29,7 +29,7 @@
 #define OV_MENU    1
 #define OV_HUD     2
 
-#define OV_HOLD_US    (500u * 1000u)   /* closed: hold a combination this long */
+#define OV_HOLD_US    (500u * 1000u)   /* closed: hold SELECT + Right this long */
 #define OV_SAMPLE_US  (100u * 1000u)   /* closed: look at the buttons this often */
 
 /* SceCtrl button bits */
@@ -101,11 +101,10 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now)
 	const uint32_t was_op = o->op;
 
 	o->prev = b;
-	if (o->state != OV_MENU) {
-		/* closed: SELECT and exactly one arrow, held OV_HOLD_US */
+	if (o->state == OV_CLOSED) {
+		/* nothing shown: SELECT + Right (and no other arrow), held OV_HOLD_US */
 		const uint32_t arrows = b & (OV_BTN_UP | OV_BTN_DOWN | OV_BTN_LEFT | OV_BTN_RIGHT);
-		const uint32_t combo = (b & OV_BTN_SELECT) && arrows && !(arrows & (arrows - 1))
-		                     ? arrows : 0;
+		const uint32_t combo = (b & OV_BTN_SELECT) && arrows == OV_BTN_RIGHT ? arrows : 0;
 
 		if (combo != o->hold) {
 			o->hold = combo;
@@ -113,11 +112,17 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now)
 			o->held = 0;
 		} else if (combo && !o->held && now - o->hold_us >= OV_HOLD_US) {
 			o->held = 1;
-			o->state = ov_combo(o->state, combo);
+			o->state = OV_MENU;
 		}
 		return o->state != was_state;
 	}
 	o->hold = 0;
+	if (o->state == OV_HUD) {
+		/* the HUD shown: at once, as in the overlay */
+		if ((b & OV_BTN_SELECT) && (down & (OV_BTN_LEFT | OV_BTN_UP | OV_BTN_DOWN)))
+			o->state = ov_combo(OV_HUD, down & OV_BTN_LEFT ? OV_BTN_LEFT : OV_BTN_UP);
+		return o->state != was_state;
+	}
 	if (b & OV_BTN_SELECT) {
 		if (down & OV_BTN_RIGHT)
 			o->state = o->state == OV_CLOSED ? OV_MENU : OV_HUD;

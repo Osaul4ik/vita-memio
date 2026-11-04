@@ -83,6 +83,10 @@ target_link_libraries(vitamemio_kernel
   SceDebugForDriver_stub        # ksceDebugPrintf (kernel logger)
   SceIofilemgrForDriver_stub    # ksceIo* (log, settings, boot guard)
   SceSdifForDriver_stub         # ksceSdifGetSdContextGlobal (which port a call is for)
+  # as PSVshell imports them (weak: a firmware without them still loads us,
+  # and read ahead Auto then simply follows no app)
+  SceSysrootForKernel_stub_weak # ksceKernelSysrootGetProcessTitleId
+  SceAppMgrForDriver_stub_weak  # ksceAppMgrIsExclusiveProcessRunning
 )
 # taiHEN modules enter via module_start, not crt0's main - drop startup files.
 target_link_options(vitamemio_kernel PRIVATE -nostartfiles)

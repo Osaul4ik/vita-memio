@@ -60,7 +60,7 @@ static void on_pad(SceCtrlData *pad, int count, int negative)
 	 * for OV_HOLD_US); the polls in between cost a clock read */
 	const uint32_t now = ksceKernelGetSystemTimeLow();
 
-	if (__atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) != OV_MENU) {
+	if (__atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) == OV_CLOSED) {
 		if (now - __atomic_load_n(&g_look_us, __ATOMIC_RELAXED) < OV_SAMPLE_US)
 			return;
 		__atomic_store_n(&g_look_us, now, __ATOMIC_RELAXED);

@@ -129,12 +129,12 @@ Settings, logs and tester results live in `ur0:data/vita-memio/`.
 
 | Keys | |
 |---|---|
-| SELECT + Right | held ½ s: opens the overlay; pressed again (open): closes it and shows the HUD (PSVshell style; *Extended* if the HUD setting is *Off*) |
-| SELECT + Left | held ½ s: from the HUD back to the overlay; pressed again (open): closes it |
-| SELECT + Up or Down | closes the overlay and the HUD (held ½ s while the overlay is closed) |
+| SELECT + Right | held ½ s (the only key held): opens the overlay; pressed again (open): closes it and shows the HUD (PSVshell style; *Extended* if the HUD setting is *Off*) |
+| SELECT + Left | from the HUD back to the overlay; pressed again (open): closes it |
+| SELECT + Up or Down | closes the overlay and the HUD |
 | Up / Down | (overlay open) choose a line |
 | Left / Right, Cross | change the value on it; Cross on *Save as its profile* / *Learn it again* does it |
-While the overlay is closed, the buttons are only looked at every 0.1 s, so a game's polling costs next to nothing; while it is open, every poll counts and the game gets no buttons. At the top: the app (the game Auto follows, or an app Auto ignores that read last) and its storage, what Auto does with it (learning and how far, learnt, set by hand, or ignored), and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Then two groups:
+With nothing shown, the buttons are only looked at every 0.1 s, so a game's polling costs next to nothing; with the overlay or the HUD shown every poll counts, and while the overlay is open the game gets no buttons. At the top: the app (the game Auto follows, or an app Auto ignores that read last) and its storage, what Auto does with it (learning and how far, learnt, set by hand, or ignored), and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Then two groups:
 
 - **This app (read ahead Auto):** *Start after (C)* and *(NC)* - after how many reads in a row read ahead starts for it (2 to 8, or never); a change applies at once and stops Auto learning it. *Save as its profile* keeps them (marked *set by hand*: Auto does not learn it again). *Auto ignores it* puts the app on Auto's ignore list, or takes it off: an ignored app is not followed, nothing of it is learnt and nothing is read ahead for it in Auto. *Learn it again* deletes its profile.
 - **Settings:** read ahead, copy on core 3, overlapped reads, GPU-safe reads - saved as in Settings.

@@ -2511,7 +2511,7 @@ static int fake_title(SceUID pid, char *t, SceSize len)
 	return 0;
 }
 
-static int fake_exclusive(void) { return 1; }
+static int fake_exclusive(const char *title_id) { return title_id ? -1 : 1; }
 
 /* `pid` comes to the front (started / resumed: its process event) and
  * reads from now on */
@@ -2622,17 +2622,24 @@ static void test_readahead_auto(void)
 	as_app(0x44);
 	streams(u, 10, 2, 256);                           /* short ones */
 	CHECK(g_ra_hstreams >= 9);
-	/* a process with no usable title id: the fixed threshold, nothing saved */
-	as_app(0x45);
+	/* a process with no usable title id never comes to the front (and is
+	 * counted for the log): the game stays followed */
+	{
+		const uint32_t noid = g_fg_noid;
+
+		as_app(0x45);
+		CHECK(g_ra_fg == 0x44 && g_fg_noid == noid + 1);
+		as_app(0x99);                                 /* no title id at all */
+		CHECK(g_ra_fg == 0x44 && g_fg_noid == noid + 2);
+	}
 	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x45 && !g_ra_learning && !g_ra_title[0]);
-	CHECK(ra_threshold(0x45, 0) == RA_STREAK);
-	/* system threads are never a game */
+	CHECK(g_ra_pid == 0x44 && ra_threshold(0x45, 0) == RA_STREAK);
+	/* a system thread reading while the game is in front: the game's */
 	fake_pid = KERNEL_PID;
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x45);
+	CHECK(g_ra_pid == 0x44);
 	vm_stage_fini();
 
 	/* a fresh folder (no profiles): learnt again; a profile out of range or
@@ -2697,10 +2704,10 @@ static void test_readahead_auto(void)
 	{
 		const uint32_t hits = g_ra_hits;
 
-		as_app(0x99);                                 /* another app in front, not followed */
+		as_app(0x46);                                 /* another app in front, not followed */
 		streams(u, 2, 8, 256);
 		CHECK(g_ra_hits == hits && ra_idle(d));
-		ra_proc_event(0x99, 4);                       /* back to the home screen: none */
+		ra_proc_event(0x46, 4);                       /* back to the home screen: none */
 		CHECK(g_ra_fg == 0);
 		streams(u, 2, 8, 256);
 		CHECK(g_ra_hits == hits && ra_idle(d));

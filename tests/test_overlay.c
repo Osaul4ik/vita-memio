@@ -48,32 +48,30 @@ static void test_states(void)
 
 	memset(&o, 0, sizeof(o));
 	CHECK(o.state == OV_CLOSED);
-	/* closed: a combination counts once held half a second */
+	/* nothing shown: only SELECT + Right held half a second opens it */
 	CHECK(!hold(&o, OV_BTN_RIGHT, 400) && o.state == OV_CLOSED);
 	CHECK(!tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_CLOSED);   /* a tap: no */
+	hold(&o, OV_BTN_LEFT, 600);
+	hold(&o, OV_BTN_UP, 600);
+	hold(&o, OV_BTN_DOWN, 600);
+	CHECK(o.state == OV_CLOSED);                                          /* nothing else */
 	CHECK(hold(&o, OV_BTN_RIGHT, 500) && o.state == OV_MENU);             /* opens */
 	/* open: a press acts at once */
 	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT) && o.state == OV_HUD);      /* HUD */
-	/* the HUD shown (the overlay closed): held again */
-	tap(&o, OV_BTN_SELECT, OV_BTN_LEFT);
-	CHECK(o.state == OV_HUD);
-	hold(&o, OV_BTN_RIGHT, 600);
+	/* the HUD shown: at once too */
+	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
 	CHECK(o.state == OV_HUD);                                              /* stays */
-	CHECK(hold(&o, OV_BTN_LEFT, 500) && o.state == OV_MENU);              /* back */
+	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_LEFT) && o.state == OV_MENU);      /* back */
 	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_LEFT) && o.state == OV_CLOSED);    /* closed */
-	hold(&o, OV_BTN_LEFT, 600);
-	CHECK(o.state == OV_CLOSED);
-	/* Up or Down with SELECT: everything closed, from either */
+	/* SELECT + Up or Down: everything closed, from either */
 	hold(&o, OV_BTN_RIGHT, 500);
-	CHECK(o.state == OV_MENU);
 	tap(&o, OV_BTN_SELECT, OV_BTN_UP);
 	CHECK(o.state == OV_CLOSED);
 	hold(&o, OV_BTN_RIGHT, 500);
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
 	CHECK(o.state == OV_HUD);
-	hold(&o, OV_BTN_DOWN, 500);
-	CHECK(o.state == OV_CLOSED);
-	/* held on after it acted: once per hold - opened, not then the HUD */
+	CHECK(tap(&o, OV_BTN_SELECT, OV_BTN_DOWN) && o.state == OV_CLOSED);
+	/* held on after it opened: once per hold - not then the HUD */
 	for (int i = 0; i < 20; i++) {
 		T += OV_SAMPLE_US;
 		ov_input(&o, OV_BTN_SELECT | OV_BTN_RIGHT, T);
@@ -83,7 +81,7 @@ static void test_states(void)
 	CHECK(o.state == OV_MENU);
 	in(&o, 0);
 	tap(&o, OV_BTN_SELECT, OV_BTN_UP);
-	/* closed: the arrow alone, two arrows, or SELECT alone: nothing */
+	/* nothing shown: the arrow alone, two arrows, SELECT alone: nothing */
 	hold(&o, 0, 600);
 	CHECK(o.state == OV_CLOSED);
 	hold(&o, OV_BTN_RIGHT | OV_BTN_UP, 600);

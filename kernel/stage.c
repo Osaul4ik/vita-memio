@@ -1342,6 +1342,7 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 static volatile int g_readahead;          /* the setting                      */
 static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
 static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
+static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a write, dirty, switched, old */
 /* ---- read ahead, auto (VM_RA_AUTO): from when on, learnt per game ----------
  *
  * Each stream that ends (a large read that does not continue it) is noted:
@@ -2193,9 +2194,107 @@ static void ra_stats_flush(int force)
  * keeps what it has learnt so far; Statistics writes what it saw. */
 static void ra_streams_close(void);
 
+/* ---- trace (a test branch only, not for main) ------------------------------
+ *
+ * With Full statistics: every read and write of the app followed, while it is
+ * in front, into RA_STATS_DIR/<title>.trc, appended, 16 bytes each (little
+ * endian): time us, sector, sectors, flags (1 write, 2 non-cacheable, dev << 4).
+ * A session starts with an entry of sectors 0xFFFFFFFF, sector TR_MAGIC. The
+ * hook only fills a ring; the worker is woken for each half of it. */
+#define TR_N      8192u
+#define TR_MAGIC  0x43525456u
+typedef struct VmTr { uint32_t t, sector, n, flags; } VmTr;
+static VmTr    *g_tr;
+static SceUID   g_tr_uid = -1;
+static uint32_t g_tr_i, g_tr_lost;        /* atomics */
+static uint32_t g_tr_written;             /* worker */
+static char     g_tr_title[16];           /* worker: the session begun in its file */
+
+static void tr_note(Dev *d, int write, void *part, uint32_t sector, void *buf, uint32_t n)
+{
+	VmTr *const t = __atomic_load_n(&g_tr, __ATOMIC_ACQUIRE);
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED);
+	uint32_t i;
+	VmTr *e;
+
+	if (!t || !LD(g_ra_stats) || !fg || fg != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
+	    !on_port(part, d->port))
+		return;
+	i = __atomic_fetch_add(&g_tr_i, 1, __ATOMIC_RELAXED);
+	e = &t[i % TR_N];
+	e->t = ksceKernelGetSystemTimeLow();
+	e->sector = sector;
+	e->n = n;
+	e->flags = (write ? 1u : 0u) | (ksceKernelGetMemBlockMemtypeByAddr(buf) == MEMTYPE_NC ? 2u : 0u) |
+	           ((uint32_t)(d - g_dev) << 4);
+	if ((i + 1) % (TR_N / 2) == 0)
+		ra_wake();
+}
+
+/* Worker: what the ring holds, into the file: whole halves, or all of it. */
+static void tr_flush(int all)
+{
+	const uint32_t i = __atomic_load_n(&g_tr_i, __ATOMIC_RELAXED);
+	char path[96];
+	SceUID fd;
+
+	if (!g_tr || i == g_tr_written)
+		return;
+	if (!g_ra_title[0]) {
+		g_tr_written = i;                     /* no name to file it by */
+		return;
+	}
+	if (i - g_tr_written > TR_N) {
+		__atomic_fetch_add(&g_tr_lost, i - TR_N - g_tr_written, __ATOMIC_RELAXED);
+		g_tr_written = i - TR_N;
+	}
+	if (!all && i - g_tr_written < TR_N / 2)
+		return;
+	ksceIoMkdir("ur0:data", 0777);
+	ksceIoMkdir(VM_DATA_DIR, 0777);
+	ksceIoMkdir(RA_STATS_DIR, 0777);
+	snprintf(path, sizeof(path), "%s/%s.trc", RA_STATS_DIR, g_ra_title);
+	fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+	if (fd < 0)
+		return;
+	if (strncmp(g_tr_title, g_ra_title, sizeof(g_tr_title))) {
+		const VmTr m = { ksceKernelGetSystemTimeLow(), TR_MAGIC, 0xFFFFFFFFu, 0 };
+
+		ksceIoWrite(fd, &m, sizeof(m));
+		memcpy(g_tr_title, g_ra_title, sizeof(g_tr_title));
+	}
+	while (g_tr_written != i) {
+		const uint32_t off = g_tr_written % TR_N;
+		uint32_t c = i - g_tr_written;
+
+		if (c > TR_N - off)
+			c = TR_N - off;
+		if (ksceIoWrite(fd, &g_tr[off], c * sizeof(VmTr)) != (int)(c * sizeof(VmTr)))
+			break;
+		g_tr_written += c;
+	}
+	ksceIoClose(fd);
+}
+
+static void tr_tick(void)
+{
+	if (LD(g_ra_stats) && !g_tr && g_tr_uid < 0) {
+		void *b = NULL;
+
+		if (alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0,
+		              (TR_N * sizeof(VmTr) + 0xFFF) & ~0xFFFu, &g_tr_uid, &b) < 0)
+			g_tr_uid = -2;                    /* not retried */
+		else
+			__atomic_store_n(&g_tr, (VmTr *)b, __ATOMIC_RELEASE);
+	}
+	tr_flush(0);
+}
+
 static void ra_game_end(void)
 {
 	ra_streams_close();                       /* the stream it was reading counts too */
+	tr_flush(1);
+	g_tr_title[0] = 0;                        /* its next session gets its own mark */
 	/* g_ra_auto_was: Auto as the game was learnt (the setting may be off by
 	 * now): what it saw is kept, to go on from next time */
 	if (g_ra_auto_was)
@@ -2761,6 +2860,11 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	w0 = stats ? ksceKernelGetSystemTimeLow() : 0;
 	for (int j = 0; j < cnt; j++)
 		if (ra_wait(d, idx[j]) != RA_READY || !ra_valid(d, idx[j])) {
+			const RaPiece *const pc = &d->ra[idx[j]];
+			const int why = LD(pc->state) != RA_READY ? 0 : !pc->ok ? 1 : LD(pc->dirty) ? 2 :
+			                pc->epoch != LD(d->ra_epoch) ? 3 : 4;
+
+			ADD(g_ra_bad_why[why], 1);
 			ADD(g_ra_bad, 1);
 			return 0;
 		}
@@ -3577,6 +3681,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 {
 	int r;
 
+	tr_note(d, write, part, sector, buf, nsec);
 	if (!write)
 		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec);
 	__atomic_fetch_add(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
@@ -3755,6 +3860,10 @@ void vm_stage_fini(void)
 		ksceKernelFreeMemBlock(g_shadow_uid);
 		g_shadow_uid = -1;
 	}
+	__atomic_store_n(&g_tr, NULL, __ATOMIC_RELEASE);
+	if (g_tr_uid >= 0)
+		ksceKernelFreeMemBlock(g_tr_uid);
+	g_tr_uid = -1;
 }
 
 /* ---- the settings in effect: the global ones, or the app in front's -------
@@ -4042,6 +4151,12 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+		if (LD(g_ra_bad))
+			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
+			         "switched %u, old %u; trace lost %u", (unsigned)LD(g_ra_bad_why[0]),
+			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
+			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]),
+			         (unsigned)LD(g_tr_lost));
 		if (LD(g_ra_mode) == VM_RA_AUTO)
 			VM_KLOGI("stage: read ahead auto: around a video %u runs, %u streams left out; "
 			         "learning %u streams, %u reads",
@@ -4171,6 +4286,8 @@ void vm_stage_worker_tick(void)
 	else if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	         __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) || g_ra_stats_was || g_ra_auto_was)
 		ra_auto_stop();
+	if (LD(g_live))
+		tr_tick();
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
 

@@ -4089,6 +4089,36 @@ static void test_review_fixes(void)
 	g_ra_by_reads = 0;
 	vm_stage_fini();
 
+	/* the trace: with Full statistics, the followed app's transfers into its
+	 * file, a mark first, each session after the last */
+	auto_game(&s, 0x44);
+	s.stats = VM_STATS_FULL;
+	vm_stage_apply(&s);
+	g_tr_i = g_tr_written = 0;
+	g_tr_title[0] = 0;
+	vm_stage_worker_tick();
+	CHECK(g_tr != NULL);
+	{
+		static VmTr rd_back[16];
+		SceUID fd;
+		int n;
+
+		CHECK(rd_ok(u, 100, 256));
+		CHECK(wr(u, 900, 256, REF_RD) >= 0);
+		ra_proc_event(0x44, 3);
+		vm_stage_worker_tick();
+		snprintf(path, sizeof(path), "%s/PCSB00777.trc", RA_STATS_DIR);
+		fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+		CHECK(fd >= 0);
+		n = ksceIoRead(fd, rd_back, sizeof(rd_back));
+		ksceIoClose(fd);
+		CHECK(n == 3 * (int)sizeof(VmTr) && rd_back[0].sector == TR_MAGIC &&
+		      rd_back[1].sector == 100 && rd_back[1].n == 256 && !(rd_back[1].flags & 1) &&
+		      (rd_back[1].flags >> 4) == M && rd_back[2].sector == 900 && (rd_back[2].flags & 1));
+	}
+	vm_stage_fini();
+	CHECK(g_tr == NULL && g_tr_uid == -1);
+
 	/* a large write ends a stream, and the stream is noted */
 	auto_game(&s, 0x44);
 	ra_dev_clear();

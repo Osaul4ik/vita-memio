@@ -1339,6 +1339,7 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 
 static volatile int g_readahead;          /* the setting                      */
 static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
+static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
 /* ---- read ahead, auto (VM_RA_AUTO): from when on, learnt per game ----------
  *
  * Each stream that ends (a large read that does not continue it) is noted:
@@ -1362,8 +1363,13 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
  * kept in its profile). Other processes and the other storage read as with
  * read ahead off.
  *
- * Measuring (streams, the game and its storage, g_ra_measure) is on with
- * Auto only; Statistics does not start it. The worker is woken for it (a new game), and ticks every
+ * Measuring (the game followed, its storage, its streams: g_ra_measure) is
+ * on with Auto or with Statistics. Statistics only collects (the streams of
+ * the game, whatever Auto does) and writes them to
+ * ur0:data/vita-memio/ra_stats/<title>.txt - when the game ends, once a
+ * minute while it runs, and when Statistics is switched off; it never
+ * touches the profiles and reads nothing ahead. Only Auto learns, keeps and
+ * uses profiles. The worker is woken for it (a new game), and ticks every
  * RA_TICK_US while a game is learnt or its storage not yet known - also
  * with the HUD and the log off. */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
@@ -1376,10 +1382,13 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
 #define RA_COST_US        8000            /* per stream that started it        */
 #define RA_THR_NONE       0xFFFFu         /* learnt: never start               */
 #define RA_PROFILE_DIR    VM_DATA_DIR "/ra"
+#define RA_STATS_DIR      VM_DATA_DIR "/ra_stats"
+#define RA_STATS_EVERY_US (60u * 1000u * 1000u)
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
 static volatile int g_ra_mode;            /* VM_RA_*                          */
-static volatile int g_ra_measure;         /* auto: learn                      */
+static volatile int g_ra_measure;         /* auto or statistics: follow       */
+static volatile int g_ra_stats;           /* statistics: collect, write file  */
 /* the game being learnt or served (a process id; 0: none), its thresholds
  * (0: the fixed one) and its histogram while it learns - all atomics */
 static SceUID   g_ra_pid, g_ra_seen;      /* g_ra_seen: the last game with a stream */
@@ -1403,7 +1412,7 @@ static void ra_hist_note(SceUID pid, int nc, uint32_t L)
 	const uint32_t b = L < RA_HBINS - 1 ? L : RA_HBINS - 1;
 
 	if (!pid || pid != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
-	    !__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE))
+	    (!__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && !LD(g_ra_stats)))
 		return;
 	__atomic_fetch_add(&g_ra_hcnt[nc][b], 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&g_ra_hstreams, 1, __ATOMIC_RELAXED);
@@ -1584,21 +1593,163 @@ static void ra_learn_finish(void)
 	         "reads", g_ra_title, (unsigned)n, a, b);
 }
 
+/* Statistics: what was seen of the game followed, as text, into
+ * RA_STATS_DIR/<title>.txt (this session of it; rewritten each time). */
+static void ra_stats_write(void)
+{
+	static char t[2048];
+	static const char *const dev_name[VM_DEV_COUNT] = { "sd2vita", "internal", "memcard" };
+	char path[96], a[8], b[8];
+	uint32_t nk[2] = { 0, 0 };
+	const int dev = LD(g_ra_dev);
+	SceUID fd;
+	int n = 0;
+
+	if (!g_ra_title[0])
+		return;
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < RA_HBINS; i++)
+			nk[k] += __atomic_load_n(&g_ra_hcnt[k][i], __ATOMIC_RELAXED);
+	ra_thr_text(a, sizeof(a), ra_choose(g_ra_hcnt[0]));
+	ra_thr_text(b, sizeof(b), ra_choose(g_ra_hcnt[1]));
+#define PUT(...) do { if (n < (int)sizeof(t)) n += snprintf(t + n, sizeof(t) - n, __VA_ARGS__); } while (0)
+	PUT("vita-memio %s read ahead statistics\n", VM_BUILD_STR);
+	PUT("title %s\n", g_ra_title);
+	PUT("storage %s (large reads:", dev >= 0 ? dev_name[dev] : "not known yet");
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		PUT(" %s %u MiB", dev_name[i],
+		    (unsigned)(__atomic_load_n(&g_ra_dev_sec[i], __ATOMIC_RELAXED) / 2048));
+	PUT(")\n");
+	PUT("streams %u: cached %u, non-cacheable %u\n", (unsigned)(nk[0] + nk[1]),
+	    (unsigned)nk[0], (unsigned)nk[1]);
+	PUT("reads in a row: cached / non-cacheable streams\n");
+	for (int i = 1; i < RA_HBINS; i++) {
+		const uint32_t c = __atomic_load_n(&g_ra_hcnt[0][i], __ATOMIC_RELAXED),
+		               d = __atomic_load_n(&g_ra_hcnt[1][i], __ATOMIC_RELAXED);
+
+		if (c || d)
+			PUT("  %2d%s %u / %u\n", i, i == RA_HBINS - 1 ? "+" : " ", (unsigned)c, (unsigned)d);
+	}
+	PUT("auto would start after: cached %s, non-cacheable %s reads\n", a, b);
+	PUT("read ahead mode %s; since the plugin started: %u reads served (%u MiB, %u MiB "
+	    "non-cacheable), %u dropped (%u MiB unused)\n",
+	    LD(g_ra_mode) == VM_RA_AUTO ? "auto" : LD(g_ra_mode) == VM_RA_ON ? "on" : "off",
+	    (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
+	    (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
+	    (unsigned)(LD(g_ra_waste_kib) / 1024));
+#undef PUT
+	if (n > (int)sizeof(t) - 1)
+		n = (int)sizeof(t) - 1;
+	ksceIoMkdir("ur0:data", 0777);
+	ksceIoMkdir(VM_DATA_DIR, 0777);
+	ksceIoMkdir(RA_STATS_DIR, 0777);
+	snprintf(path, sizeof(path), "%s/%s.txt", RA_STATS_DIR, g_ra_title);
+	fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	if (fd < 0)
+		return;
+	ksceIoWrite(fd, t, (SceSize)n);
+	ksceIoClose(fd);
+}
+
+/* Worker-only: what was last written for statistics, and when. */
+static uint32_t g_ra_stats_written = 0xFFFFFFFFu, g_ra_stats_us;
+static int      g_ra_auto_was;            /* Auto was on at the last tick     */
+static int      g_ra_stats_was;           /* Statistics was on ...            */
+
+static void ra_stats_flush(int force)
+{
+	const uint32_t n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+	const uint32_t now = ksceKernelGetSystemTimeLow();
+
+	if (!g_ra_title[0] || n == g_ra_stats_written)
+		return;
+	if (!force && now - g_ra_stats_us < RA_STATS_EVERY_US)
+		return;
+	ra_stats_write();
+	g_ra_stats_written = n;
+	g_ra_stats_us = now;
+}
+
+/* The game followed has ended (another one reads, or measuring stops): Auto
+ * keeps what it learnt if enough; Statistics writes what it saw. */
+static void ra_game_end(void)
+{
+	if (LD(g_ra_mode) == VM_RA_AUTO && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) &&
+	    g_ra_title[0] && __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
+		ra_learn_finish();
+	if (g_ra_stats_was)
+		ra_stats_flush(1);
+}
+
+/* Auto for the game followed (title known): its profile, or learning from
+ * what has been seen of it so far. */
+static void ra_auto_begin(void)
+{
+	uint32_t thr[2] = { 0, 0 };
+	int dev = -1;
+
+	if (ra_profile_load(g_ra_title, thr, &dev)) {
+		char a[8], b[8];
+
+		ra_thr_text(a, sizeof(a), thr[0]);
+		ra_thr_text(b, sizeof(b), thr[1]);
+		VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d "
+		         "(kept)", g_ra_title, a, b, dev);
+		if (dev >= 0)
+			ST(g_ra_dev, dev);
+		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+	} else {
+		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
+		VM_KLOGI("stage: read ahead auto: %s - learning", g_ra_title);
+	}
+	__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
+}
+
+/* Auto switched off with a game followed (Statistics still on): kept if it
+ * had enough, then none of Auto's state stays. */
+static void ra_auto_end(void)
+{
+	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
+		ra_learn_finish();
+	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_relearn, 0, __ATOMIC_RELEASE);
+}
+
 /* Worker, once a tick while measuring: follow the game that reads streams,
- * load its profile or learn one, find its storage, keep what is learnt. */
+ * find its storage; Auto: load its profile or learn one, keep what is
+ * learnt; Statistics: write what is seen. */
 static void ra_auto_tick(void)
 {
 	const SceUID seen = __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE);
+	const int is_auto = LD(g_ra_mode) == VM_RA_AUTO, stats = LD(g_ra_stats);
 
 	if (!g_title_fn) {
-		if (!g_ra_auto_logged && LD(g_ra_mode) == VM_RA_AUTO) {
+		if (!g_ra_auto_logged && is_auto) {
 			g_ra_auto_logged = 1;
 			VM_KLOGW("stage: read ahead auto: no title ids on this firmware - works as on");
 		}
 		return;
 	}
+	/* Statistics switched off: what it saw is written once more */
+	if (g_ra_stats_was && !stats)
+		ra_stats_flush(1);
+	g_ra_stats_was = stats;
+	/* Auto switched on or off while a game is followed */
+	if (is_auto != g_ra_auto_was) {
+		g_ra_auto_was = is_auto;
+		if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) && g_ra_title[0]) {
+			if (is_auto)
+				ra_auto_begin();
+			else
+				ra_auto_end();
+		}
+	}
 	/* its profile deleted (Settings or the overlay): learnt again */
-	if (__atomic_exchange_n(&g_ra_relearn, 0, __ATOMIC_ACQ_REL) && g_ra_title[0] &&
+	if (__atomic_exchange_n(&g_ra_relearn, 0, __ATOMIC_ACQ_REL) && is_auto && g_ra_title[0] &&
 	    __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		ra_hist_clear();
@@ -1607,6 +1758,7 @@ static void ra_auto_tick(void)
 		ST(g_ra_dev, -1);
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		g_ra_stats_written = 0xFFFFFFFFu;
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
 	}
@@ -1614,42 +1766,27 @@ static void ra_auto_tick(void)
 	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
 		char t[32];
-		uint32_t thr[2] = { 0, 0 };
-		int dev = -1;
 
-		/* the last game has ended: learnt from what it read, if enough */
-		if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
-		    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
-			ra_learn_finish();
+		ra_game_end();                        /* the last game has ended */
 		memset(t, 0, sizeof(t));
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		ra_hist_clear();
+		g_ra_stats_written = 0xFFFFFFFFu;
+		g_ra_stats_us = ksceKernelGetSystemTimeLow();
 		ST(g_ra_dev, -1);
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 		if (g_title_fn(seen, t, sizeof(t) - 1) < 0 || !ra_title_ok(t)) {
 			g_ra_title[0] = 0;                   /* not a game we can name: fixed */
-			__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
-			__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
 			__atomic_store_n(&g_ra_pid, seen, __ATOMIC_RELEASE);
 			return;
 		}
 		memcpy(g_ra_title, t, sizeof(g_ra_title) - 1);
 		g_ra_title[sizeof(g_ra_title) - 1] = 0;
-		if (ra_profile_load(g_ra_title, thr, &dev)) {
-			char a[8], b[8];
-
-			ra_thr_text(a, sizeof(a), thr[0]);
-			ra_thr_text(b, sizeof(b), thr[1]);
-			VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d "
-			         "(kept)", g_ra_title, a, b, dev);
-			ST(g_ra_dev, dev);
-		} else {
-			__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
-			VM_KLOGI("stage: read ahead auto: %s - learning", g_ra_title);
-		}
-		__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
-		__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
+		if (is_auto)
+			ra_auto_begin();
 		__atomic_store_n(&g_ra_pid, seen, __ATOMIC_RELEASE);
 		return;
 	}
@@ -1669,9 +1806,9 @@ static void ra_auto_tick(void)
 		}
 		if (sum >= RA_DEV_DECIDE && bi >= 0 && bi != VM_DEV_INTERNAL) {
 			ST(g_ra_dev, bi);
-			VM_KLOGI("stage: read ahead auto: %s - on storage %d",
+			VM_KLOGI("stage: read ahead: %s - on storage %d",
 			         g_ra_title[0] ? g_ra_title : "(no title id)", bi);
-			if (g_ra_title[0] && !__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE)) {
+			if (is_auto && g_ra_title[0] && !__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE)) {
 				uint32_t thr[2];
 
 				thr[0] = __atomic_load_n(&g_ra_thr[0], __ATOMIC_RELAXED);
@@ -1680,19 +1817,22 @@ static void ra_auto_tick(void)
 			}
 		}
 	}
-	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+	if (is_auto && __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
 	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_STREAMS)
 		ra_learn_finish();
+	if (stats)
+		ra_stats_flush(0);
 }
 
-/* Measuring switched off (Auto off): what a game learnt so
- * far is kept if it is enough (as when the game ends), then nothing is left
+/* Measuring switched off (Auto and Statistics off): Auto keeps what it
+ * learnt if enough, Statistics writes what it saw, then nothing is left
  * behind - switched on again, it starts afresh. Worker thread. */
 static void ra_auto_stop(void)
 {
-	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
-	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
-		ra_learn_finish();
+	ra_game_end();
+	g_ra_stats_was = 0;
+	g_ra_auto_was = 0;
+	g_ra_stats_written = 0xFFFFFFFFu;
 	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 	ra_hist_clear();
 	__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
@@ -2888,8 +3028,10 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_ra_mode, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
 	                                                                    : VM_RA_OFF);
 	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
-	/* only Auto learns: Statistics starts nothing but its own counters */
-	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO ? 1 : 0);
+	/* follow the game: for Auto, and for Statistics (which only collects
+	 * and writes; it starts nothing of read ahead's own) */
+	ST(g_ra_stats, s->stats ? 1 : 0);
+	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats ? 1 : 0);
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || LD(g_readahead)))
@@ -2980,7 +3122,7 @@ void vm_stage_worker_tick(void)
 	if (LD(g_ra_measure) && LD(g_live))
 		ra_auto_tick();
 	else if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
-	         __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE))
+	         __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) || g_ra_stats_was || g_ra_auto_was)
 		ra_auto_stop();
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
@@ -3150,7 +3292,7 @@ int vm_stage_ra_delete(const char *title)
 		return VM_ERR_IO;
 	/* that game running (the worker's g_ra_title; a racy read of a string
 	 * that changes only on a new game is fine for this) */
-	if (LD(g_ra_measure) && !strncmp(t, g_ra_title, sizeof(t))) {
+	if (LD(g_ra_mode) == VM_RA_AUTO && !strncmp(t, g_ra_title, sizeof(t))) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
 		__atomic_store_n(&g_ra_relearn, 1, __ATOMIC_RELEASE);
@@ -3206,6 +3348,8 @@ unsigned vm_stage_tick_us(void)
 		return RA_TICK_US;                  /* a game to follow */
 	if (pid && (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) || LD(g_ra_dev) < 0))
 		return RA_TICK_US;
+	if (pid && LD(g_ra_stats) && g_ra_title[0])
+		return RA_STATS_EVERY_US;             /* its file, once a minute */
 	return 0;
 }
 

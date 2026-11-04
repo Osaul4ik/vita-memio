@@ -43,11 +43,11 @@ int module_start(SceSize argc, const void *args)
 		return SCE_KERNEL_START_SUCCESS;     /* not the Settings app: nothing to do */
 	g_active = 1;
 
-	/* test branch: every start of Settings, in the log */
+	/* Logged only when the kernel module does not answer. */
 	int ping = vmSelfTestPing();
-
-	VM_LOGI("user v%s: Settings started, kernel module %s (ping 0x%08x)", VM_BUILD_STR,
-	        ping == (int)VM_SELFTEST_MAGIC ? "answers" : "NOT answering", (unsigned)ping);
+	if (ping != (int)VM_SELFTEST_MAGIC)
+		VM_LOGI("user v%s: kernel module not answering (ping 0x%08x)",
+		        VM_BUILD_STR, (unsigned)ping);
 
 	vm_settings_hooks_install();
 	return SCE_KERNEL_START_SUCCESS;

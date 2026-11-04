@@ -76,7 +76,7 @@ enum vm_key {
 	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
-	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read (EXPERIMENT) */
+	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read              */
 	VM_KEY_OVERLAY,        /* 0/1: the SELECT + arrows overlay (and HUD by keys) */
 	VM_KEY_COUNT
 };
@@ -100,19 +100,25 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_GPU     1   /* "GPU-safe (C)"                                     */
 #define VM_OFFLOAD_ALWAYS  2   /* "Cached only"                                      */
-#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: "C + NC", non-cacheable reads too      */
-#define VM_OFFLOAD_NC      4   /* EXPERIMENT: "NCached only" (shown before "C + NC") */
+#define VM_OFFLOAD_ALL     3   /* "C + NC R/A": and what read ahead holds for NC     */
+#define VM_OFFLOAD_FULL    4   /* "C + NC": and non-cacheable reads themselves       */
 
 /* Which reads a VM_OFFLOAD_* setting puts on the system core: reads into
  * ordinary (cached) memory (GPU-safe only: while GPU-safe reads are on), and
  * reads into non-cacheable memory (incl. read-ahead pieces copied into it). */
 static inline int vm_offload_cached(int v, int gpusafe)
 {
-	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL || (v == VM_OFFLOAD_GPU && gpusafe);
+	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL ||
+	       (v == VM_OFFLOAD_GPU && gpusafe);
 }
 static inline int vm_offload_nc(int v)
 {
-	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_NC;
+	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
+}
+/* ... and whether non-cacheable reads themselves go there, straight in. */
+static inline int vm_offload_direct(int v)
+{
+	return v == VM_OFFLOAD_FULL;
 }
 
 /* Statistics: off; on (per-transfer timers and data counters, for the tester). */
@@ -195,7 +201,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_NC;
+		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_FULL;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

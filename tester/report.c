@@ -110,8 +110,9 @@ static const char *offload_text(int v)
 {
 	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_GPU ? "with GPU-safe reads only"
 	     : v == VM_OFFLOAD_ALWAYS ? "cached only"
-	     : v == VM_OFFLOAD_ALL ? "C + NC (cached and non-cacheable reads)"
-	     : v == VM_OFFLOAD_NC ? "NCached only (non-cacheable reads only)" : "unknown";
+	     : v == VM_OFFLOAD_ALL ? "C + NC R/A (cached and non-cacheable read ahead)"
+	     : v == VM_OFFLOAD_FULL ? "C + NC (cached and non-cacheable, also the reads themselves)"
+	     : "unknown";
 }
 
 /* The same, short enough for the screen. */
@@ -412,8 +413,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
 			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe (C)"
-			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC"
-			     : res->plugin0.offload == VM_OFFLOAD_NC ? "NCached only" : "cached only");
+			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC R/A"
+			     : res->plugin0.offload == VM_OFFLOAD_FULL ? "C + NC" : "cached only");
 		if (res->plugin0.readahead == VM_RA_ON)
 			line(&s, "read ahead: on (experimental)");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));

@@ -499,8 +499,8 @@ static void hud_feed(const VmDevState *now)
 /* ---- the overlay (SELECT + arrows) ------------------------------------------ */
 
 static const char *const k_ov_ra[] = { "Off", "On" };
-static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C + NC",
-                                        "NCached only" };
+static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C + NC R/A",
+                                        "C + NC" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 static const char *const k_ov_onoff[] = { "Off", "On" };
 
@@ -510,7 +510,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 {
 	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON };
 	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS,
-	                           VM_OFFLOAD_NC, VM_OFFLOAD_ALL };   /* as on the Settings page */
+	                           VM_OFFLOAD_ALL, VM_OFFLOAD_FULL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
 	static const int onoff[] = { VM_APP_GLOBAL, 0, 1 };
 	static const int thr[] = { 0, 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };   /* 0: the fixed */

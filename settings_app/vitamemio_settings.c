@@ -86,7 +86,7 @@ static const char X_HEAD[] =
 			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2")
 		"</list>"
 		ROW_LIST("offload")
-			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "1") ITEM("vm_i_off2", "2") ITEM("vm_i_off4", "4") ITEM("vm_i_off3", "3")
+			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "1") ITEM("vm_i_off2", "2") ITEM("vm_i_off3", "3") ITEM("vm_i_off4", "4")
 		"</list>"
 		ROW_LIST("readahead")
 			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1")

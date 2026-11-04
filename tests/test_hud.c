@@ -237,7 +237,7 @@ static void test_overlay_left(void)
 {
 	static const char *const lines[12] = {
 		"vita-memio", "Game PCSE00001", "Auto: learning 3/300", "Starts after C 5 NC 5",
-		"On core 3 C 98% NC 100%", "> Read ahead       Auto", "  Copy on core 3   C + NC",
+		"On core 3 C 98% NC 100%", "> Read ahead       Auto", "  Copy on core 3   C + NC R/A",
 		"  Overlapped reads Auto", "  GPU-safe reads   On", "  Reset Auto profile (X)",
 		"Up/Down Left/Right X", "12",
 	};

@@ -508,7 +508,7 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
-/* VM_OFFLOAD_ALL ("C + NC") and VM_OFFLOAD_NC ("NCached only"): a game's read into
+/* VM_OFFLOAD_FULL ("C + NC"): a game's read into
  * NON-cacheable memory, which otherwise takes the standard path on the game's
  * own thread, is read by the helper on the system core straight into the
  * game's buffer through a kernel mapping of it - no staging, no copy - while
@@ -1297,7 +1297,7 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 
 /* ---- read ahead (VM_KEY_READAHEAD) -------------------------------------------
  *
- * EXPERIMENT, the SD2Vita and the memory card only (never the internal
+ * Off by default, the SD2Vita and the memory card only (never the internal
  * storage, which holds the system's own data). While a program reads one
  * stretch of a storage in order (five
  * staged reads in a row, each starting where the last one ended - so the four
@@ -1464,7 +1464,7 @@ static int ra_thr_ok(uint32_t t)
 static int ra_app_ok(const VmApp *a)
 {
 	return a->ra >= -1 && a->ra <= VM_RA_ON && a->offload >= -1 &&
-	       a->offload <= VM_OFFLOAD_NC && a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
+	       a->offload <= VM_OFFLOAD_FULL && a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
 	       a->gpusafe >= -1 && a->gpusafe <= 1 &&
 	       (!a->thr[0] || ra_thr_ok(a->thr[0])) && (!a->thr[1] || ra_thr_ok(a->thr[1]));
 }
@@ -1607,32 +1607,6 @@ static int ra_title_ok(const char *t)
  * system's own apps (NPXS) never take the front, and while an exclusive
  * app (a game) runs, another process starting does not either. Any thread;
  * the worker is woken to follow the change. */
-/* The last process events and what came of them, for the log (the worker
- * writes them; the hook only fills this ring). */
-#define EV_LOG_N 64
-enum { EV_TAKEN = 0, EV_NOID, EV_SYSTEM, EV_EXCLUSIVE, EV_LEFT, EV_OTHER, EV_RESULT };
-typedef struct EvLog {
-	SceUID pid;
-	int    ev, verdict, r;
-	char   title[12];
-} EvLog;
-static EvLog    g_ev_log[EV_LOG_N];
-static uint32_t g_ev_n;                     /* atomic: events noted so far */
-
-static void ev_note(SceUID pid, int ev, int verdict, int r, const char *t)
-{
-	const uint32_t i = __atomic_fetch_add(&g_ev_n, 1, __ATOMIC_ACQ_REL) % EV_LOG_N;
-	EvLog *e = &g_ev_log[i];
-
-	e->pid = pid;
-	e->ev = ev;
-	e->verdict = verdict;
-	e->r = r;
-	memset(e->title, 0, sizeof(e->title));
-	for (int k = 0; t && t[k] && k < (int)sizeof(e->title) - 1; k++)
-		e->title[k] = t[k];
-}
-
 static void ra_proc_event(SceUID pid, int ev)
 {
 	/* a process id is a UID: any value but 0 (the high bit may be set) */
@@ -1647,18 +1621,14 @@ static void ra_proc_event(SceUID pid, int ev)
 		/* no title id: not an app we can tell (never one in front) */
 		if (!g_title_fn || (r = g_title_fn(pid, t, sizeof(t) - 1)) < 0 || !ra_title_ok(t)) {
 			__atomic_fetch_add(&g_fg_noid, 1, __ATOMIC_RELAXED);
-			ev_note(pid, ev, EV_NOID, r, t);
 			return;
 		}
 		if (ra_title_system(t)) {
-			ev_note(pid, ev, EV_SYSTEM, r, t);
 			return;
 		}
 		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0) {
-			ev_note(pid, ev, EV_EXCLUSIVE, r, t);
 			return;
 		}
-		ev_note(pid, ev, EV_TAKEN, r, t);
 		if (pid != fg) {                      /* another app: its storage afresh */
 			for (int i = 0; i < VM_DEV_COUNT; i++)
 				__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
@@ -1671,8 +1641,6 @@ static void ra_proc_event(SceUID pid, int ev)
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
 
-		ev_note(pid, ev, exp == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) ? EV_LEFT : EV_OTHER,
-		        0, NULL);
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
 		                                __ATOMIC_RELAXED)) {
 			g_fg_title[0] = 0;
@@ -1684,22 +1652,9 @@ static void ra_proc_event(SceUID pid, int ev)
 static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 {
 	const tai_hook_ref_t ref = vm_hook_ref(&g_proc_ref);
-	int r;
 
 	ra_proc_event(pid, ev);
-	if (!ref) {
-		ev_note(pid, ev, EV_RESULT, VM_HOOK_NO_REF, NULL);   /* the event went unhandled */
-		ra_wake();
-		return 0;
-	}
-	r = TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6);
-	/* (a suspend is asked again and again while the app winds down: -1 is
-	 * normal there, for games too) */
-	if (r < 0 && !(ev == 4 && r == -1)) {     /* the system's handlers refused it */
-		ev_note(pid, ev, EV_RESULT, r, NULL);
-		ra_wake();
-	}
-	return r;
+	return ref ? TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6) : 0;
 }
 
 /* The threshold for a stream of kind nc: the app in front's own, or the fixed. */
@@ -2380,7 +2335,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	return ret;
 }
 
-/* EXPERIMENT: map the game's non-cacheable buffer for the helper (see
+/* Map the game's non-cacheable buffer for the helper (see
  * g_ncd_state). The mapping is used only if it is non-cacheable at both ends,
  * as the buffer is, and writable. */
 static void ncd_map(OffMap *m)
@@ -2445,7 +2400,7 @@ static void ncd_map(OffMap *m)
 	m->kern = kern;
 }
 
-/* EXPERIMENT: a game's read into non-cacheable memory, by the helper straight
+/* A game's read into non-cacheable memory, by the helper straight
  * into the game's buffer, with d->busy already held. 1 if done here (*ret:
  * its result), 0 if it stays standard (no helper, no usable mapping). On a
  * failed read the whole request is read again the standard way, so the
@@ -2494,7 +2449,7 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
  * KERNEL_PID if not. */
 static SceUID ncd_wanted(uint32_t nsec)
 {
-	if (!vm_offload_nc(LD(g_offload)) || LD(g_verify) || nsec < NCD_MIN_SECTORS ||
+	if (!vm_offload_direct(LD(g_offload)) || LD(g_verify) || nsec < NCD_MIN_SECTORS ||
 	    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) < 0)
 		return KERNEL_PID;
 	return ksceKernelGetProcessId();
@@ -2563,7 +2518,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		if (!write && nsec >= RA_SMALL_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
 		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
-		/* EXPERIMENT: "C + NC": read on the system core instead */
+		/* "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
 		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
 			return r;
@@ -3071,7 +3026,7 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_glob_gpu, s->gpusafe ? 1 : 0);
 	ST(g_glob_pipe, s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
 	                                                                         : VM_PIPE_OFF);
-	ST(g_glob_offload, s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_NC
+	ST(g_glob_offload, s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_FULL
 	                   ? s->offload : VM_OFFLOAD_OFF);
 	ST(g_glob_ra, s->readahead == VM_RA_ON ? VM_RA_ON : VM_RA_OFF);
 	eff_update();
@@ -3224,10 +3179,6 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
-		for (int i = 0; i < VM_DEV_COUNT; i++)
-			if (LD(g_dev[i].st.passthru))
-				VM_KLOGI("stage: dev %d busy, read the standard way: %u", i,
-				         (unsigned)LD(g_dev[i].st.passthru));
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),
@@ -3240,7 +3191,7 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)LD(g_offload_err));
-		if (vm_offload_nc(LD(g_offload)) || LD(g_ncd_reads))
+		if (vm_offload_direct(LD(g_offload)) || LD(g_ncd_reads))
 			VM_KLOGI("stage: uncached read on the system core %u reads %u MiB, busy %u, "
 			         "failed %u, mapping failed %u (0x%08x)",
 			         (unsigned)LD(g_ncd_reads), (unsigned)(LD(g_ncd_kib) / 1024),
@@ -3285,38 +3236,19 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
 		}
 	}
-	/* With the log on: when it was switched on, how the app in front is
-	 * followed; then the process events since (kept while the log is off,
-	 * the last EV_LOG_N, so switching it on later still shows them) and
-	 * what came of each */
+	/* With the log on: when it was switched on, how the app in front is followed */
 	{
-		static uint32_t logged;
 		static int was_on;
-		static const char *const k_verdict[] = { "in front", "no title id", "system app",
-		                                         "a game runs", "left", "-", "the system's result" };
-		const uint32_t n = __atomic_load_n(&g_ev_n, __ATOMIC_ACQUIRE);
 		const int on = LD(g_log_diag);
 
 		if (on && !was_on) {
 			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
-			VM_KLOGI("stage: v%s, app events %s, title ids %s, %u events seen, in front: %s",
-			         VM_BUILD_STR, g_proc_hook >= 0 ? "followed" : "NOT hooked",
-			         g_title_fn ? "there" : "MISSING", (unsigned)n,
-			         fg ? g_fg_title : "the home screen");
+			VM_KLOGI("stage: v%s, app events %s, title ids %s, in front: %s", VM_BUILD_STR,
+			         g_proc_hook >= 0 ? "followed" : "NOT hooked",
+			         g_title_fn ? "there" : "MISSING", fg ? g_fg_title : "the home screen");
 		}
 		was_on = on;
-		if (on) {
-			if (n - logged > EV_LOG_N)
-				logged = n - EV_LOG_N;
-			for (; logged != n; logged++) {
-				const EvLog *e = &g_ev_log[logged % EV_LOG_N];
-
-				VM_KLOGI("stage: process event %d pid 0x%08x title '%s' (0x%08x): %s", e->ev,
-				         (unsigned)e->pid, e->title, (unsigned)e->r,
-				         e->verdict >= 0 && e->verdict <= EV_RESULT ? k_verdict[e->verdict] : "?");
-			}
-		}
 	}
 	/* the app in front's own settings: loaded when another app comes to the
 	 * front (or its profile changed); kept while the home screen is in front
@@ -3337,7 +3269,7 @@ void vm_stage_worker_tick(void)
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
 
-		if (vm_offload_nc(LD(g_offload)) && st != LD(g_ncd_logged)) {
+		if (vm_offload_direct(LD(g_offload)) && st != LD(g_ncd_logged)) {
 			ST(g_ncd_logged, st);
 			if (st > 0)
 				VM_KLOGI("stage: uncached reads on the system core ready (mapping type 0x%08x)",
@@ -3402,7 +3334,7 @@ void vm_stage_worker_tick(void)
 				ST(d->ra_failed, 1);
 				VM_KLOGW("stage: dev %d read ahead not set up (0x%08x)", i, (unsigned)r);
 			} else {
-				VM_KLOGI("stage: dev %d read ahead ready (EXPERIMENT)", i);
+				VM_KLOGI("stage: dev %d read ahead ready", i);
 			}
 		}
 	}

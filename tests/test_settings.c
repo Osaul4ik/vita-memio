@@ -252,7 +252,7 @@ static void test_gpusafe_default_and_stored_value(void)
 	 * existed (11 keys); stored values kept; out of range: the default */
 	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALWAYS && VM_KEY_OFFLOAD == 11);
 	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALL) &&
-	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_NC) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
+	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_FULL) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
 	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
 	CHECK(vm_setting_valid(VM_KEY_STATS, VM_STATS_OFF) && vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) &&
 	      vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) && !vm_setting_valid(VM_KEY_STATS, 2));

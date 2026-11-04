@@ -1549,7 +1549,7 @@ static int sems_empty(const Dev *d)
 	       fake_sema_count(d->sem_fin) == 0;
 }
 
-/* EXPERIMENT "C + NC": a game's read into non-cacheable memory is
+/* "C + NC": a game's read into non-cacheable memory is
  * read by the helper straight into the game's buffer (mapped, non-cacheable
  * too); the game's thread reads nothing itself. Small reads, system threads,
  * other settings, verify, a busy device, a cached or unwritable mapping: the
@@ -1575,7 +1575,7 @@ static void test_ncd(void)
 	uint32_t nc;
 
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_ALL, 1);
+	offload_on(&s, 0, VM_OFFLOAD_FULL, 1);
 	CHECK(d->pipe_made && d->pipe_ready);
 	fake_pid = 0x42;
 	fake_memtype = MEMTYPE_NC;                 /* the game's buffer and its mapping */
@@ -1660,7 +1660,7 @@ static void test_ncd(void)
 	vm_stage_apply(&s);
 	CHECK(g_ncd_state == 0);
 	CHECK(ncd_rd(u, 21, 256) == 0 && g_ncd_reads == 4);   /* Always: uncached stays standard */
-	s.offload = VM_OFFLOAD_ALL;
+	s.offload = VM_OFFLOAD_FULL;
 	vm_stage_apply(&s);
 	fake_meminfo_type = 0x10208004;               /* no read bit */
 	CHECK(ncd_rd(u, 23, 256) == 0 && memcmp(u, disk + 23 * 512, 256 * 512) == 0);
@@ -1673,23 +1673,20 @@ static void test_ncd(void)
 	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
 	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
 
-	/* "NCached only": cached reads copied by the game's thread, uncached ones
-	 * read on the system core */
-	s.offload = VM_OFFLOAD_NC;
+	/* C + NC R/A: cached reads on the copier; without read ahead non-cacheable
+	 * reads stay standard */
+	s.offload = VM_OFFLOAD_ALL;
 	vm_stage_apply(&s);
-	CHECK(g_ncd_state == 0);
 	copies_here = copies_elsewhere = 0;
 	CHECK(rd(u, 27, 256) == 0 && memcmp(u, disk + 27 * 512, 256 * 512) == 0);
-	CHECK(copies_here >= 1 && copies_elsewhere == 0);
+	CHECK(copies_here == 0 && copies_elsewhere >= 1);
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
 	{
 		const uint32_t reads = g_ncd_reads;
 
-		memset(u, 0, 256 * 512);
 		CHECK(ncd_rd(u, 29, 256) == 0 && memcmp(u, disk + 29 * 512, 256 * 512) == 0);
-		CHECK(g_ncd_reads == reads + 1 && !pthread_equal(ncd_io_thread, pthread_self()));
-		CHECK(fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
+		CHECK(g_ncd_reads == reads && fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
 	}
 
 	vm_stage_fini();
@@ -1964,7 +1961,7 @@ static void test_pipe_retire_bounded(void)
 	free(u);
 }
 
-/* EXPERIMENT "Read ahead": while a stream is read (five staged reads in a row,
+/* "Read ahead": while a stream is read (five staged reads in a row,
  * each where the last one ended), the read-ahead thread reads the next
  * 384 KiB in pieces of 128 KiB; the stream's next reads take their data from
  * them. Anything that does not continue the stream drops them; a write (any
@@ -2072,8 +2069,8 @@ static void test_readahead(void)
 	 * NC setting the first reads go to the system core too, straight in */
 	for (int mode = 0; mode < 4; mode++) {
 		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
-		                             VM_OFFLOAD_NC };
-		const int offl = vm_offload_nc(modes[mode]);
+		                             VM_OFFLOAD_FULL };
+		const int offl = vm_offload_nc(modes[mode]), direct = vm_offload_direct(modes[mode]);
 
 		reset();
 		ra_settings(&s, 1, modes[mode], VM_PIPE_AUTO);
@@ -2096,7 +2093,7 @@ static void test_readahead(void)
 			}
 		}
 		CHECK(g_ra_hits == 7 && g_ra_nc_kib == 7 * 128);
-		CHECK(offl ? g_nc_stock_kib == 0 && g_ncd_reads == 5 && g_ncd_kib == 5 * 128
+		CHECK(direct ? g_nc_stock_kib == 0 && g_ncd_reads == 5 && g_ncd_kib == 5 * 128
 		           : g_nc_stock_kib == 5 * 128 && g_ncd_reads == 0);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);

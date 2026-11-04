@@ -89,7 +89,10 @@ target_link_libraries(vitamemio_kernel
   SceAppMgrForDriver_stub_weak  # ksceAppMgrIsExclusiveProcessRunning
 )
 # taiHEN modules enter via module_start, not crt0's main - drop startup files.
-target_link_options(vitamemio_kernel PRIVATE -nostartfiles)
+# -Tdata: as for the user module below - vita-elf-create appends ~1.5 KB of
+# module info to the end of the text segment, and a fixed data address
+# leaves room for it however the code grows.
+target_link_options(vitamemio_kernel PRIVATE -nostartfiles -Wl,-Tdata=0x81100000)
 
 vita_create_self(vitamemio_kernel.skprx vitamemio_kernel
   CONFIG ${CMAKE_SOURCE_DIR}/vitamemio_kernel.yml

@@ -99,6 +99,7 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_GPU     1
 #define VM_OFFLOAD_ALWAYS  2
+#define VM_OFFLOAD_ALL     3   /* EXPERIMENT: "Always + NC", non-cacheable reads too */
 
 /* Read ahead (experimental): off; on from five large reads in a row; auto -
  * learns, per game (title id), from when on to start and keeps that. */
@@ -174,7 +175,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_ALWAYS;
+		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_ALL;
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

@@ -2498,7 +2498,8 @@ static const char *fake_title_of(SceUID pid)
 {
 	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001"
 	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : pid == 0x46 ? "VITASHELL"
-	     : pid == 0x47 ? "NPXS10015" : pid == 0x48 ? "main" : NULL;
+	     : pid == 0x47 ? "NPXS10015" : pid == 0x48 ? "main"
+	     : pid == (SceUID)0x80410023 ? "PCSE00042" : NULL;
 }
 
 static int fake_title(SceUID pid, char *t, SceSize len)
@@ -3520,6 +3521,37 @@ static void test_readahead_auto(void)
 		as_app(0x46);
 		vm_stage_fg(&fg);
 		CHECK(fg.dev == -1);                          /* same app back: kept (none read) */
+	}
+	vm_stage_fini();
+
+	/* a process id with the high bit set (a UID, negative as a number) is
+	 * an app like any other; the events are kept for the log */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	{
+		const uint32_t n = g_ev_n;
+		VmFg fg;
+
+		as_app((SceUID)0x80410023);
+		CHECK(g_ra_fg == (SceUID)0x80410023);
+		vm_stage_fg(&fg);
+		CHECK(!strcmp(fg.title, "PCSE00042"));
+		CHECK(g_ev_n == n + 1 && g_ev_log[n % EV_LOG_N].verdict == EV_TAKEN &&
+		      !strcmp(g_ev_log[n % EV_LOG_N].title, "PCSE00042"));
+		as_app(0x47);                                 /* a system app */
+		CHECK(g_ev_log[(n + 1) % EV_LOG_N].verdict == EV_SYSTEM);
+		as_app(0x99);                                 /* no title id */
+		CHECK(g_ev_log[(n + 2) % EV_LOG_N].verdict == EV_NOID);
+		ra_proc_event((SceUID)0x80410023, 4);
+		CHECK(g_ev_log[(n + 3) % EV_LOG_N].verdict == EV_LEFT && g_ra_fg == 0);
+		g_log_diag = 1;
+		vm_stage_worker_tick();                       /* writes them out */
+		g_log_diag = 0;
+		ra_proc_event(0, 1);                          /* no process: nothing */
+		CHECK(g_ev_n == n + 4);
 	}
 	vm_stage_fini();
 

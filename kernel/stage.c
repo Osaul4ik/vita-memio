@@ -2158,24 +2158,58 @@ static void ra_game_forget(void)
  * system's own apps (NPXS) never take the front, and while an exclusive
  * app (a game) runs, another process starting does not either. Any thread;
  * the worker is woken to follow the change. */
+/* The last process events and what came of them, for the log (the worker
+ * writes them; the hook only fills this ring). */
+#define EV_LOG_N 16
+enum { EV_TAKEN = 0, EV_NOID, EV_SYSTEM, EV_EXCLUSIVE, EV_LEFT, EV_OTHER };
+typedef struct EvLog {
+	SceUID pid;
+	int    ev, verdict, r;
+	char   title[12];
+} EvLog;
+static EvLog    g_ev_log[EV_LOG_N];
+static uint32_t g_ev_n;                     /* atomic: events noted so far */
+
+static void ev_note(SceUID pid, int ev, int verdict, int r, const char *t)
+{
+	const uint32_t i = __atomic_fetch_add(&g_ev_n, 1, __ATOMIC_ACQ_REL) % EV_LOG_N;
+	EvLog *e = &g_ev_log[i];
+
+	e->pid = pid;
+	e->ev = ev;
+	e->verdict = verdict;
+	e->r = r;
+	memset(e->title, 0, sizeof(e->title));
+	for (int k = 0; t && t[k] && k < (int)sizeof(e->title) - 1; k++)
+		e->title[k] = t[k];
+}
+
 static void ra_proc_event(SceUID pid, int ev)
 {
-	if (pid <= 0)
+	/* a process id is a UID: any value but 0 (the high bit may be set) */
+	if (!pid)
 		return;
 	if (ev == 1 || ev == 5) {
 		char t[32];
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+		int r = -1;
 
 		memset(t, 0, sizeof(t));
 		/* no title id: not an app we can tell (never one in front) */
-		if (!g_title_fn || g_title_fn(pid, t, sizeof(t) - 1) < 0 || !ra_title_ok(t)) {
+		if (!g_title_fn || (r = g_title_fn(pid, t, sizeof(t) - 1)) < 0 || !ra_title_ok(t)) {
 			__atomic_fetch_add(&g_fg_noid, 1, __ATOMIC_RELAXED);
+			ev_note(pid, ev, EV_NOID, r, t);
 			return;
 		}
-		if (ra_title_system(t))
+		if (ra_title_system(t)) {
+			ev_note(pid, ev, EV_SYSTEM, r, t);
 			return;
-		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0)
+		}
+		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0) {
+			ev_note(pid, ev, EV_EXCLUSIVE, r, t);
 			return;
+		}
+		ev_note(pid, ev, EV_TAKEN, r, t);
 		if (pid != fg) {                      /* another app: its storage afresh */
 			for (int i = 0; i < VM_DEV_COUNT; i++)
 				__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
@@ -2188,6 +2222,8 @@ static void ra_proc_event(SceUID pid, int ev)
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
 
+		ev_note(pid, ev, exp == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) ? EV_LEFT : EV_OTHER,
+		        0, NULL);
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
 		                                __ATOMIC_RELAXED)) {
 			g_fg_title[0] = 0;
@@ -3705,6 +3741,25 @@ void vm_stage_worker_tick(void)
 		if (noid != last_noid) {
 			last_noid = noid;
 			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
+		}
+	}
+	/* the process events since the last tick (at most the ring's), with the
+	 * log on: what each was and what came of it */
+	{
+		static uint32_t logged;
+		static const char *const k_verdict[] = { "in front", "no title id", "system app",
+		                                         "a game runs", "left", "-" };
+		const uint32_t n = __atomic_load_n(&g_ev_n, __ATOMIC_ACQUIRE);
+
+		if (n - logged > EV_LOG_N)
+			logged = n - EV_LOG_N;
+		for (; logged != n; logged++) {
+			const EvLog *e = &g_ev_log[logged % EV_LOG_N];
+
+			if (LD(g_log_diag))
+				VM_KLOGI("stage: process event %d pid 0x%08x title '%s' (0x%08x): %s", e->ev,
+				         (unsigned)e->pid, e->title, (unsigned)e->r,
+				         e->verdict >= 0 && e->verdict <= EV_OTHER ? k_verdict[e->verdict] : "?");
 		}
 	}
 	/* the app in front's own settings: loaded when another app comes to the

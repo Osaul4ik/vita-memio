@@ -3031,13 +3031,13 @@ static void test_readahead_auto(void)
 
 	/* how long it learns: a game (retail title id) 300 streams, anything
 	 * else (homebrew) 150 */
-	CHECK(ra_learn_target("PCSE00001") == 300 && ra_learn_target("PCSH12345") == 300 &&
-	      ra_learn_target("VCJS10001") == 300 && ra_learn_target("VLJM35001") == 300 &&
-	      ra_learn_target("VCAS32001") == 300);
-	CHECK(ra_learn_target("VITASHELL") == 150 && ra_learn_target("PSPEMUCFW") == 150 &&
-	      ra_learn_target("PCSI00001") == 150 && ra_learn_target("PCSE0001") == 150 &&
-	      ra_learn_target("PCSE000012") == 150 && ra_learn_target("RETROVITA") == 150 &&
-	      ra_learn_target("NPXS10000") == 150 && ra_learn_target("") == 150);
+	CHECK(ra_learn_target("PCSE00001") == 450 && ra_learn_target("PCSH12345") == 450 &&
+	      ra_learn_target("VCJS10001") == 450 && ra_learn_target("VLJM35001") == 450 &&
+	      ra_learn_target("VCAS32001") == 450);
+	CHECK(ra_learn_target("VITASHELL") == 225 && ra_learn_target("PSPEMUCFW") == 225 &&
+	      ra_learn_target("PCSI00001") == 225 && ra_learn_target("PCSE0001") == 225 &&
+	      ra_learn_target("PCSE000012") == 225 && ra_learn_target("RETROVITA") == 225 &&
+	      ra_learn_target("NPXS10000") == 225 && ra_learn_target("") == 225);
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3503,7 +3503,7 @@ static void test_readahead_auto(void)
 		VmRaNow now;
 
 		vm_stage_ra_now(&now);
-		CHECK(now.learning && now.streams >= 57 && now.percent >= 19 && now.percent < 100);
+		CHECK(now.learning && now.streams >= 57 && now.percent >= 12 && now.percent < 100);
 	}
 	CHECK(vm_stage_tick_us() == 0);                   /* nothing to wake it for */
 	streams(u, RA_LEARN_STREAMS, 8, 256);

@@ -1411,10 +1411,10 @@ static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a writ
  * and when it has the streams to be learnt from - also with the HUD and the
  * log off. Only Full statistics ticks it (its file, once a minute). */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
-#define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
-#define RA_LEARN_HB       150             /* anything else (homebrew)          */
-#define RA_LEARN_READS    2000            /* ... or this many large reads      */
-#define RA_LEARN_READS_HB 500
+#define RA_LEARN_STREAMS  450             /* a game (retail title id)          */
+#define RA_LEARN_HB       225             /* anything else (homebrew)          */
+#define RA_LEARN_READS    3000            /* ... or this many large reads      */
+#define RA_LEARN_READS_HB 750
 #define RA_VIDEO_READS    64              /* served whole in a row, slowly: a video */
 #define RA_VIDEO_KBPS     4096u           /* ... under this                    */
 #define RA_VIDEO_US       (10u * 1000u * 1000u)   /* ... and its surroundings      */

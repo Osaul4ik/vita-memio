@@ -2872,20 +2872,17 @@ static void test_profiles(void)
 	fake_rename_fail = 0;
 	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_OFF);
 	CHECK(ra_prof_remove("PCSB00777") < 0 && !ra_prof_load("PCSB00777", &pf));
-	/* an older one with "Auto" (2) for the app: On; one that is not right: not used */
+	/* one that is not right: not used */
 	{
-		RaProfileV5 v;
+		RaProfileFile v;
 		SceUID fd;
 
 		memset(&v, 0, sizeof(v));
 		v.magic = RA_PROFILE_MAGIC;
-		v.version = 5;
-		v.flags = 0x4;                                /* learnt then: of no use now */
-		v.thr[0] = 2;
-		v.ra = 2;
+		v.version = RA_PROFILE_VERSION;
+		v.ra = VM_RA_ON;
 		v.offload = v.pipe = v.gpusafe = -1;
-		v.dev = 0;
-		v.check = ra_profile_check5(&v);
+		v.check = ra_profile_check(&v);
 		ra_profile_path(path, sizeof(path), "PCSE00001");
 		ksceIoMkdir("ur0:data", 0777);
 		ksceIoMkdir(VM_DATA_DIR, 0777);
@@ -2895,6 +2892,13 @@ static void test_profiles(void)
 		ksceIoClose(fd);
 		CHECK(ra_prof_load("PCSE00001", &pf) && pf.app.ra == VM_RA_ON);
 		v.check ^= 1;
+		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+		ksceIoWrite(fd, &v, sizeof(v));
+		ksceIoClose(fd);
+		CHECK(!ra_prof_load("PCSE00001", &pf));
+		v.check ^= 1;
+		v.ra = 2;                                     /* out of range */
+		v.check = ra_profile_check(&v);
 		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 		ksceIoWrite(fd, &v, sizeof(v));
 		ksceIoClose(fd);

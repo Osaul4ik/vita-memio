@@ -1375,7 +1375,6 @@ static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a writ
 /* The app in front and how much it reads where (the per-app settings; the HUD). */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_THR_NONE       0xFFFFu         /* an app's threshold: never start   */
-#define RA_HBINS          33              /* the file format's (version 5)     */
 #define RA_PROFILE_DIR    VM_DATA_DIR "/ra"
 #define RA_STATS_DIR      VM_DATA_DIR "/ra_stats"
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
@@ -1414,45 +1413,23 @@ static void ra_wake(void)
 
 /* An app's profile: its own settings (VmApp): read ahead, copy on core 3,
  * overlapped reads, GPU-safe reads (-1: the global one, from Settings), and its
- * thresholds with read ahead On (0: the fixed). On the card: version 5 (written
- * aside and swapped in, so a cut-off write leaves the old file or the finished
- * copy), with a check word; what older versions kept for the read ahead that
- * learnt (thresholds, what it saw) is not used, and its "Auto" (2) means On. Only
- * versions 3 to 5 hold settings; anything else - another size, a value out of
- * range, a wrong check - is not used: the app then has the global settings. */
-#define RA_V3_MANUAL      0x1u            /* version 3's flags */
-#define RA_V3_IGNORE      0x2u
+ * thresholds with read ahead On (0: the fixed). Written aside and swapped in, so
+ * a cut-off write leaves the old file or the finished copy. Anything not exactly
+ * right - another size, a value out of range, a wrong check - is not used: the
+ * app then has the global settings. */
+#define RA_PROFILE_VERSION 6u
 
 typedef struct RaProf {
 	VmApp app;
 } RaProf;
 
-/* version 1 and 2: nothing of use now */
-/* version 3 (read only) */
-typedef struct RaProfileV3 {
-	uint32_t magic, version, flags, thr[2], streams;
-	int32_t  dev;
+typedef struct RaProfileFile {
+	uint32_t magic, version;
+	int32_t  ra, offload, pipe, gpusafe;
+	uint32_t thr[2];
 	uint32_t check;
-} RaProfileV3;
-
-/* version 5: version 4, then a learning in progress */
-typedef struct RaProfileV5 {
-	uint32_t magic, version, flags, thr[2], streams;
-	int32_t  dev, ra, offload, pipe, gpusafe;
-	uint32_t thr_on[2];
-	uint32_t reads;
-	uint32_t hist[2][RA_HBINS];
-	uint32_t check;
-} RaProfileV5;
-#define RA_V5_WORDS ((int)(sizeof(RaProfileV5) / 4) - 1)
-
-/* version 4 (read only) */
-typedef struct RaProfileV4 {
-	uint32_t magic, version, flags, thr[2], streams;
-	int32_t  dev, ra, offload, pipe, gpusafe;
-	uint32_t thr_on[2];
-	uint32_t check;
-} RaProfileV4;
+} RaProfileFile;
+#define RA_PROFILE_WORDS ((int)(sizeof(RaProfileFile) / 4) - 1)
 
 static uint32_t ra_words_check(const uint32_t *w, int n)
 {
@@ -1463,19 +1440,9 @@ static uint32_t ra_words_check(const uint32_t *w, int n)
 	return c ^ 0xA5C3A5C3u;
 }
 
-static uint32_t ra_profile_check3(const RaProfileV3 *p)
+static uint32_t ra_profile_check(const RaProfileFile *p)
 {
-	return ra_words_check((const uint32_t *)p, 7);
-}
-
-static uint32_t ra_profile_check4(const RaProfileV4 *p)
-{
-	return ra_words_check((const uint32_t *)p, 13);
-}
-
-static uint32_t ra_profile_check5(const RaProfileV5 *p)
-{
-	return ra_words_check((const uint32_t *)p, RA_V5_WORDS);
+	return ra_words_check((const uint32_t *)p, RA_PROFILE_WORDS);
 }
 
 static void ra_profile_path(char *out, size_t n, const char *title)
@@ -1515,19 +1482,11 @@ static int ra_app_set_any(const VmApp *a)
 	       a->thr[1];
 }
 
-/* One profile file, if usable. The two large buffers are not on the stack
- * (this also runs in a syscall, on the caller's small kernel stack): g_prof_lock. */
-static volatile int g_prof_lock;
-
+/* One profile file, if usable. */
 static int ra_prof_read(const char *path, RaProf *out)
 {
-	static union {
-		RaProfileV3 v3;
-		RaProfileV4 v4;
-		RaProfileV5 v5;
-		uint8_t     raw[sizeof(RaProfileV5) + 16];
-	} f;
-	static RaProf p;
+	RaProfileFile f;
+	RaProf p;
 	SceUID fd;
 	int n;
 
@@ -1537,45 +1496,15 @@ static int ra_prof_read(const char *path, RaProf *out)
 	memset(&f, 0, sizeof(f));
 	n = ksceIoRead(fd, &f, sizeof(f));
 	ksceIoClose(fd);
-	if (n <= 0 || f.v3.magic != RA_PROFILE_MAGIC)
+	if (n != (int)sizeof(f) || f.magic != RA_PROFILE_MAGIC || f.version != RA_PROFILE_VERSION ||
+	    f.check != ra_profile_check(&f))
 		return 0;
-	ra_app_global(&p.app);
-	if (f.v5.version == 5) {
-		if (n != (int)sizeof(f.v5) || f.v5.check != ra_profile_check5(&f.v5))
-			return 0;
-		p.app.ra = f.v5.ra;
-		p.app.offload = f.v5.offload;
-		p.app.pipe = f.v5.pipe;
-		p.app.gpusafe = f.v5.gpusafe;
-		p.app.thr[0] = f.v5.thr_on[0];
-		p.app.thr[1] = f.v5.thr_on[1];
-	} else if (f.v4.version == 4) {
-		if (n != (int)sizeof(f.v4) || f.v4.check != ra_profile_check4(&f.v4))
-			return 0;
-		p.app.ra = f.v4.ra;
-		p.app.offload = f.v4.offload;
-		p.app.pipe = f.v4.pipe;
-		p.app.gpusafe = f.v4.gpusafe;
-		p.app.thr[0] = f.v4.thr_on[0];
-		p.app.thr[1] = f.v4.thr_on[1];
-	} else if (f.v3.version == 3) {
-		if (n != (int)sizeof(f.v3) || f.v3.check != ra_profile_check3(&f.v3) ||
-		    (f.v3.flags & ~(RA_V3_MANUAL | RA_V3_IGNORE)))
-			return 0;
-		if (f.v3.flags & RA_V3_IGNORE) {
-			p.app.ra = VM_RA_OFF;
-		} else if (f.v3.flags & RA_V3_MANUAL) {
-			if (!ra_thr_ok(f.v3.thr[0]) || !ra_thr_ok(f.v3.thr[1]))
-				return 0;
-			p.app.ra = VM_RA_ON;
-			p.app.thr[0] = f.v3.thr[0];
-			p.app.thr[1] = f.v3.thr[1];
-		}
-	} else {
-		return 0;
-	}
-	if (p.app.ra == 2)
-		p.app.ra = VM_RA_ON;                  /* it was "Auto" */
+	p.app.ra = f.ra;
+	p.app.offload = f.offload;
+	p.app.pipe = f.pipe;
+	p.app.gpusafe = f.gpusafe;
+	p.app.thr[0] = f.thr[0];
+	p.app.thr[1] = f.thr[1];
 	if (!ra_app_ok(&p.app))
 		return 0;
 	*out = p;
@@ -1589,15 +1518,12 @@ static int ra_prof_load(const char *title, RaProf *out)
 	char path[96];
 	int ok;
 
-	while (__sync_lock_test_and_set(&g_prof_lock, 1))
-		ksceKernelDelayThread(100);
 	ra_profile_path(path, sizeof(path), title);
 	ok = ra_prof_read(path, out);
 	if (!ok) {
 		ra_profile_tmp(path, sizeof(path), title);
 		ok = ra_prof_read(path, out);
 	}
-	__sync_lock_release(&g_prof_lock);
 	return ok;
 }
 
@@ -1615,7 +1541,7 @@ static int ra_prof_remove(const char *title)
 static void ra_prof_save(const char *title, const RaProf *in)
 {
 	char path[96], tmp[96];
-	RaProfileV5 p;
+	RaProfileFile p;
 	SceUID fd;
 	int w;
 
@@ -1626,15 +1552,14 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	ra_profile_tmp(tmp, sizeof(tmp), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
-	p.version = 5;
-	p.dev = -1;
+	p.version = RA_PROFILE_VERSION;
 	p.ra = in->app.ra;
 	p.offload = in->app.offload;
 	p.pipe = in->app.pipe;
 	p.gpusafe = in->app.gpusafe;
-	p.thr_on[0] = in->app.thr[0];
-	p.thr_on[1] = in->app.thr[1];
-	p.check = ra_profile_check5(&p);
+	p.thr[0] = in->app.thr[0];
+	p.thr[1] = in->app.thr[1];
+	p.check = ra_profile_check(&p);
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(VM_DATA_DIR, 0777);
 	ksceIoMkdir(RA_PROFILE_DIR, 0777);
@@ -2421,7 +2346,6 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
                         uint8_t *p, uint32_t n, int *ret)
 {
 	const int clean = LD(g_gpu_safe) && g_dcache_clean;
-	const uint32_t now = ksceKernelGetSystemTimeLow();
 	int wr;
 	void *shadow;
 
@@ -2437,7 +2361,8 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 	d->t_next = sector + n;
 	if (!(LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) && sector + n <= LD(d->t_end) &&
 	      part == d->t_part && io == d->t_io && d->t_epoch == LD(d->ra_epoch) &&
-	      !__atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST) && now - d->t_us < RA_MAX_AGE_US)) {
+	      !__atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST) &&
+	      ksceKernelGetSystemTimeLow() - d->t_us < RA_MAX_AGE_US)) {   /* last: only with a block */
 		/* not in it: the block is of no use now */
 		ST(d->t_end, LD(d->t_start));
 		d->t_part = part;

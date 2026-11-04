@@ -195,27 +195,6 @@ static void test_corrupt_file_gives_defaults(void)
 	CHECK(all_defaults(&s));
 }
 
-/* Read ahead "Auto" and statistics "Full" are gone: a file with them has On. */
-static void test_removed_values_are_on(void)
-{
-	uint8_t buf[128];
-	int32_t v[VM_KEY_COUNT];
-	VmSettings s;
-	size_t n;
-
-	clean();
-	for (int k = 0; k < VM_KEY_COUNT; k++)
-		v[k] = 0;
-	v[VM_KEY_READAHEAD] = 2;
-	v[VM_KEY_STATS] = 2;
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.readahead == VM_RA_ON && s.stats == VM_STATS_ON);
-	CHECK(!vm_setting_valid(VM_KEY_READAHEAD, 2));
-}
-
 static void test_older_file_with_fewer_keys(void)
 {
 	uint8_t buf[128];
@@ -446,7 +425,6 @@ int main(void)
 	dir = fakes_tmpdir_new();
 
 	RUN(test_no_file_gives_defaults);
-	RUN(test_removed_values_are_on);
 	RUN(test_save_and_load_roundtrip);
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);

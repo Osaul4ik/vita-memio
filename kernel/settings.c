@@ -93,10 +93,7 @@ static int load_file(const char *path, VmSettings *s)
 		return 0;
 	}
 	for (int k = 0; k < (int)cnt && k < VM_KEY_COUNT; k++) {
-		/* read ahead "Auto" and statistics "Full" are gone: both now On */
-		if ((k == VM_KEY_READAHEAD || k == VM_KEY_STATS) && values[k] == 2)
-			*vm_setting_field(s, k) = 1;
-		else if (vm_setting_valid(k, values[k]))
+		if (vm_setting_valid(k, values[k]))
 			*vm_setting_field(s, k) = values[k];
 		else
 			VM_KLOGW("settings: key %d value %d out of range, default %d",

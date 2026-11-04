@@ -115,13 +115,11 @@ static inline int vm_offload_nc(int v)
 	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_NC;
 }
 
-/* Statistics: off; on (per-transfer timers and data counters, for the tester).
- * 1 was "on" before the choice existed. */
+/* Statistics: off; on (per-transfer timers and data counters, for the tester). */
 #define VM_STATS_OFF       0
 #define VM_STATS_ON        1
 
-/* Read ahead (experimental): off; on. 2 was "Auto" in older settings and
- * profiles, and means on. */
+/* Read ahead (experimental): off; on. */
 #define VM_RA_OFF          0
 #define VM_RA_ON           1
 

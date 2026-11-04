@@ -9,4 +9,6 @@ typedef uintptr_t tai_hook_ref_t;
 int taiHookFunctionExportForKernel(int pid, tai_hook_ref_t *ref, const char *mod,
                                    uint32_t lib, uint32_t nid, const void *fn);
 int taiHookReleaseForKernel(int uid, tai_hook_ref_t ref);
+int taiHookFunctionImportForKernel(int pid, tai_hook_ref_t *ref, const char *mod,
+                                   uint32_t lib, uint32_t nid, const void *fn);
 #define TAI_ANY_LIBRARY 0xFFFFFFFF

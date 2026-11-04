@@ -3363,12 +3363,17 @@ int vm_stage_init(void)
 			break;
 		}
 	}
-	/* the app in front: the process events, as PSVshell follows them (read
-	 * ahead Auto and its statistics; without it they follow nothing) */
-	g_proc_hook = taiHookFunctionExportForKernel(KERNEL_PID, &g_proc_ref, "SceProcessmgr",
+	/* the app in front: the process events, hooked as PSVshell hooks them -
+	 * SceProcessmgr's import of ksceKernelInvokeProcEventHandler (an import,
+	 * not an export: there is none to hook) */
+	g_proc_hook = taiHookFunctionImportForKernel(KERNEL_PID, &g_proc_ref, "SceProcessmgr",
 	                                             LIB_PROCMGR_KERNEL, NID_PROC_EVENT,
 	                                             ra_proc_event_hook);
-	VM_KLOGI("stage: app events %s", g_proc_hook >= 0 ? "followed" : "not hooked");
+	if (g_proc_hook >= 0)
+		VM_KLOGI("stage: app events followed");
+	else
+		VM_KLOGW("stage: app events not hooked (0x%08x) - the per-app settings and read "
+		         "ahead Auto follow no app", (unsigned)g_proc_hook);
 	return VM_OK;
 }
 

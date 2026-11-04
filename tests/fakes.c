@@ -272,6 +272,13 @@ int taiHookFunctionExportForKernel(int pid, tai_hook_ref_t *ref, const char *mod
 	return 100 + fake_hook_calls;
 }
 
+/* an import hook counts as any other */
+int taiHookFunctionImportForKernel(int pid, tai_hook_ref_t *ref, const char *mod,
+                                   uint32_t lib, uint32_t nid, const void *fn)
+{
+	return taiHookFunctionExportForKernel(pid, ref, mod, lib, nid, fn);
+}
+
 int taiHookReleaseForKernel(int uid, tai_hook_ref_t ref)
 {
 	(void)uid; (void)ref;

@@ -2199,13 +2199,13 @@ static void test_readahead(void)
 		}
 	}
 
-	/* small transfers too (as the tester's small files): reads under 64 KiB
+	/* small transfers too (as the tester's small files): reads under 32 KiB
 	 * never start a stream ... */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	g_min_sectors = 1;
 	for (uint32_t i = 0; i < 40; i++)
-		CHECK(rd_ok(u, i * 64, 64));
+		CHECK(rd_ok(u, i * 32, 32));
 	CHECK(ra_idle(d) && g_ra_hits == 0 && g_ra_drops == 0);
 	/* ... nor break one, and go the standard way while pieces are kept,
 	 * which stay (no drop) for the stream's next read */
@@ -2293,8 +2293,8 @@ static void test_readahead(void)
 	CHECK(wr(w, 3000, 8, REF_RD) == 0);           /* elsewhere, stock */
 	CHECK(wr(w, 3300, 256, REF_RD) == 0);         /* elsewhere, staged: drops them */
 	CHECK(ra_idle(d) && g_ra_drops == 1);
-	for (uint32_t i = 5; i < 10; i++)
-		CHECK(rd_ok(u, i * 256, 256));            /* a stream again from here */
+	for (uint32_t i = 5; i < 12; i++)
+		CHECK(rd_ok(u, i * 256, 256));            /* a stream again from here: three pieces */
 	for (int i = 0; i < RA_PIECES; i++)
 		ra_wait(d, i);
 	CHECK(wr(w, 3900, 8, REF_RD) == 0);           /* elsewhere: nothing marked */
@@ -2304,7 +2304,7 @@ static void test_readahead(void)
 		for (int i = 0; i < RA_PIECES; i++)
 			dirty += d->ra[i].dirty;
 		CHECK(dirty == 0);
-		CHECK(wr(w, 10 * 256 + 300, 8, REF_RD) == 0);   /* into the second piece */
+		CHECK(wr(w, 12 * 256 + 300, 8, REF_RD) == 0);   /* into the second piece */
 		for (int i = 0; i < RA_PIECES; i++)
 			dirty += d->ra[i].dirty;
 		CHECK(dirty == 1);
@@ -2312,8 +2312,8 @@ static void test_readahead(void)
 	{
 		const uint32_t hits = g_ra_hits;
 
-		CHECK(rd_ok(u, 10 * 256, 256) && g_ra_hits == hits + 1);   /* the clean piece */
-		CHECK(rd_ok(u, 11 * 256, 256) && u[44 * 512] == 0x77 && g_ra_bad == 1);
+		CHECK(rd_ok(u, 12 * 256, 256) && g_ra_hits == hits + 1);   /* the clean piece */
+		CHECK(rd_ok(u, 13 * 256, 256) && u[44 * 512] == 0x77 && g_ra_bad == 1);
 	}
 	vm_stage_fini();
 
@@ -2321,11 +2321,15 @@ static void test_readahead(void)
 	 * before */
 	reset();
 	ra_settings(&s, 1, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	for (uint32_t i = 0; i < 5; i++)
+	for (uint32_t i = 0; i < 7; i++)                  /* step by step: three pieces by now */
 		CHECK(rd_ok(u, i * 256, 256));
-	CHECK(rd_ok(u, 5 * 256, 1100));
-	CHECK(g_ra_hits == 1 && g_ra_kib == 3 * 128 && ra_idle(d) == 0);
-	CHECK(rd_ok(u, 5 * 256 + 1100, 256) && g_ra_hits == 2);
+	{
+		const uint32_t hits = g_ra_hits, kib = g_ra_kib;
+
+		CHECK(rd_ok(u, 7 * 256, 1100));
+		CHECK(g_ra_hits == hits + 1 && g_ra_kib == kib + 3 * 128 && ra_idle(d) == 0);
+		CHECK(rd_ok(u, 7 * 256 + 1100, 256) && g_ra_hits == hits + 2);
+	}
 	vm_stage_fini();
 
 	/* a write while a piece is being read: that piece is not used */
@@ -3985,7 +3989,7 @@ static void test_review_fixes(void)
 	ra_prof_save("PCSB00777", &pf);
 	as_app(0x44);
 	vm_stage_worker_tick();
-	CHECK(g_ra_dev == VM_DEV_SD2VITA && !ra_auto_here(d));
+	CHECK(g_ra_dev == VM_DEV_SD2VITA && !ra_auto_for(d, (d)->ra_pid));
 	ra_dev_add(VM_DEV_SD2VITA, 3 * RA_DEV_DECIDE);    /* its own reads ... */
 	ra_dev_add(M, RA_DEV_DECIDE);                     /* ... some elsewhere: it stays */
 	vm_stage_worker_tick();
@@ -4087,6 +4091,66 @@ static void test_review_fixes(void)
 	vm_stage_worker_tick();
 	CHECK(!g_ra_learning && ra_prof_load("PCSB00777", &pf) && (pf.flags & RA_PF_LEARNT));
 	g_ra_by_reads = 0;
+	vm_stage_fini();
+
+	/* 32 KiB reads: a stream of their own. Twenty in a row start read ahead
+	 * (On), every read still gets the disk's data; one elsewhere ends it */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	{
+		uint32_t at = 64;
+		const uint32_t h0 = g_ra_hits;
+
+		for (int k = 0; k < 19; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(!ra_any(d) && d->rs_streak == 19 && !d->ra_streak);
+		CHECK(rd_ok(u, at, 64));                      /* the 20th: it starts */
+		at += 64;
+		CHECK(ra_any(d) && d->ra_small);
+		for (int k = 0; k < 40; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(g_ra_hits > h0 + 20);
+		CHECK(rd_ok(u, 3000, 64));
+	}
+	/* ... and the large reads' stream is not broken by one, nor loses its
+	 * pieces to one (the cached 32 KiB read goes the standard way, live) */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	{
+		uint32_t at = 0;
+
+		for (int k = 0; k < RA_STREAK; k++, at += 256)
+			CHECK(rd_ok(u, at, 256));
+		CHECK(ra_any(d) && !d->ra_small && d->ra_streak == RA_STREAK);
+		CHECK(rd_ok(u, 3500, 64));
+		CHECK(ra_any(d) && d->ra_streak == RA_STREAK);
+		{
+			const uint32_t h = g_ra_hits;
+
+			CHECK(rd_ok(u, at, 256));
+			CHECK(g_ra_hits == h + 1 && d->ra_streak == RA_STREAK + 1);
+		}
+	}
+	vm_stage_fini();
+
+	/* in learning: four reads make one read, a stream from four, in pieces */
+	auto_game(&s, 0x44);
+	{
+		uint32_t at = 0;
+
+		g_ra_dev = M;
+		for (int k = 0; k < 8; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(g_ra_hreads == 2);
+		CHECK(rd_ok(u, 3000, 64));                    /* ends it: 8 reads, 2 pieces */
+		CHECK(g_ra_hcnt[0][2] == 1 && g_ra_hstreams == 1);
+		for (int k = 0; k < 3; k++, at += 64)
+			CHECK(rd_ok(u, at + 64, 64));
+		CHECK(rd_ok(u, 3100, 64));                    /* under a piece's worth: nothing */
+		CHECK(g_ra_hstreams == 1);
+	}
 	vm_stage_fini();
 
 	/* the trace: with Full statistics, the followed app's transfers into its

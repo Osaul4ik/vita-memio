@@ -211,6 +211,13 @@ typedef struct Dev {
 	int           ra_hit;                 /* this read came whole from the pieces */
 	uint32_t      ra_run;                 /* reads in a row that did (see "video") */
 	uint32_t      ra_run_us, ra_run_sec;  /* ... since when, and how many sectors */
+	/* the stream of 32 KiB reads, kept apart (see RA_SMALL_SECTORS) */
+	uint32_t      rs_end, rs_streak, rs_quarter;
+	int           rs_nc;
+	SceUID        rs_pid;
+	void         *rs_part;
+	int           ra_noted_small;         /* the last read noted was one of those */
+	int           ra_small;               /* atomic: the pieces are for that stream */
 	SceUID        ra_pid;                 /* ... started by (auto only, else 0) */
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
@@ -1332,6 +1339,16 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  * start nor break one, and while pieces are kept they go the standard way, so
  * they do not drop them (see stage_xfer_one). */
 #define RA_MIN_SECTORS  128
+/* Many apps read a file in the file system's 32 KiB pieces, and some read
+ * nearly everything so. From this size to RA_MIN_SECTORS the reads make a
+ * stream of their own: it neither breaks the large reads' stream nor is broken
+ * by it, and takes the pieces only while that one has none. It starts at four
+ * times the threshold (RA_SMALL_FACTOR reads make one piece), RA_SMALL_MIN at
+ * least: 128 KiB read in four 32 KiB reads is common and starts nothing. In
+ * learning it counts in pieces: four reads for one read, streams from four. */
+#define RA_SMALL_SECTORS 64
+#define RA_SMALL_FACTOR  4
+#define RA_SMALL_MIN     16
 /* ... but only while the stream is live (read within this long): pieces left
  * behind by a stream that has ended are dropped by the next staged transfer,
  * which then goes the faster way as usual. */
@@ -1395,7 +1412,7 @@ static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a writ
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300             /* a game (retail title id)          */
 #define RA_LEARN_HB       150             /* anything else (homebrew)          */
-#define RA_LEARN_READS    1000            /* ... or this many large reads      */
+#define RA_LEARN_READS    2000            /* ... or this many large reads      */
 #define RA_LEARN_READS_HB 500
 #define RA_VIDEO_READS    64              /* served whole in a row, slowly: a video */
 #define RA_VIDEO_KBPS     4096u           /* ... under this                    */
@@ -1495,7 +1512,7 @@ static void ra_dev_add(int dev, uint32_t n)
  * short one around a video (see the top). At most g_ra_rate_max a second (0: no
  * limit; the tests), so a burst of any kind is a sample of the app, not most
  * of it. */
-#define RA_RATE_MAX  20
+#define RA_RATE_MAX  5
 static uint32_t g_ra_rate_max = RA_RATE_MAX;
 static uint32_t g_ra_rate_us, g_ra_rate_n;    /* atomics: this second's window */
 
@@ -2605,13 +2622,13 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 
 /* Auto: whether this device reads ahead for the stream it has - only the
  * game's, on the game's storage. Without title ids, as on. */
-static int ra_auto_here(const Dev *d)
+static int ra_auto_for(const Dev *d, SceUID stream_pid)
 {
 	const SceUID pid = __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
 
 	if (LD(g_ra_mode) != VM_RA_AUTO || !g_title_fn)
 		return 1;
-	return pid && d->ra_pid == pid && LD(g_ra_dev) == (int)(d - g_dev);
+	return pid && stream_pid == pid && LD(g_ra_dev) == (int)(d - g_dev);
 }
 
 /* The threshold for a stream of `pid` of kind nc: the learnt one in auto
@@ -2922,6 +2939,34 @@ static void ra_stream_end(Dev *d)
 	d->ra_run = 0;
 }
 
+static void ra_read_note(SceUID pid, int is_long);
+
+/* The stream of 32 KiB reads has ended: in pieces, from one piece's worth. */
+static void ra_small_end(Dev *d)
+{
+	if (d->rs_streak >= RA_SMALL_FACTOR)
+		ra_hist_note(d->rs_pid, d->rs_nc, d->rs_streak / RA_SMALL_FACTOR);
+	d->rs_streak = 0;
+}
+
+static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
+{
+	if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc) {
+		d->rs_streak += d->rs_streak < 1000;
+	} else {
+		ra_small_end(d);
+		d->rs_streak = 1;
+		d->rs_pid = LD(g_ra_measure) ? __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) : 0;
+	}
+	d->rs_nc = nc;
+	d->rs_part = part;
+	d->rs_end = sector + n;
+	if (d->rs_pid && d->rs_pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
+		ra_dev_add((int)(d - g_dev), n);
+	if (!(++d->rs_quarter % RA_SMALL_FACTOR))
+		ra_read_note(d->rs_pid, 0);
+}
+
 /* Worker, as the app leaves: the streams still open end here (the fields are
  * the request holder's: a device in use now is left, its stream is lost). */
 static void ra_streams_close(void)
@@ -2936,6 +2981,8 @@ static void ra_streams_close(void)
 				ra_stream_end(d);
 				d->ra_streak = 0;
 			}
+			if (d->rs_pid && d->rs_pid == pid)
+				ra_small_end(d);
 			__sync_lock_release(&d->busy);
 		}
 	}
@@ -2950,11 +2997,11 @@ static int ra_run_slow(const Dev *d, uint32_t now)
 }
 
 /* A large read of the app being learnt, unless a short stream's around a video. */
-static void ra_read_note(const Dev *d)
+static void ra_read_note(SceUID pid, int is_long)
 {
-	if (d->ra_pid && d->ra_pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
+	if (pid && pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
 	    __atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) &&
-	    (d->ra_streak >= RA_VIDEO_READS || !ra_video_now()) &&
+	    (is_long || !ra_video_now()) &&
 	    __atomic_add_fetch(&g_ra_hreads, 1, __ATOMIC_RELAXED) ==
 	    __atomic_load_n(&g_ra_target_reads, __ATOMIC_RELAXED))
 		ra_wake();
@@ -2967,8 +3014,14 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	const int hit = d->ra_hit;
 
 	d->ra_hit = 0;
-	if (n < RA_MIN_SECTORS)
+	d->ra_noted_small = 0;
+	if (n < RA_SMALL_SECTORS)
 		return 0;                           /* neither part of a stream nor a break */
+	if (n < RA_MIN_SECTORS) {
+		ra_note_small(d, part, sector, n, nc);
+		d->ra_noted_small = 1;
+		return 1;
+	}
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc) {
 		d->ra_streak += d->ra_streak < 1000;
 		if (d->ra_pid && d->ra_pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
@@ -2993,7 +3046,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	d->ra_nc = nc;
 	d->ra_last_part = part;
 	d->ra_last_end = sector + n;
-	ra_read_note(d);
+	ra_read_note(d->ra_pid, d->ra_streak >= RA_VIDEO_READS);
 	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {   /* no clock read otherwise */
 		const uint32_t now = ksceKernelGetSystemTimeLow();
 
@@ -3039,14 +3092,30 @@ static void ra_note_nc(Dev *d, void *part, uint32_t sector, uint32_t n, int ret)
  * where the stream is). */
 static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 {
-	const uint32_t thr = ra_threshold(d->ra_pid, d->ra_nc);
-	uint32_t next = d->ra_last_end;
+	const int small = d->ra_noted_small;
+	const SceUID pid = small ? d->rs_pid : d->ra_pid;
+	const int nc = small ? d->rs_nc : d->ra_nc;
+	const uint32_t streak = small ? d->rs_streak : d->ra_streak;
+	uint32_t thr = ra_threshold(pid, nc), next = small ? d->rs_end : d->ra_last_end;
 	int want, live = 0;
 
-	if (d->ra_streak < thr || !ra_auto_here(d))
+	if (small && thr != RA_THR_NONE) {
+		thr *= RA_SMALL_FACTOR;
+		if (thr < RA_SMALL_MIN)
+			thr = RA_SMALL_MIN;
+	}
+	if (streak < thr || !ra_auto_for(d, pid))
 		return;
-	want = d->ra_nc && d->ra_streak - thr + 1 < RA_PIECES ? (int)(d->ra_streak - thr + 1)
-	                                                      : RA_PIECES;
+	/* the pieces are the large reads' stream's while it has any */
+	if (small && !LD(d->ra_small) && ra_any(d))
+		return;
+	/* step by step (every kind, a stream may end at any time) */
+	{
+		const uint32_t ahead = (streak - thr) / (small ? RA_SMALL_FACTOR : 1) + 1;
+
+		want = ahead < RA_PIECES ? (int)ahead : RA_PIECES;
+	}
+	ST(d->ra_small, small);
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 
@@ -3242,7 +3311,9 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
 	      vm_offload_nc(offload) && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
-	if (ra_any(d)) {
+	/* a 32 KiB read leaves the large reads' pieces alone: it goes straight
+	 * into its own buffer, they are not in its way */
+	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small))) {
 		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
 		if (got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
@@ -3456,7 +3527,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data (what the pieces do not
 		 * cover goes to the system core there too, with "C + NC") */
-		if (!write && nsec >= RA_MIN_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
+		if (!write && nsec >= RA_SMALL_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
 		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec);
 		/* EXPERIMENT: "C + NC": read on the system core instead */
@@ -3474,7 +3545,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
 	 * waits for the card either way; a write still makes them unusable). */
-	if (mine && nsec < RA_MIN_SECTORS && ra_any(d) &&
+	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) && ra_any(d) &&
 	    ksceKernelGetSystemTimeLow() - __atomic_load_n(&d->ra_last_us, __ATOMIC_RELAXED) <
 	    RA_LIVE_US)
 		return io(ref, part, sector, buf, nsec);
@@ -3517,7 +3588,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
-		/* a write ends the stream: noted, as any other end */
+		/* a write ends the streams: noted, as any other end */
+		ra_small_end(d);
 		ra_stream_end(d);
 		d->ra_streak = 0;
 	}

@@ -3743,23 +3743,37 @@ void vm_stage_worker_tick(void)
 			VM_KLOGW("stage: %u processes started without a title id", (unsigned)noid);
 		}
 	}
-	/* the process events since the last tick (at most the ring's), with the
-	 * log on: what each was and what came of it */
+	/* With the log on: when it was switched on, how the app in front is
+	 * followed; then the process events since (kept while the log is off,
+	 * the last EV_LOG_N, so switching it on later still shows them) and
+	 * what came of each */
 	{
 		static uint32_t logged;
+		static int was_on;
 		static const char *const k_verdict[] = { "in front", "no title id", "system app",
 		                                         "a game runs", "left", "-" };
 		const uint32_t n = __atomic_load_n(&g_ev_n, __ATOMIC_ACQUIRE);
+		const int on = LD(g_log_diag);
 
-		if (n - logged > EV_LOG_N)
-			logged = n - EV_LOG_N;
-		for (; logged != n; logged++) {
-			const EvLog *e = &g_ev_log[logged % EV_LOG_N];
+		if (on && !was_on) {
+			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
-			if (LD(g_log_diag))
+			VM_KLOGI("stage: v%s, app events %s, title ids %s, %u events seen, in front: %s",
+			         VM_BUILD_STR, g_proc_hook >= 0 ? "followed" : "NOT hooked",
+			         g_title_fn ? "there" : "MISSING", (unsigned)n,
+			         fg ? g_fg_title : "the home screen");
+		}
+		was_on = on;
+		if (on) {
+			if (n - logged > EV_LOG_N)
+				logged = n - EV_LOG_N;
+			for (; logged != n; logged++) {
+				const EvLog *e = &g_ev_log[logged % EV_LOG_N];
+
 				VM_KLOGI("stage: process event %d pid 0x%08x title '%s' (0x%08x): %s", e->ev,
 				         (unsigned)e->pid, e->title, (unsigned)e->r,
 				         e->verdict >= 0 && e->verdict <= EV_OTHER ? k_verdict[e->verdict] : "?");
+			}
 		}
 	}
 	/* the app in front's own settings: loaded when another app comes to the

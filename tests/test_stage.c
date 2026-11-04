@@ -114,7 +114,6 @@ static void reset(void)
 	g_ra_pid = g_ra_seen = 0;
 	g_ra_seen_n = 0;
 	g_ra_paused = 0;
-	g_ra_ev = 0;
 	g_ra_relearn = 0;
 	g_count_cores = 0;
 	g_ra_measure = 0;
@@ -3226,8 +3225,7 @@ static void test_readahead_auto(void)
 
 	/* Auto off and on again while it learns, too little for a profile:
 	 * paused, not dropped - the same game goes on from where it was; a
-	 * reset ("learn it again") starts over, with or without a profile; and
-	 * the end of learning is told once (the worker's notice) */
+	 * reset ("learn it again") starts over, with or without a profile */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3264,16 +3262,15 @@ static void test_readahead_auto(void)
 		char t[16];
 		uint32_t th[2];
 
-		CHECK(!vm_stage_ra_take_learnt(t, th));
 		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);   /* no profile yet: starts over */
 		vm_stage_worker_tick();
 		CHECK(g_ra_learning && g_ra_hstreams == 0);
 		CHECK(vm_stage_ra_delete("PCSE00099") == VM_ERR_IO);
 		streams(u, RA_LEARN_STREAMS + 1, 8, 256);
 		vm_stage_worker_tick();
-		CHECK(!g_ra_learning && vm_stage_ra_take_learnt(t, th) && !strcmp(t, "PCSB00777") &&
-		      th[0] == 2 && th[1] == VM_RA_NEVER);
-		CHECK(!vm_stage_ra_take_learnt(t, th));      /* once */
+		CHECK(!g_ra_learning && ra_profile_load("PCSB00777", th, &dev) && th[0] == 2 &&
+		      th[1] == VM_RA_NEVER);
+		(void)t;
 		/* reset with a profile: learnt again */
 		CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK);
 		vm_stage_worker_tick();

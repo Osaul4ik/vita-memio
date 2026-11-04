@@ -1728,11 +1728,6 @@ static void ra_thr_text(char *out, size_t n, uint32_t t)
 }
 
 /* The game's learning is over: the thresholds that pay most, kept. */
-/* Auto finished learning a game (for the worker's notice), worker only. */
-static int      g_ra_ev;
-static char     g_ra_ev_title[16];
-static uint32_t g_ra_ev_thr[2];
-
 static void ra_learn_finish(void)
 {
 	uint32_t thr[2];
@@ -1745,10 +1740,6 @@ static void ra_learn_finish(void)
 	__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
 	__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
 	ra_profile_save(g_ra_title, thr, n, LD(g_ra_dev));
-	memcpy(g_ra_ev_title, g_ra_title, sizeof(g_ra_ev_title));
-	g_ra_ev_thr[0] = thr[0];
-	g_ra_ev_thr[1] = thr[1];
-	g_ra_ev = 1;
 	ra_thr_text(a, sizeof(a), thr[0]);
 	ra_thr_text(b, sizeof(b), thr[1]);
 	VM_KLOGI("stage: read ahead auto: %s - learnt from %u streams: starts after %s / %s "
@@ -3540,18 +3531,6 @@ int vm_stage_ra_delete(const char *title)
 			fn();
 	}
 	return gone || running ? VM_OK : VM_ERR_IO;
-}
-
-int vm_stage_ra_take_learnt(char title[16], uint32_t thr[2])
-{
-	if (!g_ra_ev)
-		return 0;
-	g_ra_ev = 0;
-	memcpy(title, g_ra_ev_title, 16);
-	title[15] = 0;
-	thr[0] = g_ra_ev_thr[0];
-	thr[1] = g_ra_ev_thr[1];
-	return 1;
 }
 
 void vm_stage_ra_now(VmRaNow *o)

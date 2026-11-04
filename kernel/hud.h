@@ -40,8 +40,4 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style);
  * left corner. Worker thread only. */
 void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n);
 
-/* A notice (n = 0 hides it): a PSVshell-style panel at the top centre, over
- * whatever is on screen. Worker thread only. */
-void vm_hud_set_notice(const char lines[][VM_HUD_LINE_MAX], int n);
-
 #endif /* VITAMEMIO_HUD_H */

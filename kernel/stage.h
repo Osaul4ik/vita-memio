@@ -71,9 +71,6 @@ void vm_stage_ra_now(VmRaNow *out);
  *   save:   its thresholds as its profile, set by hand;
  *   ignore: 1: the game on Auto's ignore list (no longer followed);
  *           0: the ignored app that read last off it (not a system app). */
-/* Auto finished learning a game since the last call: 1, its title and the
- * thresholds it chose (VM_RA_NEVER: never). Worker thread. */
-int  vm_stage_ra_take_learnt(char title[16], uint32_t thr[2]);
 int  vm_stage_ra_tune(int kind, uint32_t thr);
 int  vm_stage_ra_save(void);
 int  vm_stage_ra_ignore(int on);

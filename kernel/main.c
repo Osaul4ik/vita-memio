@@ -492,7 +492,7 @@ static void overlay_feed(void)
 	{
 		VmRaNow now;
 		uint32_t core[4], ncs, nco, other = 0;
-		char a[24], b[24];
+		char a[12], b[12];
 		const char *dev;
 		const int cur = vm_overlay_cursor();
 

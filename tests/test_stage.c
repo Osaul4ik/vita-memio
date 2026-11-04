@@ -1376,7 +1376,7 @@ static void test_pipeline_released_while_reading(void)
 		s.pipeline = (i & 1) ? VM_PIPE_AUTO : VM_PIPE_OFF;
 		vm_stage_apply(&s);
 		vm_stage_worker_tick();               /* releases or makes the helper */
-		while (__atomic_load_n(&g_reader_reads, __ATOMIC_ACQUIRE) < i)
+		while (__atomic_load_n(&g_reader_reads, __ATOMIC_ACQUIRE) <= i)
 			sched_yield();
 	}
 	__atomic_store_n(&g_reader_stop, 1, __ATOMIC_RELEASE);

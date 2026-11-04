@@ -176,7 +176,7 @@ static void l_hex(Line *l, uint32_t v)
 /* ---- read ahead Auto profiles (a sub-page) ------------------------------ */
 
 #define RP_MAX       32            /* shown; the kernel keeps any number       */
-#define RP_XML_EACH  700           /* one profile's XML, at most               */
+#define RP_XML_EACH  1024          /* one profile's XML, at most (about 800)   */
 
 static VmRaProfile g_rp[RP_MAX];
 static int         g_rp_n;
@@ -248,11 +248,17 @@ static int rp_build(void)
 		return x_put(g_rp_xml, 0, cap, "<button id=\"vm_rp_none\" title=\"vm_rp_none\" "
 		                               "icon=\"tex_spanner\" hint=\"vm_h_raprof\"/>");
 	for (int i = 0; i < g_rp_n; i++) {
+		/* never a profile cut short (the page would not load): the rest left out */
+		if (cap - n < RP_XML_EACH) {
+			g_rp_n = i;
+			break;
+		}
 		n = x_put(g_rp_xml, n, cap, "<setting_list id=\"vm_rp_l_");
 		n = x_uint(g_rp_xml, n, cap, (uint32_t)i);
 		n = x_put(g_rp_xml, n, cap, "\" title=\"vm_rp_t_");
 		n = x_uint(g_rp_xml, n, cap, (uint32_t)i);
 		n = x_put(g_rp_xml, n, cap, "\" icon=\"tex_spanner\">");
+		n = x_button(g_rp_xml, n, cap, 'm', i);    /* learnt / by hand / ignored */
 		n = x_button(g_rp_xml, n, cap, 'c', i);    /* cached */
 		n = x_button(g_rp_xml, n, cap, 'n', i);    /* non-cacheable */
 		n = x_button(g_rp_xml, n, cap, 'd', i);    /* storage */
@@ -268,8 +274,12 @@ static void rp_thr(Line *l, int32_t t)
 {
 	const char *f = vm_i18n(VM_I18N_RP_AFTER);
 
-	if (t == VM_RA_NEVER || t <= 0) {
+	if (t == VM_RA_NEVER) {
 		l_put(l, vm_i18n(VM_I18N_RP_NEVER));
+		return;
+	}
+	if (t < 1 || t > 99) {                /* never from the kernel; shown as unknown */
+		l_put(l, "-");
 		return;
 	}
 	for (; *f; f++) {
@@ -304,9 +314,19 @@ static const vm_u16 *rp_text(char kind, int i)
 		return 0;
 	p = &g_rp[i];
 	if (kind == 't') {
-		l_put(&l, p->title);
+		char t[sizeof(p->title) + 1];
+
+		s_cpy(t, p->title, (int)sizeof(p->title));   /* always ended */
+		t[sizeof(p->title)] = 0;
+		l_put(&l, t);
 		if (g_rp_gone[i])
 			l_put(&l, " (-)");
+	}
+	if (kind == 'm' || kind == 'h') {
+		l_put(&l, vm_i18n((p->flags & VM_RA_PF_IGNORE) ? VM_I18N_RP_IGNORED
+		                : (p->flags & VM_RA_PF_MANUAL) ? VM_I18N_RP_MANUAL : VM_I18N_RP_LEARNT));
+		if (kind == 'h')
+			l_put(&l, ". ");
 	}
 	if (kind == 'c' || kind == 'h') {
 		l_put(&l, "C: ");

@@ -66,31 +66,45 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
-	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_OFFLOAD);
+	CHECK(o.cursor == OV_ITEM_C && OV_GROUP_APP == 0 && OV_GROUP_SETTINGS == OV_ITEM_RA);
+	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_NC);
 	tap(&o, 0, OV_BTN_UP);
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEMS - 1);                  /* wraps */
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == 0);
-	/* a change: left for the worker, one at a time */
+	/* a value: left for the worker, one at a time */
 	tap(&o, 0, OV_BTN_RIGHT);
-	CHECK(o.op == OV_OP(OV_ITEM_RA, 1) && OV_OP_ITEM(o.op) == OV_ITEM_RA && OV_OP_DIR(o.op) == 1);
+	CHECK(o.op == OV_OP(OV_ITEM_C, 1) && OV_OP_ITEM(o.op) == OV_ITEM_C && OV_OP_DIR(o.op) == 1);
 	tap(&o, 0, OV_BTN_LEFT);
 	CHECK(OV_OP_DIR(o.op) == 1);                       /* not taken yet: kept */
 	o.op = 0;
 	tap(&o, 0, OV_BTN_LEFT);
-	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_RA && OV_OP_DIR(o.op) == -1);
+	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_C && OV_OP_DIR(o.op) == -1);
 	o.op = 0;
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(OV_OP_DIR(o.op) == 1);
 	o.op = 0;
-	/* reset: only Cross */
-	o.cursor = OV_ITEM_RESET;
-	tap(&o, 0, OV_BTN_RIGHT);
-	CHECK(!o.op);
-	tap(&o, 0, OV_BTN_CROSS);
-	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_RESET && OV_OP_DIR(o.op) == 0);
+	/* actions: only Cross */
+	for (int it = 0; it < OV_ITEMS; it++) {
+		if (!ov_item_action(it))
+			continue;
+		o.cursor = it;
+		tap(&o, 0, OV_BTN_RIGHT);
+		tap(&o, 0, OV_BTN_LEFT);
+		CHECK(!o.op);
+		tap(&o, 0, OV_BTN_CROSS);
+		CHECK(OV_OP_ITEM(o.op) == it && OV_OP_DIR(o.op) == 0);
+		o.op = 0;
+	}
+	CHECK(ov_item_action(OV_ITEM_SAVE) && ov_item_action(OV_ITEM_RESET) &&
+	      !ov_item_action(OV_ITEM_IGNORE) && !ov_item_action(OV_ITEM_C));
+	/* the ignore switch: either arrow or Cross */
+	o.cursor = OV_ITEM_IGNORE;
+	tap(&o, 0, OV_BTN_LEFT);
+	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_IGNORE);
 	o.op = 0;
+	o.cursor = OV_ITEM_RESET;
 	/* the HUD state: the game has its buttons, nothing changes */
 	tap(&o, OV_BTN_SELECT, OV_BTN_RIGHT);
 	CHECK(o.state == OV_HUD);
@@ -102,10 +116,13 @@ static void test_menu(void)
 static void test_helpers(void)
 {
 	static const int off[] = { 0, 1, 2, 4, 3 };   /* the Settings page's order */
+	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, 0xFFFF };
 
 	CHECK(ov_step(off, 5, 2, 1) == 4 && ov_step(off, 5, 4, 1) == 3 && ov_step(off, 5, 3, 1) == 0);
 	CHECK(ov_step(off, 5, 0, -1) == 3 && ov_step(off, 5, 4, -1) == 2);
 	CHECK(ov_step(off, 5, 9, 1) == 0);
+	CHECK(ov_step(thr, 8, 8, 1) == 0xFFFF && ov_step(thr, 8, 0xFFFF, 1) == 2 &&
+	      ov_step(thr, 8, 2, -1) == 0xFFFF && ov_step(thr, 8, -5, 1) == 2);   /* never negative */
 	CHECK(ov_pct(0, 0) == -1 && ov_pct(1, 0) == 100 && ov_pct(0, 5) == 0 && ov_pct(1, 2) == 33 &&
 	      ov_pct(2, 1) == 67);
 	CHECK(ov_pct(0xFFFFFFFFu, 0xFFFFFFFFu) == 50);

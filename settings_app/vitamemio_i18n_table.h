@@ -1672,3 +1672,69 @@
 	"Full",   /* engb */
 	"Tam",   /* tr */
 },
+[VM_I18N_RP_LEARNT] = {
+	"自動で学習済み",   /* ja */
+	"Learnt by Auto",   /* en */
+	"Appris par Auto",   /* fr */
+	"Aprendido por Auto",   /* es */
+	"Von Auto gelernt",   /* de */
+	"Appreso da Auto",   /* it */
+	"Geleerd door Auto",   /* nl */
+	"Aprendido pelo Auto",   /* pt */
+	"Изучено «Авто»",   /* ru */
+	"자동으로 학습됨",   /* ko */
+	"由自動模式學習",   /* zht */
+	"由自动模式学习",   /* zhs */
+	"Automaattisen oppima",   /* fi */
+	"Inlärt av Auto",   /* sv */
+	"Lært af Auto",   /* da */
+	"Lært av Auto",   /* no */
+	"Nauczone przez Auto",   /* pl */
+	"Aprendido pelo Auto",   /* ptbr */
+	"Learnt by Auto",   /* engb */
+	"Otomatik tarafından öğrenildi",   /* tr */
+},
+[VM_I18N_RP_MANUAL] = {
+	"手動で設定",   /* ja */
+	"Set by hand",   /* en */
+	"Réglé à la main",   /* fr */
+	"Ajustado a mano",   /* es */
+	"Von Hand eingestellt",   /* de */
+	"Impostato a mano",   /* it */
+	"Met de hand ingesteld",   /* nl */
+	"Definido à mão",   /* pt */
+	"Задано вручную",   /* ru */
+	"직접 설정함",   /* ko */
+	"手動設定",   /* zht */
+	"手动设置",   /* zhs */
+	"Asetettu käsin",   /* fi */
+	"Inställt för hand",   /* sv */
+	"Indstillet manuelt",   /* da */
+	"Satt manuelt",   /* no */
+	"Ustawione ręcznie",   /* pl */
+	"Definido à mão",   /* ptbr */
+	"Set by hand",   /* engb */
+	"Elle ayarlandı",   /* tr */
+},
+[VM_I18N_RP_IGNORED] = {
+	"自動はこのアプリを無視",   /* ja */
+	"Auto ignores this app",   /* en */
+	"Auto ignore cette appli",   /* fr */
+	"Auto ignora esta app",   /* es */
+	"Auto ignoriert diese App",   /* de */
+	"Auto ignora questa app",   /* it */
+	"Auto negeert deze app",   /* nl */
+	"O Auto ignora esta app",   /* pt */
+	"«Авто» игнорирует это приложение",   /* ru */
+	"자동이 이 앱을 무시함",   /* ko */
+	"自動模式忽略此應用程式",   /* zht */
+	"自动模式忽略此应用",   /* zhs */
+	"Automaattinen ohittaa tämän sovelluksen",   /* fi */
+	"Auto ignorerar appen",   /* sv */
+	"Auto ignorerer appen",   /* da */
+	"Auto ignorerer appen",   /* no */
+	"Auto ignoruje tę aplikację",   /* pl */
+	"O Auto ignora esta app",   /* ptbr */
+	"Auto ignores this app",   /* engb */
+	"Otomatik bu uygulamayı yok sayar",   /* tr */
+},

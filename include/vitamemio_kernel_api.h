@@ -107,10 +107,13 @@ typedef struct VmRaProfile {
 	int32_t  thr[2];           /* reads in a row before it starts: [0] cached
 	                            * memory, [1] non-cacheable; VM_RA_NEVER: never */
 	int32_t  dev;              /* the game's storage, VM_DEV_*; -1 not known    */
-	uint32_t streams;          /* streams it was learnt from                    */
+	uint32_t streams;          /* streams it was learnt from (0: set by hand)   */
+	uint32_t flags;            /* VM_RA_PF_*                                    */
 } VmRaProfile;
-#define VM_RA_NEVER  0xFFFF
-_Static_assert(sizeof(VmRaProfile) == 32, "VmRaProfile is part of the syscall ABI");
+#define VM_RA_NEVER      0xFFFF
+#define VM_RA_PF_MANUAL  0x1   /* set by hand in the overlay                     */
+#define VM_RA_PF_IGNORE  0x2   /* Auto ignores the app                           */
+_Static_assert(sizeof(VmRaProfile) == 36, "VmRaProfile is part of the syscall ABI");
 
 /* Up to `max` profiles into out[] (user pointer), sorted by title id. Returns
  * how many (0 .. max), or VM_ERR_ARG. */

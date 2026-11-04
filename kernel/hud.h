@@ -15,7 +15,7 @@
 #ifndef VITAMEMIO_HUD_H
 #define VITAMEMIO_HUD_H
 
-#define VM_HUD_LINES     12   /* the HUD uses up to 6, the overlay up to 12 */
+#define VM_HUD_LINES     16   /* the HUD uses up to 7, the overlay up to 16 */
 #define VM_HUD_LINE_MAX  64   /* bytes incl. colour codes and NUL; ASCII    */
 
 /* Colour codes inside a line: they switch the colour of the text after them

@@ -56,8 +56,24 @@ typedef struct VmRaNow {
 	uint32_t target;        /* ... of this many (a game 300, homebrew 150)   */
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)  */
 	int      dev;           /* the game's storage, -1 not known              */
+	int      manual;        /* its thresholds are set by hand                */
+	char     app[16];       /* the app the overlay acts on: the game, or one
+	                         * Auto ignores that read last ("" none)          */
+	int      app_ignored;   /* ... Auto ignores it                           */
+	int      app_system;    /* ... a system app (always ignored)             */
 } VmRaNow;
 void vm_stage_ra_now(VmRaNow *out);
+
+/* The overlay's changes (worker thread). VM_OK, VM_ERR_NOT_READY (no game
+ * followed / no app ignored) or VM_ERR_ARG.
+ *   tune:   the game's threshold for cached (0) / non-cacheable (1) reads,
+ *           2..8 or VM_RA_NEVER, now (set by hand: no longer learnt);
+ *   save:   its thresholds as its profile, set by hand;
+ *   ignore: 1: the game on Auto's ignore list (no longer followed);
+ *           0: the ignored app that read last off it (not a system app). */
+int  vm_stage_ra_tune(int kind, uint32_t thr);
+int  vm_stage_ra_save(void);
+int  vm_stage_ra_ignore(int on);
 
 /* Where reads were copied / read, since boot (KiB; wrap-safe differences):
  * the copies by core, and non-cacheable reads on the system core vs the

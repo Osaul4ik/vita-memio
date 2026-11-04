@@ -86,6 +86,9 @@ enum vm_i18n_id {
 	VM_I18N_RP_MEMCARD,
 	VM_I18N_RP_STREAMS,         /* "learnt from %u streams"                       */
 	VM_I18N_ITEM_STATS_FULL,    /* Statistics: "Full" (Off and On: as elsewhere)  */
+	VM_I18N_RP_LEARNT,          /* a profile: learnt by Auto                      */
+	VM_I18N_RP_MANUAL,          /* ... set by hand in the overlay                 */
+	VM_I18N_RP_IGNORED,         /* ... Auto ignores the app                       */
 	VM_I18N_COUNT
 };
 

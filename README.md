@@ -121,7 +121,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect immediatel
 
 Settings, logs and tester results live in `ur0:data/vita-memio/`.
 
-**Read ahead Auto profiles** (next to *Advanced*). One entry per game Auto has learnt, by title ID. Open one to see when read ahead starts for reads into cached memory (*C*) and into non-cacheable memory (*NC*), which storage the game is on, and how many streams it was learnt from; *Delete* makes Auto learn that game again (at once, if it is running). The list is read when the Devices page opens.
+**Read ahead Auto profiles** (next to *Advanced*). One entry per app Auto has a profile for, by title ID. Open one to see whether Auto learnt it, it was set by hand in the overlay, or Auto ignores the app; when read ahead starts for reads into cached memory (*C*) and into non-cacheable memory (*NC*), which storage the game is on, and how many streams it was learnt from; *Delete* makes Auto learn that game again (at once, if it is running). The list is read when the Devices page opens.
 
 **Emulators and Adrenaline.** Auto follows the process that reads, by its title ID. An emulator (RetroArch and the like) or Adrenaline is one process for every game it runs, so all of them share that one profile and that one storage (the one the ISOs or ROMs are read from). That works well when they are read the same way; to have it learnt again, delete its profile.
 
@@ -133,9 +133,17 @@ Settings, logs and tester results live in `ur0:data/vita-memio/`.
 | SELECT + Left | from the HUD back to the overlay; again: closes it |
 | SELECT + Up or Down | closes the overlay and the HUD |
 | Up / Down | (overlay open) choose a line |
-| Left / Right, Cross | change the setting on it; on *Reset Auto profile*, Cross deletes the running game's profile so it is learnt again |
+| Left / Right, Cross | change the value on it; Cross on *Save as its profile* / *Learn it again* does it |
+While the overlay is open the game gets no buttons. At the top: the app (the game Auto follows, or an app Auto ignores that read last) and its storage, what Auto does with it (learning and how far, learnt, set by hand, or ignored), and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Then two groups:
 
-While the overlay is open the game gets no buttons. It shows the game being followed and its storage, whether Auto is learning it (and how far) or has learnt it, after how many reads read ahead starts for *C* and *NC* reads, and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 (the system core) since the overlay was opened. Changes made there are saved, as in Settings. The overlay is in English.
+- **This app (read ahead Auto):** *Start after (C)* and *(NC)* - after how many reads in a row read ahead starts for it (2 to 8, or never); a change applies at once and stops Auto learning it. *Save as its profile* keeps them (marked *set by hand*: Auto does not learn it again). *Auto ignores it* puts the app on Auto's ignore list, or takes it off: an ignored app is not followed, nothing of it is learnt and nothing is read ahead for it in Auto. *Learn it again* deletes its profile.
+- **Settings:** read ahead, copy on core 3, overlapped reads, GPU-safe reads - saved as in Settings.
+
+The overlay is in English.
+
+**Apps Auto never follows.** The system's own apps (title IDs starting with NPXS, and the home screen) are always ignored, so opening Settings or the home screen during a game does not take Auto off the game.
+
+**Profiles are checked.** A profile file that is not exactly right - another size, a wrong check word, a threshold outside 2-8, an unknown storage or flag - is not used at all; Auto then learns that app again and writes a new one. Nothing out of range is ever written.
 
 **Safe mode.** If the console does not reach the home screen and stay there for 30 seconds, the next start installs nothing, so a bad setting cannot trap you in a reboot loop. The *Driver* row then says *safe mode*. You can still change settings: switch off whatever caused it, select **Reset safe mode** and restart. (Restarting by hand within 30 seconds of the home screen also counts, once.) Holding **L** while the console starts skips all plugins.
 

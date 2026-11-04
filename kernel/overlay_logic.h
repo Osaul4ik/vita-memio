@@ -9,8 +9,9 @@
  *   SELECT + Up/Down everything closed
  * While the overlay is open, the game gets no buttons, and without SELECT:
  *   Up / Down        the cursor
- *   Left / Right     the setting under it, back / on (Cross: on)
- *   Cross            on "Reset Auto profile": do it
+ *   Left / Right     the value under it, back / on (Cross: on); on "Auto
+ *                    ignores it", either toggles it
+ *   Cross            on "Save as its profile" / "Learn it again": do it
  * A change is not made here: it is left in `op` for the worker, which owns
  * the settings and the files.
  */
@@ -31,15 +32,29 @@
 #define OV_BTN_LEFT   0x00000080u
 #define OV_BTN_CROSS  0x00004000u
 
-/* The menu's items, top to bottom. */
+/* The menu's items, top to bottom, in two groups. */
 enum {
-	OV_ITEM_RA = 0,      /* read ahead: Off / On / Auto                       */
+	/* this app, for read ahead Auto */
+	OV_ITEM_C = 0,       /* reads in a row before it starts, cached           */
+	OV_ITEM_NC,          /* ... non-cacheable                                 */
+	OV_ITEM_SAVE,        /* keep those as its profile (set by hand)           */
+	OV_ITEM_IGNORE,      /* Auto ignores it (on / off)                        */
+	OV_ITEM_RESET,       /* delete its profile: learnt again                  */
+	/* the settings */
+	OV_ITEM_RA,          /* read ahead: Off / On / Auto                       */
 	OV_ITEM_OFFLOAD,     /* copy on the system core (core 3)                  */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
-	OV_ITEM_RESET,       /* delete the game's Auto profile: learnt again      */
 	OV_ITEMS
 };
+#define OV_GROUP_APP       OV_ITEM_C       /* first item of each group        */
+#define OV_GROUP_SETTINGS  OV_ITEM_RA
+
+/* Items done with Cross only (an action, not a value). */
+static inline int ov_item_action(int i)
+{
+	return i == OV_ITEM_SAVE || i == OV_ITEM_RESET;
+}
 
 /* An op for the worker: the item + 1 in bits 8.., the step (-1, +1) below. */
 #define OV_OP(item, dir)   ((uint32_t)(((item) + 1) << 8) | ((uint32_t)(dir) & 0xFFu))
@@ -75,11 +90,11 @@ static inline int ov_input(OvLogic *o, uint32_t b)
 			o->cursor = o->cursor > 0 ? o->cursor - 1 : OV_ITEMS - 1;
 		else if (down & OV_BTN_DOWN)
 			o->cursor = o->cursor + 1 < OV_ITEMS ? o->cursor + 1 : 0;
-		else if (!o->op && o->cursor != OV_ITEM_RESET && (down & (OV_BTN_LEFT | OV_BTN_RIGHT |
-		                                                          OV_BTN_CROSS)))
+		else if (!o->op && !ov_item_action(o->cursor) &&
+		         (down & (OV_BTN_LEFT | OV_BTN_RIGHT | OV_BTN_CROSS)))
 			o->op = OV_OP(o->cursor, (down & OV_BTN_LEFT) ? -1 : 1);
-		else if (!o->op && o->cursor == OV_ITEM_RESET && (down & OV_BTN_CROSS))
-			o->op = OV_OP(OV_ITEM_RESET, 0);
+		else if (!o->op && ov_item_action(o->cursor) && (down & OV_BTN_CROSS))
+			o->op = OV_OP(o->cursor, 0);
 	}
 	return o->state != was_state || o->cursor != was_cursor || o->op != was_op;
 }

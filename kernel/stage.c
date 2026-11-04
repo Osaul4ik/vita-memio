@@ -1399,6 +1399,13 @@ static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
 static uint32_t g_ra_seen_n;              /* g_ra_seen's streams so far       */
+/* An app Auto ignores (a system app, or one put on its ignore list) that read
+ * a stream: not followed, its streams not counted; kept to show it in the
+ * overlay (g_ra_skip_last: it read last, after the game followed). */
+static SceUID   g_ra_skip_pid;
+static char     g_ra_skip_title[16];
+static int      g_ra_skip_sys, g_ra_skip_last;
+static int      g_ra_manual;              /* the game's thresholds: set by hand */
 static volatile int g_ra_relearn;         /* the game's profile was deleted   */
 static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
 static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
@@ -1447,23 +1454,64 @@ static uint32_t ra_choose(const uint32_t *cnt)
 	return best_t;
 }
 
-/* version 1: no dev (read as -1, decided again); version 2: dev */
-typedef struct RaProfile {
+/* A profile, as used (always validated):
+ *   thr      reads in a row before read ahead starts, cached / non-cacheable:
+ *            2..8, or RA_THR_NONE (never)
+ *   dev      the game's storage (VM_DEV_SD2VITA / VM_DEV_MEMCARD), -1 not known
+ *   streams  what it was learnt from (0: set by hand, or only ignored)
+ *   flags    RA_PF_MANUAL: set by hand in the overlay (Auto does not learn it
+ *            again); RA_PF_IGNORE: Auto ignores this app (not followed, nothing
+ *            read ahead for it in Auto)
+ * On the card: version 3, 8 words with a check word; versions 1 and 2 (no
+ * flags; 1: no dev) still load. Anything else - another size, an unknown
+ * flag, a value out of range, a wrong check - is not used at all: Auto then
+ * learns the app again and the file is replaced. */
+#define RA_PF_MANUAL      0x1u
+#define RA_PF_IGNORE      0x2u
+#define RA_PF_KNOWN       (RA_PF_MANUAL | RA_PF_IGNORE)
+#define RA_STREAMS_MAX    1000000u
+
+typedef struct RaProf {
+	uint32_t thr[2];
+	int32_t  dev;
+	uint32_t streams;
+	uint32_t flags;
+} RaProf;
+
+/* version 1 and 2 (read only) */
+typedef struct RaProfileV2 {
 	uint32_t magic, version, thr[2], streams, check;
 	int32_t  dev;
 	uint32_t check2;
-} RaProfile;
+} RaProfileV2;
 #define RA_PROFILE_V1_SIZE (6 * 4)
 
-static uint32_t ra_profile_check(const RaProfile *p)
+/* version 3 */
+typedef struct RaProfileV3 {
+	uint32_t magic, version, flags, thr[2], streams;
+	int32_t  dev;
+	uint32_t check;
+} RaProfileV3;
+
+static uint32_t ra_profile_check(const RaProfileV2 *p)
 {
 	return p->magic ^ (p->version << 3) ^ (p->thr[0] * 2654435761u) ^ (p->thr[1] * 40503u) ^
 	       (p->streams << 7) ^ 0x5A5A5A5Au;
 }
 
-static uint32_t ra_profile_check2(const RaProfile *p)
+static uint32_t ra_profile_check2(const RaProfileV2 *p)
 {
 	return ra_profile_check(p) ^ ((uint32_t)p->dev * 2246822519u) ^ 0xC3C3C3C3u;
+}
+
+static uint32_t ra_profile_check3(const RaProfileV3 *p)
+{
+	const uint32_t *w = (const uint32_t *)p;
+	uint32_t c = 0x811C9DC5u;
+
+	for (int i = 0; i < 7; i++)
+		c = (c ^ w[i]) * 16777619u;
+	return c ^ 0xA5C3A5C3u;
 }
 
 static void ra_profile_path(char *out, size_t n, const char *title)
@@ -1471,12 +1519,21 @@ static void ra_profile_path(char *out, size_t n, const char *title)
 	snprintf(out, n, "%s/%s.bin", RA_PROFILE_DIR, title);
 }
 
-/* 1 and its thresholds (and storage, -1 if not kept) if the game has a
- * usable profile. */
-static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
+static int ra_thr_ok(uint32_t t)
+{
+	return t == RA_THR_NONE || (t >= 2 && t <= 8);
+}
+
+/* 1 and the profile if the app has a usable one. */
+static int ra_prof_load(const char *title, RaProf *out)
 {
 	char path[96];
-	RaProfile p;
+	union {
+		RaProfileV2 v2;
+		RaProfileV3 v3;
+		uint8_t     raw[64];
+	} f;
+	RaProf p;
 	SceUID fd;
 	int n;
 
@@ -1484,58 +1541,61 @@ static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
 	if (fd < 0)
 		return 0;
-	memset(&p, 0, sizeof(p));
-	n = ksceIoRead(fd, &p, sizeof(p));
+	memset(&f, 0, sizeof(f));
+	n = ksceIoRead(fd, &f, sizeof(f));
 	ksceIoClose(fd);
-	if (p.magic != RA_PROFILE_MAGIC || p.check != ra_profile_check(&p))
+	if (n <= 0 || f.v2.magic != RA_PROFILE_MAGIC)
 		return 0;
-	if (p.version == 1 && n == RA_PROFILE_V1_SIZE)
-		p.dev = -1;
-	else if (p.version != 2 || n != (int)sizeof(p) || p.check2 != ra_profile_check2(&p) ||
-	         p.dev < -1 || p.dev >= VM_DEV_COUNT || p.dev == VM_DEV_INTERNAL)
-		return 0;
-	for (int k = 0; k < 2; k++)
-		if (p.thr[k] != RA_THR_NONE && (p.thr[k] < 2 || p.thr[k] > 8))
+	memset(&p, 0, sizeof(p));
+	if (f.v3.version == 3) {
+		if (n != (int)sizeof(f.v3) || f.v3.check != ra_profile_check3(&f.v3) ||
+		    (f.v3.flags & ~RA_PF_KNOWN))
 			return 0;
-	thr[0] = p.thr[0];
-	thr[1] = p.thr[1];
-	*dev = p.dev;
+		p.thr[0] = f.v3.thr[0];
+		p.thr[1] = f.v3.thr[1];
+		p.dev = f.v3.dev;
+		p.streams = f.v3.streams;
+		p.flags = f.v3.flags;
+	} else if (f.v2.version == 1 || f.v2.version == 2) {
+		if (f.v2.check != ra_profile_check(&f.v2))
+			return 0;
+		if (f.v2.version == 1 ? n != RA_PROFILE_V1_SIZE
+		                      : n != (int)sizeof(f.v2) || f.v2.check2 != ra_profile_check2(&f.v2))
+			return 0;
+		p.thr[0] = f.v2.thr[0];
+		p.thr[1] = f.v2.thr[1];
+		p.dev = f.v2.version == 1 ? -1 : f.v2.dev;
+		p.streams = f.v2.streams;
+	} else {
+		return 0;
+	}
+	if (!ra_thr_ok(p.thr[0]) || !ra_thr_ok(p.thr[1]) || p.streams > RA_STREAMS_MAX ||
+	    (p.dev != -1 && p.dev != VM_DEV_SD2VITA && p.dev != VM_DEV_MEMCARD))
+		return 0;
+	*out = p;
 	return 1;
 }
 
-/* The streams a usable profile was learnt from (0 if none / version 1). */
-static uint32_t ra_profile_streams(const char *title)
+static void ra_prof_save(const char *title, const RaProf *in)
 {
 	char path[96];
-	RaProfile p;
+	RaProfileV3 p;
 	SceUID fd;
 
-	ra_profile_path(path, sizeof(path), title);
-	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
-	if (fd < 0)
-		return 0;
-	memset(&p, 0, sizeof(p));
-	ksceIoRead(fd, &p, sizeof(p));
-	ksceIoClose(fd);
-	return p.magic == RA_PROFILE_MAGIC ? p.streams : 0;
-}
-
-static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams, int dev)
-{
-	char path[96];
-	RaProfile p;
-	SceUID fd;
-
+	/* nothing out of range is ever written */
+	if (!ra_thr_ok(in->thr[0]) || !ra_thr_ok(in->thr[1]) || (in->flags & ~RA_PF_KNOWN) ||
+	    (in->dev != -1 && in->dev != VM_DEV_SD2VITA && in->dev != VM_DEV_MEMCARD))
+		return;
 	ra_profile_path(path, sizeof(path), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
-	p.version = 2;
-	p.thr[0] = thr[0];
-	p.thr[1] = thr[1];
-	p.streams = streams;
-	p.dev = dev;
-	p.check = ra_profile_check(&p);
-	p.check2 = ra_profile_check2(&p);
+	p.version = 3;
+	p.flags = in->flags;
+	p.thr[0] = in->thr[0];
+	p.thr[1] = in->thr[1];
+	p.streams = in->streams > RA_STREAMS_MAX ? RA_STREAMS_MAX : in->streams;
+	p.dev = in->dev;
+	p.check = ra_profile_check3(&p);
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(VM_DATA_DIR, 0777);
 	ksceIoMkdir(RA_PROFILE_DIR, 0777);
@@ -1547,6 +1607,34 @@ static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t s
 	if (ksceIoWrite(fd, &p, sizeof(p)) != (int)sizeof(p))
 		VM_KLOGW("stage: read ahead profile for %s not saved (short write)", title);
 	ksceIoClose(fd);
+}
+
+/* The older call shapes: a learnt profile (no flags). */
+static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
+{
+	RaProf p;
+
+	if (!ra_prof_load(title, &p))
+		return 0;
+	thr[0] = p.thr[0];
+	thr[1] = p.thr[1];
+	*dev = p.dev;
+	return 1;
+}
+
+static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams, int dev)
+{
+	const RaProf p = { { thr[0], thr[1] }, dev, streams, 0 };
+
+	ra_prof_save(title, &p);
+}
+
+/* System apps (the home screen, Settings, ...: NPXS*, and "main") are never
+ * Auto's: not followed, nothing read ahead for them in Auto. */
+static int ra_title_system(const char *t)
+{
+	return (t[0] == 'N' && t[1] == 'P' && t[2] == 'X' && t[3] == 'S') ||
+	       (t[0] == 'm' && t[1] == 'a' && t[2] == 'i' && t[3] == 'n' && !t[4]);
 }
 
 /* A retail game's title id (4 letters + 5 digits): PCSA..PCSH (the regions'
@@ -1713,17 +1801,21 @@ static void ra_game_end(void)
 static void ra_auto_begin(void)
 {
 	uint32_t thr[2] = { 0, 0 };
-	int dev = -1;
+	RaProf pf;
 
-	if (ra_profile_load(g_ra_title, thr, &dev)) {
+	if (ra_prof_load(g_ra_title, &pf)) {
 		char a[8], b[8];
 
+		thr[0] = pf.thr[0];
+		thr[1] = pf.thr[1];
 		ra_thr_text(a, sizeof(a), thr[0]);
 		ra_thr_text(b, sizeof(b), thr[1]);
 		VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d "
-		         "(kept)", g_ra_title, a, b, dev);
-		if (dev >= 0)
-			ST(g_ra_dev, dev);
+		         "(%s)", g_ra_title, a, b, (int)pf.dev,
+		         (pf.flags & RA_PF_MANUAL) ? "set by hand" : "kept");
+		if (pf.dev >= 0)
+			ST(g_ra_dev, pf.dev);
+		ST(g_ra_manual, (pf.flags & RA_PF_MANUAL) ? 1 : 0);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 	} else {
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
@@ -1786,6 +1878,7 @@ static void ra_auto_tick(void)
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
 		g_ra_stats_written = 0xFFFFFFFFu;
+		ST(g_ra_manual, 0);
 		__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 		VM_KLOGI("stage: read ahead auto: %s - profile deleted, learning again", g_ra_title);
 	}
@@ -1793,9 +1886,25 @@ static void ra_auto_tick(void)
 	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
 	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
 		char t[32];
+		RaProf pf;
 
-		ra_game_end();                        /* the last game has ended */
+		/* an app Auto ignores: the game followed stays; this one is noted */
 		memset(t, 0, sizeof(t));
+		if (g_title_fn(seen, t, sizeof(t) - 1) >= 0 && ra_title_ok(t) &&
+		    (ra_title_system(t) || (ra_prof_load(t, &pf) && (pf.flags & RA_PF_IGNORE)))) {
+			memcpy(g_ra_skip_title, t, sizeof(g_ra_skip_title) - 1);
+			g_ra_skip_title[sizeof(g_ra_skip_title) - 1] = 0;
+			ST(g_ra_skip_sys, ra_title_system(t));
+			__atomic_store_n(&g_ra_skip_pid, seen, __ATOMIC_RELEASE);
+			__atomic_store_n(&g_ra_skip_last, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
+			__atomic_store_n(&g_ra_seen, __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE),
+			                 __ATOMIC_RELEASE);
+			return;
+		}
+		ra_game_end();                        /* the last game has ended */
+		__atomic_store_n(&g_ra_skip_last, 0, __ATOMIC_RELAXED);
+		ST(g_ra_manual, 0);
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		ra_hist_clear();
 		g_ra_stats_written = 0xFFFFFFFFu;
@@ -1805,7 +1914,7 @@ static void ra_auto_tick(void)
 			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
 		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
-		if (g_title_fn(seen, t, sizeof(t) - 1) < 0 || !ra_title_ok(t)) {
+		if (!t[0] || !ra_title_ok(t)) {
 			g_ra_title[0] = 0;                   /* not a game we can name: fixed */
 			__atomic_store_n(&g_ra_pid, seen, __ATOMIC_RELEASE);
 			return;
@@ -1836,11 +1945,12 @@ static void ra_auto_tick(void)
 			VM_KLOGI("stage: read ahead: %s - on storage %d",
 			         g_ra_title[0] ? g_ra_title : "(no title id)", bi);
 			if (is_auto && g_ra_title[0] && !__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE)) {
-				uint32_t thr[2];
+				RaProf pf;
 
-				thr[0] = __atomic_load_n(&g_ra_thr[0], __ATOMIC_RELAXED);
-				thr[1] = __atomic_load_n(&g_ra_thr[1], __ATOMIC_RELAXED);
-				ra_profile_save(g_ra_title, thr, ra_profile_streams(g_ra_title), bi);   /* now with it */
+				if (ra_prof_load(g_ra_title, &pf) && pf.dev != bi) {
+					pf.dev = bi;              /* its profile, now with it */
+					ra_prof_save(g_ra_title, &pf);
+				}
 			}
 		}
 	}
@@ -1872,6 +1982,11 @@ static void ra_auto_stop(void)
 	__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
 	__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
 	g_ra_title[0] = 0;
+	ST(g_ra_manual, 0);
+	__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);
+	g_ra_skip_title[0] = 0;
+	ST(g_ra_skip_sys, 0);
+	ST(g_ra_skip_last, 0);
 }
 
 /* Auto: whether this device reads ahead for the stream it has - only the
@@ -2192,8 +2307,13 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 				const SceUID cur = __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
 				uint32_t k;
 
-				if (pid == cur) {
+				if (pid == __atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE)) {
+					/* an app Auto ignores: nothing of it counts */
+					__atomic_store_n(&g_ra_skip_last, 1, __ATOMIC_RELAXED);
+					d->ra_pid = 0;
+				} else if (pid == cur) {
 					/* the game again: another process's few streams were not one */
+					__atomic_store_n(&g_ra_skip_last, 0, __ATOMIC_RELAXED);
 					__atomic_fetch_add(&g_ra_dev_sec[d - g_dev], n, __ATOMIC_RELAXED);
 					__atomic_store_n(&g_ra_seen, pid, __ATOMIC_RELEASE);
 				} else {
@@ -3293,8 +3413,8 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 		return 0;
 	while (n < max) {
 		char t[16];
-		uint32_t thr[2];
-		int dev, len = 0, at;
+		RaProf pf;
+		int len = 0, at;
 
 		memset(&e, 0, sizeof(e));
 		if (ksceIoDread(dfd, &e) <= 0)
@@ -3305,17 +3425,18 @@ int vm_stage_ra_list(VmRaProfile *out, int max)
 			continue;
 		memcpy(t, e.d_name, (size_t)(len - 4));
 		t[len - 4] = 0;
-		if (!ra_title_ok(t) || !ra_profile_load(t, thr, &dev))
+		if (!ra_title_ok(t) || !ra_prof_load(t, &pf))
 			continue;
 		/* sorted by title id: insertion */
 		for (at = n; at > 0 && strncmp(out[at - 1].title, t, sizeof(t)) > 0; at--)
 			out[at] = out[at - 1];
 		memset(&out[at], 0, sizeof(out[at]));
 		memcpy(out[at].title, t, sizeof(t));
-		out[at].thr[0] = (int32_t)thr[0];
-		out[at].thr[1] = (int32_t)thr[1];
-		out[at].dev = dev;
-		out[at].streams = ra_profile_streams(t);
+		out[at].thr[0] = (int32_t)pf.thr[0];
+		out[at].thr[1] = (int32_t)pf.thr[1];
+		out[at].dev = pf.dev;
+		out[at].streams = pf.streams;
+		out[at].flags = pf.flags;
 		n++;
 	}
 	ksceIoDclose(dfd);
@@ -3337,6 +3458,8 @@ int vm_stage_ra_delete(const char *title)
 		return VM_ERR_IO;
 	/* that game running (the worker's g_ra_title; a racy read of a string
 	 * that changes only on a new game is fine for this) */
+	if (!LD(g_ra_skip_sys) && !strncmp(t, g_ra_skip_title, sizeof(t)))
+		__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);   /* no longer ignored */
 	if (LD(g_ra_mode) == VM_RA_AUTO && !strncmp(t, g_ra_title, sizeof(t))) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
@@ -3364,6 +3487,124 @@ void vm_stage_ra_now(VmRaNow *o)
 		          ? t : k ? RA_STREAK_NC : RA_STREAK;
 	}
 	o->dev = LD(g_ra_dev);
+	o->manual = LD(g_ra_manual);
+	/* the app the overlay acts on: the one Auto ignores, if it read last */
+	if (LD(g_ra_skip_last) && __atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE) &&
+	    g_ra_skip_title[0]) {
+		memcpy(o->app, g_ra_skip_title, sizeof(o->app) - 1);
+		o->app_ignored = 1;
+		o->app_system = LD(g_ra_skip_sys);
+	} else {
+		memcpy(o->app, o->title, sizeof(o->app));
+	}
+}
+
+/* ---- the overlay's changes to the game's profile (worker thread) ---------- */
+
+/* Thresholds in use for the game: learnt / set, else the fixed ones. */
+static void ra_thr_now(uint32_t thr[2])
+{
+	for (int k = 0; k < 2; k++) {
+		const uint32_t t = __atomic_load_n(&g_ra_thr[k], __ATOMIC_RELAXED);
+
+		thr[k] = ra_thr_ok(t) ? t : k ? RA_STREAK_NC : RA_STREAK;
+	}
+}
+
+int vm_stage_ra_tune(int kind, uint32_t thr)
+{
+	uint32_t cur[2];
+
+	if (kind < 0 || kind > 1 || !ra_thr_ok(thr))
+		return VM_ERR_ARG;
+	if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
+		return VM_ERR_NOT_READY;
+	ra_thr_now(cur);
+	cur[kind] = thr;
+	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);   /* set by hand: not learnt */
+	ST(g_ra_manual, 1);
+	__atomic_store_n(&g_ra_thr[0], cur[0], __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], cur[1], __ATOMIC_RELAXED);
+	return VM_OK;
+}
+
+int vm_stage_ra_save(void)
+{
+	RaProf pf, old;
+
+	if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
+		return VM_ERR_NOT_READY;
+	memset(&pf, 0, sizeof(pf));
+	ra_thr_now(pf.thr);
+	pf.dev = LD(g_ra_dev);
+	pf.streams = ra_prof_load(g_ra_title, &old) ? old.streams : 0;
+	pf.flags = RA_PF_MANUAL;
+	ra_prof_save(g_ra_title, &pf);
+	if (!ra_prof_load(g_ra_title, &old))
+		return VM_ERR_IO;
+	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+	ST(g_ra_manual, 1);
+	__atomic_store_n(&g_ra_thr[0], pf.thr[0], __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], pf.thr[1], __ATOMIC_RELAXED);
+	return VM_OK;
+}
+
+int vm_stage_ra_ignore(int on)
+{
+	RaProf pf;
+	char path[96];
+
+	if (on) {
+		/* the game followed: on the list, then no longer followed */
+		if (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) || !g_ra_title[0])
+			return VM_ERR_NOT_READY;
+		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);   /* nothing learnt now */
+		if (!ra_prof_load(g_ra_title, &pf)) {
+			memset(&pf, 0, sizeof(pf));
+			pf.thr[0] = RA_STREAK;
+			pf.thr[1] = RA_STREAK_NC;
+			pf.dev = LD(g_ra_dev);
+		}
+		pf.flags |= RA_PF_IGNORE;
+		ra_prof_save(g_ra_title, &pf);
+		memcpy(g_ra_skip_title, g_ra_title, sizeof(g_ra_skip_title));
+		ST(g_ra_skip_sys, 0);
+		__atomic_store_n(&g_ra_skip_pid, __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE),
+		                 __ATOMIC_RELEASE);
+		ST(g_ra_skip_last, 1);
+		ra_hist_clear();
+		__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_thr[1], 0, __ATOMIC_RELAXED);
+		ST(g_ra_dev, -1);
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
+		ST(g_ra_manual, 0);
+		__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
+		__atomic_store_n(&g_ra_seen, 0, __ATOMIC_RELEASE);
+		__atomic_store_n(&g_ra_pid, 0, __ATOMIC_RELEASE);
+		VM_KLOGI("stage: read ahead auto: %s - ignored from now on", g_ra_title);
+		g_ra_title[0] = 0;
+		return VM_OK;
+	}
+	/* the app ignored that read last: off the list (never a system app) */
+	if (!__atomic_load_n(&g_ra_skip_pid, __ATOMIC_ACQUIRE) || !g_ra_skip_title[0])
+		return VM_ERR_NOT_READY;
+	if (LD(g_ra_skip_sys))
+		return VM_ERR_ARG;
+	if (ra_prof_load(g_ra_skip_title, &pf)) {
+		pf.flags &= ~RA_PF_IGNORE;
+		if (!pf.streams && !(pf.flags & RA_PF_MANUAL)) {
+			ra_profile_path(path, sizeof(path), g_ra_skip_title);
+			ksceIoRemove(path);                /* only the mark: learnt from scratch */
+		} else {
+			ra_prof_save(g_ra_skip_title, &pf);
+		}
+	}
+	VM_KLOGI("stage: read ahead auto: %s - no longer ignored", g_ra_skip_title);
+	__atomic_store_n(&g_ra_skip_pid, 0, __ATOMIC_RELEASE);
+	ST(g_ra_skip_last, 0);
+	g_ra_skip_title[0] = 0;
+	return VM_OK;
 }
 
 void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib)

@@ -2496,7 +2496,7 @@ static const char *fake_title_of(SceUID pid)
 {
 	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001"
 	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : pid == 0x46 ? "VITASHELL"
-	     : NULL;
+	     : pid == 0x47 ? "NPXS10015" : pid == 0x48 ? "main" : NULL;
 }
 
 static int fake_title(SceUID pid, char *t, SceSize len)
@@ -2990,6 +2990,213 @@ static void test_readahead_auto(void)
 	vm_stage_worker_tick();
 	CHECK(!g_ra_learning && ra_profile_load("VITASHELL", thr, &dev) && thr[0] == 2);
 	vm_stage_fini();
+
+	/* system apps (NPXS*, the home screen "main") are never followed: the
+	 * game stays followed, nothing of theirs counts or is read ahead */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x47;                                  /* Settings first: not followed */
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x47 && g_ra_skip_sys);
+	{
+		VmRaNow now;
+
+		vm_stage_ra_now(&now);
+		CHECK(!strcmp(now.app, "NPXS10015") && now.app_ignored && now.app_system && !now.title[0]);
+		CHECK(vm_stage_ra_ignore(0) == VM_ERR_ARG);   /* a system app stays ignored */
+	}
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning);
+	{
+		const uint32_t n = g_ra_hstreams, hits = g_ra_hits;
+
+		fake_pid = 0x48;                              /* the home screen streams */
+		streams(u, 5, 8, 256);
+		vm_stage_worker_tick();
+		/* the game's own stream it cut short counts for the game: one */
+		CHECK(g_ra_pid == 0x44 && g_ra_hstreams <= n + 1 && g_ra_skip_pid == 0x48);
+		CHECK(g_ra_hits == hits);                     /* nothing read ahead for it */
+	}
+	vm_stage_fini();
+
+	/* the overlay's changes: thresholds by hand (now, no longer learnt),
+	 * kept as the app's profile; the app on / off the ignore list */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	CHECK(vm_stage_ra_tune(0, 3) == VM_ERR_NOT_READY && vm_stage_ra_save() == VM_ERR_NOT_READY &&
+	      vm_stage_ra_ignore(1) == VM_ERR_NOT_READY && vm_stage_ra_ignore(0) == VM_ERR_NOT_READY);
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning);
+	CHECK(vm_stage_ra_tune(0, 1) == VM_ERR_ARG && vm_stage_ra_tune(0, 9) == VM_ERR_ARG &&
+	      vm_stage_ra_tune(2, 3) == VM_ERR_ARG && vm_stage_ra_tune(-1, 3) == VM_ERR_ARG &&
+	      vm_stage_ra_tune(0, 0) == VM_ERR_ARG && vm_stage_ra_tune(0, 0xFFFFFFFFu) == VM_ERR_ARG);
+	CHECK(vm_stage_ra_tune(0, 3) == VM_OK && vm_stage_ra_tune(1, VM_RA_NEVER) == VM_OK);
+	CHECK(!g_ra_learning && g_ra_manual && g_ra_thr[0] == 3 && g_ra_thr[1] == RA_THR_NONE);
+	CHECK(ra_threshold(0x44, 0) == 3);                /* used at once */
+	CHECK(!ra_profile_load("PCSB00777", thr, &dev));  /* not kept until saved */
+	CHECK(vm_stage_ra_save() == VM_OK);
+	{
+		VmRaProfile pl[4];
+		RaProf pf;
+
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_MANUAL && pf.thr[0] == 3 &&
+		      pf.thr[1] == RA_THR_NONE);
+		CHECK(vm_stage_ra_list(pl, 4) == 1 && pl[0].flags == VM_RA_PF_MANUAL && pl[0].thr[0] == 3);
+	}
+	/* the game ends and runs again: set by hand, used, not learnt */
+	fake_pid = 0x42;
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	fake_pid = 0x43 + 1;                              /* PCSB00777 again (0x44) */
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && !g_ra_learning && g_ra_manual && g_ra_thr[0] == 3);
+	/* on the ignore list: no longer followed, its streams not counted */
+	CHECK(vm_stage_ra_ignore(1) == VM_OK);
+	CHECK(g_ra_pid == 0 && g_ra_skip_pid == 0x44 && !g_ra_skip_sys && !g_ra_title[0]);
+	{
+		RaProf pf;
+		VmRaNow now;
+
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == (RA_PF_MANUAL | RA_PF_IGNORE) &&
+		      pf.thr[0] == 3);
+		streams(u, 4, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0 && g_ra_hstreams == 0);
+		vm_stage_ra_now(&now);
+		CHECK(!strcmp(now.app, "PCSB00777") && now.app_ignored && !now.app_system);
+		CHECK(vm_stage_ra_tune(0, 4) == VM_ERR_NOT_READY);   /* nothing followed */
+		/* off the list: its profile (set by hand) kept; followed again */
+		CHECK(vm_stage_ra_ignore(0) == VM_OK);
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.flags == RA_PF_MANUAL);
+		streams(u, 1, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0x44 && g_ra_manual && g_ra_thr[0] == 3);
+	}
+	/* a new app ignored before anything was learnt: only the mark is kept,
+	 * and taken off it is learnt from scratch */
+	fake_pid = 0x46;
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x46 && g_ra_learning);
+	CHECK(vm_stage_ra_ignore(1) == VM_OK);
+	{
+		RaProf pf;
+
+		CHECK(ra_prof_load("VITASHELL", &pf) && pf.flags == RA_PF_IGNORE && pf.streams == 0);
+		CHECK(vm_stage_ra_ignore(0) == VM_OK && !ra_prof_load("VITASHELL", &pf));
+	}
+	/* an ignored app's profile deleted (Settings): no longer ignored */
+	fake_pid = 0x44;
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && vm_stage_ra_ignore(1) == VM_OK && g_ra_skip_pid == 0x44);
+	CHECK(vm_stage_ra_delete("PCSB00777") == VM_OK && g_ra_skip_pid == 0);
+	vm_stage_fini();
+
+	/* profiles that are not right are never used: Auto learns the app
+	 * again; older versions still load; nothing out of range is written */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	{
+		RaProf pf, good = { { 3, RA_THR_NONE }, M, 300, RA_PF_MANUAL };
+		RaProfileV3 v3;
+		RaProfileV2 v2;
+		SceUID fd;
+
+#define WRITE_RAW(p, len) do { \
+		ksceIoMkdir("ur0:data/vita-memio/ra", 0777); \
+		fd = ksceIoOpen("ur0:data/vita-memio/ra/PCSE00009.bin", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666); \
+		ksceIoWrite(fd, (p), (len)); \
+		ksceIoClose(fd); } while (0)
+		ra_prof_save("PCSE00009", &good);
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.thr[0] == 3 && pf.flags == RA_PF_MANUAL &&
+		      pf.dev == M && pf.streams == 300);
+		fd = ksceIoOpen("ur0:data/vita-memio/ra/PCSE00009.bin", SCE_O_RDONLY, 0);
+		ksceIoRead(fd, &v3, sizeof(v3));
+		ksceIoClose(fd);
+		{
+			struct { uint32_t off, val; } bad[] = {
+				{ 3, 1 }, { 3, 9 }, { 3, 0 }, { 3, 0xFFFFFFFFu },   /* thr[0] */
+				{ 4, 0x80000000u },                                  /* thr[1] */
+				{ 2, 4 }, { 2, 0xFFFFFFFFu },                        /* flags  */
+				{ 5, RA_STREAMS_MAX + 1 },                           /* streams */
+				{ 6, (uint32_t)-2 }, { 6, VM_DEV_INTERNAL }, { 6, 7 }, /* dev  */
+				{ 1, 4 }, { 1, 0 },                                  /* version */
+			};
+
+			for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+				RaProfileV3 b = v3;
+
+				((uint32_t *)&b)[bad[i].off] = bad[i].val;
+				b.check = ra_profile_check3(&b);          /* even with a right check */
+				WRITE_RAW(&b, sizeof(b));
+				CHECK(!ra_prof_load("PCSE00009", &pf));
+			}
+			v3.check ^= 1;                                /* a wrong check */
+			WRITE_RAW(&v3, sizeof(v3));
+			CHECK(!ra_prof_load("PCSE00009", &pf));
+			v3.check ^= 1;
+			WRITE_RAW(&v3, sizeof(v3) - 4);               /* cut short */
+			CHECK(!ra_prof_load("PCSE00009", &pf));
+			WRITE_RAW("garbage", 7);
+			CHECK(!ra_prof_load("PCSE00009", &pf));
+			WRITE_RAW("", 0);
+			CHECK(!ra_prof_load("PCSE00009", &pf));
+		}
+		/* version 2 and 1 */
+		memset(&v2, 0, sizeof(v2));
+		v2.magic = RA_PROFILE_MAGIC;
+		v2.version = 2;
+		v2.thr[0] = 4;
+		v2.thr[1] = 6;
+		v2.streams = 300;
+		v2.dev = VM_DEV_SD2VITA;
+		v2.check = ra_profile_check(&v2);
+		v2.check2 = ra_profile_check2(&v2);
+		WRITE_RAW(&v2, sizeof(v2));
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.thr[0] == 4 && pf.thr[1] == 6 &&
+		      pf.dev == VM_DEV_SD2VITA && pf.flags == 0);
+		v2.dev = -5;
+		v2.check2 = ra_profile_check2(&v2);
+		WRITE_RAW(&v2, sizeof(v2));
+		CHECK(!ra_prof_load("PCSE00009", &pf));
+		v2.version = 1;
+		v2.check = ra_profile_check(&v2);
+		WRITE_RAW(&v2, 24);
+		CHECK(ra_prof_load("PCSE00009", &pf) && pf.dev == -1 && pf.thr[0] == 4);
+#undef WRITE_RAW
+		/* nothing out of range written */
+		{
+			RaProf w = good;
+
+			CHECK(vm_stage_ra_delete("PCSE00009") == VM_OK);
+			w.thr[0] = 0;
+			ra_prof_save("PCSE00009", &w);
+			w = good;
+			w.dev = VM_DEV_INTERNAL;
+			ra_prof_save("PCSE00009", &w);
+			w = good;
+			w.flags = 8;
+			ra_prof_save("PCSE00009", &w);
+			CHECK(!ra_prof_load("PCSE00009", &pf));
+		}
+	}
 
 	/* auto without title ids (an unknown firmware): as on, said once */
 	reset();

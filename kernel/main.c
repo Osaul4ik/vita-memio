@@ -466,10 +466,49 @@ static void overlay_op(uint32_t op, const VmSettings *s, char *msg, int cap)
 	                           VM_OFFLOAD_ALL };   /* as on the Settings page */
 	static const int pipe[] = { VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
 	static const int onoff[] = { 0, 1 };
-	const int dir = OV_OP_DIR(op);
+	static const int thr[] = { 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };
+	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
+	VmRaNow now;
+	int r = VM_OK;
 
 	msg[0] = 0;
-	switch (OV_OP_ITEM(op)) {
+	vm_stage_ra_now(&now);
+	switch (item) {
+	case OV_ITEM_C:
+	case OV_ITEM_NC: {
+		const int k = item == OV_ITEM_NC;
+
+		if (now.app_ignored)
+			r = VM_ERR_ARG;
+		else
+			r = vm_stage_ra_tune(k, (uint32_t)ov_step(thr, 8, (int)now.thr[k], dir));
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_DIM "Set by hand (now; Save to keep it)");
+		break;
+	}
+	case OV_ITEM_SAVE:
+		r = now.app_ignored ? VM_ERR_ARG : vm_stage_ra_save();
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: profile saved", now.title);
+		break;
+	case OV_ITEM_IGNORE:
+		if (now.app_system) {
+			snprintf(msg, cap, HUD_C_WARN "A system app: always ignored");
+			return;
+		}
+		r = vm_stage_ra_ignore(!now.app_ignored);
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: %s", now.app,
+			         now.app_ignored ? "Auto follows it again" : "Auto ignores it");
+		break;
+	case OV_ITEM_RESET:
+		if (!now.app[0] || now.app_system)
+			r = VM_ERR_ARG;
+		else if (vm_stage_ra_delete(now.app) == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: learnt again", now.app);
+		else
+			snprintf(msg, cap, HUD_C_WARN "%.15s: no profile yet", now.app);
+		break;
 	case OV_ITEM_RA:
 		vm_settings_set(VM_KEY_READAHEAD, ov_step(ra, 3, s->readahead, dir));
 		break;
@@ -482,33 +521,42 @@ static void overlay_op(uint32_t op, const VmSettings *s, char *msg, int cap)
 	case OV_ITEM_GPUSAFE:
 		vm_settings_set(VM_KEY_GPUSAFE, ov_step(onoff, 2, s->gpusafe, dir));
 		break;
-	case OV_ITEM_RESET: {
-		VmRaNow now;
-
-		vm_stage_ra_now(&now);
-		if (!now.title[0])
-			snprintf(msg, cap, HUD_C_WARN "No game followed yet");
-		else if (vm_stage_ra_delete(now.title) == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%s: learning again", now.title);
-		else
-			snprintf(msg, cap, HUD_C_WARN "%s: no profile yet", now.title);
-		break;
-	}
 	default:
 		break;
 	}
+	if (r == VM_ERR_NOT_READY)
+		snprintf(msg, cap, HUD_C_WARN "No app followed (read ahead Auto?)");
+	else if (r != VM_OK && !msg[0])
+		snprintf(msg, cap, HUD_C_WARN "Not for this app");
 	vm_settings_flush();                  /* saved now */
 }
 
-/* "after N" / "never" / "-" into o. */
-static void ov_thr(char *o, int cap, int mode, uint32_t t)
+/* A threshold: "5" / "never". */
+static void ov_thr(char *o, int cap, uint32_t t)
 {
-	if (mode == VM_RA_OFF)
-		snprintf(o, cap, HUD_C_DIM "-");
-	else if (t == VM_RA_NEVER)
-		snprintf(o, cap, HUD_C_DIM "never");
+	if (t == VM_RA_NEVER)
+		snprintf(o, cap, "never");
 	else
-		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)t);
+		snprintf(o, cap, "%u", (unsigned)(t > 99 ? 99 : t));
+}
+
+/* What read ahead does now; 1 if the app's values apply (a game followed,
+ * not one Auto ignores). */
+static int now_app_ok(VmRaNow *now)
+{
+	vm_stage_ra_now(now);
+	return now->title[0] && !now->app_ignored;
+}
+
+/* One menu line: the cursor, the name padded, the value. */
+static void ov_item(char *o, int cur, int i, const char *name, const char *val)
+{
+	char nm[24];
+
+	pad(nm, sizeof(nm), name, 20, 20, 0);
+	snprintf(o, VM_HUD_LINE_MAX, "%s%s" HUD_C_TEXT "%s%s%.20s",
+	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ", nm,
+	         i == cur ? HUD_C_ACCENT : HUD_C_GOOD, val);
 }
 
 static void overlay_feed(void)
@@ -547,56 +595,54 @@ static void overlay_feed(void)
 	{
 		VmRaNow now;
 		uint32_t core[4], ncs, nco, other = 0;
-		char a[16], b[16];
+		char a[16], b[16], tc[8], tn[8];
 		const char *dev;
 		const int cur = vm_overlay_cursor();
+		const int app_ok = now_app_ok(&now);
 
-		vm_stage_ra_now(&now);
 		vm_stage_core_stats(core, &ncs, &nco);
-		dev = now.dev == VM_DEV_SD2VITA ? "SD2Vita" : now.dev == VM_DEV_MEMCARD ? "memory card"
-		    : "?";
+		dev = now.app_ignored ? "-" : now.dev == VM_DEV_SD2VITA ? "SD2Vita"
+		    : now.dev == VM_DEV_MEMCARD ? "memory card" : "?";
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_ACCENT "vita-memio" HUD_C_DIM
 		         "   SEL+> HUD  SEL+< close");
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Game " HUD_C_TEXT "%s" HUD_C_DIM
-		         "  storage " HUD_C_TEXT "%s", now.title[0] ? now.title : "-", dev);
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "App " HUD_C_TEXT "%.15s" HUD_C_DIM
+		         "  storage " HUD_C_TEXT "%s", now.app[0] ? now.app : "-", dev);
 		if (now.mode != VM_RA_AUTO)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: off (Read ahead %s)",
 			         k_ov_ra[s.readahead]);
-		else if (!now.title[0])
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: waiting for a game");
+		else if (!now.app[0])
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: waiting for an app");
+		else if (now.app_ignored)
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "ignores %s",
+			         now.app_system ? "it (system app)" : "it");
+		else if (now.manual)
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_ACCENT "set by hand");
 		else if (now.learning)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/%u",
 			         (unsigned)now.streams, (unsigned)now.target);
 		else
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_GOOD "learnt");
-		ov_thr(a, sizeof(a), now.mode, now.thr[0]);
-		ov_thr(b, sizeof(b), now.mode, now.thr[1]);
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Starts after  C %s" HUD_C_DIM "  NC %s"
-		         HUD_C_DIM " reads", a, b);
 		for (int i = 0; i < 3; i++)
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "On core 3    C %s" HUD_C_DIM "  NC %s",
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "On core 3    C %.7s" HUD_C_DIM "  NC %.7s",
 		         a, b);
-		{
-			const char *const names[OV_ITEMS] = { "Read ahead", "Copy on core 3",
-			                                      "Overlapped reads", "GPU-safe reads",
-			                                      "Reset Auto profile" };
-			const char *vals[OV_ITEMS] = {
-				k_ov_ra[s.readahead], k_ov_off[s.offload], k_ov_pipe[s.pipeline],
-				s.gpusafe ? "On" : "Off", "(X)",
-			};
-
-			for (int i = 0; i < OV_ITEMS; i++) {
-				char nm[20];
-
-				pad(nm, sizeof(nm), names[i], 18, 18, 0);
-				snprintf(L[n++], VM_HUD_LINE_MAX, "%s%s" HUD_C_TEXT "%s%s%s",
-				         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ", nm,
-				         i == cur ? HUD_C_ACCENT : HUD_C_GOOD, vals[i]);
-			}
-		}
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- This app (read ahead Auto) --");
+		ov_thr(tc, sizeof(tc), now.thr[0]);
+		ov_thr(tn, sizeof(tn), now.thr[1]);
+		ov_item(L[n++], cur, OV_ITEM_C, "Start after (C)", app_ok ? tc : "-");
+		ov_item(L[n++], cur, OV_ITEM_NC, "Start after (NC)", app_ok ? tn : "-");
+		ov_item(L[n++], cur, OV_ITEM_SAVE, "Save as its profile", "(X)");
+		ov_item(L[n++], cur, OV_ITEM_IGNORE, "Auto ignores it",
+		        !now.app[0] ? "-" : now.app_system ? "yes (system)"
+		        : now.app_ignored ? "yes" : "no");
+		ov_item(L[n++], cur, OV_ITEM_RESET, "Learn it again", "(X)");
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings --");
+		ov_item(L[n++], cur, OV_ITEM_RA, "Read ahead", k_ov_ra[s.readahead]);
+		ov_item(L[n++], cur, OV_ITEM_OFFLOAD, "Copy on core 3", k_ov_off[s.offload]);
+		ov_item(L[n++], cur, OV_ITEM_PIPE, "Overlapped reads", k_ov_pipe[s.pipeline]);
+		ov_item(L[n++], cur, OV_ITEM_GPUSAFE, "GPU-safe reads", s.gpusafe ? "On" : "Off");
 		if (msg[0] && ksceKernelGetSystemTimeLow() - msg_us < 4u * 1000u * 1000u)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);
 		else

@@ -170,11 +170,11 @@ static inline int hud_panel_geom(int w, int h, const HudText *t, HudGeom *g)
 	return t->n > 0 && g->box_w <= HUD_ROW_MAX && g->x0 >= 0 && g->y0 + g->box_h <= h;
 }
 
-/* Words a cached panel needs at the largest font (the most any framebuffer
- * can ask for). */
-static inline int hud_cache_words(const HudText *t)
+/* Bytes a cached panel needs at the largest font (the most any framebuffer can
+ * ask for): four bits a pixel, the panel has seven colours. */
+static inline int hud_cache_bytes(const HudText *t)
 {
-	return (t->maxlen * TER24_W + 2 * TER24_W) * (t->n * TER24_H + 2 * (TER24_H / 3));
+	return ((t->maxlen * TER24_W + 2 * TER24_W + 1) / 2) * (t->n * TER24_H + 2 * (TER24_H / 3));
 }
 
 /* How far row `r` of the box is cut in by the rounded corners. */
@@ -233,37 +233,92 @@ static inline void hud_draw_panel(uint32_t *fb, int pitch, int w, int h, const H
 	}
 }
 
-/* The panel kept composed between frames: built again only when the text or
- * the framebuffer size changes, otherwise each frame is just the copy. */
+/* The panel kept composed between frames, at four bits a pixel (0: the panel's
+ * background, else a colour code): built again only when the text or the
+ * framebuffer size changes, otherwise each frame only expands it, row by row. */
 typedef struct {
-	uint32_t *px;
-	int       words;          /* size of px                                 */
+	uint8_t  *px;
+	int       bytes;          /* size of px                                 */
 	uint32_t  gen;            /* what is in it: text generation ...         */
 	int       w, h;           /* ... for this framebuffer size (w = 0: none) */
 } HudCache;
 
-/* 0 if the cache is too small for this panel (then draw it uncached). */
-static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, const HudText *t,
-                                        HudCache *c)
+/* Row `r` of the panel in `stride` bytes, four bits a pixel, high nibble first. */
+static inline void hud_pack_row(const HudText *t, const HudGeom *g, int r, uint8_t *out, int stride)
 {
+	const int li = (r - g->pad_y) / g->f.h, gy = (r - g->pad_y) % g->f.h;
+
+	for (int i = 0; i < stride; i++)
+		out[i] = 0;
+	if (r < g->pad_y || li >= t->n)
+		return;
+	{
+		unsigned color = 1;
+		int cx = g->pad_x;
+
+		for (const char *s = t->lines[li]; *s; s++) {
+			unsigned char c = (unsigned char)*s;
+			uint16_t bits;
+
+			if (hud_is_code((char)c)) {
+				color = c;
+				continue;
+			}
+			if (c >= TER_FIRST && c <= TER_LAST &&
+			    (bits = g->f.glyphs[(c - TER_FIRST) * g->f.h + gy]) != 0)
+				for (int dx = 0; dx < g->f.w; dx++)
+					if (bits & (0x8000u >> dx)) {
+						const int x = cx + dx;
+
+						out[x >> 1] |= (uint8_t)((x & 1) ? color : color << 4);
+					}
+			cx += g->f.w;
+		}
+	}
+}
+
+/* 0 if the cache is too small for this panel (then draw it uncached). `row`: at
+ * least HUD_ROW_MAX words of ordinary memory, for the copy in one straight run. */
+static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, const HudText *t,
+                                        HudCache *c, uint32_t *row)
+{
+	uint32_t pal[16];
 	HudGeom g;
+	int stride;
 
 	if (!hud_panel_geom(w, h, t, &g))
 		return 1;                       /* nothing to draw is not a failure */
-	if (!c->px || g.box_w * g.box_h > c->words)
+	stride = (g.box_w + 1) / 2;
+	if (!c->px || stride * g.box_h > c->bytes)
 		return 0;
 	if (c->gen != t->gen || c->w != w || c->h != h) {
 		for (int r = 0; r < g.box_h; r++)
-			hud_compose_row(t, &g, r, c->px + r * g.box_w);
+			hud_pack_row(t, &g, r, c->px + r * stride, stride);
 		c->gen = t->gen;
 		c->w = w;
 		c->h = h;
 	}
+	pal[0] = HUD_PANEL_BG;
+	for (int i = 1; i < 16; i++)
+		pal[i] = hud_color(i);
 	for (int r = 0; r < g.box_h; r++) {
-		int in = hud_row_inset(&g, r);
+		const int in = hud_row_inset(&g, r), end = g.box_w - in;
+		const uint8_t *p = c->px + r * stride;
+		int x = in;
 
-		memcpy(fb + (g.y0 + r) * pitch + g.x0 + in, c->px + r * g.box_w + in,
-		       (size_t)(g.box_w - 2 * in) * 4);
+		if (x & 1) {
+			row[x] = pal[p[x >> 1] & 15];
+			x++;
+		}
+		for (; x + 1 < end; x += 2) {
+			const uint8_t b = p[x >> 1];
+
+			row[x] = pal[b >> 4];
+			row[x + 1] = pal[b & 15];
+		}
+		if (x < end)
+			row[x] = pal[p[x >> 1] >> 4];
+		memcpy(fb + (g.y0 + r) * pitch + g.x0 + in, row + in, (size_t)(end - in) * 4);
 	}
 	return 1;
 }

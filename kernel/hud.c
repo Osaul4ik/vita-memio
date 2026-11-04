@@ -38,8 +38,8 @@ static volatile int g_front = 0;
 static HudText      g_ov[2];
 static volatile int g_ov_front = 0;
 
-/* The PSVshell style keeps the composed panel in g_cache (ordinary cached
- * memory, allocated by the worker while the HUD is on), so a frame only copies
+/* The PSVshell style keeps the composed panel in g_cache, at four bits a pixel
+ * (ordinary cached memory, allocated by the worker while the HUD is on), so a frame only copies
  * it; built again when the text or the framebuffer size changes. Without the
  * cache it composes one row at a time in g_row. `g_row_busy` keeps the drawing
  * threads and the worker's cache swap apart. */
@@ -102,7 +102,7 @@ static int hook_set_framebuf(int head, int index,
 		/* only the overlay */
 	} else if (t->style == VM_HUD_STYLE_PSVSHELL) {
 		if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
-			if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache))
+			if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
 				hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
 			__sync_lock_release(&g_row_busy);
 		}
@@ -141,7 +141,7 @@ int vm_hud_init(void)
 
 /* Put `uid`/`px`/`words` in as the cache (uid -1: no cache) and free the old
  * one, with the drawing threads kept out meanwhile. Worker thread only. */
-static void cache_swap(SceUID uid, uint32_t *px, int words)
+static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 {
 	SceUID old;
 
@@ -150,7 +150,7 @@ static void cache_swap(SceUID uid, uint32_t *px, int words)
 	old = g_cache_uid;
 	g_cache_uid = uid;
 	g_cache.px = px;
-	g_cache.words = words;
+	g_cache.bytes = bytes;
 	g_cache.w = 0;                     /* nothing composed in it yet */
 	__sync_lock_release(&g_row_busy);
 	if (old >= 0)
@@ -162,22 +162,22 @@ static void cache_swap(SceUID uid, uint32_t *px, int words)
  * composed every frame. */
 static void cache_fit(const HudText *t)
 {
-	static int failed_words;           /* the size that could not be had */
+	static int failed_bytes;           /* the size that could not be had */
 	SceKernelAllocMemBlockKernelOpt opt;
 	SceUID uid;
 	void *base = NULL;
-	int words, size;
+	int want, size;
 
 	if (t->n <= 0 || t->style != VM_HUD_STYLE_PSVSHELL) {
 		if (g_cache_uid >= 0)
 			cache_swap(-1, NULL, 0);
-		failed_words = 0;
+		failed_bytes = 0;
 		return;
 	}
-	words = hud_cache_words(t);
-	if (words <= g_cache.words || words == failed_words)
+	want = hud_cache_bytes(t);
+	if (want <= g_cache.bytes || want == failed_bytes)
 		return;
-	size = (words * 4 + 0xFFF) & ~0xFFF;
+	size = (want + 0xFFF) & ~0xFFF;
 	memset(&opt, 0, sizeof(opt));
 	opt.size = sizeof(opt);
 	uid = ksceKernelAllocMemBlock("SceVitaMemioHud", SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW,
@@ -185,10 +185,10 @@ static void cache_fit(const HudText *t)
 	if (uid < 0 || ksceKernelGetMemBlockBase(uid, &base) < 0) {
 		if (uid >= 0)
 			ksceKernelFreeMemBlock(uid);
-		failed_words = words;
+		failed_bytes = want;
 		return;
 	}
-	cache_swap(uid, base, size / 4);
+	cache_swap(uid, base, size);
 }
 
 void vm_hud_fini(void)

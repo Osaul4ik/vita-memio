@@ -506,17 +506,15 @@ static void overlay_feed(void)
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Game " HUD_C_TEXT "%s" HUD_C_DIM
 		         "  storage " HUD_C_TEXT "%s", now.title[0] ? now.title : "-", dev);
 		if (!now.measure)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: not learning (Read ahead "
-			         "%s)", k_ov_ra[s.readahead]);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: off (Read ahead %s)",
+			         k_ov_ra[s.readahead]);
 		else if (!now.title[0])
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: waiting for a game");
 		else if (now.learning)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/300"
-			         HUD_C_DIM "%s", (unsigned)now.streams,
-			         now.mode == VM_RA_AUTO ? "" : " (used in Auto)");
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_WARN "learning %u/300",
+			         (unsigned)now.streams);
 		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_GOOD "learnt" HUD_C_DIM
-			         "%s", now.mode == VM_RA_AUTO ? "" : " (used in Auto)");
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Auto: " HUD_C_GOOD "learnt");
 		ov_thr(a, sizeof(a), now.mode, now.thr[0]);
 		ov_thr(b, sizeof(b), now.mode, now.thr[1]);
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Starts after  C %s" HUD_C_DIM "  NC %s"

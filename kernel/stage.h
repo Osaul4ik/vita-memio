@@ -50,7 +50,7 @@ int  vm_stage_ra_delete(const char *title);
 typedef struct VmRaNow {
 	char     title[16];     /* the game followed ("" none / no title id)     */
 	int      mode;          /* VM_RA_*                                       */
-	int      measure;       /* learning switched on (auto or statistics)     */
+	int      measure;       /* learning switched on (auto)                   */
 	int      learning;      /* 1 while it learns this game                   */
 	uint32_t streams;       /* ... streams seen so far                       */
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)  */

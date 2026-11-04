@@ -2752,31 +2752,34 @@ static void test_readahead_auto(void)
 	CHECK(!g_ra_learning && g_ra_dev == M && vm_stage_tick_us() == 0);
 	vm_stage_fini();
 
-	/* Statistics with read ahead on (not auto): measured and learnt the
-	 * same way (one switch for both), but on uses its fixed threshold;
-	 * with neither, nothing is measured and the worker is not asked to tick */
+	/* Statistics starts nothing of read ahead's learning, with read ahead
+	 * On or Off: no game followed, the worker not asked to tick */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	s.readahead = VM_RA_ON;
-	s.stats = 1;
+	for (int m = 0; m < 2; m++) {
+		s.readahead = m ? VM_RA_ON : VM_RA_OFF;
+		s.stats = 1;
+		vm_stage_apply(&s);
+		CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
+		g_title_fn = fake_title;
+		fake_pid = 0x44;
+		streams(u, RA_SWITCH, 8, 256);
+		vm_stage_worker_tick();
+		CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
+		      g_ra_dev_sec[M] == 0 && g_ra_hstreams == 0);
+	}
+	/* Auto on, a game followed and learning; Auto off (Statistics still
+	 * on): nothing left behind */
+	s.readahead = VM_RA_AUTO;
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 1);
-	g_title_fn = fake_title;
-	fake_pid = 0x44;
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning);
-	streams(u, RA_LEARN_STREAMS, 8, 256);
-	vm_stage_worker_tick();
-	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && ra_threshold(0x44, 0) == RA_STREAK);
-	s.readahead = VM_RA_AUTO;                         /* auto as well: still one switch */
-	vm_stage_apply(&s);
-	CHECK(g_ra_measure == 1 && ra_threshold(0x44, 0) == 2);
 	s.readahead = VM_RA_ON;
-	s.stats = 0;
 	vm_stage_apply(&s);
 	CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
-	vm_stage_worker_tick();                           /* nothing left behind */
+	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0 && g_ra_seen == 0 && !g_ra_title[0] && !g_ra_learning &&
 	      g_ra_dev == -1 && g_ra_thr[0] == 0 && g_ra_hstreams == 0);
 	{
@@ -2786,11 +2789,6 @@ static void test_readahead_auto(void)
 		streams(u, RA_SWITCH, 8, 256);
 		CHECK(g_ra_seen == seen && g_ra_dev_sec[M] == 0);
 	}
-	/* Statistics with read ahead Off: nothing measured either */
-	s.readahead = VM_RA_OFF;
-	s.stats = 1;
-	vm_stage_apply(&s);
-	CHECK(g_ra_measure == 0);
 	vm_stage_fini();
 
 	/* Auto switched off mid-learning: kept if it had enough, then afresh */
@@ -2807,8 +2805,7 @@ static void test_readahead_auto(void)
 	streams(u, RA_LEARN_MIN, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_learning && g_ra_dev == M);
-	s.readahead = VM_RA_ON;
-	s.stats = 0;                                      /* neither measures now */
+	s.readahead = VM_RA_ON;                           /* Auto off */
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0 && !g_ra_learning && !g_ra_title[0]);

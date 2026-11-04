@@ -1362,9 +1362,8 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
  * kept in its profile). Other processes and the other storage read as with
  * read ahead off.
  *
- * Measuring (streams, the game and its storage) is on with Auto or with
- * Statistics, one switch for both (g_ra_measure); only Auto uses what is
- * learnt. The worker is woken for it (a new game), and ticks every
+ * Measuring (streams, the game and its storage, g_ra_measure) is on with
+ * Auto only; Statistics does not start it. The worker is woken for it (a new game), and ticks every
  * RA_TICK_US while a game is learnt or its storage not yet known - also
  * with the HUD and the log off. */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
@@ -1380,7 +1379,7 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
 static volatile int g_ra_mode;            /* VM_RA_*                          */
-static volatile int g_ra_measure;         /* auto or statistics: learn        */
+static volatile int g_ra_measure;         /* auto: learn                      */
 /* the game being learnt or served (a process id; 0: none), its thresholds
  * (0: the fixed one) and its histogram while it learns - all atomics */
 static SceUID   g_ra_pid, g_ra_seen;      /* g_ra_seen: the last game with a stream */
@@ -1686,7 +1685,7 @@ static void ra_auto_tick(void)
 		ra_learn_finish();
 }
 
-/* Measuring switched off (Auto and Statistics both): what a game learnt so
+/* Measuring switched off (Auto off): what a game learnt so
  * far is kept if it is enough (as when the game ends), then nothing is left
  * behind - switched on again, it starts afresh. Worker thread. */
 static void ra_auto_stop(void)
@@ -2889,10 +2888,8 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_ra_mode, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
 	                                                                    : VM_RA_OFF);
 	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
-	/* Statistics learns too while read ahead is On; with it Off there is
-	 * nothing to learn for (and non-cacheable streams are not seen) */
-	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || (s->stats && LD(g_ra_mode) == VM_RA_ON)
-	                 ? 1 : 0);
+	/* only Auto learns: Statistics starts nothing but its own counters */
+	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO ? 1 : 0);
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || LD(g_readahead)))

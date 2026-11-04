@@ -2228,7 +2228,7 @@ static void test_readahead(void)
 	for (int i = 0; i < RA_PIECES; i++)
 		ra_wait(d, i);
 	CHECK(!ra_idle(d));
-	fake_now_us += RA_LIVE_US;
+	__sync_fetch_and_add(&fake_now_us, RA_LIVE_US);
 	g_min_sectors = MIN_SECTORS;
 	CHECK(rd_ok(u, 3000, 64) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == staging);
 	CHECK(ra_idle(d) && g_ra_drops == 1);
@@ -2360,7 +2360,7 @@ static void test_readahead(void)
 		CHECK(rd_ok(u, i * 256, 256));
 	for (int i = 0; i < RA_PIECES; i++)
 		ra_wait(d, i);
-	fake_now_us += RA_MAX_AGE_US;
+	__sync_fetch_and_add(&fake_now_us, RA_MAX_AGE_US);
 	{
 		const uint32_t bad = g_ra_bad;
 
@@ -4032,20 +4032,20 @@ static void test_review_fixes(void)
 			d->ra_hit = 1;
 			ra_note(d, NULL, at, 256, 0);
 			at += 256;
-			fake_now_us += 100000;                    /* 128 KiB per 100 ms: slow */
+			__sync_fetch_and_add(&fake_now_us, 100000);                    /* 128 KiB per 100 ms: slow */
 		}
 		CHECK(d->ra_run >= RA_VIDEO_READS && g_ra_video_us && g_ra_video_runs == 1);
 		ra_note(d, NULL, 3000, 256, 0);               /* it ends: it counts */
 		CHECK(g_ra_hstreams == n + 1 && !d->ra_run);
 		ra_note(d, NULL, 200, 256, 0);                /* a short one around it: no */
 		CHECK(g_ra_hstreams == n + 1 && g_ra_video_left == 1);
-		fake_now_us += RA_VIDEO_US / 2;
+		__sync_fetch_and_add(&fake_now_us, RA_VIDEO_US / 2);
 		d->ra_hit = 1;                                /* a piece of it: still a video */
 		ra_note(d, NULL, 456, 256, 0);
-		fake_now_us += RA_VIDEO_US - 1000;
+		__sync_fetch_and_add(&fake_now_us, RA_VIDEO_US - 1000);
 		ra_note(d, NULL, 1000, 256, 0);
 		CHECK(g_ra_hstreams == n + 1);
-		fake_now_us += RA_VIDEO_US + 1000;            /* over: the game's again */
+		__sync_fetch_and_add(&fake_now_us, RA_VIDEO_US + 1000);            /* over: the game's again */
 		ra_note(d, NULL, 2000, 256, 0);
 		CHECK(g_ra_hstreams == n + 2);
 	}
@@ -4061,7 +4061,7 @@ static void test_review_fixes(void)
 			d->ra_hit = 1;
 			ra_note(d, NULL, at, 256, 0);
 			at += 256;
-			fake_now_us += 5000;                      /* 128 KiB per 5 ms */
+			__sync_fetch_and_add(&fake_now_us, 5000);                      /* 128 KiB per 5 ms */
 		}
 		CHECK(d->ra_run >= RA_VIDEO_READS && !g_ra_video_us && !g_ra_video_runs);
 	}
@@ -4132,6 +4132,40 @@ static void test_review_fixes(void)
 			CHECK(rd_ok(u, at, 256));
 			CHECK(g_ra_hits == h + 1 && d->ra_streak == RA_STREAK + 1);
 		}
+	}
+	vm_stage_fini();
+
+	/* a 32 KiB read with the device busy goes the standard way, and its
+	 * stream goes on; and small reads between them leave the pieces, by the
+	 * time of the last one */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_ra_measure = 1;
+	{
+		uint32_t at = 64;
+
+		for (int k = 0; k < 5; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		d->busy = 1;
+		CHECK(rd_ok(u, at, 64));
+		d->busy = 0;
+		at += 64;
+		CHECK(d->rs_streak == 6);
+		for (int k = 0; k < 20; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(ra_any(d) && d->ra_small && d->rs_streak == 26);
+		__sync_fetch_and_add(&fake_now_us, RA_LIVE_US * 3);
+		CHECK(rd_ok(u, at, 64));
+		at += 64;
+		__sync_fetch_and_add(&fake_now_us, RA_LIVE_US / 2);
+		g_min_sectors = 1;
+		{
+			const uint32_t drops = g_ra_drops;
+
+			CHECK(rd_ok(u, 3900, 1));                 /* live: not dropped */
+			CHECK(g_ra_drops == drops && ra_any(d));
+		}
+		g_min_sectors = MIN_SECTORS;
 	}
 	vm_stage_fini();
 

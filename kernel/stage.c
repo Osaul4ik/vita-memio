@@ -218,6 +218,7 @@ typedef struct Dev {
 	void         *rs_part;
 	int           ra_noted_small;         /* the last read noted was one of those */
 	int           ra_small;               /* atomic: the pieces are for that stream */
+	volatile int  rs_lock;                /* its fields: any thread, a moment only */
 	SceUID        ra_pid;                 /* ... started by (auto only, else 0) */
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
@@ -2949,8 +2950,13 @@ static void ra_small_end(Dev *d)
 	d->rs_streak = 0;
 }
 
+/* A 32 KiB read done, by whichever path: with the device busy it goes the
+ * standard way, and a stream that lost such a read would fall apart into
+ * pieces. Another thread at it just now: this one is lost, as a lost update. */
 static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 {
+	if (__sync_lock_test_and_set(&d->rs_lock, 1))
+		return;
 	if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc) {
 		d->rs_streak += d->rs_streak < 1000;
 	} else {
@@ -2965,6 +2971,15 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 		ra_dev_add((int)(d - g_dev), n);
 	if (!(++d->rs_quarter % RA_SMALL_FACTOR))
 		ra_read_note(d->rs_pid, 0);
+	__sync_lock_release(&d->rs_lock);
+}
+
+/* The same for a read that went the standard way, if it is one of those. */
+static inline void ra_note_small_stock(Dev *d, void *part, uint32_t sector, uint32_t n, int nc, int ret)
+{
+	if (ret >= 0 && n >= RA_SMALL_SECTORS && n < RA_MIN_SECTORS && LD(g_ra_measure) &&
+	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
+		ra_note_small(d, part, sector, n, nc);
 }
 
 /* Worker, as the app leaves: the streams still open end here (the fields are
@@ -2981,8 +2996,10 @@ static void ra_streams_close(void)
 				ra_stream_end(d);
 				d->ra_streak = 0;
 			}
-			if (d->rs_pid && d->rs_pid == pid)
+			if (d->rs_pid && d->rs_pid == pid && !__sync_lock_test_and_set(&d->rs_lock, 1)) {
 				ra_small_end(d);
+				__sync_lock_release(&d->rs_lock);
+			}
 			__sync_lock_release(&d->busy);
 		}
 	}
@@ -3020,6 +3037,9 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	if (n < RA_MIN_SECTORS) {
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;
+		/* read: small reads between them leave the pieces alone meanwhile */
+		if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
+			__atomic_store_n(&d->ra_last_us, ksceKernelGetSystemTimeLow(), __ATOMIC_RELAXED);
 		return 1;
 	}
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc) {
@@ -3298,7 +3318,9 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 
 	if (!take(d, 1, nsec)) {
 		ADD(g_nc_stock_kib, nsec / 2);
-		return io(ref, part, sector, p, nsec);
+		ret = io(ref, part, sector, p, nsec);
+		ra_note_small_stock(d, part, sector, nsec, 1, ret);
+		return ret;
 	}
 	if (!__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
 		__sync_lock_release(&d->busy);          /* switched off meanwhile */
@@ -3547,15 +3569,23 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	 * waits for the card either way; a write still makes them unusable). */
 	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) && ra_any(d) &&
 	    ksceKernelGetSystemTimeLow() - __atomic_load_n(&d->ra_last_us, __ATOMIC_RELAXED) <
-	    RA_LIVE_US)
-		return io(ref, part, sector, buf, nsec);
+	    RA_LIVE_US) {
+		ret = io(ref, part, sector, buf, nsec);
+		if (!write)
+			ra_note_small_stock(d, part, sector, nsec, 0, ret);
+		return ret;
+	}
 	/* GPU-safe reads asked for, but this firmware has no cache clean to
 	 * keep that promise: such reads take the standard path, which leaves
 	 * the data in memory as promised. */
 	if (!write && LD(g_gpu_safe) && !g_dcache_clean)
 		return io(ref, part, sector, buf, nsec);
-	if (!take(d, mine, nsec))
-		return io(ref, part, sector, buf, nsec);
+	if (!take(d, mine, nsec)) {
+		ret = io(ref, part, sector, buf, nsec);
+		if (mine && !write)
+			ra_note_small_stock(d, part, sector, nsec, 0, ret);
+		return ret;
+	}
 	if (!write)
 		rd_ref = ref;
 	void *const shadow = take_shadow();
@@ -3589,7 +3619,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
 		/* a write ends the streams: noted, as any other end */
-		ra_small_end(d);
+		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
+			ra_small_end(d);
+			__sync_lock_release(&d->rs_lock);
+		}
 		ra_stream_end(d);
 		d->ra_streak = 0;
 	}
@@ -4223,6 +4256,10 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			if (LD(g_dev[i].st.passthru))
+				VM_KLOGI("stage: dev %d busy, read the standard way: %u", i,
+				         (unsigned)LD(g_dev[i].st.passthru));
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
 			         "switched %u, old %u; trace lost %u", (unsigned)LD(g_ra_bad_why[0]),

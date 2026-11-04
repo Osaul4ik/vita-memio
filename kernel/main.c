@@ -83,6 +83,8 @@ static uint64_t g_t0_us;             /* ... from this system time          */
  *     for the home screen;
  *   - every 5 s while a failed settings save is to be retried;
  *   - once a minute while the log is on (the stage's statistics line);
+ *   - every 2 s while read ahead learns a game or looks for its storage
+ *     (auto or statistics; also woken when a new game starts reading);
  *   - otherwise not at all, until it is woken: by a changed setting (saved
  *     and applied at once: buffers, helper threads) or by a device error or
  *     verify mismatch (logged at once). */
@@ -382,6 +384,12 @@ static int worker(SceSize args, void *argp)
 			wait = VM_WORKER_RETRY_US;      /* a save or a helper release to retry */
 		else if (__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED) && running)
 			wait = VM_WORKER_LOG_US;
+		if (running) {
+			const SceUInt t = vm_stage_tick_us();   /* read ahead learning a game */
+
+			if (t && (!wait || t < wait))
+				wait = t;
+		}
 		if (g_wake >= 0)
 			ksceKernelWaitSema(g_wake, 1, wait ? &wait : NULL);   /* 0: until woken */
 		else

@@ -1348,9 +1348,28 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
  * and the next read waiting for the card) - or none at all, if nothing pays. That is kept for the game, by its
  * title id, in ur0:data/vita-memio/ra/, and used whenever the game runs again.
  * Learning uses the fixed threshold. Only when to start changes: everything
- * "read ahead" guarantees holds whatever it learns. */
+ * "read ahead" guarantees holds whatever it learns.
+ *
+ * A game that ends (another process starts streams) after at least
+ * RA_LEARN_MIN streams is learnt from what it read, so short sessions (as
+ * homebrew often has) learn too.
+ *
+ * Auto reads ahead only for the game, and only on its storage: the device
+ * that served most of its large reads (decided after RA_DEV_DECIDE sectors,
+ * kept in its profile). Other processes and the other storage read as with
+ * read ahead off.
+ *
+ * Measuring (streams, the game and its storage) is on with Auto or with
+ * Statistics, one switch for both (g_ra_measure); only Auto uses what is
+ * learnt. The worker is woken for it (a new game), and ticks every
+ * RA_TICK_US while a game is learnt or its storage not yet known - also
+ * with the HUD and the log off. */
 #define RA_HBINS          33              /* stream lengths 1 .. 32 (and more) */
 #define RA_LEARN_STREAMS  300
+#define RA_LEARN_MIN      32              /* ... or this many, when it ends   */
+#define RA_SWITCH         3               /* streams of another process: a new game */
+#define RA_DEV_DECIDE     8192            /* sectors (4 MiB) to know its storage */
+#define RA_TICK_US        (2u * 1000u * 1000u)
 #define RA_GAIN_US        2700            /* per read served from the pieces   */
 #define RA_COST_US        8000            /* per stream that started it        */
 #define RA_THR_NONE       0xFFFFu         /* learnt: never start               */
@@ -1358,12 +1377,16 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
 static volatile int g_ra_mode;            /* VM_RA_*                          */
+static volatile int g_ra_measure;         /* auto or statistics: learn        */
 /* the game being learnt or served (a process id; 0: none), its thresholds
  * (0: the fixed one) and its histogram while it learns - all atomics */
 static SceUID   g_ra_pid, g_ra_seen;      /* g_ra_seen: the last game with a stream */
 static uint32_t g_ra_thr[2];
 static int      g_ra_learning;
 static uint32_t g_ra_hcnt[2][RA_HBINS], g_ra_hstreams;
+static uint32_t g_ra_seen_n;              /* g_ra_seen's streams so far       */
+static int      g_ra_dev = -1;            /* the game's storage (VM_DEV_*), -1 unknown */
+static uint32_t g_ra_dev_sec[VM_DEV_COUNT];   /* its large reads per storage */
 /* the worker's own */
 static char     g_ra_title[16];
 static int      g_ra_auto_logged;
@@ -1409,9 +1432,13 @@ static uint32_t ra_choose(const uint32_t *cnt)
 	return best_t;
 }
 
+/* version 1: no dev (read as -1, decided again); version 2: dev */
 typedef struct RaProfile {
 	uint32_t magic, version, thr[2], streams, check;
+	int32_t  dev;
+	uint32_t check2;
 } RaProfile;
+#define RA_PROFILE_V1_SIZE (6 * 4)
 
 static uint32_t ra_profile_check(const RaProfile *p)
 {
@@ -1419,13 +1446,19 @@ static uint32_t ra_profile_check(const RaProfile *p)
 	       (p->streams << 7) ^ 0x5A5A5A5Au;
 }
 
+static uint32_t ra_profile_check2(const RaProfile *p)
+{
+	return ra_profile_check(p) ^ ((uint32_t)p->dev * 2246822519u) ^ 0xC3C3C3C3u;
+}
+
 static void ra_profile_path(char *out, size_t n, const char *title)
 {
 	snprintf(out, n, "%s/%s.bin", RA_PROFILE_DIR, title);
 }
 
-/* 1 and its thresholds if the game has a usable profile. */
-static int ra_profile_load(const char *title, uint32_t thr[2])
+/* 1 and its thresholds (and storage, -1 if not kept) if the game has a
+ * usable profile. */
+static int ra_profile_load(const char *title, uint32_t thr[2], int *dev)
 {
 	char path[96];
 	RaProfile p;
@@ -1436,20 +1469,26 @@ static int ra_profile_load(const char *title, uint32_t thr[2])
 	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
 	if (fd < 0)
 		return 0;
+	memset(&p, 0, sizeof(p));
 	n = ksceIoRead(fd, &p, sizeof(p));
 	ksceIoClose(fd);
-	if (n != (int)sizeof(p) || p.magic != RA_PROFILE_MAGIC || p.version != 1 ||
-	    p.check != ra_profile_check(&p))
+	if (p.magic != RA_PROFILE_MAGIC || p.check != ra_profile_check(&p))
+		return 0;
+	if (p.version == 1 && n == RA_PROFILE_V1_SIZE)
+		p.dev = -1;
+	else if (p.version != 2 || n != (int)sizeof(p) || p.check2 != ra_profile_check2(&p) ||
+	         p.dev < -1 || p.dev >= VM_DEV_COUNT || p.dev == VM_DEV_INTERNAL)
 		return 0;
 	for (int k = 0; k < 2; k++)
 		if (p.thr[k] != RA_THR_NONE && (p.thr[k] < 2 || p.thr[k] > 8))
 			return 0;
 	thr[0] = p.thr[0];
 	thr[1] = p.thr[1];
+	*dev = p.dev;
 	return 1;
 }
 
-static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams)
+static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t streams, int dev)
 {
 	char path[96];
 	RaProfile p;
@@ -1458,11 +1497,13 @@ static void ra_profile_save(const char *title, const uint32_t thr[2], uint32_t s
 	ra_profile_path(path, sizeof(path), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
-	p.version = 1;
+	p.version = 2;
 	p.thr[0] = thr[0];
 	p.thr[1] = thr[1];
 	p.streams = streams;
+	p.dev = dev;
 	p.check = ra_profile_check(&p);
+	p.check2 = ra_profile_check2(&p);
 	ksceIoMkdir("ur0:data", 0777);
 	ksceIoMkdir(VM_DATA_DIR, 0777);
 	ksceIoMkdir(RA_PROFILE_DIR, 0777);
@@ -1483,7 +1524,7 @@ static int ra_title_ok(const char *t)
 
 	for (; t[n]; n++)
 		if (!((t[n] >= 'A' && t[n] <= 'Z') || (t[n] >= 'a' && t[n] <= 'z') ||
-		      (t[n] >= '0' && t[n] <= '9')) || n >= 12)
+		      (t[n] >= '0' && t[n] <= '9') || t[n] == '_') || n >= 12)
 			return 0;
 	return n >= 4;
 }
@@ -1504,26 +1545,55 @@ static void ra_thr_text(char *out, size_t n, uint32_t t)
 		snprintf(out, n, "%u", (unsigned)t);
 }
 
-/* Worker, once a tick with read ahead on auto: follow the game that reads
- * streams, load its profile or learn one, and keep it once learnt. */
+/* The game's learning is over: the thresholds that pay most, kept. */
+static void ra_learn_finish(void)
+{
+	uint32_t thr[2];
+	const uint32_t n = __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED);
+	char a[8], b[8];
+
+	thr[0] = ra_choose(g_ra_hcnt[0]);
+	thr[1] = ra_choose(g_ra_hcnt[1]);
+	__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
+	__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
+	ra_profile_save(g_ra_title, thr, n, LD(g_ra_dev));
+	ra_thr_text(a, sizeof(a), thr[0]);
+	ra_thr_text(b, sizeof(b), thr[1]);
+	VM_KLOGI("stage: read ahead auto: %s - learnt from %u streams: starts after %s / %s "
+	         "reads", g_ra_title, (unsigned)n, a, b);
+}
+
+/* Worker, once a tick while measuring: follow the game that reads streams,
+ * load its profile or learn one, find its storage, keep what is learnt. */
 static void ra_auto_tick(void)
 {
 	const SceUID seen = __atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE);
 
 	if (!g_title_fn) {
-		if (!g_ra_auto_logged) {
+		if (!g_ra_auto_logged && LD(g_ra_mode) == VM_RA_AUTO) {
 			g_ra_auto_logged = 1;
 			VM_KLOGW("stage: read ahead auto: no title ids on this firmware - works as on");
 		}
 		return;
 	}
-	if (seen && seen != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE)) {
+	if (seen && seen != __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) &&
+	    (!__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) ||
+	     __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH)) {
 		char t[32];
 		uint32_t thr[2] = { 0, 0 };
+		int dev = -1;
 
+		/* the last game has ended: learnt from what it read, if enough */
+		if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+		    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_MIN)
+			ra_learn_finish();
 		memset(t, 0, sizeof(t));
 		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
 		ra_hist_clear();
+		ST(g_ra_dev, -1);
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			__atomic_store_n(&g_ra_dev_sec[i], 0, __ATOMIC_RELAXED);
 		if (g_title_fn(seen, t, sizeof(t) - 1) < 0 || !ra_title_ok(t)) {
 			g_ra_title[0] = 0;                   /* not a game we can name: fixed */
 			__atomic_store_n(&g_ra_thr[0], 0, __ATOMIC_RELAXED);
@@ -1533,13 +1603,14 @@ static void ra_auto_tick(void)
 		}
 		memcpy(g_ra_title, t, sizeof(g_ra_title) - 1);
 		g_ra_title[sizeof(g_ra_title) - 1] = 0;
-		if (ra_profile_load(g_ra_title, thr)) {
+		if (ra_profile_load(g_ra_title, thr, &dev)) {
 			char a[8], b[8];
 
 			ra_thr_text(a, sizeof(a), thr[0]);
 			ra_thr_text(b, sizeof(b), thr[1]);
-			VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads (kept)",
-			         g_ra_title, a, b);
+			VM_KLOGI("stage: read ahead auto: %s - starts after %s / %s reads, storage %d "
+			         "(kept)", g_ra_title, a, b, dev);
+			ST(g_ra_dev, dev);
 		} else {
 			__atomic_store_n(&g_ra_learning, 1, __ATOMIC_RELEASE);
 			VM_KLOGI("stage: read ahead auto: %s - learning", g_ra_title);
@@ -1549,23 +1620,47 @@ static void ra_auto_tick(void)
 		__atomic_store_n(&g_ra_pid, seen, __ATOMIC_RELEASE);
 		return;
 	}
-	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
-	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_STREAMS) {
-		uint32_t thr[2];
-		char a[8], b[8];
+	/* the game's storage: where most of its large reads went */
+	if (__atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE) && LD(g_ra_dev) < 0) {
+		uint32_t sum = 0, best = 0;
+		int bi = -1;
 
-		thr[0] = ra_choose(g_ra_hcnt[0]);
-		thr[1] = ra_choose(g_ra_hcnt[1]);
-		__atomic_store_n(&g_ra_learning, 0, __ATOMIC_RELEASE);
-		__atomic_store_n(&g_ra_thr[0], thr[0], __ATOMIC_RELAXED);
-		__atomic_store_n(&g_ra_thr[1], thr[1], __ATOMIC_RELAXED);
-		ra_profile_save(g_ra_title, thr, __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED));
-		ra_thr_text(a, sizeof(a), thr[0]);
-		ra_thr_text(b, sizeof(b), thr[1]);
-		VM_KLOGI("stage: read ahead auto: %s - learnt from %u streams: starts after %s / %s "
-		         "reads", g_ra_title, (unsigned)__atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED),
-		         a, b);
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			const uint32_t v = __atomic_load_n(&g_ra_dev_sec[i], __ATOMIC_RELAXED);
+
+			sum += v;
+			if (v > best) {
+				best = v;
+				bi = i;
+			}
+		}
+		if (sum >= RA_DEV_DECIDE && bi >= 0 && bi != VM_DEV_INTERNAL) {
+			ST(g_ra_dev, bi);
+			VM_KLOGI("stage: read ahead auto: %s - on storage %d",
+			         g_ra_title[0] ? g_ra_title : "(no title id)", bi);
+			if (g_ra_title[0] && !__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE)) {
+				uint32_t thr[2];
+
+				thr[0] = __atomic_load_n(&g_ra_thr[0], __ATOMIC_RELAXED);
+				thr[1] = __atomic_load_n(&g_ra_thr[1], __ATOMIC_RELAXED);
+				ra_profile_save(g_ra_title, thr, 0, bi);   /* an old profile: now with it */
+			}
+		}
 	}
+	if (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) && g_ra_title[0] &&
+	    __atomic_load_n(&g_ra_hstreams, __ATOMIC_RELAXED) >= RA_LEARN_STREAMS)
+		ra_learn_finish();
+}
+
+/* Auto: whether this device reads ahead for the stream it has - only the
+ * game's, on the game's storage. Without title ids, as on. */
+static int ra_auto_here(const Dev *d)
+{
+	const SceUID pid = __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
+
+	if (LD(g_ra_mode) != VM_RA_AUTO || !g_title_fn)
+		return 1;
+	return pid && d->ra_pid == pid && LD(g_ra_dev) == (int)(d - g_dev);
 }
 
 /* The threshold for a stream of `pid` of kind nc: the learnt one in auto
@@ -1859,18 +1954,39 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		return 0;                           /* neither part of a stream nor a break */
 	if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc) {
 		d->ra_streak += d->ra_streak < 1000;
+		if (d->ra_pid && d->ra_pid == __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE))
+			__atomic_fetch_add(&g_ra_dev_sec[d - g_dev], n, __ATOMIC_RELAXED);
 	} else {
 		/* the last stream is over: noted for auto; a new one starts */
 		if (d->ra_streak)
 			ra_hist_note(d->ra_pid, d->ra_nc, d->ra_streak);
 		d->ra_streak = 1;
 		d->ra_pid = 0;
-		if (LD(g_ra_mode) == VM_RA_AUTO) {
+		if (LD(g_ra_measure)) {
 			const SceUID pid = ksceKernelGetProcessId();
 
 			if (pid != KERNEL_PID) {
 				d->ra_pid = pid;
-				__atomic_store_n(&g_ra_seen, pid, __ATOMIC_RELEASE);
+				const SceUID cur = __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
+				uint32_t k;
+
+				if (pid == cur) {
+					/* the game again: another process's few streams were not one */
+					__atomic_fetch_add(&g_ra_dev_sec[d - g_dev], n, __ATOMIC_RELAXED);
+					__atomic_store_n(&g_ra_seen, pid, __ATOMIC_RELEASE);
+				} else {
+					if (__atomic_exchange_n(&g_ra_seen, pid, __ATOMIC_ACQ_REL) != pid)
+						__atomic_store_n(&g_ra_seen_n, 0, __ATOMIC_RELAXED);
+					k = __atomic_add_fetch(&g_ra_seen_n, 1, __ATOMIC_RELAXED);
+					if (k == RA_SWITCH || (!cur && k == 1)) {
+						/* a new game: the worker follows it now */
+						void (*const fn)(void) = __atomic_load_n(&g_on_problem,
+						                                         __ATOMIC_ACQUIRE);
+
+						if (fn)
+							fn();
+					}
+				}
 			}
 		}
 	}
@@ -1890,7 +2006,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	uint32_t next = d->ra_last_end;
 	int want, live = 0;
 
-	if (d->ra_streak < thr)
+	if (d->ra_streak < thr || !ra_auto_here(d))
 		return;
 	want = d->ra_nc && d->ra_streak - thr + 1 < RA_PIECES ? (int)(d->ra_streak - thr + 1)
 	                                                      : RA_PIECES;
@@ -2717,6 +2833,7 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_ra_mode, s->readahead >= VM_RA_OFF && s->readahead <= VM_RA_AUTO ? s->readahead
 	                                                                    : VM_RA_OFF);
 	ST(g_readahead, LD(g_ra_mode) != VM_RA_OFF ? 1 : 0);
+	ST(g_ra_measure, LD(g_ra_mode) == VM_RA_AUTO || s->stats ? 1 : 0);
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || LD(g_readahead)))
@@ -2804,7 +2921,7 @@ void vm_stage_worker_tick(void)
 				         "differs - games copy as before");
 		}
 	}
-	if (LD(g_ra_mode) == VM_RA_AUTO && LD(g_live))
+	if (LD(g_ra_measure) && LD(g_live))
 		ra_auto_tick();
 	{
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
@@ -2912,6 +3029,22 @@ int vm_stage_pending(void)
 		if ((LD(g_dev[i].pipe_made) && !__atomic_load_n(&g_dev[i].pipe_ready, __ATOMIC_ACQUIRE)) ||
 		    (LD(g_dev[i].ra_made) && !__atomic_load_n(&g_dev[i].ra_ready, __ATOMIC_ACQUIRE)))
 			return 1;
+	return 0;
+}
+
+/* Read ahead's measuring: how soon the worker should tick again (0: only
+ * when woken). */
+unsigned vm_stage_tick_us(void)
+{
+	const SceUID pid = __atomic_load_n(&g_ra_pid, __ATOMIC_ACQUIRE);
+
+	if (!LD(g_ra_measure) || !LD(g_live) || !g_title_fn)
+		return 0;
+	if (__atomic_load_n(&g_ra_seen, __ATOMIC_ACQUIRE) != pid &&
+	    (!pid || __atomic_load_n(&g_ra_seen_n, __ATOMIC_RELAXED) >= RA_SWITCH))
+		return RA_TICK_US;                  /* a game to follow */
+	if (pid && (__atomic_load_n(&g_ra_learning, __ATOMIC_ACQUIRE) || LD(g_ra_dev) < 0))
+		return RA_TICK_US;
 	return 0;
 }
 

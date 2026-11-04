@@ -112,6 +112,10 @@ static void reset(void)
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_pid = g_ra_seen = 0;
+	g_ra_seen_n = 0;
+	g_ra_measure = 0;
+	g_ra_dev = -1;
+	memset(g_ra_dev_sec, 0, sizeof(g_ra_dev_sec));
 	g_ra_thr[0] = g_ra_thr[1] = 0;
 	g_ra_learning = 0;
 	g_ra_title[0] = 0;
@@ -2525,6 +2529,7 @@ static void test_readahead_auto(void)
 	Dev *d = &g_dev[M];
 	int saved_live = g_live;
 	uint32_t thr[2];
+	int dev;
 
 	/* the choice: long streams start early; short ones (as a game reading
 	 * files of 1 MiB and less) never; a mix by what pays */
@@ -2563,7 +2568,9 @@ static void test_readahead_auto(void)
 	streams(u, RA_LEARN_STREAMS, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && g_ra_thr[1] == RA_THR_NONE);   /* none seen */
-	CHECK(ra_profile_load("PCSE00001", thr) && thr[0] == 2 && thr[1] == RA_THR_NONE);
+	CHECK(g_ra_dev == M);                             /* its storage: where it read */
+	CHECK(ra_profile_load("PCSE00001", thr, &dev) && thr[0] == 2 && thr[1] == RA_THR_NONE &&
+	      dev == M);
 	CHECK(ra_threshold(0x42, 0) == 2 && ra_threshold(0x99, 0) == RA_STREAK);  /* only it */
 	{
 		const uint32_t hits = g_ra_hits;
@@ -2590,10 +2597,14 @@ static void test_readahead_auto(void)
 	fake_pid = 0x43;
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
-	CHECK(g_ra_pid == 0x43 && !g_ra_learning && g_ra_thr[0] == 2);
+	CHECK(g_ra_pid == 0x43 && !g_ra_learning && g_ra_thr[0] == 2 && g_ra_dev == M);
+	/* a stream or two of another process: not a new game */
+	fake_pid = 0x44;
+	streams(u, 2, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x43);
 	/* another game: learns its own; a stream of the first one meanwhile is
 	 * not counted for it */
-	fake_pid = 0x44;
 	streams(u, 1, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x44 && g_ra_learning && !strcmp(g_ra_title, "PCSB00777"));
@@ -2603,7 +2614,7 @@ static void test_readahead_auto(void)
 	CHECK(g_ra_hstreams >= 9);
 	/* a process with no usable title id: the fixed threshold, nothing saved */
 	fake_pid = 0x45;
-	streams(u, 1, 8, 256);
+	streams(u, RA_SWITCH, 8, 256);
 	vm_stage_worker_tick();
 	CHECK(g_ra_pid == 0x45 && !g_ra_learning && !g_ra_title[0]);
 	CHECK(ra_threshold(0x45, 0) == RA_STREAK);
@@ -2618,7 +2629,7 @@ static void test_readahead_auto(void)
 	 * damaged is not used */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
-	CHECK(!ra_profile_load("PCSE00001", thr));       /* the new folder has none */
+	CHECK(!ra_profile_load("PCSE00001", thr, &dev));   /* the new folder has none */
 	reset();
 	g_title_fn = fake_title;
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
@@ -2632,12 +2643,137 @@ static void test_readahead_auto(void)
 	{
 		uint32_t t2[2] = { 7, 9 };                    /* 9: out of range */
 
-		ra_profile_save("PCSE00002", t2, 1);
-		CHECK(!ra_profile_load("PCSE00002", thr));
+		ra_profile_save("PCSE00002", t2, 1, -1);
+		CHECK(!ra_profile_load("PCSE00002", thr, &dev));
 		t2[1] = 3;
-		ra_profile_save("PCSE00002", t2, 1);
-		CHECK(ra_profile_load("PCSE00002", thr) && thr[0] == 7 && thr[1] == 3);
+		ra_profile_save("PCSE00002", t2, 1, VM_DEV_INTERNAL);   /* never the internal one */
+		CHECK(!ra_profile_load("PCSE00002", thr, &dev));
+		ra_profile_save("PCSE00002", t2, 1, VM_DEV_SD2VITA);
+		CHECK(ra_profile_load("PCSE00002", thr, &dev) && thr[0] == 7 && thr[1] == 3 &&
+		      dev == VM_DEV_SD2VITA);
+		ra_profile_save("PCSE00002", t2, 1, -1);           /* storage not known yet */
+		CHECK(ra_profile_load("PCSE00002", thr, &dev) && dev == -1);
 	}
+	vm_stage_fini();
+
+	/* only the game, only on its storage: with its storage elsewhere, or
+	 * another process here, nothing is read ahead (but stays correct) */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	{
+		uint32_t t2[2] = { 2, 2 };
+
+		ra_profile_save("PCSE00001", t2, 300, VM_DEV_SD2VITA);
+	}
+	fake_pid = 0x42;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x42 && !g_ra_learning && g_ra_dev == VM_DEV_SD2VITA);
+	{
+		const uint32_t hits = g_ra_hits;
+
+		streams(u, 4, 8, 256);                        /* the game, on the other storage */
+		CHECK(g_ra_hits == hits && ra_idle(d));
+		g_ra_dev = M;                                 /* now here */
+		streams(u, 4, 8, 256);
+		CHECK(g_ra_hits >= hits + 4 * 5);
+		fake_pid = 0x99;                              /* another process here */
+		streams(u, 2, 8, 256);
+		CHECK(g_ra_hits < hits + 4 * 5 + 2 * 5 && g_ra_pid == 0x42);
+	}
+	{
+		const uint32_t hits = g_ra_hits;
+
+		fake_pid = 0x99;
+		streams(u, 2, 8, 256);
+		CHECK(g_ra_hits == hits && ra_idle(d));
+	}
+	vm_stage_fini();
+
+	/* a game's storage not known yet: none until RA_DEV_DECIDE sectors of
+	 * its large reads; then where most of them went */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;                                  /* PCSB00777: no profile here */
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning && g_ra_dev == -1);
+	CHECK(vm_stage_tick_us() == RA_TICK_US);         /* the worker comes back */
+	{
+		const uint32_t hits = g_ra_hits;
+
+		streams(u, 3, 8, 256);                        /* 3 x 1 MiB: not yet */
+		vm_stage_worker_tick();
+		CHECK(g_ra_dev == -1);
+		streams(u, 1, 8, 256);                        /* 4 MiB */
+		CHECK(g_ra_hits == hits);
+	}
+	vm_stage_worker_tick();
+	CHECK(g_ra_dev == M && g_ra_dev_sec[M] >= RA_DEV_DECIDE);
+	/* a short session (homebrew): learnt when the next game starts */
+	streams(u, RA_LEARN_MIN, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_learning);                             /* not yet RA_LEARN_STREAMS */
+	fake_pid = 0x42;
+	streams(u, RA_SWITCH, 8, 256);
+	CHECK(vm_stage_tick_us() == RA_TICK_US);         /* a new game: follow it */
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x42);
+	CHECK(ra_profile_load("PCSB00777", thr, &dev) && thr[0] == 2 && dev == M);
+	vm_stage_fini();
+
+	/* a game ending with too little seen: nothing kept, learnt next time */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_AUTO;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	streams(u, 5, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning);
+	fake_pid = 0x42;
+	streams(u, RA_SWITCH, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x42 && !ra_profile_load("PCSB00777", thr, &dev));
+	/* learnt and its storage known: the worker only when woken */
+	streams(u, RA_LEARN_STREAMS, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && g_ra_dev == M && vm_stage_tick_us() == 0);
+	vm_stage_fini();
+
+	/* Statistics with read ahead on (not auto): measured and learnt the
+	 * same way (one switch for both), but on uses its fixed threshold;
+	 * with neither, nothing is measured and the worker is not asked to tick */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ON;
+	s.stats = 1;
+	vm_stage_apply(&s);
+	CHECK(g_ra_measure == 1);
+	g_title_fn = fake_title;
+	fake_pid = 0x44;
+	streams(u, 1, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(g_ra_pid == 0x44 && g_ra_learning);
+	streams(u, RA_LEARN_STREAMS, 8, 256);
+	vm_stage_worker_tick();
+	CHECK(!g_ra_learning && g_ra_thr[0] == 2 && ra_threshold(0x44, 0) == RA_STREAK);
+	s.readahead = VM_RA_AUTO;                         /* auto as well: still one switch */
+	vm_stage_apply(&s);
+	CHECK(g_ra_measure == 1 && ra_threshold(0x44, 0) == 2);
+	s.readahead = VM_RA_ON;
+	s.stats = 0;
+	vm_stage_apply(&s);
+	CHECK(g_ra_measure == 0 && vm_stage_tick_us() == 0);
 	vm_stage_fini();
 
 	/* auto without title ids (an unknown firmware): as on, said once */

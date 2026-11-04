@@ -311,6 +311,65 @@ static void hud_effective(VmSettings *s)
 	}
 }
 
+/* Where copies run is counted (vm_stage_count_cores) while the overlay is
+ * open or the HUD shows Auto's line; each says what it needs here. */
+static int g_cnt_hud, g_cnt_ov;
+
+static void count_cores_want(int *who, int on)
+{
+	*who = on;
+	vm_stage_count_cores(g_cnt_hud || g_cnt_ov);
+}
+
+/* "100%" coloured as the overlay does, or "-" without data. */
+static void pct_text(char *o, int cap, int p)
+{
+	if (p < 0)
+		snprintf(o, cap, HUD_C_DIM "-");
+	else
+		snprintf(o, cap, "%s%u%%", p >= 90 ? HUD_C_GOOD : p > 0 ? HUD_C_WARN : HUD_C_BAD,
+		         (unsigned)(p > 100 ? 100 : p));
+}
+
+/* Read ahead Auto in one HUD line: L (learning: streams so far of 300, or
+ * done), and the share of copies (C) and of non-cacheable reads (NC) run on
+ * core 3 since the line came up. `on`: the line is wanted. */
+static int hud_auto_line(char *o, int on)
+{
+	static int shown;
+	static uint32_t base_core[4], base_ncs, base_nco;
+	uint32_t core[4], ncs, nco, other = 0;
+	char l[24], c[16], nc[16];
+	VmRaNow now;
+
+	if (!on) {
+		if (shown)
+			count_cores_want(&g_cnt_hud, 0);
+		shown = 0;
+		return 0;
+	}
+	if (!shown) {
+		count_cores_want(&g_cnt_hud, 1);
+		vm_stage_core_stats(base_core, &base_ncs, &base_nco);
+		shown = 1;
+	}
+	vm_stage_ra_now(&now);
+	vm_stage_core_stats(core, &ncs, &nco);
+	if (!now.title[0])
+		snprintf(l, sizeof(l), HUD_C_DIM "-");
+	else if (now.learning)
+		snprintf(l, sizeof(l), HUD_C_WARN "%u/300", (unsigned)now.streams);
+	else
+		snprintf(l, sizeof(l), HUD_C_GOOD "done");
+	for (int i = 0; i < 3; i++)
+		other += core[i] - base_core[i];
+	pct_text(c, sizeof(c), ov_pct(core[3] - base_core[3], other));
+	pct_text(nc, sizeof(nc), ov_pct(ncs - base_ncs, nco - base_nco));
+	snprintf(o, VM_HUD_LINE_MAX, HUD_C_TEXT "AUTO " HUD_C_DIM "L: %s " HUD_C_DIM "C:%s "
+	         HUD_C_DIM "NC:%s", l, c, nc);
+	return 1;
+}
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
@@ -353,7 +412,8 @@ static void hud_feed(const VmDevState *now)
 		last_rd[i] = rd;
 		last_wr[i] = wr;
 		seen[i] |= rd | wr;
-		if (s.hud == VM_HUD_OFF || !seen[i])
+		/* a storage switched off in Settings is not shown */
+		if (s.hud == VM_HUD_OFF || !seen[i] || now[i].status == VM_ST_OFF)
 			continue;
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
 		const char *c = state_color(&now[i], dev_slow);
@@ -382,6 +442,9 @@ static void hud_feed(const VmDevState *now)
 		         (unsigned)now[i].errors,
 		         s.verify ? " " : "", HUD_C_WARN, s.verify ? hud_tr(g_lang, HTR_VERIFY) : "");
 	}
+	if (hud_auto_line(L[n], s.hud != VM_HUD_OFF && s.readahead == VM_RA_AUTO &&
+	                        n < VM_HUD_LINES))
+		n++;
 	if (vm_hud_installed())
 		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_style);
 }
@@ -448,15 +511,6 @@ static void ov_thr(char *o, int cap, int mode, uint32_t t)
 		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)t);
 }
 
-static void ov_pct_text(char *o, int cap, int p)
-{
-	if (p < 0)
-		snprintf(o, cap, HUD_C_DIM "-");
-	else
-		snprintf(o, cap, "%s%u%%", p >= 90 ? HUD_C_GOOD : p > 0 ? HUD_C_WARN : HUD_C_BAD,
-		         (unsigned)(p > 100 ? 100 : p));
-}
-
 static void overlay_feed(void)
 {
 	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
@@ -478,14 +532,14 @@ static void overlay_feed(void)
 	}
 	if (vm_overlay_state() != OV_MENU) {
 		if (shown) {
-			vm_stage_count_cores(0);
+			count_cores_want(&g_cnt_ov, 0);
 			vm_hud_set_overlay(L, 0);
 			shown = 0;
 		}
 		return;
 	}
 	if (!shown) {                         /* just opened: count from now */
-		vm_stage_count_cores(1);
+		count_cores_want(&g_cnt_ov, 1);
 		vm_stage_core_stats(base_core, &base_ncs, &base_nco);
 		msg[0] = 0;
 		shown = 1;
@@ -521,8 +575,8 @@ static void overlay_feed(void)
 		         HUD_C_DIM " reads", a, b);
 		for (int i = 0; i < 3; i++)
 			other += core[i] - base_core[i];
-		ov_pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
-		ov_pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
+		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
+		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "On core 3    C %s" HUD_C_DIM "  NC %s",
 		         a, b);
 		{

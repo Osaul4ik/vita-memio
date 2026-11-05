@@ -6,11 +6,9 @@
  * only text the worker hands it (vm_hud_set_text); the frame hook itself
  * formats nothing.
  *
- * Two looks (VM_HUD_STYLE_*):
- *   classic   white text with a drop shadow, the 8x8 font at 2x;
- *   PSVshell  a black panel with rounded corners and coloured values in the
- *             Terminus font, sized by the framebuffer like PSVshell's overlay
- *             (8x14 up to 640 px wide, 10x18 up to 720, 12x24 above).
+ * A black panel with rounded corners and coloured values in the Terminus font,
+ * sized by the framebuffer like PSVshell's overlay (8x14 up to 640 px wide, 10x18
+ * up to 720, 12x24 above).
  */
 #ifndef VITAMEMIO_HUD_H
 #define VITAMEMIO_HUD_H
@@ -33,8 +31,8 @@ void vm_hud_fini(void);
 int  vm_hud_installed(void);
 
 /* Replace the text (n lines, n = 0 hides the HUD) and the look
- * (VM_HUD_STYLE_*). Worker thread only. */
-void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style);
+ * Worker thread only. */
+void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n);
 
 /* The overlay's text (n = 0 hides it): a PSVshell-style panel in the top
  * left corner. Worker thread only. */

@@ -56,7 +56,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
  * (NULL: the reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", "hud_style", "log", "memcard", "small", "stats", "gpusafe",
+	"sd2vita", "internal", "verify", "hud", NULL, "log", "memcard", "small", "stats", "gpusafe",
 	"pipeline", "offload", "readahead", "overlay",
 };
 
@@ -72,45 +72,45 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 #define SAFE_BUTTON_ID   "vm_safe_reset"
 #define STATUS_BUTTON_ID "vm_status"
 
-/* The group. */
-static const char X_HEAD[] =
-	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">"
-	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" "
+/* The group, with the safe-mode row under the driver's only in safe mode. */
+#define X_OPEN \
+	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">" \
+	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" " \
 	"hint=\"vm_h_status\" success_dialog_message=\"vm_h_status\"/>"
-	ROW_TOGGLE("sd2vita")
-	ROW_TOGGLE("memcard")
-	ROW_TOGGLE("internal")
-	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">"
-		ROW_TOGGLE("gpusafe")
-		ROW_LIST("pipeline")
-			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2")
-		"</list>"
-		ROW_LIST("offload")
-			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "1") ITEM("vm_i_off2", "2") ITEM("vm_i_off3", "3") ITEM("vm_i_off4", "4")
-		"</list>"
-		ROW_LIST("readahead")
-			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1")
-		"</list>"
-		ROW_TOGGLE("small")
-		ROW_TOGGLE("verify")
-		ROW_TOGGLE("log")
-		ROW_LIST("stats")
-			ITEM("vm_i_st0", "0") ITEM("vm_i_st1", "1")
-		"</list>"
-		ROW_LIST("hud")
-			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2")
-		"</list>"
-		ROW_LIST("hud_style")
-			ITEM("vm_i_style0", "0") ITEM("vm_i_style1", "1")
-		"</list>"
-		ROW_TOGGLE("overlay")
-		"<button id=\"" SAFE_BUTTON_ID "\" title=\"vm_t_safe\" icon=\"tex_spanner\" "
-		"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" "
-		"error_dialog_message=\"vm_m_safe_err\"/>"
+#define X_SAFE \
+	"<button id=\"" SAFE_BUTTON_ID "\" title=\"vm_t_safe\" icon=\"tex_spanner\" " \
+	"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" " \
+	"error_dialog_message=\"vm_m_safe_err\"/>"
+#define X_REST \
+	ROW_TOGGLE("sd2vita") \
+	ROW_TOGGLE("memcard") \
+	ROW_TOGGLE("internal") \
+	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">" \
+		ROW_TOGGLE("gpusafe") \
+		ROW_LIST("pipeline") \
+			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2") \
+		"</list>" \
+		ROW_LIST("offload") \
+			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "2") ITEM("vm_i_off2", "3") ITEM("vm_i_off3", "4") \
+		"</list>" \
+		ROW_LIST("readahead") \
+			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") \
+		"</list>" \
+		ROW_TOGGLE("small") \
+		ROW_LIST("hud") \
+			ITEM("vm_i_hud0", "0") ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2") \
+		"</list>" \
+		ROW_TOGGLE("overlay") \
+		"<setting_list id=\"vm_developer\" title=\"vm_t_developer\" icon=\"tex_spanner\">" \
+			ROW_TOGGLE("verify") \
+			ROW_TOGGLE("log") \
+			ROW_TOGGLE("stats") \
+		"</setting_list>" \
+	"</setting_list>" \
 	"</setting_list>"
-	;
-static const char X_TAIL[] =
-	"</setting_list>";
+
+static const char X_PAGE[] = X_OPEN X_REST;
+static const char X_PAGE_SAFE[] = X_OPEN X_SAFE X_REST;
 
 /* Accept a Devices page up to this size; leave it alone if it is ever bigger.
  * The stock page is a few KB; YAMT replaces it with its own (~50 KB), and when
@@ -171,7 +171,7 @@ static void l_hex(Line *l, uint32_t v)
 	l_put(l, h);
 }
 
-static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_HEAD) + sizeof(X_TAIL)];
+static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_PAGE_SAFE)];
 
 /* The status row: title and help (also the dialog it opens). */
 static const vm_u16 *status_text(int hint)
@@ -242,7 +242,7 @@ static const vm_u16 *device_hint(int dev, int help_id)
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
-	[VM_KEY_HUD_STYLE] = VM_I18N_ROW_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_ROW_LOG,
+	[VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_ROW_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_ROW_OFFLOAD,
@@ -251,7 +251,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
 	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
-	[VM_KEY_HUD_STYLE] = VM_I18N_HINT_HUD_STYLE, [VM_KEY_LOG] = VM_I18N_HINT_LOG,
+	[VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_HINT_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_HINT_OFFLOAD,
@@ -289,6 +289,8 @@ static const vm_u16 *vm_text(const char *id)
 		return status_text(1);
 	if (s_eqn(id, "vm_t_advanced", 14))
 		return fixed_text(VM_I18N_TITLE_ADVANCED);
+	if (s_eqn(id, "vm_t_developer", 15))
+		return fixed_text(VM_I18N_TITLE_DEVELOPER);
 	if (s_eqn(id, "vm_t_safe", 10))
 		return fixed_text(VM_I18N_ROW_SAFE);
 	if (s_eqn(id, "vm_h_safe", 10))
@@ -310,13 +312,11 @@ static const vm_u16 *vm_text(const char *id)
 	}
 	if (s_pfx(id, "vm_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
-	if (s_pfx(id, "vm_i_style") && id[10] >= '0' && id[10] <= '1' && !id[11])
-		return fixed_text(VM_I18N_ITEM_STYLE_CLASSIC + (id[10] - '0'));
-	if ((s_pfx(id, "vm_i_ra") || s_pfx(id, "vm_i_st")) && id[7] >= '0' && id[7] <= '1' && !id[8])
+	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '1' && !id[8])
 		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF : VM_I18N_ITEM_RA_ON);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
-	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '4' && !id[9])
+	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '3' && !id[9])
 		return fixed_text(VM_I18N_ITEM_OFF_OFF + (id[8] - '0'));
 	return 0;
 }
@@ -387,7 +387,10 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 			return TAI_CONTINUE(int, r_xml, out, buf, size, a4);
 		}
 		const char *ins = devices_insert_at(s, size);
-		const int hl = (int)sizeof(X_HEAD) - 1, tl = (int)sizeof(X_TAIL) - 1;
+		VmState st;
+		const int safe = get_state(&st) && st.disabled == VM_DIS_SAFE;
+		const char *const page = safe ? X_PAGE_SAFE : X_PAGE;
+		const int hl = (safe ? (int)sizeof(X_PAGE_SAFE) : (int)sizeof(X_PAGE)) - 1;
 		if (!ins)
 			VM_LOGI("[SET] devices page (size=%d): insert point not found - page not added",
 			        size);
@@ -395,10 +398,9 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 			int head = (int)(ins - s);
 
 			s_cpy(g_pagebuf, s, head);
-			s_cpy(g_pagebuf + head, X_HEAD, hl);
-			s_cpy(g_pagebuf + head + hl, X_TAIL, tl);
-			s_cpy(g_pagebuf + head + hl + tl, ins, size - head);
-			buf = g_pagebuf; size = size + hl + tl;
+			s_cpy(g_pagebuf + head, page, hl);
+			s_cpy(g_pagebuf + head + hl, ins, size - head);
+			buf = g_pagebuf; size = size + hl;
 		}
 	}
 	return TAI_CONTINUE(int, r_xml, out, buf, size, a4);

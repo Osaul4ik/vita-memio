@@ -52,9 +52,10 @@ enum {
 	OV_ITEM_C,           /* ... On: reads in a row before it starts, cached   */
 	OV_ITEM_NC,          /* ... non-cacheable                                 */
 	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
+	OV_ITEM_TEST,        /* the read ahead test: start / stop                 */
+	OV_ITEM_ADV,         /* the two below shown or not                        */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
-	OV_ITEM_TEST,        /* the read ahead test: start / stop                 */
 	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
 	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS
@@ -64,7 +65,7 @@ enum {
 /* Items done with Cross only (an action, not a value). */
 static inline int ov_item_action(int i)
 {
-	return i == OV_ITEM_TEST || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
+	return i == OV_ITEM_TEST || i == OV_ITEM_ADV || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
 }
 
 /* The next item shown from `i`, `dir` -1 / +1 (wrapping); `i` itself if

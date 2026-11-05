@@ -108,10 +108,10 @@ static const char *pipe_text(int v)
 
 static const char *offload_text(int v)
 {
-	return v == VM_OFFLOAD_OFF ? "off" : v == VM_OFFLOAD_GPU ? "with GPU-safe reads only"
+	return v == VM_OFFLOAD_OFF ? "off"
 	     : v == VM_OFFLOAD_ALWAYS ? "cached only"
 	     : v == VM_OFFLOAD_ALL ? "C + NC R/A (cached and non-cacheable read ahead)"
-	     : v == VM_OFFLOAD_FULL ? "C + NC (cached and non-cacheable, also the reads themselves)"
+	     : v == VM_OFFLOAD_FULL ? "C + NC All (cached and non-cacheable, also the reads themselves)"
 	     : "unknown";
 }
 
@@ -212,7 +212,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin overlapped reads: %s%s\n", pipe_text(res->plugin0.pipeline),
 		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
-		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on (experimental)"
+		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on"
 		    : res->plugin0.readahead == VM_RA_OFF ? "off" : "unknown");
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
@@ -412,11 +412,10 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
-			     res->plugin0.offload == VM_OFFLOAD_GPU ? "GPU-safe (C)"
-			     : res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC R/A"
-			     : res->plugin0.offload == VM_OFFLOAD_FULL ? "C + NC" : "cached only");
+			     res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC R/A"
+			     : res->plugin0.offload == VM_OFFLOAD_FULL ? "C + NC All" : "cached only");
 		if (res->plugin0.readahead == VM_RA_ON)
-			line(&s, "read ahead: on (experimental)");
+			line(&s, "read ahead: on");
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{

@@ -528,94 +528,6 @@
 	"Writes kernel.log and user.log to ur0:data/vita-memio/ (the start line and problems only). Off: nothing is written.",   /* engb */
 	"kernel.log ve user.log dosyalarını ur0:data/vita-memio/ klasörüne yazar (yalnızca başlangıç satırı ve sorunlar). Kapalı: hiçbir şey yazılmaz.",   /* tr */
 },
-[VM_I18N_ROW_HUD_STYLE] = {
-	"HUDのスタイル",   /* ja */
-	"HUD style",   /* en */
-	"Style du HUD",   /* fr */
-	"Estilo del HUD",   /* es */
-	"HUD-Stil",   /* de */
-	"Stile HUD",   /* it */
-	"HUD-stijl",   /* nl */
-	"Estilo do HUD",   /* pt */
-	"Вид HUD",   /* ru */
-	"HUD 스타일",   /* ko */
-	"HUD 樣式",   /* zht */
-	"HUD 样式",   /* zhs */
-	"HUD:n tyyli",   /* fi */
-	"HUD-stil",   /* sv */
-	"HUD-stil",   /* da */
-	"HUD-stil",   /* no */
-	"Styl HUD",   /* pl */
-	"Estilo do HUD",   /* ptbr */
-	"HUD style",   /* engb */
-	"HUD stili",   /* tr */
-},
-[VM_I18N_HINT_HUD_STYLE] = {
-	"クラシック：白い文字。PSVshell：色付きの値を表示する黒いパネル。HUDは常に右上に表示されます。",   /* ja */
-	"Classic: white text. PSVshell: a black panel with coloured values. The HUD is always in the top right corner.",   /* en */
-	"Classique : texte blanc. PSVshell : un panneau noir avec des valeurs en couleur. Le HUD est toujours en haut à droite.",   /* fr */
-	"Clásico: texto blanco. PSVshell: un panel negro con valores en color. El HUD siempre está arriba a la derecha.",   /* es */
-	"Klassisch: weißer Text. PSVshell: ein schwarzes Feld mit farbigen Werten. Das HUD ist immer oben rechts.",   /* de */
-	"Classico: testo bianco. PSVshell: un pannello nero con valori colorati. L'HUD è sempre in alto a destra.",   /* it */
-	"Klassiek: witte tekst. PSVshell: een zwart paneel met gekleurde waarden. De HUD staat altijd rechtsboven.",   /* nl */
-	"Clássico: texto branco. PSVshell: um painel preto com valores a cores. O HUD está sempre no canto superior direito.",   /* pt */
-	"Классический: белый текст. PSVshell: чёрная панель с цветными значениями. HUD всегда в правом верхнем углу.",   /* ru */
-	"클래식: 흰색 글자. PSVshell: 값이 색으로 표시되는 검은 패널. HUD는 항상 오른쪽 위에 있습니다.",   /* ko */
-	"經典：白色文字。PSVshell：以彩色數值顯示的黑色面板。HUD 一律顯示在右上角。",   /* zht */
-	"经典：白色文字。PSVshell：以彩色数值显示的黑色面板。HUD 始终显示在右上角。",   /* zhs */
-	"Perinteinen: valkoinen teksti. PSVshell: musta paneeli ja värilliset arvot. HUD on aina oikeassa yläkulmassa.",   /* fi */
-	"Klassisk: vit text. PSVshell: en svart panel med färgade värden. HUD:en är alltid uppe till höger.",   /* sv */
-	"Klassisk: hvid tekst. PSVshell: et sort panel med farvede værdier. HUD'en er altid øverst til højre.",   /* da */
-	"Klassisk: hvit tekst. PSVshell: et svart panel med fargede verdier. HUD-en er alltid øverst til høyre.",   /* no */
-	"Klasyczny: biały tekst. PSVshell: czarny panel z kolorowymi wartościami. HUD jest zawsze w prawym górnym rogu.",   /* pl */
-	"Clássico: texto branco. PSVshell: um painel preto com valores coloridos. O HUD fica sempre no canto superior direito.",   /* ptbr */
-	"Classic: white text. PSVshell: a black panel with coloured values. The HUD is always in the top right corner.",   /* engb */
-	"Klasik: beyaz metin. PSVshell: renkli değerlerle siyah bir panel. HUD her zaman sağ üst köşededir.",   /* tr */
-},
-[VM_I18N_ITEM_STYLE_CLASSIC] = {
-	"クラシック",   /* ja */
-	"Classic",   /* en */
-	"Classique",   /* fr */
-	"Clásico",   /* es */
-	"Klassisch",   /* de */
-	"Classico",   /* it */
-	"Klassiek",   /* nl */
-	"Clássico",   /* pt */
-	"Классический",   /* ru */
-	"클래식",   /* ko */
-	"經典",   /* zht */
-	"经典",   /* zhs */
-	"Perinteinen",   /* fi */
-	"Klassisk",   /* sv */
-	"Klassisk",   /* da */
-	"Klassisk",   /* no */
-	"Klasyczny",   /* pl */
-	"Clássico",   /* ptbr */
-	"Classic",   /* engb */
-	"Klasik",   /* tr */
-},
-[VM_I18N_ITEM_STYLE_PSVSHELL] = {
-	"PSVshell",   /* ja */
-	"PSVshell",   /* en */
-	"PSVshell",   /* fr */
-	"PSVshell",   /* es */
-	"PSVshell",   /* de */
-	"PSVshell",   /* it */
-	"PSVshell",   /* nl */
-	"PSVshell",   /* pt */
-	"PSVshell",   /* ru */
-	"PSVshell",   /* ko */
-	"PSVshell",   /* zht */
-	"PSVshell",   /* zhs */
-	"PSVshell",   /* fi */
-	"PSVshell",   /* sv */
-	"PSVshell",   /* da */
-	"PSVshell",   /* no */
-	"PSVshell",   /* pl */
-	"PSVshell",   /* ptbr */
-	"PSVshell",   /* engb */
-	"PSVshell",   /* tr */
-},
 [VM_I18N_ROW_SAFE] = {
 	"セーフモードを解除",   /* ja */
 	"Reset safe mode",   /* en */
@@ -1145,26 +1057,26 @@
 	"Sistem çekirdeğinde kopyala",   /* tr */
 },
 [VM_I18N_HINT_OFFLOAD] = {
-	"ゲームが読み込んだデータのコピーを、ゲーム自身のコアではなく本体のシステムコアで行い、読み込み中にゲームのコアを早く空けます。GPU-safe (C): Cached only + GPU-safe. Cached only: 通常メモリへの読み込み。C + NC R/A: Cached + 非キャッシュメモリ（グラフィックデータ）への読み込みで、先読み済みのデータのみ（先読みが必要）。それ以外の読み込みにはコピーがありません。C + NC: NC の読み込み自体（64 KiB 以上）もシステムコアで行います。本体が許可しない場合は、ゲームがこれまでどおりコピーします（ログを参照）。",   /* ja */
-	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads. GPU-safe (C): Cached only + GPU-safe. Cached only: reads into ordinary memory. C + NC R/A: Cached + reads into non-cacheable memory (graphics data), only what Read ahead has already read, so it needs Read ahead; other such reads have nothing to copy. C + NC: and the NC reads themselves (64 KiB or more) are done on the system core. If the console does not allow it, games copy as before (see the log).",   /* en */
-	"Copie ce qu'un jeu lit sur le cœur système de la console au lieu du cœur du jeu, qui se libère plus tôt pendant le chargement. GPU-safe (C): Cached only + GPU-safe. Cached only : lectures vers la mémoire ordinaire. C + NC R/A : Cached + lectures vers la mémoire non cacheable (données graphiques), uniquement ce que la lecture anticipée a déjà lu, elle est donc requise ; les autres n'ont rien à copier. C + NC : les lectures NC elles-mêmes (64 Kio ou plus) passent aussi sur le cœur système. Si la console ne le permet pas, les jeux copient comme avant (voir le journal).",   /* fr */
-	"Copia lo que lee un juego en el núcleo del sistema de la consola en lugar del núcleo del juego, que queda libre antes durante la carga. GPU-safe (C): Cached only + GPU-safe. Cached only: lecturas a memoria normal. C + NC R/A: Cached + lecturas a memoria no almacenable en caché (datos gráficos), solo lo que la lectura anticipada ya leyó, por lo que la necesita; las demás no tienen nada que copiar. C + NC: las propias lecturas NC (64 KiB o más) también se hacen en el núcleo del sistema. Si la consola no lo permite, los juegos copian como antes (ver el registro).",   /* es */
-	"Kopiert, was ein Spiel liest, auf dem Systemkern der Konsole statt auf dem Kern des Spiels, der beim Laden so früher frei wird. GPU-safe (C): Cached only + GPU-safe. Cached only: Lesevorgänge in normalen Speicher. C + NC R/A: Cached + Lesevorgänge in nicht cachebaren Speicher (Grafikdaten), nur was Vorauslesen schon gelesen hat, es wird also benötigt; andere haben nichts zu kopieren. C + NC: auch die NC-Lesevorgänge selbst (ab 64 KiB) laufen auf dem Systemkern. Erlaubt die Konsole es nicht, kopieren Spiele wie bisher (siehe Protokoll).",   /* de */
-	"Copia ciò che un gioco legge sul core di sistema della console invece che sul core del gioco, che si libera prima durante il caricamento. GPU-safe (C): Cached only + GPU-safe. Cached only: letture nella memoria normale. C + NC R/A: Cached + letture nella memoria non memorizzabile in cache (dati grafici), solo ciò che la lettura anticipata ha già letto, quindi la richiede; le altre non hanno nulla da copiare. C + NC: anche le letture NC stesse (64 KiB o più) avvengono sul core di sistema. Se la console non lo consente, i giochi copiano come prima (vedi il registro).",   /* it */
-	"Kopieert wat een game leest op de systeemkern van de console in plaats van op de kern van de game, die zo eerder vrij is tijdens het laden. GPU-safe (C): Cached only + GPU-safe. Cached only: lezen naar normaal geheugen. C + NC R/A: Cached + lezen naar niet-cachebaar geheugen (grafische gegevens), alleen wat Vooruitlezen al heeft gelezen, dus dat is nodig; andere leesacties hebben niets te kopiëren. C + NC: ook de NC-leesacties zelf (64 KiB of meer) gebeuren op de systeemkern. Staat de console het niet toe, dan kopiëren games zoals voorheen (zie het logboek).",   /* nl */
-	"Copia o que um jogo lê no núcleo do sistema da consola em vez do núcleo do jogo, que fica livre mais cedo durante o carregamento. GPU-safe (C): Cached only + GPU-safe. Cached only: leituras para memória normal. C + NC R/A: Cached + leituras para memória não armazenável em cache (dados gráficos), apenas o que a leitura antecipada já leu, pelo que é necessária; as outras não têm nada para copiar. C + NC: as próprias leituras NC (64 KiB ou mais) também são feitas no núcleo do sistema. Se a consola não o permitir, os jogos copiam como antes (ver o registo).",   /* pt */
-	"Копирует прочитанное игрой на системном ядре консоли, а не на ядре игры, и оно раньше освобождается при загрузке. GPU-safe (C): Cached only + GPU-safe. Cached only: чтение в обычную память. C + NC R/A: Cached + чтение в некэшируемую память (графические данные), только то, что уже прочитало упреждающее чтение, поэтому оно необходимо; в остальных таких чтениях копировать нечего. C + NC: сами чтения NC (от 64 КиБ) тоже выполняются на системном ядре. Если консоль не позволяет, игры копируют как раньше (см. журнал).",   /* ru */
-	"게임이 읽은 데이터를 게임 자신의 코어 대신 본체의 시스템 코어에서 복사하여 로딩 중 게임 코어가 더 빨리 비워집니다. GPU-safe (C): Cached only + GPU-safe. Cached only: 일반 메모리로 읽기. C + NC R/A: Cached + 비캐시 메모리(그래픽 데이터)로 읽기이며, 미리 읽기가 이미 읽은 데이터만 해당하므로 미리 읽기가 필요합니다. 그 외의 읽기는 복사할 것이 없습니다. C + NC: NC 읽기 자체(64 KiB 이상)도 시스템 코어에서 수행합니다. 본체가 허용하지 않으면 게임이 이전처럼 복사합니다(로그 참조).",   /* ko */
-	"將遊戲讀取的資料改在主機的系統核心複製，而非遊戲自己的核心，讓遊戲核心在載入時更早空出。GPU-safe (C): Cached only + GPU-safe. Cached only：讀入一般記憶體。C + NC R/A：Cached + 讀入非快取記憶體（圖形資料），僅限預先讀取已讀到的部分，因此需要預先讀取；其他這類讀取沒有東西要複製。C + NC：NC 讀取本身（64 KiB 以上）也在系統核心執行。若主機不允許，遊戲會照舊複製（請見記錄）。",   /* zht */
-	"将游戏读取的数据改在主机的系统核心复制，而不是游戏自己的核心，让游戏核心在加载时更早空出。GPU-safe (C): Cached only + GPU-safe. Cached only：读入普通内存。C + NC R/A：Cached + 读入非缓存内存（图形数据），仅限预读已读到的部分，因此需要预读；其他此类读取没有内容需要复制。C + NC：NC 读取本身（64 KiB 及以上）也在系统核心执行。如果主机不允许，游戏会照旧复制（见日志）。",   /* zhs */
-	"Kopioi pelin lukemat tiedot konsolin järjestelmäytimellä pelin oman ytimen sijaan, joten pelin ydin vapautuu latauksessa aiemmin. GPU-safe (C): Cached only + GPU-safe. Cached only: luku tavalliseen muistiin. C + NC R/A: Cached + luku välimuistittomaan muistiin (grafiikkadata), vain se, minkä ennakkoluku on jo lukenut, joten se tarvitaan; muissa ei ole kopioitavaa. C + NC: myös itse NC-luvut (vähintään 64 KiB) tehdään järjestelmäytimellä. Jos konsoli ei salli tätä, pelit kopioivat kuten ennen (katso loki).",   /* fi */
-	"Kopierar det ett spel läser på konsolens systemkärna i stället för spelets egen kärna, som då blir ledig tidigare under laddning. GPU-safe (C): Cached only + GPU-safe. Cached only: läsning till vanligt minne. C + NC R/A: Cached + läsning till icke-cachebart minne (grafikdata), bara det Läs i förväg redan har läst, så den behövs; andra läsningar har inget att kopiera. C + NC: även själva NC-läsningarna (64 KiB eller mer) görs på systemkärnan. Om konsolen inte tillåter det kopierar spelen som tidigare (se loggen).",   /* sv */
-	"Kopierer det, et spil læser, på konsollens systemkerne i stedet for spillets egen kerne, som så bliver fri tidligere under indlæsning. GPU-safe (C): Cached only + GPU-safe. Cached only: læsning til almindelig hukommelse. C + NC R/A: Cached + læsning til ikke-cachebar hukommelse (grafikdata), kun det Læs forud allerede har læst, så det er nødvendigt; andre læsninger har intet at kopiere. C + NC: også selve NC-læsningerne (64 KiB eller mere) sker på systemkernen. Hvis konsollen ikke tillader det, kopierer spil som før (se loggen).",   /* da */
-	"Kopierer det et spill leser på konsollens systemkjerne i stedet for spillets egen kjerne, som da blir ledig tidligere under lasting. GPU-safe (C): Cached only + GPU-safe. Cached only: lesing til vanlig minne. C + NC R/A: Cached + lesing til ikke-hurtigbufret minne (grafikkdata), bare det Les på forhånd allerede har lest, så det er nødvendig; andre lesinger har ingenting å kopiere. C + NC: også selve NC-lesingene (64 KiB eller mer) skjer på systemkjernen. Hvis konsollen ikke tillater det, kopierer spill som før (se loggen).",   /* no */
-	"Kopiuje to, co czyta gra, na rdzeniu systemowym konsoli zamiast na rdzeniu gry, który zwalnia się szybciej podczas wczytywania. GPU-safe (C): Cached only + GPU-safe. Cached only: odczyty do zwykłej pamięci. C + NC R/A: Cached + odczyty do pamięci niebuforowanej (dane graficzne), tylko to, co odczyt z wyprzedzeniem już odczytał, więc jest on potrzebny; pozostałe nie mają czego kopiować. C + NC: same odczyty NC (od 64 KiB) także odbywają się na rdzeniu systemowym. Jeśli konsola na to nie pozwala, gry kopiują jak dotąd (zobacz dziennik).",   /* pl */
-	"Copia o que um jogo lê no núcleo do sistema do console em vez do núcleo do jogo, que fica livre mais cedo durante o carregamento. GPU-safe (C): Cached only + GPU-safe. Cached only: leituras para memória normal. C + NC R/A: Cached + leituras para memória não armazenável em cache (dados gráficos), apenas o que a leitura antecipada já leu, então ela é necessária; as outras não têm nada para copiar. C + NC: as próprias leituras NC (64 KiB ou mais) também são feitas no núcleo do sistema. Se o console não permitir, os jogos copiam como antes (veja o log).",   /* ptbr */
-	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads. GPU-safe (C): Cached only + GPU-safe. Cached only: reads into ordinary memory. C + NC R/A: Cached + reads into non-cacheable memory (graphics data), only what Read ahead has already read, so it needs Read ahead; other such reads have nothing to copy. C + NC: and the NC reads themselves (64 KiB or more) are done on the system core. If the console does not allow it, games copy as before (see the log).",   /* engb */
-	"Bir oyunun okuduğunu oyunun kendi çekirdeği yerine konsolun sistem çekirdeğinde kopyalar, böylece oyunun çekirdeği yükleme sırasında daha erken boşalır. GPU-safe (C): Cached only + GPU-safe. Cached only: normal belleğe okumalar. C + NC R/A: Cached + önbelleğe alınmayan belleğe okumalar (grafik verileri), yalnızca önden okumanın zaten okuduğu kısım, bu yüzden önden okuma gerekir; diğerlerinde kopyalanacak bir şey yoktur. C + NC: NC okumalarının kendisi de (64 KiB ve üzeri) sistem çekirdeğinde yapılır. Konsol izin vermezse oyunlar eskisi gibi kopyalar (günlüğe bakın).",   /* tr */
+	"ゲームが読み込んだデータのコピーを、ゲーム自身のコアではなく本体のシステムコアで行い、読み込み中にゲームのコアを早く空けます。Cached only: 通常メモリへの読み込み。C + NC R/A: Cached + 非キャッシュメモリ（グラフィックデータ）への読み込みで、先読み済みのデータのみ（先読みが必要）。それ以外の読み込みにはコピーがありません。C + NC All: NC の読み込み自体（64 KiB 以上）もシステムコアで行います。本体が許可しない場合は、ゲームがこれまでどおりコピーします（ログを参照）。",   /* ja */
+	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads. Cached only: reads into ordinary memory. C + NC R/A: Cached + reads into non-cacheable memory (graphics data), only what Read ahead has already read, so it needs Read ahead; other such reads have nothing to copy. C + NC All: and the NC reads themselves (64 KiB or more) are done on the system core. If the console does not allow it, games copy as before (see the log).",   /* en */
+	"Copie ce qu'un jeu lit sur le cœur système de la console au lieu du cœur du jeu, qui se libère plus tôt pendant le chargement. Cached only : lectures vers la mémoire ordinaire. C + NC R/A : Cached + lectures vers la mémoire non cacheable (données graphiques), uniquement ce que la lecture anticipée a déjà lu, elle est donc requise ; les autres n'ont rien à copier. C + NC All : les lectures NC elles-mêmes (64 Kio ou plus) passent aussi sur le cœur système. Si la console ne le permet pas, les jeux copient comme avant (voir le journal).",   /* fr */
+	"Copia lo que lee un juego en el núcleo del sistema de la consola en lugar del núcleo del juego, que queda libre antes durante la carga. Cached only: lecturas a memoria normal. C + NC R/A: Cached + lecturas a memoria no almacenable en caché (datos gráficos), solo lo que la lectura anticipada ya leyó, por lo que la necesita; las demás no tienen nada que copiar. C + NC All: las propias lecturas NC (64 KiB o más) también se hacen en el núcleo del sistema. Si la consola no lo permite, los juegos copian como antes (ver el registro).",   /* es */
+	"Kopiert, was ein Spiel liest, auf dem Systemkern der Konsole statt auf dem Kern des Spiels, der beim Laden so früher frei wird. Cached only: Lesevorgänge in normalen Speicher. C + NC R/A: Cached + Lesevorgänge in nicht cachebaren Speicher (Grafikdaten), nur was Vorauslesen schon gelesen hat, es wird also benötigt; andere haben nichts zu kopieren. C + NC All: auch die NC-Lesevorgänge selbst (ab 64 KiB) laufen auf dem Systemkern. Erlaubt die Konsole es nicht, kopieren Spiele wie bisher (siehe Protokoll).",   /* de */
+	"Copia ciò che un gioco legge sul core di sistema della console invece che sul core del gioco, che si libera prima durante il caricamento. Cached only: letture nella memoria normale. C + NC R/A: Cached + letture nella memoria non memorizzabile in cache (dati grafici), solo ciò che la lettura anticipata ha già letto, quindi la richiede; le altre non hanno nulla da copiare. C + NC All: anche le letture NC stesse (64 KiB o più) avvengono sul core di sistema. Se la console non lo consente, i giochi copiano come prima (vedi il registro).",   /* it */
+	"Kopieert wat een game leest op de systeemkern van de console in plaats van op de kern van de game, die zo eerder vrij is tijdens het laden. Cached only: lezen naar normaal geheugen. C + NC R/A: Cached + lezen naar niet-cachebaar geheugen (grafische gegevens), alleen wat Vooruitlezen al heeft gelezen, dus dat is nodig; andere leesacties hebben niets te kopiëren. C + NC All: ook de NC-leesacties zelf (64 KiB of meer) gebeuren op de systeemkern. Staat de console het niet toe, dan kopiëren games zoals voorheen (zie het logboek).",   /* nl */
+	"Copia o que um jogo lê no núcleo do sistema da consola em vez do núcleo do jogo, que fica livre mais cedo durante o carregamento. Cached only: leituras para memória normal. C + NC R/A: Cached + leituras para memória não armazenável em cache (dados gráficos), apenas o que a leitura antecipada já leu, pelo que é necessária; as outras não têm nada para copiar. C + NC All: as próprias leituras NC (64 KiB ou mais) também são feitas no núcleo do sistema. Se a consola não o permitir, os jogos copiam como antes (ver o registo).",   /* pt */
+	"Копирует прочитанное игрой на системном ядре консоли, а не на ядре игры, и оно раньше освобождается при загрузке. Cached only: чтение в обычную память. C + NC R/A: Cached + чтение в некэшируемую память (графические данные), только то, что уже прочитало упреждающее чтение, поэтому оно необходимо; в остальных таких чтениях копировать нечего. C + NC All: сами чтения NC (от 64 КиБ) тоже выполняются на системном ядре. Если консоль не позволяет, игры копируют как раньше (см. журнал).",   /* ru */
+	"게임이 읽은 데이터를 게임 자신의 코어 대신 본체의 시스템 코어에서 복사하여 로딩 중 게임 코어가 더 빨리 비워집니다. Cached only: 일반 메모리로 읽기. C + NC R/A: Cached + 비캐시 메모리(그래픽 데이터)로 읽기이며, 미리 읽기가 이미 읽은 데이터만 해당하므로 미리 읽기가 필요합니다. 그 외의 읽기는 복사할 것이 없습니다. C + NC All: NC 읽기 자체(64 KiB 이상)도 시스템 코어에서 수행합니다. 본체가 허용하지 않으면 게임이 이전처럼 복사합니다(로그 참조).",   /* ko */
+	"將遊戲讀取的資料改在主機的系統核心複製，而非遊戲自己的核心，讓遊戲核心在載入時更早空出。Cached only：讀入一般記憶體。C + NC R/A：Cached + 讀入非快取記憶體（圖形資料），僅限預先讀取已讀到的部分，因此需要預先讀取；其他這類讀取沒有東西要複製。C + NC All：NC 讀取本身（64 KiB 以上）也在系統核心執行。若主機不允許，遊戲會照舊複製（請見記錄）。",   /* zht */
+	"将游戏读取的数据改在主机的系统核心复制，而不是游戏自己的核心，让游戏核心在加载时更早空出。Cached only：读入普通内存。C + NC R/A：Cached + 读入非缓存内存（图形数据），仅限预读已读到的部分，因此需要预读；其他此类读取没有内容需要复制。C + NC All：NC 读取本身（64 KiB 及以上）也在系统核心执行。如果主机不允许，游戏会照旧复制（见日志）。",   /* zhs */
+	"Kopioi pelin lukemat tiedot konsolin järjestelmäytimellä pelin oman ytimen sijaan, joten pelin ydin vapautuu latauksessa aiemmin. Cached only: luku tavalliseen muistiin. C + NC R/A: Cached + luku välimuistittomaan muistiin (grafiikkadata), vain se, minkä ennakkoluku on jo lukenut, joten se tarvitaan; muissa ei ole kopioitavaa. C + NC All: myös itse NC-luvut (vähintään 64 KiB) tehdään järjestelmäytimellä. Jos konsoli ei salli tätä, pelit kopioivat kuten ennen (katso loki).",   /* fi */
+	"Kopierar det ett spel läser på konsolens systemkärna i stället för spelets egen kärna, som då blir ledig tidigare under laddning. Cached only: läsning till vanligt minne. C + NC R/A: Cached + läsning till icke-cachebart minne (grafikdata), bara det Läs i förväg redan har läst, så den behövs; andra läsningar har inget att kopiera. C + NC All: även själva NC-läsningarna (64 KiB eller mer) görs på systemkärnan. Om konsolen inte tillåter det kopierar spelen som tidigare (se loggen).",   /* sv */
+	"Kopierer det, et spil læser, på konsollens systemkerne i stedet for spillets egen kerne, som så bliver fri tidligere under indlæsning. Cached only: læsning til almindelig hukommelse. C + NC R/A: Cached + læsning til ikke-cachebar hukommelse (grafikdata), kun det Læs forud allerede har læst, så det er nødvendigt; andre læsninger har intet at kopiere. C + NC All: også selve NC-læsningerne (64 KiB eller mere) sker på systemkernen. Hvis konsollen ikke tillader det, kopierer spil som før (se loggen).",   /* da */
+	"Kopierer det et spill leser på konsollens systemkjerne i stedet for spillets egen kjerne, som da blir ledig tidligere under lasting. Cached only: lesing til vanlig minne. C + NC R/A: Cached + lesing til ikke-hurtigbufret minne (grafikkdata), bare det Les på forhånd allerede har lest, så det er nødvendig; andre lesinger har ingenting å kopiere. C + NC All: også selve NC-lesingene (64 KiB eller mer) skjer på systemkjernen. Hvis konsollen ikke tillater det, kopierer spill som før (se loggen).",   /* no */
+	"Kopiuje to, co czyta gra, na rdzeniu systemowym konsoli zamiast na rdzeniu gry, który zwalnia się szybciej podczas wczytywania. Cached only: odczyty do zwykłej pamięci. C + NC R/A: Cached + odczyty do pamięci niebuforowanej (dane graficzne), tylko to, co odczyt z wyprzedzeniem już odczytał, więc jest on potrzebny; pozostałe nie mają czego kopiować. C + NC All: same odczyty NC (od 64 KiB) także odbywają się na rdzeniu systemowym. Jeśli konsola na to nie pozwala, gry kopiują jak dotąd (zobacz dziennik).",   /* pl */
+	"Copia o que um jogo lê no núcleo do sistema do console em vez do núcleo do jogo, que fica livre mais cedo durante o carregamento. Cached only: leituras para memória normal. C + NC R/A: Cached + leituras para memória não armazenável em cache (dados gráficos), apenas o que a leitura antecipada já leu, então ela é necessária; as outras não têm nada para copiar. C + NC All: as próprias leituras NC (64 KiB ou mais) também são feitas no núcleo do sistema. Se o console não permitir, os jogos copiam como antes (veja o log).",   /* ptbr */
+	"Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads. Cached only: reads into ordinary memory. C + NC R/A: Cached + reads into non-cacheable memory (graphics data), only what Read ahead has already read, so it needs Read ahead; other such reads have nothing to copy. C + NC All: and the NC reads themselves (64 KiB or more) are done on the system core. If the console does not allow it, games copy as before (see the log).",   /* engb */
+	"Bir oyunun okuduğunu oyunun kendi çekirdeği yerine konsolun sistem çekirdeğinde kopyalar, böylece oyunun çekirdeği yükleme sırasında daha erken boşalır. Cached only: normal belleğe okumalar. C + NC R/A: Cached + önbelleğe alınmayan belleğe okumalar (grafik verileri), yalnızca önden okumanın zaten okuduğu kısım, bu yüzden önden okuma gerekir; diğerlerinde kopyalanacak bir şey yoktur. C + NC All: NC okumalarının kendisi de (64 KiB ve üzeri) sistem çekirdeğinde yapılır. Konsol izin vermezse oyunlar eskisi gibi kopyalar (günlüğe bakın).",   /* tr */
 },
 [VM_I18N_ITEM_OFF_OFF] = {
 	"オフ",   /* ja */
@@ -1187,28 +1099,6 @@
 	"Desligado",   /* ptbr */
 	"Off",   /* engb */
 	"Kapalı",   /* tr */
-},
-[VM_I18N_ITEM_OFF_GPU] = {
-	"GPU-safe (C)",   /* ja */
-	"GPU-safe (C)",   /* en */
-	"GPU-safe (C)",   /* fr */
-	"GPU-safe (C)",   /* es */
-	"GPU-safe (C)",   /* de */
-	"GPU-safe (C)",   /* it */
-	"GPU-safe (C)",   /* nl */
-	"GPU-safe (C)",   /* pt */
-	"GPU-safe (C)",   /* ru */
-	"GPU-safe (C)",   /* ko */
-	"GPU-safe (C)",   /* zht */
-	"GPU-safe (C)",   /* zhs */
-	"GPU-safe (C)",   /* fi */
-	"GPU-safe (C)",   /* sv */
-	"GPU-safe (C)",   /* da */
-	"GPU-safe (C)",   /* no */
-	"GPU-safe (C)",   /* pl */
-	"GPU-safe (C)",   /* ptbr */
-	"GPU-safe (C)",   /* engb */
-	"GPU-safe (C)",   /* tr */
 },
 [VM_I18N_ITEM_OFF_ALWAYS] = {
 	"Cached only",   /* ja */
@@ -1255,48 +1145,70 @@
 	"C + NC R/A",   /* tr */
 },
 [VM_I18N_ITEM_OFF_FULL] = {
-	"C + NC",   /* ja */
-	"C + NC",   /* en */
-	"C + NC",   /* fr */
-	"C + NC",   /* es */
-	"C + NC",   /* de */
-	"C + NC",   /* it */
-	"C + NC",   /* nl */
-	"C + NC",   /* pt */
-	"C + NC",   /* ru */
-	"C + NC",   /* ko */
-	"C + NC",   /* zht */
-	"C + NC",   /* zhs */
-	"C + NC",   /* fi */
-	"C + NC",   /* sv */
-	"C + NC",   /* da */
-	"C + NC",   /* no */
-	"C + NC",   /* pl */
-	"C + NC",   /* ptbr */
-	"C + NC",   /* engb */
-	"C + NC",   /* tr */
+	"C + NC All",   /* ja */
+	"C + NC All",   /* en */
+	"C + NC All",   /* fr */
+	"C + NC All",   /* es */
+	"C + NC All",   /* de */
+	"C + NC All",   /* it */
+	"C + NC All",   /* nl */
+	"C + NC All",   /* pt */
+	"C + NC All",   /* ru */
+	"C + NC All",   /* ko */
+	"C + NC All",   /* zht */
+	"C + NC All",   /* zhs */
+	"C + NC All",   /* fi */
+	"C + NC All",   /* sv */
+	"C + NC All",   /* da */
+	"C + NC All",   /* no */
+	"C + NC All",   /* pl */
+	"C + NC All",   /* ptbr */
+	"C + NC All",   /* engb */
+	"C + NC All",   /* tr */
+},
+[VM_I18N_TITLE_DEVELOPER] = {
+	"開発者向け設定",   /* ja */
+	"Developer settings",   /* en */
+	"Paramètres développeur",   /* fr */
+	"Ajustes de desarrollador",   /* es */
+	"Entwicklereinstellungen",   /* de */
+	"Impostazioni sviluppatore",   /* it */
+	"Ontwikkelaarsinstellingen",   /* nl */
+	"Definições de programador",   /* pt */
+	"Настройки разработчика",   /* ru */
+	"개발자 설정",   /* ko */
+	"開發人員設定",   /* zht */
+	"开发者设置",   /* zhs */
+	"Kehittäjäasetukset",   /* fi */
+	"Utvecklarinställningar",   /* sv */
+	"Udviklerindstillinger",   /* da */
+	"Utviklerinnstillinger",   /* no */
+	"Ustawienia programisty",   /* pl */
+	"Configurações de desenvolvedor",   /* ptbr */
+	"Developer settings",   /* engb */
+	"Geliştirici ayarları",   /* tr */
 },
 [VM_I18N_ROW_READAHEAD] = {
-	"先読み（試験的）",   /* ja */
-	"Read ahead (experimental)",   /* en */
-	"Lecture anticipée (expérimental)",   /* fr */
-	"Lectura anticipada (experimental)",   /* es */
-	"Vorauslesen (experimentell)",   /* de */
-	"Lettura anticipata (sperimentale)",   /* it */
-	"Vooruitlezen (experimenteel)",   /* nl */
-	"Leitura antecipada (experimental)",   /* pt */
-	"Упреждающее чтение (эксперимент)",   /* ru */
-	"미리 읽기 (실험적)",   /* ko */
-	"預先讀取（實驗性）",   /* zht */
-	"预读（实验性）",   /* zhs */
-	"Ennakkoluku (kokeellinen)",   /* fi */
-	"Läs i förväg (experimentell)",   /* sv */
-	"Læs forud (eksperimentel)",   /* da */
-	"Les på forhånd (eksperimentell)",   /* no */
-	"Odczyt z wyprzedzeniem (eksperymentalny)",   /* pl */
-	"Leitura antecipada (experimental)",   /* ptbr */
-	"Read ahead (experimental)",   /* engb */
-	"Önden okuma (deneysel)",   /* tr */
+	"先読み",   /* ja */
+	"Read ahead",   /* en */
+	"Lecture anticipée",   /* fr */
+	"Lectura anticipada",   /* es */
+	"Vorauslesen",   /* de */
+	"Lettura anticipata",   /* it */
+	"Vooruitlezen",   /* nl */
+	"Leitura antecipada",   /* pt */
+	"Упреждающее чтение",   /* ru */
+	"미리 읽기",   /* ko */
+	"預先讀取",   /* zht */
+	"预读",   /* zhs */
+	"Ennakkoluku",   /* fi */
+	"Läs i förväg",   /* sv */
+	"Læs forud",   /* da */
+	"Les på forhånd",   /* no */
+	"Odczyt z wyprzedzeniem",   /* pl */
+	"Leitura antecipada",   /* ptbr */
+	"Read ahead",   /* engb */
+	"Önden okuma",   /* tr */
 },
 [VM_I18N_HINT_READAHEAD] = {
 	"ファイルが順番に読み込まれている間、次の部分を要求される前にシステムコアがカードから読み込むため、カードが待つことはありません。読み込みやコピーが速くなります。別の場所の読み込みは数ミリ秒待つことがあります。書き込みには影響しません。内蔵ストレージには使いません。",   /* ja */

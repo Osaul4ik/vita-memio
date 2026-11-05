@@ -9,7 +9,7 @@
  * Strictly read + overdraw: no storage state is touched here. The text comes
  * from the worker (main.c, every second while the HUD is on) through vm_hud_set_text(), double-buffered so
  * the frame hook never reads a half-written line. The drawing itself is in
- * hud_draw.h (top right corner, classic or PSVshell style).
+ * hud_draw.h.
  *
  * Drawing is guarded by a plausibility check on width, height, pitch and pixel
  * format and is simply skipped if the frame looks wrong, rather than risk a bad
@@ -38,7 +38,7 @@ static volatile int g_front = 0;
 static HudText      g_ov[2];
 static volatile int g_ov_front = 0;
 
-/* The PSVshell style keeps the composed panel in g_cache, at four bits a pixel
+/* The HUD keeps the composed panel in g_cache, at four bits a pixel
  * (ordinary cached memory, allocated by the worker while the HUD is on), so a frame only copies
  * it; built again when the text or the framebuffer size changes. Without the
  * cache it composes one row at a time in g_row. `g_row_busy` keeps the drawing
@@ -100,14 +100,10 @@ static int hook_set_framebuf(int head, int index,
 	uint32_t prev_dacr = hud_dacr_open();
 	if (t->n <= 0) {
 		/* only the overlay */
-	} else if (t->style == VM_HUD_STYLE_PSVSHELL) {
-		if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
-			if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
-				hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
-			__sync_lock_release(&g_row_busy);
-		}
-	} else {
-		hud_draw_classic((uint32_t *)pParam->base, pitch, w, h, t);
+	} else if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
+		if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
+			hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
+		__sync_lock_release(&g_row_busy);
 	}
 	if (ov->n > 0 && !__sync_lock_test_and_set(&g_row_busy, 1)) {
 		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, g_row);
@@ -158,7 +154,7 @@ static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 }
 
 /* A cache big enough for `t` (at the largest font), or none if the HUD is off
- * or not in the PSVshell style. If the memory is not there, the panel is just
+ * If the memory is not there, the panel is just
  * composed every frame. */
 static void cache_fit(const HudText *t)
 {
@@ -168,7 +164,7 @@ static void cache_fit(const HudText *t)
 	void *base = NULL;
 	int want, size;
 
-	if (t->n <= 0 || t->style != VM_HUD_STYLE_PSVSHELL) {
+	if (t->n <= 0) {
 		if (g_cache_uid >= 0)
 			cache_swap(-1, NULL, 0);
 		failed_bytes = 0;
@@ -208,7 +204,7 @@ int vm_hud_installed(void)
 	return g_hook >= 0;
 }
 
-void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
+void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 {
 	int back = g_front ^ 1;
 	HudText *t = &g_text[back];
@@ -216,7 +212,7 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 	if (n < 0) n = 0;
 	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
 	/* The same text as on screen: nothing to do (the cache stays valid). */
-	if (n == cur->n && style == cur->style) {
+	if (n == cur->n) {
 		int same = 1;
 		for (int i = 0; i < n && same; i++)
 			same = !strncmp(lines[i], cur->lines[i], VM_HUD_LINE_MAX);
@@ -235,8 +231,7 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n, int style)
 		if (len > t->maxlen)
 			t->maxlen = len;
 	}
-	t->style = style;
-	t->n = n;
+		t->n = n;
 	t->gen = ++g_gen;
 	cache_fit(t);
 	__sync_synchronize();   /* the text must be visible before the flip */
@@ -260,7 +255,6 @@ static void panel_fill(HudText *t, const char lines[][VM_HUD_LINE_MAX], int n, i
 		if (len > t->maxlen)
 			t->maxlen = len;
 	}
-	t->style = VM_HUD_STYLE_PSVSHELL;
 	t->left = where;
 	t->n = n;
 	t->gen = ++g_gen;

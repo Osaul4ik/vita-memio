@@ -17,7 +17,6 @@ enum vm_i18n_id {
 	VM_I18N_ROW_MEMCARD,
 	VM_I18N_ROW_VERIFY,
 	VM_I18N_ROW_LOG,
-	VM_I18N_ROW_HUD_STYLE,
 	VM_I18N_ROW_SAFE,
 	VM_I18N_HINT_SD2VITA,       /* help text                                      */
 	VM_I18N_HINT_INTERNAL,
@@ -25,7 +24,6 @@ enum vm_i18n_id {
 	VM_I18N_HINT_MEMCARD,
 	VM_I18N_HINT_VERIFY,
 	VM_I18N_HINT_LOG,
-	VM_I18N_HINT_HUD_STYLE,
 	VM_I18N_HINT_SAFE_ON,       /* the safe-mode row's help, by the state         */
 	VM_I18N_HINT_SAFE_OFF,
 	VM_I18N_TITLE_ADVANCED,     /* the "Advanced" sub-page                        */
@@ -34,8 +32,6 @@ enum vm_i18n_id {
 	VM_I18N_ITEM_HUD_OFF,       /* HUD list items, in VM_HUD_* order              */
 	VM_I18N_ITEM_HUD_COMPACT,
 	VM_I18N_ITEM_HUD_EXTENDED,
-	VM_I18N_ITEM_STYLE_CLASSIC, /* HUD style items, in VM_HUD_STYLE_* order       */
-	VM_I18N_ITEM_STYLE_PSVSHELL,
 	VM_I18N_ST_FALLBACK,        /* added to a storage's help when it isn't working */
 	VM_I18N_ST_NO_BUFFER,
 	VM_I18N_ST_FIRMWARE,
@@ -64,15 +60,15 @@ enum vm_i18n_id {
 	VM_I18N_ROW_OFFLOAD,        /* Advanced > Copy on the system core             */
 	VM_I18N_HINT_OFFLOAD,
 	VM_I18N_ITEM_OFF_OFF,       /* its choices, in VM_OFFLOAD_* order             */
-	VM_I18N_ITEM_OFF_GPU,
 	VM_I18N_ITEM_OFF_ALWAYS,
 	VM_I18N_ITEM_OFF_ALL,       /* C + NC R/A                                     */
-	VM_I18N_ITEM_OFF_FULL,      /* C + NC                                         */
+	VM_I18N_ITEM_OFF_FULL,      /* C + NC All                                     */
 	VM_I18N_ROW_READAHEAD,      /* Advanced > Read ahead (experimental)           */
 	VM_I18N_HINT_READAHEAD,
 	VM_I18N_ITEM_RA_ON,         /* its "On" (Off and Auto: the pipeline's)        */
 	VM_I18N_ROW_OVERLAY,        /* Advanced > Overlay (SELECT + arrows)           */
 	VM_I18N_HINT_OVERLAY,
+	VM_I18N_TITLE_DEVELOPER,
 	VM_I18N_COUNT
 };
 

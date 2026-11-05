@@ -3,7 +3,7 @@
  * can draw into an ordinary buffer (tests/test_hud.c). Included by hud.c only;
  * memcpy must already be declared (sysclib in the kernel, string.h on a PC).
  *
- * Both looks sit in the top right corner, below the system status bar's
+ * The panel sits in the top right corner, below the system status bar's
  * height so they never cover the clock and battery on the home screen.
  */
 #ifndef VITAMEMIO_HUD_DRAW_H
@@ -12,14 +12,12 @@
 #include <stdint.h>
 
 #include "hud.h"
-#include "font8x8.h"
 #include "../include/vitamemio.h"
 #include "../include/vm_font_terminus.h"
 
 typedef struct {
 	char     lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
 	int      n;
-	int      style;    /* VM_HUD_STYLE_*                                    */
 	int      maxlen;   /* longest line in characters, codes not counted     */
 	int      left;     /* 1: the top left corner (the overlay)              */
 	uint32_t gen;      /* changes whenever the text does (for the cache)    */
@@ -45,57 +43,6 @@ static inline int hud_visible_len(const char *s)
 		if (!hud_is_code(*s))
 			n++;
 	return n;
-}
-
-/* ---- classic: white text with a shadow, 8x8 font at 2x -------------------- */
-
-#define HUD_CLASSIC_FG      0xFFFFFFFFu
-#define HUD_CLASSIC_SHADOW  0xFF000000u
-
-static inline void hud_classic_char(uint32_t *fb, int pitch, int w, int h, int ox, int oy,
-                                    char ch, uint32_t color)
-{
-	const unsigned char *g;
-
-	if ((unsigned char)ch < VM_FONT_FIRST || (unsigned char)ch > VM_FONT_LAST)
-		return;
-	g = vm_font8x8[(unsigned char)ch - VM_FONT_FIRST];
-	for (int row = 0; row < 8; row++) {
-		unsigned char bits = g[row];
-
-		for (int col = 0; bits && col < 8; col++, bits >>= 1) {
-			if (!(bits & 1))
-				continue;
-			for (int sy = 0; sy < 2; sy++) {
-				int y = oy + row * 2 + sy, x = ox + col * 2;
-
-				if (y < 0 || y >= h || x < 0 || x + 1 >= w)
-					continue;
-				fb[y * pitch + x] = color;
-				fb[y * pitch + x + 1] = color;
-			}
-		}
-	}
-}
-
-static inline void hud_draw_classic(uint32_t *fb, int pitch, int w, int h, const HudText *t)
-{
-	const int line_h = 20, margin = 24;
-	int x = w - margin - t->maxlen * 16, y = margin + 24;
-
-	if (x < 0)
-		x = 0;
-	for (int i = 0; i < t->n; i++, y += line_h) {
-		int cx = x;
-
-		for (const char *s = t->lines[i]; *s; s++) {
-			if (hud_is_code(*s))
-				continue;
-			hud_classic_char(fb, pitch, w, h, cx + 1, y + 1, *s, HUD_CLASSIC_SHADOW);
-			hud_classic_char(fb, pitch, w, h, cx, y, *s, HUD_CLASSIC_FG);
-			cx += 16;
-		}
-	}
 }
 
 /* ---- PSVshell style: a black panel, Terminus font, colours ------------------ */

@@ -68,7 +68,7 @@ enum vm_key {
 	VM_KEY_INTERNAL,       /* 0/1: faster internal storage                   */
 	VM_KEY_VERIFY,         /* 0/1: check every faster transfer (diagnostic)  */
 	VM_KEY_HUD,            /* VM_HUD_*                                       */
-	VM_KEY_HUD_STYLE,      /* VM_HUD_STYLE_*: how the HUD is drawn           */
+	VM_KEY_HUD_STYLE,      /* reserved: the HUD has one look now             */
 	VM_KEY_LOG,            /* 0/1: write kernel.log / user.log at all        */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
@@ -98,18 +98,16 @@ enum vm_key {
  * (whose core is then free sooner): off; only with GPU-safe reads (where the
  * copy costs the most); always. */
 #define VM_OFFLOAD_OFF     0
-#define VM_OFFLOAD_GPU     1   /* "GPU-safe (C)"                                     */
-#define VM_OFFLOAD_ALWAYS  2   /* "Cached only"                                      */
+#define VM_OFFLOAD_ALWAYS  2   /* "Cached only" (1: the removed "GPU-safe only")     */
 #define VM_OFFLOAD_ALL     3   /* "C + NC R/A": and what read ahead holds for NC     */
-#define VM_OFFLOAD_FULL    4   /* "C + NC": and non-cacheable reads themselves       */
+#define VM_OFFLOAD_FULL    4   /* "C + NC All": and non-cacheable reads themselves   */
 
 /* Which reads a VM_OFFLOAD_* setting puts on the system core: reads into
- * ordinary (cached) memory (GPU-safe only: while GPU-safe reads are on), and
+ * ordinary (cached) memory, and
  * reads into non-cacheable memory (incl. read-ahead pieces copied into it). */
-static inline int vm_offload_cached(int v, int gpusafe)
+static inline int vm_offload_cached(int v)
 {
-	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL ||
-	       (v == VM_OFFLOAD_GPU && gpusafe);
+	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
 }
 static inline int vm_offload_nc(int v)
 {
@@ -125,7 +123,7 @@ static inline int vm_offload_direct(int v)
 #define VM_STATS_OFF       0
 #define VM_STATS_ON        1
 
-/* Read ahead (experimental): off; on. */
+/* Read ahead: off; on. */
 #define VM_RA_OFF          0
 #define VM_RA_ON           1
 
@@ -147,7 +145,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
 #define VM_DEF_OFFLOAD   2   /* VM_OFFLOAD_ALWAYS: with GPU-safe reads or not  */
-#define VM_DEF_READAHEAD 0   /* experimental: opt-in                           */
+#define VM_DEF_READAHEAD 0   /* opt-in                                         */
 #define VM_DEF_OVERLAY   0   /* opt-in: it takes SELECT + arrows from games    */
 
 /* One int per key, in enum vm_key order. */
@@ -201,7 +199,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v >= VM_OFFLOAD_OFF && v <= VM_OFFLOAD_FULL;
+		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_ALWAYS && v <= VM_OFFLOAD_FULL);
 	case VM_KEY_HUD:
 		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

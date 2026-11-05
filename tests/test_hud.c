@@ -13,7 +13,7 @@
 
 #define BG 0xFF336699u              /* "the game's picture"                    */
 
-static void set_text(HudText *t, int style, const char *const *lines, int n)
+static void set_text(HudText *t, const char *const *lines, int n)
 {
 	memset(t, 0, sizeof(*t));
 	for (int i = 0; i < n; i++) {
@@ -22,7 +22,6 @@ static void set_text(HudText *t, int style, const char *const *lines, int n)
 			t->maxlen = hud_visible_len(t->lines[i]);
 	}
 	t->n = n;
-	t->style = style;
 }
 
 static void dump(const uint32_t *fb, int pitch, int w, int h, const char *name)
@@ -70,7 +69,7 @@ static void test_panel_sizes(void)
 	static uint32_t row[HUD_ROW_MAX];
 	HudText t;
 
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, k_lines, 4);
+	set_text(&t, k_lines, 4);
 	CHECK(t.maxlen == (int)strlen("MEMCARD  R   0.0 W   0.0 MB/s ERROR"));
 	for (int k = 0; k < 3; k++) {
 		int w = sizes[k][0], h = sizes[k][1], pitch = w == 960 ? 960 : 1024;
@@ -123,21 +122,21 @@ static void test_panel_limits(void)
 	/* the widest line that fits the row buffer still draws, in bounds */
 	memset(wide, 'W', sizeof(wide) - 1);
 	wide[sizeof(wide) - 1] = 0;
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, wl, 1);
+	set_text(&t, wl, 1);
 	for (int i = 0; i < 960 * 544; i++) fb[i] = BG;
 	hud_draw_panel(fb, 960, 960, 544, &t, row);
 	changed_box(fb, 960, 960, 544, &x0, &y0, &x1, &y1);
 	CHECK(x1 > 0 && x1 < 960);
 
 	/* a framebuffer too small for the box: nothing drawn at all */
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, k_lines, 4);
+	set_text(&t, k_lines, 4);
 	for (int i = 0; i < 960 * 544; i++) fb[i] = BG;
 	hud_draw_panel(fb, 200, 200, 60, &t, row);
 	changed_box(fb, 960, 960, 544, &x0, &y0, &x1, &y1);
 	CHECK(x1 < 0);
 
 	/* no lines: nothing drawn */
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, one, 0);
+	set_text(&t, one, 0);
 	hud_draw_panel(fb, 960, 960, 544, &t, row);
 	changed_box(fb, 960, 960, 544, &x0, &y0, &x1, &y1);
 	CHECK(x1 < 0);
@@ -155,7 +154,7 @@ static void test_panel_cache(void)
 	HudCache c = { 0 };
 	int x0, y0, x1, y1;
 
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, k_lines, 4);
+	set_text(&t, k_lines, 4);
 	t.gen = 1;
 	c.bytes = hud_cache_bytes(&t);
 	c.px = malloc((size_t)c.bytes);
@@ -206,23 +205,6 @@ static void test_panel_cache(void)
 	free(b);
 }
 
-static void test_classic(void)
-{
-	uint32_t *fb = malloc(960 * 544 * 4);
-	HudText t;
-	int x0, y0, x1, y1;
-
-	set_text(&t, VM_HUD_STYLE_CLASSIC, k_lines, 4);
-	for (int i = 0; i < 960 * 544; i++) fb[i] = BG;
-	hud_draw_classic(fb, 960, 960, 544, &t);
-	changed_box(fb, 960, 960, 544, &x0, &y0, &x1, &y1);
-	CHECK(x1 <= 960 - 24 && x1 > 960 - 24 - 16 * 2);   /* the top right corner */
-	CHECK(y0 >= 48 && y1 < 48 + 4 * 20 + 2);
-	CHECK(x0 >= 960 - 24 - t.maxlen * 16);
-	dump(fb, 960, 960, 544, "hud_classic_960.ppm");
-	free(fb);
-}
-
 static void test_corner(void)
 {
 	CHECK(hud_corner_inset(0, 8) > 0);
@@ -237,7 +219,7 @@ static void test_overlay_left(void)
 {
 	static const char *const lines[12] = {
 		"vita-memio", "Game PCSE00001", "Auto: learning 3/300", "Starts after C 5 NC 5",
-		"On core 3 C 98% NC 100%", "> Read ahead       Auto", "  Copy on core 3   C + NC R/A",
+		"On core 3 C 98% NC 100%", "> Read ahead       Auto", "  Copy on core 3   C + NC All",
 		"  Overlapped reads Auto", "  GPU-safe reads   On", "  Reset Auto profile (X)",
 		"Up/Down Left/Right X", "12",
 	};
@@ -247,7 +229,7 @@ static void test_overlay_left(void)
 	HudText t;
 	HudGeom g;
 
-	set_text(&t, VM_HUD_STYLE_PSVSHELL, lines, 12);
+	set_text(&t, lines, 12);
 	t.left = 1;
 	CHECK(hud_panel_geom(w, h, &t, &g) && g.x0 == w / 96 && g.y0 + g.box_h <= h);
 	hud_draw_panel(fb, w, w, h, &t, row);
@@ -264,7 +246,6 @@ int main(void)
 	RUN(test_panel_sizes);
 	RUN(test_panel_limits);
 	RUN(test_panel_cache);
-	RUN(test_classic);
 	RUN(test_corner);
 	printf(vm_failures ? "test_hud: %d FAILED\n" : "test_hud: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

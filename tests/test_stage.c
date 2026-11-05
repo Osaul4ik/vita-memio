@@ -1707,7 +1707,7 @@ static void test_offload(void)
 	/* made with overlapped reads off too: the helper reads, the copier copies */
 	for (int pipeline = 0; pipeline <= 1; pipeline++) {
 		reset();
-		offload_on(&s, 1, VM_OFFLOAD_GPU, pipeline);
+		offload_on(&s, 1, VM_OFFLOAD_ALWAYS, pipeline);
 		CHECK(d->pipe_made && fake_threads_live == 2 && fake_semas_live == 5);
 		fake_pid = 0x42;
 		g_log_diag = 1;
@@ -1780,7 +1780,7 @@ static void test_offload(void)
 
 	/* "with GPU-safe only": a plain read stays with the caller; "always" not */
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_GPU, 1);
+	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);
 	fake_pid = 0x42;
 	CHECK(rd(u, 0, 256) == 0 && memcmp(u, disk, 256 * 512) == 0);
 	CHECK(copies_elsewhere == 0 && fake_usermap_calls == 0 && g_off_reads == 0);

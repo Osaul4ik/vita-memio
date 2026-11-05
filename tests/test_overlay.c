@@ -144,7 +144,7 @@ static void test_menu(void)
 	CHECK(o.cursor == OV_ITEM_OFFLOAD);
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_RA);
-	o.cursor = OV_ITEM_GPUSAFE;
+	o.cursor = OV_ITEM_OFFLOAD;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_TEST);
 	/* the test: an action, Cross only */
@@ -153,6 +153,26 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.op == OV_OP(OV_ITEM_TEST, 0));
 	o.op = 0;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_ADV);
+	tap(&o, 0, OV_BTN_RIGHT);
+	CHECK(!o.op);
+	tap(&o, 0, OV_BTN_CROSS);
+	CHECK(o.op == OV_OP(OV_ITEM_ADV, 0));
+	o.op = 0;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_PIPE);
+	/* advanced hidden: straight on to Save */
+	{
+		const uint32_t all = g_mask;
+
+		g_mask = all & ~((1u << OV_ITEM_PIPE) | (1u << OV_ITEM_GPUSAFE));
+		o.cursor = OV_ITEM_ADV;
+		tap(&o, 0, OV_BTN_DOWN);
+		CHECK(o.cursor == OV_ITEM_SAVE);
+		g_mask = all;
+	}
+	o.cursor = OV_ITEM_GPUSAFE;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_SAVE);
 	/* the cursor on a line that went away (read ahead changed): the next

@@ -1471,8 +1471,8 @@ static int ra_thr_ok(uint32_t t)
  * thresholds 0 (the fixed) or 2..8 / never. */
 static int ra_app_ok(const VmApp *a)
 {
-	return a->ra >= -1 && a->ra <= VM_RA_ON && a->offload >= -1 &&
-	       a->offload <= VM_OFFLOAD_FULL && a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
+	return a->ra >= -1 && a->ra <= VM_RA_ON && (a->offload == -1 || vm_setting_valid(VM_KEY_OFFLOAD, a->offload)) &&
+	       a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
 	       a->gpusafe >= -1 && a->gpusafe <= 1 &&
 	       (!a->thr[0] || ra_thr_ok(a->thr[0])) && (!a->thr[1] || ra_thr_ok(a->thr[1]));
 }
@@ -2593,7 +2593,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = mt0, .mt = -2 };
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
-	                vm_offload_cached(offload, clean) &&
+	                vm_offload_cached(offload) &&
 	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
@@ -3052,8 +3052,7 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_glob_gpu, s->gpusafe ? 1 : 0);
 	ST(g_glob_pipe, s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
 	                                                                         : VM_PIPE_OFF);
-	ST(g_glob_offload, s->offload >= VM_OFFLOAD_OFF && s->offload <= VM_OFFLOAD_FULL
-	                   ? s->offload : VM_OFFLOAD_OFF);
+	ST(g_glob_offload, vm_setting_valid(VM_KEY_OFFLOAD, s->offload) ? s->offload : VM_OFFLOAD_OFF);
 	ST(g_glob_ra, s->readahead == VM_RA_ON ? VM_RA_ON : VM_RA_OFF);
 	eff_update();
 	if (!s->verify)

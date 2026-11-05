@@ -304,7 +304,6 @@ static void hud_effective(VmSettings *s)
 	if (vm_overlay_state() == OV_HUD) {
 		if (s->hud == VM_HUD_OFF)
 			s->hud = VM_HUD_EXTENDED;
-		s->hud_style = VM_HUD_STYLE_PSVSHELL;
 	} else {
 		s->hud = VM_HUD_OFF;
 	}
@@ -342,8 +341,8 @@ static void hud_thr(char *o, int cap, uint32_t t, int compact)
 /* Read ahead in the HUD, for the app in front:
  *   compact   RA On C 5 NC no
  *   extended  RA On  PCSB00777
- *               start after  C 5  NC never
- *               core 3       C 98%  NC 100%   (since the HUD came up)
+ *            Streak  C 5  NC never      (reads in a row before it starts)
+ *            Core 3  C 98%  NC 100%     (since the HUD came up)
  * Off: just "RA Off". Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *s,
                         const VmFg *fg, int on)
@@ -382,7 +381,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	}
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room)
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  start after  C %.7s" HUD_C_DIM
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C %.7s" HUD_C_DIM
 		         "  NC %.7s", c, nc);
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;
@@ -393,7 +392,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "  core 3       C %.7s" HUD_C_DIM
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Core 3  C %.7s" HUD_C_DIM
 		         "  NC %.7s", a, b);
 	}
 	return n;
@@ -473,8 +472,8 @@ static void hud_feed(const VmDevState *now)
 		const char *flag = now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_ERROR)
 		                 : dev_slow ? hud_tr(g_lang, HTR_SLOW) : "";
 		pad(np, sizeof(np), name, s.hud == VM_HUD_COMPACT ? 4 : 8, 14, 0);
-		pad(rp, sizeof(rp), r, 5, 6, 1);
-		pad(wp, sizeof(wp), w, 5, 6, 1);
+		pad(rp, sizeof(rp), r, 4, 6, 1);
+		pad(wp, sizeof(wp), w, 4, 6, 1);
 		snprintf(L[n++], VM_HUD_LINE_MAX,
 		         HUD_C_TEXT "%s " HUD_C_DIM "R %s%s " HUD_C_DIM "W %s%s " HUD_C_DIM "MB/s%s%s%s",
 		         np, c, rp, c, wp, flag[0] ? " " : "", c, flag);
@@ -486,7 +485,7 @@ static void hud_feed(const VmDevState *now)
 			now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
 			                                  hud_tr(g_lang, HTR_UNAVAILABLE);
 		snprintf(L[n++], VM_HUD_LINE_MAX,
-		         HUD_C_DIM "  %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
+		         HUD_C_DIM "Read/Write %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
 		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), c, state,
 		         hud_tr(g_lang, HTR_ERR), now[i].errors ? HUD_C_BAD : HUD_C_DIM,
 		         (unsigned)now[i].errors,
@@ -496,15 +495,14 @@ static void hud_feed(const VmDevState *now)
 	if (s.hud != VM_HUD_OFF && n < VM_HUD_LINES)
 		n += rt_line(L[n]);
 	if (vm_hud_installed())
-		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n, s.hud_style);
+		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n);
 }
 
 
 /* ---- the overlay (SELECT + arrows) ------------------------------------------ */
 
 static const char *const k_ov_ra[] = { "Off", "On" };
-static const char *const k_ov_off[] = { "Off", "GPU-safe (C)", "Cached only", "C + NC R/A",
-                                        "C + NC" };
+static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A", "C + NC All" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 static const char *const k_ov_onoff[] = { "Off", "On" };
 
@@ -541,9 +539,11 @@ static const char *rt_thr(char *o, int cap, uint32_t t)
 	return o;
 }
 
-/* Start, or stop and put in what it found (in effect at once; kept by Save). */
-static int rt_toggle(VmApp *a, char *msg, int cap)
+/* Start (copy on core 3 goes to C + NC All meanwhile), or stop and put in what it
+ * found, saved in the app's profile. *save: to be saved once in effect. */
+static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 {
+	static int before;                    /* the copy setting it started from */
 	VmRaTestPick p;
 	char c[12], n[12];
 
@@ -551,8 +551,11 @@ static int rt_toggle(VmApp *a, char *msg, int cap)
 		const int r = vm_stage_ratest_start();
 
 		g_rt_line[0] = 0;
-		if (r == VM_OK)
+		if (r == VM_OK) {
+			before = a->offload;
+			a->offload = VM_OFFLOAD_FULL;
 			snprintf(msg, cap, HUD_C_GOOD "Test on: play, SEL+> shows the HUD");
+		}
 		return r;
 	}
 	vm_stage_ratest_stop(&p);
@@ -560,6 +563,7 @@ static int rt_toggle(VmApp *a, char *msg, int cap)
 	p.pct %= 1000u;
 	g_rt_us = ksceKernelGetSystemTimeLow();
 	if (p.little) {
+		a->offload = before;
 		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "RA test: %u MiB is too little, play more",
 		         (unsigned)p.mib);
 		return VM_OK;
@@ -568,33 +572,40 @@ static int rt_toggle(VmApp *a, char *msg, int cap)
 	a->offload = p.offload;
 	a->thr[0] = p.ra == VM_RA_ON ? p.thr[0] : 0;
 	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
+	*save = 1;
 	if (p.ra == VM_RA_ON)
 		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_GOOD "RA On" HUD_C_TEXT " C %s NC %s %s" HUD_C_DIM
 		         " %u%% of %u MiB", rt_thr(c, sizeof(c), p.thr[0]), rt_thr(n, sizeof(n), p.thr[1]),
 		         k_ov_off[p.offload], (unsigned)p.pct, (unsigned)p.mib);
 	else
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "RA Off" HUD_C_DIM ": no gain in %u MiB",
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "RA Off" HUD_C_DIM ": it would only cost, %u MiB",
 		         (unsigned)p.mib);
-	snprintf(msg, cap, HUD_C_GOOD "Picked: Save keeps it");
 	return VM_OK;
 }
+
+/* Overlapped reads and GPU-safe reads: shown on asking. */
+static int g_ov_adv;
 
 /* A change asked for in the overlay, made here: the app in front's own
  * settings (in effect at once; kept only by Save), or an action. */
 static void overlay_op(uint32_t op, char *msg, int cap)
 {
 	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON };
-	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_GPU, VM_OFFLOAD_ALWAYS,
-	                           VM_OFFLOAD_ALL, VM_OFFLOAD_FULL };   /* as on the Settings page */
+	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
+	                           VM_OFFLOAD_FULL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
 	static const int onoff[] = { VM_APP_GLOBAL, 0, 1 };
 	static const int thr[] = { 0, 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };   /* 0: the fixed */
 	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
 	VmAppNow an;
 	VmApp a;
-	int r = VM_OK;
+	int r = VM_OK, save = 0;
 
 	msg[0] = 0;
+	if (item == OV_ITEM_ADV) {
+		g_ov_adv = !g_ov_adv;
+		return;
+	}
 	vm_stage_app_now(&an);
 	a = an.cur;
 	switch (item) {
@@ -609,7 +620,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		break;
 	}
 	case OV_ITEM_OFFLOAD:
-		a.offload = ov_step(off, 6, a.offload, dir);
+		a.offload = ov_step(off, 5, a.offload, dir);
 		break;
 	case OV_ITEM_PIPE:
 		a.pipe = ov_step(pipe, 4, a.pipe, dir);
@@ -618,7 +629,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		a.gpusafe = ov_step(onoff, 3, a.gpusafe, dir);
 		break;
 	case OV_ITEM_TEST:
-		r = rt_toggle(&a, msg, cap);
+		r = rt_toggle(&a, msg, cap, &save);
 		break;
 	case OV_ITEM_SAVE:
 		r = vm_stage_app_save();
@@ -630,6 +641,11 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	}
 	if (item != OV_ITEM_SAVE)
 		r = vm_stage_app_set(&a);
+	if (r == VM_OK && save) {
+		r = vm_stage_app_save();
+		if (r == VM_OK)
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: picked and saved", an.title);
+	}
 	if (r == VM_ERR_NOT_READY)
 		snprintf(msg, cap, HUD_C_WARN "No app in front");
 	else if (r == VM_ERR_IO)
@@ -638,14 +654,13 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		snprintf(msg, cap, HUD_C_WARN "Not done (%d)", r);
 }
 
-/* The colour of an app's value: as the global one (not its own, nothing to
- * save) white; changed and not saved blue (as PSVshell marks its own
- * values); saved and its own green. */
-static const char *ov_color(int cur, int saved)
+/* The colour of an app's value: changed and not saved blue (as PSVshell marks its
+ * own values); saved and not the standard one green; else white. */
+static const char *ov_color(int cur, int saved, int standard)
 {
 	if (cur != saved)
 		return HUD_C_ACCENT;
-	return cur == VM_APP_GLOBAL ? HUD_C_TEXT : HUD_C_GOOD;
+	return cur == VM_APP_GLOBAL || cur == standard ? HUD_C_TEXT : HUD_C_GOOD;
 }
 
 /* "Global (Auto)" for a value that is the global one, else the value. */
@@ -670,6 +685,31 @@ static void ov_line(char *o, int cur, int i, int indent, const char *name, const
 	snprintf(o, VM_HUD_LINE_MAX, "%s%s%s" HUD_C_TEXT "%s%s%.24s",
 	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ",
 	         indent ? "  " : "", nm, color, val);
+}
+
+/* Characters that take room (colour codes do not). */
+static int ov_vis(const char *s)
+{
+	int n = 0;
+
+	for (; *s; s++)
+		if ((unsigned char)*s > HUD_C_LAST)
+			n++;
+	return n;
+}
+
+/* A line with `text` in the middle of `width`, between > < under the cursor. */
+static void ov_center(char *o, int width, int under, const char *color, const char *text)
+{
+	const int len = ov_vis(text) + 4;
+	int left = width > len ? (width - len) / 2 : 0;
+
+	if (left > VM_HUD_LINE_MAX / 2)
+		left = VM_HUD_LINE_MAX / 2;
+	for (int i = 0; i < left; i++)
+		o[i] = ' ';
+	snprintf(o + left, (size_t)(VM_HUD_LINE_MAX - left), "%s%s%s%s", under ? HUD_C_ACCENT "> " : "  ",
+	         color, text, under ? HUD_C_ACCENT " <" : "  ");
 }
 
 static void overlay_feed(void)
@@ -715,7 +755,7 @@ static void overlay_feed(void)
 		uint32_t core[4], ncs, nco, other = 0, mask;
 		char a[16], b[16], v[40];
 		const int cur = vm_overlay_cursor();
-		int ra;
+		int ra, save_line = -1, close_line;
 
 		vm_stage_app_now(&an);
 		vm_stage_fg(&fg);
@@ -737,13 +777,12 @@ static void overlay_feed(void)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
 		} else {
-			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_PIPE) |
-			       (1u << OV_ITEM_GPUSAFE) | (1u << OV_ITEM_TEST) | (1u << OV_ITEM_SAVE) |
-			       (1u << OV_ITEM_CLOSE);
+			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_TEST) |
+			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
 			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 2);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
-			        ov_color(an.cur.ra, an.saved.ra), v);
+			        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);
 			if (ra == VM_RA_ON) {                 /* its thresholds: On only */
 				for (int k = 0; k < 2; k++) {
 					const uint32_t t = an.cur.thr[k] ? an.cur.thr[k] : an.global.thr[k];
@@ -754,21 +793,16 @@ static void overlay_feed(void)
 						snprintf(v, sizeof(v), "%u%s", (unsigned)t,
 						         an.cur.thr[k] ? "" : " (fixed)");
 					ov_line(L[n++], cur, k ? OV_ITEM_NC : OV_ITEM_C, 1,
-					        k ? "Start after NC" : "Start after C",
+					        k ? "NC streak" : "C streak",
 					        an.cur.thr[k] != an.saved.thr[k] ? HUD_C_ACCENT
-					        : an.cur.thr[k] ? HUD_C_GOOD : HUD_C_TEXT, v);
+					        : an.cur.thr[k] && an.cur.thr[k] != an.global.thr[k] ? HUD_C_GOOD
+					        : HUD_C_TEXT, v);
 				}
 				mask |= (1u << OV_ITEM_C) | (1u << OV_ITEM_NC);
 			}
 			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
 			ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
-			        ov_color(an.cur.offload, an.saved.offload), v);
-			ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
-			ov_line(L[n++], cur, OV_ITEM_PIPE, 0, "Overlapped reads",
-			        ov_color(an.cur.pipe, an.saved.pipe), v);
-			ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_onoff, 2);
-			ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 0, "GPU-safe reads",
-			        ov_color(an.cur.gpusafe, an.saved.gpusafe), v);
+			        ov_color(an.cur.offload, an.saved.offload, an.global.offload), v);
 			{
 				uint32_t mib = 0;
 
@@ -778,14 +812,21 @@ static void overlay_feed(void)
 					snprintf(v, sizeof(v), "(X) start");
 				ov_line(L[n++], cur, OV_ITEM_TEST, 0, "Read ahead test", HUD_C_TEXT, v);
 			}
-			{
-				const int dirty = memcmp(&an.cur, &an.saved, sizeof(an.cur)) != 0;
-
-				ov_line(L[n++], cur, OV_ITEM_SAVE, 0, "Save",
-				        dirty ? HUD_C_ACCENT : HUD_C_DIM, dirty ? "(X) not saved" : "(X)");
+			ov_line(L[n++], cur, OV_ITEM_ADV, 0, g_ov_adv ? "Hide advanced" : "Show advanced",
+			        HUD_C_TEXT, "(X)");
+			mask |= 1u << OV_ITEM_ADV;
+			if (g_ov_adv) {
+				mask |= (1u << OV_ITEM_PIPE) | (1u << OV_ITEM_GPUSAFE);
+				ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
+				ov_line(L[n++], cur, OV_ITEM_PIPE, 1, "Overlapped reads",
+				        ov_color(an.cur.pipe, an.saved.pipe, an.global.pipe), v);
+				ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_onoff, 2);
+				ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
+				        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
 			}
+			save_line = n++;
 		}
-		ov_line(L[n++], cur, OV_ITEM_CLOSE, 0, "Close", HUD_C_TEXT, "(X)");
+		close_line = n++;
 		if (!vm_stage_ratest_running(NULL) && n < VM_HUD_LINES - 1)
 			n += rt_line(L[n]);
 		vm_overlay_set_mask(mask);
@@ -793,6 +834,21 @@ static void overlay_feed(void)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);
 		else
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Up/Down  Left/Right change  X do");
+		/* Save and Close: in the middle of the panel, whatever is in it */
+		{
+			int width = 0;
+
+			for (int i = 0; i < n; i++)
+				if (i != save_line && i != close_line && ov_vis(L[i]) > width)
+					width = ov_vis(L[i]);
+			if (save_line >= 0) {
+				const int dirty = memcmp(&an.cur, &an.saved, sizeof(an.cur)) != 0;
+
+				ov_center(L[save_line], width, cur == OV_ITEM_SAVE,
+				          dirty ? HUD_C_ACCENT : HUD_C_TEXT, dirty ? "Save (not saved)" : "Save");
+			}
+			ov_center(L[close_line], width, cur == OV_ITEM_CLOSE, HUD_C_TEXT, "Close");
+		}
 	}
 	vm_hud_set_overlay(L, n);
 }

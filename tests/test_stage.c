@@ -3140,6 +3140,45 @@ static void test_ra_slow_stream(void)
 	free(u);
 }
 
+static void test_trace(void)
+{
+	static uint8_t u[256 * 512];
+	static VmTr rd_back[16];
+	VmSettings s;
+	char path[96];
+	SceUID fd;
+	int n;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_title_fn = fake_title;
+	s.log = 1;
+	vm_stage_apply(&s);
+	g_tr_i = g_tr_written = 0;
+	g_tr_title[0] = g_tr_name[0] = 0;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(g_tr != NULL);
+	CHECK(rd_ok(u, 100, 256));
+	CHECK(wr(u, 900, 256, REF_RD) >= 0);
+	as_app(0x44);
+	ra_proc_event(0x44, 3);                       /* it ends: what it read, written */
+	vm_stage_worker_tick();
+	snprintf(path, sizeof(path), "%s/PCSB00777.trc", RA_STATS_DIR);
+	fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	CHECK(fd >= 0);
+	n = ksceIoRead(fd, rd_back, sizeof(rd_back));
+	ksceIoClose(fd);
+	CHECK(n == 3 * (int)sizeof(VmTr) && rd_back[0].sector == TR_MAGIC &&
+	      rd_back[1].sector == 100 && rd_back[1].n == 256 && !(rd_back[1].flags & 1) &&
+	      (rd_back[1].flags >> 4) == M && rd_back[2].sector == 900 && (rd_back[2].flags & 1));
+	g_title_fn = NULL;
+	vm_stage_fini();
+	CHECK(g_tr == NULL && g_tr_uid == -1);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -3166,6 +3205,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
+	RUN(test_trace);
 	RUN(test_ra_slow_stream);
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);

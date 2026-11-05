@@ -8,16 +8,7 @@ It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork
 
 ## What you get
 
-On my console, with a microSD in an SD2Vita (GPU-safe reads on, every byte checked by the tester):
-
-| | Without the plugin | With the plugin | With *Read ahead* on |
-|---|---:|---:|---:|
-| Reads, 1 MiB at a time | 13.5 MiB/s | **18.7 MiB/s** | **21.8 MiB/s** |
-| Reads, 128 KiB at a time | 12.9 MiB/s | **16.6 MiB/s** | **27.9 MiB/s** |
-| Graphics data (non-cacheable memory), 128 KiB | | 19.2 MiB/s | **40.1 MiB/s** |
-| Opening small files | | 187 files/s | **238 files/s** |
-
-These are benchmark figures: **results depend on your microSD**, and the gain from *Read ahead* is smaller in real use. See [Benchmarks](#benchmarks) for every value.
+Faster reads and writes, with the biggest gain in anything that reads files in order. Every measured value is under [Benchmarks](#benchmarks). Results depend on your microSD, and games usually gain less than a benchmark.
 
 **Your data is safe by design.** A program reads exactly what it would read without the plugin. Writes are never delayed: when a write returns, the data is on the card. If anything goes wrong, that storage goes back to the normal way for the rest of the session.
 

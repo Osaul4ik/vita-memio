@@ -143,32 +143,35 @@ Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writ
 
 ## Benchmarks
 
-Measured with the tester (quick profile: 16 MiB file, 3 runs, every byte checked) on a PCH-1000, firmware 3.65, with a microSD in an SD2Vita. *GPU-safe reads* on, *Overlapped reads* on *Auto*, *Small transfers too* on.
+Measured with the tester (quick profile: 16 MiB file, 3 runs, every byte checked) on a PCH-1000, firmware 3.65, with a microSD in an SD2Vita. With the plugin: *Overlapped reads* on *Auto*, *Copy on the system core* on *C + NC All*, *Small transfers too* on.
 
-| Test | Unit | Read ahead off | Read ahead on |
-|---|---|---:|---:|
-| Sequential read 1 MiB | MiB/s | 18.7 | **21.8** |
-| Sequential read 128 KiB | MiB/s | 16.6 | **27.9** |
-| Random read 4 KiB | IOPS | 370.4 | 371 |
-| Random read 32 KiB | IOPS | 359.9 | 360.2 |
-| Random read 128 KiB | IOPS | 132.9 | 132.8 |
-| Random read 1 MiB | IOPS | 18.8 | 18.4 |
-| Graphics data (NC) read 1 MiB | MiB/s | 20.6 | **24.2** |
-| Graphics data (NC) read 128 KiB | MiB/s | 19.2 | **40.1** |
-| NCphy read 1 MiB | MiB/s | 20.7 | **24.3** |
-| CDRAM read 1 MiB | MiB/s | 20.6 | **25** |
-| Files read | files/s | 187 | **237.5** |
-| Files created | files/s | 110.4 | 114.3 |
-| Files deleted | files/s | 216.9 | 217.1 |
-| Sequential write 1 MiB | MiB/s | 14.2 | 15.6 |
-| Random write 4 KiB | IOPS | 180.4 | 180.6 |
-| Random write 32 KiB | IOPS | 292.3 | 374.8 |
-| Random write 128 KiB | IOPS | 116.5 | 119.2 |
-| Random write 1 MiB | IOPS | 16.2 | 15.6 |
+| Test | Unit | Without plugin | GPU-safe on | GPU-safe on + Read ahead | GPU-safe off | GPU-safe off + Read ahead |
+|---|---|---:|---:|---:|---:|---:|
+| Sequential read 1 MiB | MiB/s | 14.9 | 18.8 | 21.8 | 19.4 | 24.7 |
+| Sequential read 128 KiB | MiB/s | 14.3 | 16.7 | 28.0 | 17.8 | 29.2 |
+| Random read 4 KiB | IOPS | 379.1 | 372.0 | 370.2 | 410.4 | 409.8 |
+| Random read 32 KiB | IOPS | 360.9 | 361.7 | 360.4 | 397.2 | 397.0 |
+| Random read 128 KiB | IOPS | 114.0 | 133.3 | 132.8 | 141.8 | 141.4 |
+| Random read 1 MiB | IOPS | 14.9 | 18.8 | 18.4 | 19.5 | 19.2 |
+| NC read 1 MiB | MiB/s | 21.1 | 20.7 | 24.1 | 20.7 | 24.1 |
+| NC read 128 KiB | MiB/s | 19.8 | 19.2 | 40.0 | 19.2 | 39.9 |
+| NCphy read 1 MiB | MiB/s | 21.1 | 20.7 | 24.1 | 20.7 | 24.1 |
+| CDRAM read 1 MiB | MiB/s | 21.1 | 20.7 | 24.8 | 20.7 | 24.8 |
+| NC random read 1 MiB | IOPS | 21.1 | 20.7 | — | 20.7 | 20.3 |
+| Files read | files/s | 208.5 | 209.8 | 239.3 | 218.9 | 250.4 |
+| Files created | files/s | 45.1 | 42.0 | — | 42.1 | 42.9 |
+| Files deleted | files/s | 135.9 | 155.0 | — | 137.7 | 145.0 |
+| Sequential write 1 MiB | MiB/s | 13.7 | 18.1 | 15.7 | 15.7 | 15.2 |
+| Random write 4 KiB | IOPS | 162.8 | 180.0 | 167.3 | 174.6 | 164.0 |
+| Random write 32 KiB | IOPS | 309.1 | 390.8 | 374.6 | 297.4 | 335.3 |
+| Random write 128 KiB | IOPS | 100.8 | 137.6 | 122.3 | 91.8 | 109.6 |
+| Random write 1 MiB | IOPS | 13.8 | 18.3 | 15.3 | 14.5 | 14.4 |
+
+*NC* is non-cacheable memory, as games use for graphics data; *NCphy* and *CDRAM* are other kinds of memory games keep it in. A dash means the value was not measured for that setup.
 
 - **Results depend on your microSD.** Cards differ a lot, especially in writes, so your numbers will not match these.
 - **The gain from *Read ahead* is from the benchmark,** which reads files strictly in order. In real use it is smaller, and in games it depends on how each game reads: some gain a lot, some almost nothing.
-- *Read ahead* does not touch random reads or writes, so differences in those rows are normal variation between runs.
+- **Writes vary between runs,** because the card sometimes pauses to do its own housekeeping. *Read ahead* and *GPU-safe reads* do not change how writes work, so differences in those rows are not from them.
 - Most game loading is not limited by storage, so games gain less than file copies.
 
 ## Good to know

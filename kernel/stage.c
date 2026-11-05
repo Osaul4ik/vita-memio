@@ -227,6 +227,7 @@ typedef struct Dev {
 	uint32_t      t_epoch, t_us;
 	void         *ra_last_part;
 	uint32_t      ra_last_us;             /* when the stream was last read (atomic) */
+	uint32_t      ra_us, rs_us;           /* when each stream was last read    */
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
@@ -1364,7 +1365,9 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
  * behind by a stream that has ended are dropped by the next staged transfer,
  * which then goes the faster way as usual. */
 #define RA_LIVE_US      30000u
-#define RA_MAX_AGE_US   500000u
+/* A slow stream still gets what was read for it; a pause longer than this ends
+ * the stream, so nothing is read over and over for a program that has stopped. */
+#define RA_MAX_AGE_US   5000000u
 #define RA_RETIRE_MS    50
 
 static volatile int g_readahead;          /* the setting                      */
@@ -1956,10 +1959,17 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 {
 	if (__sync_lock_test_and_set(&d->rs_lock, 1))
 		return;                               /* another thread at it: a lost update */
-	if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc)
-		d->rs_streak += d->rs_streak < 1000;
-	else
-		d->rs_streak = 1;
+	{
+		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
+
+		if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc &&
+		    (!ready || now - d->rs_us < RA_MAX_AGE_US))
+			d->rs_streak += d->rs_streak < 1000;
+		else
+			d->rs_streak = 1;
+		d->rs_us = now;
+	}
 	d->rs_nc = nc;
 	d->rs_part = part;
 	d->rs_end = sector + n;
@@ -1986,10 +1996,15 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;
 	} else {
-		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc)
+		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
+
+		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc &&
+		    (!ready || now - d->ra_us < RA_MAX_AGE_US))
 			d->ra_streak += d->ra_streak < 1000;
 		else
 			d->ra_streak = 1;
+		d->ra_us = now;
 		d->ra_nc = nc;
 		d->ra_last_part = part;
 		d->ra_last_end = sector + n;

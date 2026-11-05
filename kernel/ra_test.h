@@ -25,7 +25,7 @@
 #define RT_PIECE_SECTORS   256u
 #define RT_PIECES          3u
 #define RT_TINY_STREAK     8u
-#define RT_MAX_AGE_US      500000u
+#define RT_MAX_AGE_US      5000000u      /* as RA_MAX_AGE_US                    */
 #define RT_POS             10            /* positions 0..9, the last: 9 and on  */
 #define RT_RUN             11            /* run lengths 0..10, the last: 10 and on */
 #define RT_THR_MIN         2

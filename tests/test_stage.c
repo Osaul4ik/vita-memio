@@ -3095,6 +3095,51 @@ static void test_ra_test_hook(void)
 	vm_stage_fini();
 }
 
+/* A slow stream: a read every second gets what was read for it, nothing is
+ * dropped for its age; a pause too long ends the stream, and nothing is read
+ * again until it has started afresh. */
+static void test_ra_slow_stream(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+	uint32_t at = 0, hits;
+
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	fake_pid = 0x42;
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	for (int i = 0; i < 8; i++, at += 256) {
+		__sync_fetch_and_add(&fake_now_us, 1000000);
+		CHECK(rd_ok(u, at, 256));
+	}
+	CHECK(g_ra_hits >= 2 && g_ra_bad == 0 && g_ra_drops == 0 && d->ra_streak == 8);
+	/* a pause longer than the limit: over; the pieces left are not used */
+	hits = g_ra_hits;
+	for (int k = 0; k < RA_PIECES; k++)
+		ra_wait(d, k);
+	__sync_fetch_and_add(&fake_now_us, RA_MAX_AGE_US + 1000);
+	CHECK(rd_ok(u, at, 256));
+	at += 256;
+	CHECK(d->ra_streak == 1 && g_ra_hits == hits && g_ra_bad == 1 && ra_idle(d));
+	/* ... and nothing is read ahead for a stream read this slowly */
+	{
+		const int calls = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+
+		for (int i = 0; i < 6; i++, at += 256) {
+			__sync_fetch_and_add(&fake_now_us, RA_MAX_AGE_US + 1000);
+			CHECK(rd_ok(u, at, 256));
+			CHECK(d->ra_streak == 1 && ra_idle(d));
+		}
+		CHECK(__atomic_load_n(&io_calls, __ATOMIC_RELAXED) == calls + 6);
+	}
+	vm_stage_fini();
+	g_live = saved_live;
+	free(u);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -3121,6 +3166,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
+	RUN(test_ra_slow_stream);
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_app_settings);

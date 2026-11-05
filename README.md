@@ -2,77 +2,31 @@
 
 <p align="center"><img src="assets/logo.png" alt="vita-memio: faster storage for PS Vita" width="720"></p>
 
-Makes the PS Vita read and write its storage faster: a microSD in an SD2Vita, the Sony memory card and the internal storage. It is a taiHEN plugin for HENkaku/Ensō on firmware **3.65**.
+**Faster storage for your PS Vita.** vita-memio speeds up a microSD in an SD2Vita, the Sony memory card and the internal storage. Copies, VPK installs and game loading get quicker, and your files stay exactly as they are.
 
-On my console a microSD in an SD2Vita reads **19.6 MiB/s instead of 13.5** (+45%) and writes about 15–17 MiB/s. VitaShell copies, VPK installs and anything else that moves big files get faster, and nothing about your files changes: the data on the card is exactly what it would be without the plugin. Most game loading is not limited by storage speed, so expect a smaller gain there than in a file copy.
+It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia), whose idea and research it builds on.
 
-vita-memio is a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). The idea, the research and the original implementation are his. This fork adds a few speed-ups of its own, a Settings page, a HUD and a tester app.
+## What you get
 
-## What the plugin does
+On my console, with a microSD in an SD2Vita (GPU-safe reads on, every byte checked by the tester):
 
-vita-memio sits between the system's storage driver and the program that reads or writes. For large transfers on a storage you have switched on, it arranges the transfer so the driver finishes it sooner. The system's driver itself is never modified: it still sends every command, handles every error and moves the data.
-
-- **The storage works exactly as before.** What a program reads is byte-for-byte what it would read without the plugin, and what it writes ends up on the card unchanged.
-- **Writes are never cached or delayed.** When a write returns, the data is on the card, just like without the plugin.
-- **Nothing is read before it is asked for,** unless you switch on *Read ahead*. Then, while a file is read from start to end, the next part is read from the card a little early. What was read early is only used for the very next read of that file, never once anything was written over it, and never on the internal storage.
-- **Anything unusual falls back to normal.** An error switches that storage back to the standard path for the rest of the session and finishes the request the standard way. On a firmware it does not know, the plugin installs nothing at all.
-- **Small transfers are left alone** (under 32 KiB: mostly the file system's own bookkeeping), unless you switch on *Small transfers too*.
-- **Only the three storages below are touched,** and only while switched on: a microSD in an SD2Vita, the Sony memory card and the internal storage. Game cards, USB storage and Wi-Fi never are.
-
-**Cached and non-cacheable memory.** A program reads into a buffer, and that buffer is in one of two kinds of memory:
-
-- **Ordinary (cached) memory**, where most program data lives: file copies, installs, most of what a game loads. These reads get the speed-up described below.
-- **Non-cacheable memory**, which a program sets aside for data the graphics chip reads directly. The system already reads into it as fast as a single read can go, so the plugin leaves these reads exactly as they are. The one exception is *Read ahead*: when a game reads such data in long runs, the card can already be busy with the next part. The tester shows these reads as the **NC** rows.
-
-The plugin decides this per read, from the buffer itself, so the same program can do both in one session. Which kind a given program uses for a given file is up to that program.
-
-**About GPU-safe reads.** They matter only for reads into ordinary memory. What your program reads is always identical to the normal way. With **GPU-safe reads** on, the data also ends up in memory exactly as the normal way leaves it, so the graphics chip always sees it correctly, even if a program hands data to it without any extra step. It costs a little speed (see below) and is the recommended choice while playing. With it off, the data is the same, but it can still sit in the processor's cache for a moment: a program that loads a file straight into memory the graphics chip reads, without flushing, could in principle draw a stale texture. Nothing on the card is affected either way.
-
-## Performance
-
-My console: PCH-1000 on firmware 3.65, my own microSD in an SD2Vita (`ux0:`), the official Sony memory card (`uma0:`) and the internal storage (`ur0:`). Measured with the included tester (quick profile: a 16 MiB file, three runs, every byte checked), with *Overlapped reads* on *Auto*.
-
-**SD2Vita (microSD) reads**
-
-| Request size | Without plugin | GPU-safe reads off | GPU-safe reads on |
+| | Without the plugin | With the plugin | With *Read ahead* on |
 |---|---:|---:|---:|
-| 1 MiB | 13.5 MiB/s | **19.6 MiB/s** | **18.8 MiB/s** |
-| 128 KiB | 12.9 MiB/s | **18.1 MiB/s** | **16.8 MiB/s** |
+| Reads, 1 MiB at a time | 13.5 MiB/s | **18.7 MiB/s** | **21.8 MiB/s** |
+| Reads, 128 KiB at a time | 12.9 MiB/s | **16.6 MiB/s** | **27.9 MiB/s** |
+| Graphics data (non-cacheable memory), 128 KiB | | 19.2 MiB/s | **40.1 MiB/s** |
+| Opening small files | | 187 files/s | **238 files/s** |
 
-**Compared with the original project's published figures**
+Your numbers will depend on your console, card and game. Most game loading is not limited by storage, so games gain less than file copies, and how much depends on how each game reads.
 
-| Test | Original: stock | Original: Turbo Storage | vita-memio (my console) |
-|---|---:|---:|---:|
-| SD2Vita reads, 1 MiB | 13.3 MB/s | 16.8 MB/s | **19.6 MiB/s** |
-| SD2Vita reads, 128 KiB | 12.4 MB/s | 15.7 MB/s | **18.1 MiB/s** |
-| SD2Vita writes | 4.4–5.4 MB/s | 6.0–6.3 MB/s | **14.5–17.5 MiB/s** |
-| Sony memory card reads, 1 MiB | 10.5 MB/s | 13.8 MB/s | **14.1 MiB/s** |
-| Sony memory card writes, 1 MiB | 9.1 MB/s | 10.0 MB/s | **13.2–13.8 MiB/s** |
-| Internal storage reads | 14.2–15.5 MB/s | 19.0–21.1 MB/s | **19.2–21.3 MiB/s** |
-| Internal storage writes | 7.4–8.1 MB/s | 8.2–8.8 MB/s | **7.6 MiB/s** |
-
-- **What loading costs the game's own CPU core** (measured with the tester's core meter, SD2Vita, GPU-safe reads on), in ms of its time per MiB read:
-
-  | Reads of | Copy on the game's core | *Copy on the system core*: Always (default) |
-  |---|---:|---:|
-  | 1 MiB | 22 | **3** |
-  | 128 KiB | 25 | **5** |
-  | 32 KiB | 37 | **16** |
-  | 4 KiB (the system reads 32 KiB from the card) | 276 | **105** |
-
-  Reads into non-cacheable memory cost it about 1.5 ms per MiB. Small reads are about 4% slower with the copy on the system core (387 → 371 reads per second at 4 KiB); big reads are as fast as before.
-- These figures are for reads into ordinary (cached) memory. Reads into non-cacheable memory are not changed by the plugin unless *Read ahead* is on (see *What the plugin does*); on my console the system reads those from the SD2Vita at about 21 MiB/s on its own.
-- **With *Read ahead* on** (SD2Vita, files read from start to end, GPU-safe reads on): 1 MiB reads 23.0 MiB/s instead of 18.7, 128 KiB reads 29.9 instead of 16.7, and reads into non-cacheable memory, as games load their graphics, 25.3 instead of 21.0 (26.1 into CDRAM). With GPU-safe reads off, 1 MiB reads reach 27.0. Part of that is the card working while the tester is busy between reads, which is exactly when a game is busy with what it just loaded. Random reads are unchanged.
-- The original's figures are from [its README](https://github.com/juanjsebgarcia/vita-turbo-storage#headline-figures): PCH-1000, firmware 3.60, a 128 GB microSD, an official 4 GB memory card, 64 MiB per run.
-- The memory card and internal storage rows were measured with an earlier version; the current one should be a little faster still.
-- microSD cards write at very different speeds, so the SD2Vita write row compares cards more than plugins. Your numbers will depend on your console, card and game.
+**Your data is safe by design.** A program reads exactly what it would read without the plugin. Writes are never delayed: when a write returns, the data is on the card. If anything goes wrong, that storage goes back to the normal way for the rest of the session.
 
 ## Install
 
-Download the latest release (or build it yourself, see below): `vitamemio_kernel.skprx`, `vitamemio.suprx` and the tester `vitamemio_tester.vpk`.
+Get `vitamemio_kernel.skprx`, `vitamemio.suprx` and, if you want to measure your card, `vitamemio_tester.vpk` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest).
 
-1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`. Always update the two together.
-2. Add these lines to your taiHEN config. If `ux0:tai/config.txt` exists, edit **that** one: taiHEN reads it first and ignores `ur0:tai/config.txt`. Otherwise use `ur0:tai/config.txt`. Keep the `ur0:tai/...` paths for the plugin files either way.
+1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`.
+2. Add these lines to your taiHEN config. If `ux0:tai/config.txt` exists, edit that one, otherwise `ur0:tai/config.txt`:
 
    ```
    *KERNEL
@@ -81,131 +35,132 @@ Download the latest release (or build it yourself, see below): `vitamemio_kernel
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Restart the console. Every storage starts switched off.
-4. Go to **Settings > Devices > vita-memio** and switch on the storage you use.
-5. Optional: install `vitamemio_tester.vpk` with VitaShell to measure your own card.
+3. Restart the console.
+4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything starts switched off.
 
-**Suggested settings for playing:** just switch your storage on. The defaults, **GPU-safe reads** on and **Overlapped reads** on *Auto*, are the recommended ones.
+That is all: the other defaults are the recommended ones. Back up your cards first, as with any plugin that touches storage.
 
-**Before a firmware update or downgrade,** switch *Faster internal storage* off as an extra precaution (no restart needed).
+**To update:** replace both files and restart. Always update the two together.
 
-**To update:** replace both files and restart. **To uninstall:** remove the two plugin lines from `config.txt`, restart, then delete the two files and `ur0:data/vita-memio/`.
+**Before a firmware update or downgrade,** switch *Faster internal storage* off, as an extra precaution.
+
+## Uninstall
+
+1. In **Settings > Devices > vita-memio**, switch off every storage.
+2. Remove the plugin's lines from `config.txt`.
+3. Restart the console.
+4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio.suprx` and the folder `ur0:data/vita-memio/`.
 
 ## Settings
 
-Everything is in **Settings > Devices > vita-memio** and takes effect immediately, no restart needed.
+Everything is in **Settings > Devices > vita-memio** and takes effect at once, no restart needed.
 
 | Setting | What it does | Default |
 |---|---|---|
-| Driver: … | Shows whether the plugin is running (active, not loaded, safe mode, firmware not supported, could not start). Select it for details | |
-| Faster SD2Vita | Speeds up a microSD in an SD2Vita adapter | Off |
-| Faster memory card | Speeds up the official Sony memory card | Off |
-| Faster internal storage | Speeds up the console's own storage | Off |
+| Driver | Shows whether the plugin is running. Select it for details | |
+| Faster SD2Vita / memory card / internal storage | Speeds up that storage | Off |
 
 **Advanced**
 
 | Setting | What it does | Default |
 |---|---|---|
-| GPU-safe reads | Leaves read data in memory exactly as the normal way does, so the graphics chip always sees it correctly (see *About GPU-safe reads*). If the firmware cannot do this, reads simply take the normal way | On |
-| Overlapped reads | Faster reads, especially with GPU-safe reads on. **Auto**: tunes itself to your card. **Fixed**: built-in tuning, nothing measured. **Off**: not used. Needs 128 KiB of memory and two helper threads per storage in use; all are given back when this, *Copy on the system core* and *Read ahead* are off, or the storage is switched off. Not used while *Verify transfers* is on | Auto |
-| Copy on the system core | Copies what a game or app reads on the console's system core instead of its own core, so that core is free sooner while it loads. *C* means reads into cached (ordinary) memory, *NC* reads into non-cacheable memory (what games set aside for graphics data). **Off**: the game's own core copies, as without the plugin. **Cached only** (recommended): every faster read of a game or app of 16 KiB or more into cached memory, with or without *GPU-safe reads*. Big reads stay as fast as before; reads of 16–32 KiB are about 4% slower, for less than half the work on the game's core. **C + NC R/A**: as *Cached only*, and what *Read ahead* has already read for reads of 32 KiB or more into non-cacheable memory; on my console that took the work on the game cores from 12.2 to 1.7 ms per MiB for those reads, about 1% slower. Without *Read ahead* it is the same as *Cached only*. **C + NC All**: also reads of 64 KiB or more into non-cacheable memory themselves are done on the system core, straight into the game's buffer, with or without *Read ahead*. On my console that gave no less work in total, so it mainly moves work between cores. If the console does not allow it, games copy as before (the log says why) | Cached only |
-| Read ahead | While a file is read in order, the system core reads the next part from the card before it is asked for, so the card does not wait between reads. Also for games loading graphics data (non-cacheable memory). It starts after five large reads in a row, or sixteen of 32 KiB, reading just a little ahead at first, so little is read past the end of a file; random reads of 1 MiB or less never start it. Reads under 32 KiB in order (some apps read whole files a sector at a time) are read in 32 KiB blocks from the eighth on, on the program's own thread. A read elsewhere in the meantime may wait a few ms for the card. A write to the same place always wins: what was read early is then not used. Covered by *Verify transfers*. Never used on the internal storage. Needs 32 KiB more per storage on top of the *Overlapped reads* buffers | Off |
-| Small transfers too | Also speeds up transfers under 32 KiB, which are mostly the file system's own bookkeeping (folders, file entries). Experimental: try it with *Verify transfers* first | Off |
-| Verify transfers | Reads every faster transfer again the normal way and compares. Slow; for checking only. Overlapped reads are not used while it is on | Off |
-| Enable log | Writes `kernel.log` and `user.log`: one line per start, otherwise only problems. Off: nothing is written | Off |
-| Statistics | **On**: collects timings and data counts for the tester app. Overlapped reads measure what they need either way | On |
-| Storage HUD | Live speed in the top right corner: Off, Compact, or Extended (adds totals and errors). With an app in front, only the storage it reads from (once it has read 1 MiB); at the home screen, every storage in use. A storage switched off here is not shown. Then read ahead for the app in front: compact `R/A: On C: 5 NC: no`; extended `R/A: On  TitleID: PCSB00777`, `Streak  C: 5  NC: never` and `core 3  C 98%  NC 100%` (how much of the copying and of the non-cacheable reads ran on core 3 since the HUD came up). Auto's state: learning (streams of 300 for a game, 150 for homebrew), learnt, set by hand, or ignored; *On* shows its fixed thresholds; *Off* just says so | Off |
-| Overlay (SELECT + arrows) | A small menu over any game, opened with keys (see *Overlay* below). While it is on, the HUD shows only through these keys | Off |
+| GPU-safe reads | Makes sure the graphics chip always sees data correctly. Costs a little speed; recommended for playing | On |
+| Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
+| Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
+| Read ahead | Reads the next part of a file before it is asked for. See below. Never used on the internal storage | Off |
+| Small transfers too | Also speeds up transfers under 32 KiB. Try it with *Verify transfers* first | Off |
+| Storage HUD | Live speed in the top right corner: **Compact** or **Extended** | Off |
+| Overlay (SELECT + arrows) | A small menu over any game, see below | Off |
 
-Settings, logs and tester results live in `ur0:data/vita-memio/`.
+**Developer settings** (inside *Advanced*)
 
-**Overlay.** With *Overlay* on in *Advanced*:
+| Setting | What it does | Default |
+|---|---|---|
+| Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
+| Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
+| Statistics | Collects timings for the tester app | On |
+
+If the plugin ever could not start properly, a **Reset safe mode** row appears under *Driver*.
+
+### Copy on the system core
+
+| Choice | What runs on the spare core |
+|---|---|
+| Off | Nothing |
+| Cached only | Copies of ordinary reads of 16 KiB or more |
+| **C + NC R/A** | That, plus what *Read ahead* already read for graphics data. Without *Read ahead* it is the same as *Cached only* |
+| C + NC All | That, plus the graphics data reads themselves. In my tests this only moved work between cores, so it is here mostly for experimenting |
+
+In numbers: with *Read ahead* on, copying graphics data on the spare core took the work on the game's cores from 12.2 to 1.7 ms per MiB, at about 1% less speed. Ordinary 1 MiB reads cost the game's core 3 ms per MiB instead of 22.
+
+### Read ahead
+
+While a file is being read in order, the spare core reads the next part early, so the card does not sit idle between requests. It starts after five large reads in a row, or sixteen of 32 KiB; smaller reads in order are read in 32 KiB blocks from the eighth on.
+
+Data read early is thrown away if anything writes over it, so it can never be stale, and *Verify transfers* checks it like everything else. It uses about 40 KiB more memory per storage.
+
+It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
+
+## Overlay
+
+Switch on *Overlay* in *Advanced*, then, in any game:
 
 | Keys | |
 |---|---|
-| SELECT + Right | opens the overlay at once (a game that uses this combination will open it too); pressed again (open): closes it and shows the HUD (PSVshell style; *Extended* if the HUD setting is *Off*) |
-| SELECT + Left | from the HUD back to the overlay; pressed again (open): closes it |
-| SELECT + Up or Down | closes the overlay and the HUD |
-| Up / Down | (overlay open) choose a line |
-| Left / Right, Cross | change the value on it; Cross on *Save* or *Close* does it |
+| SELECT + Right | Opens the overlay; again: closes it and shows the HUD |
+| SELECT + Left | From the HUD back to the overlay; again: closes it |
+| SELECT + Up or Down | Closes everything |
+| Up / Down | Choose a line |
+| Left / Right, Cross | Change a value, or do the action |
 
-With nothing shown, the buttons are only looked at every 0.1 s, so a game's polling costs next to nothing; with the overlay or the HUD shown every poll counts, and while the overlay is open the game gets no buttons.
+A game that uses SELECT + Right itself will open the overlay too. While the overlay is open, the game gets no buttons.
 
-The overlay is about **the app in front** (the game, homebrew, emulator...), with its title ID and storage, and how much of the copying (*C*) and of the non-cacheable reads (*NC*) has run on core 3 since it opened:
+The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
 
-- **R/A test:** *Start R/A Test*, play the part you care about (the HUD shows how much was read), then *Stop R/A Test*. It works out what read ahead would have given for this app, however read ahead is set: on or off, *C / NC streak* (*never* for a kind of read where it would only cost; where it brings nothing and costs nothing, the fixed value stays), and whether to copy on core 3 what it reads for non-cacheable memory (*C + NC R/A*, else *Cached only*). They take effect at once and are saved for this app at once. While it runs, copy on core 3 is at *C + NC All*. Under 16 MiB read it says so and changes nothing. It estimates from how the app reads, it does not see frame rate.
-- **Settings (this app):** read ahead, copy on core 3, overlapped reads, GPU-safe reads, each *Global (…)* - the one set in Settings - or this app's own. With read ahead *On*, *C / NC streak* (2-8 or never) set when it starts for this app; they are hidden with *Auto* and *Off*. A change is in effect at once, for this app only, while it is in front.
-- **Save** keeps this app's settings in its profile (its changes are not kept otherwise: another app in front drops them). **Close** closes the overlay.
+### R/A test: let the plugin choose for your game
 
-Colours: white - the global setting; **blue** - changed, not saved; **green** - this app's own, saved. The overlay is in English. Settings (the system app) sets the global ones; an app's own are made in the overlay only.
+1. Open the overlay and choose **Start R/A Test**, ideally before the game loads.
+2. Play for a few minutes, including a loading screen. The HUD shows how much was read.
+3. Open the overlay and choose **Stop R/A Test**.
 
-**Profiles are checked.** An app's settings are kept in `ur0:data/vita-memio/ra/<title ID>.bin`. A file that is not exactly right - another size, a wrong check word, a value out of range - is not used at all: the app then has the global settings. Delete the file, or save the app with everything *Global*, to remove them.
+The plugin works out what read ahead brings this game and saves the result for it: on or off, when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
 
-**Safe mode.** The *Reset safe mode* row appears under *Driver* only then; it ends safe mode, and the plugin starts normally after the next restart. If the console does not reach the home screen and stay there for 30 seconds, the next start installs nothing, so a bad setting cannot trap you in a reboot loop. The *Driver* row then says *safe mode*. You can still change settings: switch off whatever caused it, select **Reset safe mode** and restart. (Restarting by hand within 30 seconds of the home screen also counts, once.) Holding **L** while the console starts skips all plugins.
+It judges from how the game reads and cannot see the frame rate. The result depends on what you played, so test the part you care about. Test during play only and it may decide read ahead is not worth it, because it never saw the loading.
+
+## HUD
+
+**Extended** shows, for the storage the game reads from:
+
+```
+SD2VITA R: 21.8 W:  0.0 MB/s
+R/W: 909/1 MiB On Err: 0
+R/A: On  TitleID: PCSF00024
+Streak  C: 5  NC: 3
+Core 3  C: 98%  NC: 0%
+```
+
+- **R / W:** speed right now. **R/W:** total read and written since the console started.
+- **Streak:** reads in a row before read ahead starts.
+- **Core 3, C:** the share of copying done on the spare core since the HUD opened. Copies of graphics data from read ahead count here.
+- **Core 3, NC:** the share of graphics data reads done on the spare core. It stays at 0% unless copying is on *C + NC All*.
 
 ## Tester
 
-The tester app ("vita-memio Tester") measures one storage: sequential and random reads and writes of several sizes and many small files. It checks every byte and adds each result to `ur0:data/vita-memio/results.txt`.
+Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writes of several sizes and many small files, checks every byte, and adds each result to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings: to compare, change a setting and run it again.
 
-It never changes the plugin's settings. To compare, change a setting in Settings and run the test again. Each result also shows:
+## Good to know
 
-- reads into non-cacheable memory (the **NC** rows), next to the ordinary ones, also into the kinds of memory games keep graphics data in (*NCphy*, *CDRAM*), and random 1 MiB reads into it (*NC rnd read 1M*);
-- how busy each of the game cores (0, 1, 2) really was during the reads and writes, in ms per MiB;
-- where the time goes for every 512-byte block (the card vs. the CPU copy), with *Statistics* on;
-- the plugin's settings during the test (verify, small transfers, overlapped reads, copy on the system core, read ahead);
-- whether the plugin behaved as its settings say.
-
-Pick the storage the test folder is on. On most setups both the SD2Vita and the memory card are `ux0:`; if the storage and folder don't match, the test tells you.
-
-## Limitations
-
-- Most game loading is not limited by storage, so a game gains less than a file copy does.
-- Reads into non-cacheable memory (graphics data) are not sped up, unless *Read ahead* is on and a game reads them in long runs.
-- *Read ahead* bets that a file read from start to end goes on being read: when a game jumps elsewhere instead, that read can wait a few ms for the card.
-- Writes are limited mostly by the card itself, and cards differ a lot.
-- Memory use: 256 KiB per storage you switch on, plus 128 KiB for *Overlapped reads* while they are used.
-- Tested on one console so far (see below). Treat it as experimental and keep a backup.
-
-## Compatibility
-
-- **Console:** PS Vita PCH-1000 on firmware 3.65 tested. PCH-2000 and PS TV use the same storage system and should work, but are untested.
-- **Storage:** a microSD in an SD2Vita, the official memory card and the internal storage. Game cards and USB storage are not touched.
-- **Languages:** the Settings page follows the system language (all 20 Vita languages). Only English is written by a person; the rest are machine translations, and corrections are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+- Only the storages you switch on are touched. Game cards, USB storage and Wi-Fi never are.
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*.
+- Writes depend mostly on the card itself, and cards differ a lot.
+- If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
+- Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
+- Known issue: opening Settings with VitaShell running once gave error C1-2569-3. The cause is not known yet.
+- The Settings page follows the system language. Only English is written by a person; corrections are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
-This software is provided **"as is", without warranty of any kind**. It changes how your console reads and writes its storage, and you use it entirely at your own risk. **Back up your memory card and SD card before installing**, and know how to start without plugins (hold **L** while the console starts). See the [MIT License](LICENSE).
-
-## Compared with the original
-
-Against Vita Turbo Storage as of 29 October 2026 (commit [`e48f309`](https://github.com/juanjsebgarcia/vita-turbo-storage/commit/e48f309)).
-
-**Added**
-
-- **Faster reads**: SD2Vita 1 MiB reads 19.6 MiB/s (the original: 16.8), and 18.8 MiB/s even with GPU-safe reads on.
-- **GPU-safe reads**, removing the one difference the original lists under its limitations.
-- **Tester app** with per-block timings, live plugin counters and every byte checked.
-- **Driver status row** in Settings, also shown when the kernel module is missing.
-- **Overlapped reads**, **Small transfers too**, **Verify transfers** and **Statistics** as Settings options.
-- **Copy on the system core**: a game's or app's reads can be copied on the console's spare core instead of its own.
-- **PSVshell-style HUD** next to the original look.
-- **Safe mode you can recover from**: settings can be changed in safe mode, and a start only counts as good after 30 seconds on the home screen.
-- **Host tests** for the storage path, settings, HUD and tester, run on every push.
-
-**Changed**
-
-- The page is under **Settings > Devices** (the original: Settings > System), with an **Advanced** sub-page.
-- No `*main` line in `config.txt`: only the kernel module and the Settings app load the plugin.
-- Buffers are allocated only for the storages you switch on.
-- Logging is off unless *Enable log* is on.
-
-**Removed**
-
-- Developer mode and its TCP command port (1340).
-
-**In the original but not here**
-
-- The HUD corner choice (here always top right), *In-game HUD* and *HUD recent activity only*.
+This software is provided **"as is", without warranty of any kind**, and you use it at your own risk. **Back up your memory card and SD card before installing.** See the [MIT License](LICENSE).
 
 ## Build
 
@@ -215,7 +170,7 @@ make test         # host tests (no VitaSDK needed)
 make config       # prints the config.txt lines
 ```
 
-`make deploy`, `make log` and `make results` talk to vitacompanion on the console (`VITA_IP=...`). See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
 ## Credits
 

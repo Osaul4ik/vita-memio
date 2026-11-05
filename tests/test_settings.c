@@ -250,7 +250,7 @@ static void test_gpusafe_default_and_stored_value(void)
 	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
 	/* copy on the system core: Always by default, also for a file from before it
 	 * existed (11 keys); stored values kept; out of range: the default */
-	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALWAYS && VM_KEY_OFFLOAD == 11);
+	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALL && VM_KEY_OFFLOAD == 11);
 	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALL) && !vm_setting_valid(VM_KEY_OFFLOAD, 1) &&
 	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_FULL) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
 	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));

@@ -22,7 +22,7 @@
 
 /* Release version. The .yml module versions carry major.minor (0.2); bump all
  * three together. Logged in both modules' init banner so a log pins the build. */
-#define VM_VERSION_STR    "1.2.1"
+#define VM_VERSION_STR    "1.3.0"
 
 /* Which build: "+" and the commit it was built from (CMakeLists.txt sets it
  * at configure time; empty when built outside a git checkout). The version
@@ -144,7 +144,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
 #define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
-#define VM_DEF_OFFLOAD   2   /* VM_OFFLOAD_ALWAYS: with GPU-safe reads or not  */
+#define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL   /* "C + NC R/A"; without read ahead as Cached only */
 #define VM_DEF_READAHEAD 0   /* opt-in                                         */
 #define VM_DEF_OVERLAY   0   /* opt-in: it takes SELECT + arrows from games    */
 

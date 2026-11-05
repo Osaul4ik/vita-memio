@@ -1,6 +1,6 @@
 /*
  * test_ra_test.c - the read ahead test's sums (kernel/ra_test.h): what each kind
- * of game should get, above all that Off comes only when nothing would be gained.
+ * of game should get, above all that Off comes only when it would cost and bring nothing.
  */
 #include <string.h>
 #include <stdlib.h>
@@ -56,21 +56,26 @@ int main(void)
 	go();
 	runs(30, 40, 256, 1, &at);
 	ra_test_pick(&T, &P);
-	CHECK(P.ra && P.thr[1] >= RT_THR_MIN && P.thr[1] <= RT_THR_MAX && P.copy_nc);
+	CHECK(P.ra && P.thr[1] >= RT_THR_MIN && P.thr[1] <= RT_THR_MAX && P.thr[0] == 0 && P.copy_nc);
 
-	/* nothing but scattered 128 KiB reads: Off is right, nothing to gain */
+	/* nothing but scattered 128 KiB reads: no gain, no loss, left as it is */
 	go();
 	for (int i = 0; i < 400; i++)
 		rd(1000000u + (uint32_t)i * 7777u, 256, 0);
 	ra_test_pick(&T, &P);
-	CHECK(!P.little && !P.ra && P.pct == 0);
+	CHECK(!P.little && P.ra && P.thr[0] == 0 && P.thr[1] == 0 && !P.copy_nc && P.pct == 0);
 
-	/* short streams only, two reads each, and the same scattered: never read
-	 * ahead for them, but not On for nothing either */
+	/* short streams, two reads each: the fixed threshold never starts: left */
 	go();
 	runs(200, 2, 256, 1, &at);
 	ra_test_pick(&T, &P);
-	CHECK(!P.ra);
+	CHECK(P.ra && P.thr[1] == 0);
+
+	/* streams just long enough to start it and no more: it would only cost: off */
+	go();
+	runs(100, 6, 128, 1, &at);
+	ra_test_pick(&T, &P);
+	CHECK(!P.little && !P.ra && P.thr[1] == 0 && !P.copy_nc);
 
 	/* mostly scattered with some long streams: on, it is worth it, not Off */
 	go();
@@ -86,7 +91,7 @@ int main(void)
 	for (int i = 0; i < 300; i++)
 		rd(6000000u + (uint32_t)i * 7777u, 256, 1);
 	ra_test_pick(&T, &P);
-	CHECK(P.ra && P.thr[0] != RT_NEVER && P.thr[0] != 0 && P.thr[1] == RT_NEVER && !P.copy_nc);
+	CHECK(P.ra && P.thr[0] != RT_NEVER && P.thr[0] != 0 && P.thr[1] == 0 && !P.copy_nc);
 
 	/* a game reading a sector at a time (GTA): on for its tiny reads alone */
 	go();
@@ -97,26 +102,35 @@ int main(void)
 		rd(7000000u + (uint32_t)i * 7777u, 128, 0);
 	ra_test_pick(&T, &P);
 	CHECK(P.ra);
+	/* ... and next to nothing into non-cacheable memory: left, nothing to copy */
+	CHECK(P.thr[1] == 0 && !P.copy_nc);
+
+	/* one kind gains, the other would only cost: that one never */
+	go();
+	runs(10, 60, 256, 0, &at);
+	runs(100, 6, 128, 1, &at);
+	ra_test_pick(&T, &P);
+	CHECK(P.ra && P.thr[0] >= RT_THR_MIN && P.thr[1] == RT_NEVER && !P.copy_nc);
 
 	/* 32 KiB reads in long runs */
 	go();
 	runs(5, 300, 64, 0, &at);
 	ra_test_pick(&T, &P);
 	CHECK(P.ra && P.thr[0] != RT_NEVER);
-	/* ... in runs too short to start: nothing */
+	/* ... in runs too short to start: left */
 	go();
 	runs(100, 10, 64, 0, &at);
 	ra_test_pick(&T, &P);
-	CHECK(!P.ra);
+	CHECK(P.ra && P.thr[0] == 0);
 
-	/* a pause too long, as a video: every read on its own, nothing to gain */
+	/* a pause too long, as a video: every read on its own: no gain, no loss */
 	go();
 	for (int i = 0; i < 400; i++, at += 256) {
 		now += RT_MAX_AGE_US + 1;
 		ra_test_note(&T, &K, at, 256, 0, 0, now);
 	}
 	ra_test_pick(&T, &P);
-	CHECK(!P.little && !P.ra);
+	CHECK(!P.little && P.ra && P.thr[0] == 0);
 
 	/* a large write ends a stream, a small one does not */
 	go();

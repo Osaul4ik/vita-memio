@@ -6,7 +6,8 @@
  * one stream of large reads, one of 32 KiB reads, one of tiny reads, broken by
  * a read elsewhere, a large write or a pause too long for what was read early
  * to be used. It works out what read ahead would have given whatever read ahead
- * is set to, so Off is only ever the answer when it would not have helped.
+ * is set to. What brings nothing and costs nothing is left as it is; what would
+ * only cost is switched off, for that kind of read or altogether.
  *
  * For each threshold it adds up time saved and time lost. Times are from the
  * console's measurements: a 128 KiB read in a stream 7.5 -> 4.6 ms, into
@@ -39,7 +40,6 @@
 #define RT_TINY_GAIN_US    350           /* a tiny read from its block          */
 #define RT_TINY_WASTE_US   1400          /* half a block left when a run ends   */
 #define RT_MIN_TOTAL_SECTORS (16u * 2048u)   /* below 16 MiB: too little to tell */
-#define RT_MIN_KIND_SECTORS  2048u       /* below 1 MiB of a kind: the fixed one */
 
 typedef struct {
 	const void *key;                     /* the storage                         */
@@ -52,7 +52,6 @@ typedef struct {
 	uint32_t run[2][RT_RUN];             /* runs of large reads, by length      */
 	uint32_t spos[2][RT_POS];            /* 32 KiB reads, in fours              */
 	uint32_t srun[2][RT_RUN];
-	uint32_t kind_sectors[2];
 	uint32_t total_sectors;              /* every read                          */
 	uint32_t tiny_hits, tiny_runs;
 	RtStream large, small;
@@ -63,7 +62,8 @@ typedef struct {
 typedef struct {
 	int      little;                     /* too little was read to tell         */
 	int      ra;                         /* 1 on                                */
-	uint32_t thr[2];                     /* C, NC: 2..8, RT_NEVER, 0 the fixed  */
+	uint32_t thr[2];                     /* C, NC: 2..8; 0 the fixed: no gain, no loss;
+	                                      * RT_NEVER: the fixed one would lose  */
 	int      copy_nc;                    /* what read ahead holds for NC is worth copying */
 	uint32_t pct;                        /* of what was read, from read ahead   */
 } RaPick;
@@ -112,7 +112,6 @@ static inline void ra_test_note(RaTest *t, const void *key, uint32_t sector, uin
 		return;
 	}
 	nc = !!nc;
-	t->kind_sectors[nc] += n;
 	{
 		const int large = n >= RT_MIN_SECTORS;
 		RtStream *s = large ? &t->large : &t->small;
@@ -191,6 +190,7 @@ static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, uint64_t *s
 static inline void ra_test_pick(RaTest *t, RaPick *p)
 {
 	int64_t total = 0, nc_best = 0;
+	int loss = 0;
 	uint64_t from = 0;
 
 	rt_end_large(t);
@@ -205,10 +205,9 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 	for (int k = 0; k < 2; k++) {
 		int best_t = RT_THR_FIXED;
 		uint64_t best_s = 0;
-		int64_t best = rt_kind_score(t, k, RT_THR_FIXED, &best_s);
+		const int64_t fixed = rt_kind_score(t, k, RT_THR_FIXED, &best_s);
+		int64_t best = fixed;
 
-		if (t->kind_sectors[k] < RT_MIN_KIND_SECTORS)
-			continue;                    /* too little of it: the fixed one */
 		for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
 			uint64_t s = 0;
 			const int64_t sc = rt_kind_score(t, k, i, &s);
@@ -225,9 +224,10 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 			from += best_s;
 			if (k)
 				nc_best = best;
-		} else {
-			p->thr[k] = RT_NEVER;
-		}
+		} else if (fixed < 0) {
+			p->thr[k] = RT_NEVER;        /* it would only cost */
+			loss = 1;
+		}                                /* else nothing either way: left as it is */
 	}
 	if (t->tiny_hits) {
 		const int64_t tiny = (int64_t)t->tiny_hits * RT_TINY_GAIN_US -
@@ -236,9 +236,11 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 		if (tiny > 0) {
 			total += tiny;
 			from += t->tiny_hits;
+		} else if (tiny < 0) {
+			loss = 1;
 		}
 	}
-	p->ra = total > 0;
+	p->ra = total > 0 || !loss;          /* off only if it would cost and bring nothing */
 	p->copy_nc = p->ra && nc_best > 0;
 	p->pct = t->total_sectors ? (uint32_t)(from * 100u / t->total_sectors) : 0;
 	if (!p->ra)

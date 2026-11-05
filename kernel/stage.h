@@ -74,7 +74,7 @@ int  vm_stage_app_save(void);
 typedef struct VmRaTestPick {
 	int      little;        /* too little was read to tell: nothing picked    */
 	int      ra;            /* VM_RA_*                                        */
-	uint32_t thr[2];        /* C, NC: 2..8, VM_RA_NEVER, 0 the fixed          */
+	uint32_t thr[2];        /* C, NC: 2..8, 0 the fixed, VM_RA_NEVER: a loss  */
 	int      offload;       /* VM_OFFLOAD_*                                   */
 	uint32_t mib, pct;      /* read during it, the share from read ahead      */
 } VmRaTestPick;

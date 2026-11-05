@@ -485,7 +485,7 @@ static void hud_feed(const VmDevState *now)
 			now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
 			                                  hud_tr(g_lang, HTR_UNAVAILABLE);
 		snprintf(L[n++], VM_HUD_LINE_MAX,
-		         HUD_C_DIM "R/W: %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
+		         HUD_C_DIM "R/W: %u/%u MiB %s%s " HUD_C_DIM "%s: %s%u%s%s%s",
 		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), c, state,
 		         hud_tr(g_lang, HTR_ERR), now[i].errors ? HUD_C_BAD : HUD_C_DIM,
 		         (unsigned)now[i].errors,
@@ -647,7 +647,7 @@ static void ov_line(char *o, int cur, int i, int indent, const char *name, const
 {
 	char nm[24];
 
-	pad(nm, sizeof(nm), name, 18 - 2 * indent, 18, 0);
+	pad(nm, sizeof(nm), name, 20 - 2 * indent, 20, 0);
 	snprintf(o, VM_HUD_LINE_MAX, "%s%s%s" HUD_C_TEXT "%s%s%.24s",
 	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ",
 	         indent ? "  " : "", nm, color, val);

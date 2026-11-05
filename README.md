@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo.png" alt="vita-memio: faster storage for PS Vita" width="720"></p>
 
-Makes the PS Vita read and write its storage faster: a microSD in an SD2Vita, the Sony memory card and the internal storage. It is a taiHEN plugin for HENkaku/Ensō on firmware **3.60–3.74**.
+Makes the PS Vita read and write its storage faster: a microSD in an SD2Vita, the Sony memory card and the internal storage. It is a taiHEN plugin for HENkaku/Ensō on firmware **3.65**.
 
 On my console a microSD in an SD2Vita reads **19.6 MiB/s instead of 13.5** (+45%) and writes about 15–17 MiB/s. VitaShell copies, VPK installs and anything else that moves big files get faster, and nothing about your files changes: the data on the card is exactly what it would be without the plugin. Most game loading is not limited by storage speed, so expect a smaller gain there than in a file copy.
 
@@ -169,7 +169,6 @@ Pick the storage the test folder is on. On most setups both the SD2Vita and the 
 ## Compatibility
 
 - **Console:** PS Vita PCH-1000 on firmware 3.65 tested. PCH-2000 and PS TV use the same storage system and should work, but are untested.
-- **Firmware:** 3.60 to 3.74. On any other firmware the plugin stays inactive.
 - **Storage:** a microSD in an SD2Vita, the official memory card and the internal storage. Game cards and USB storage are not touched.
 - **Languages:** the Settings page follows the system language (all 20 Vita languages). Only English is written by a person; the rest are machine translations, and corrections are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 

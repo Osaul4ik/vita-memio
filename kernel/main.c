@@ -339,11 +339,11 @@ static void hud_thr(char *o, int cap, uint32_t t, int compact)
 }
 
 /* Read ahead in the HUD, for the app in front:
- *   compact   RA On C 5 NC no
- *   extended  RA On  PCSB00777
- *            Streak  C 5  NC never      (reads in a row before it starts)
- *            Core 3  C 98%  NC 100%     (since the HUD came up)
- * Off: just "RA Off". Returns the lines added (at most `room`). */
+ *   compact   R/A: On C: 5 NC: no
+ *   extended  R/A: On  TitleID: PCSB00777
+ *             Streak  C: 5  NC: never    (reads in a row before it starts)
+ *             Core 3  C: 98%  NC: 100%   (since the HUD came up)
+ * Off: just "R/A: Off". Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *s,
                         const VmFg *fg, int on)
 {
@@ -373,16 +373,16 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 	hud_thr(nc, sizeof(nc), now.thr[1], !ext);
 	if (!ext) {
 		if (now.mode == VM_RA_OFF)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s", mode);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s", mode);
 		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s " HUD_C_DIM "C %.7s "
-			         HUD_C_DIM "NC %.7s", mode, c, nc);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s " HUD_C_DIM "C: %.7s "
+			         HUD_C_DIM "NC: %.7s", mode, c, nc);
 		return n;
 	}
-	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "RA %s  " HUD_C_TEXT "%.15s", mode, fg->title);
+	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room)
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C %.7s" HUD_C_DIM
-		         "  NC %.7s", c, nc);
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.7s" HUD_C_DIM
+		         "  NC: %.7s", c, nc);
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;
 		char a[16], b[16];
@@ -392,8 +392,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Core 3  C %.7s" HUD_C_DIM
-		         "  NC %.7s", a, b);
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Core 3  C: %.7s" HUD_C_DIM
+		         "  NC: %.7s", a, b);
 	}
 	return n;
 }
@@ -475,7 +475,7 @@ static void hud_feed(const VmDevState *now)
 		pad(rp, sizeof(rp), r, 4, 6, 1);
 		pad(wp, sizeof(wp), w, 4, 6, 1);
 		snprintf(L[n++], VM_HUD_LINE_MAX,
-		         HUD_C_TEXT "%s " HUD_C_DIM "R %s%s " HUD_C_DIM "W %s%s " HUD_C_DIM "MB/s%s%s%s",
+		         HUD_C_TEXT "%s " HUD_C_DIM "R: %s%s " HUD_C_DIM "W: %s%s " HUD_C_DIM "MB/s%s%s%s",
 		         np, c, rp, c, wp, flag[0] ? " " : "", c, flag);
 		if (s.hud != VM_HUD_EXTENDED)
 			continue;
@@ -485,7 +485,7 @@ static void hud_feed(const VmDevState *now)
 			now[i].status == VM_ST_FALLBACK ? hud_tr(g_lang, HTR_STANDARD) :
 			                                  hud_tr(g_lang, HTR_UNAVAILABLE);
 		snprintf(L[n++], VM_HUD_LINE_MAX,
-		         HUD_C_DIM "Read/Write %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
+		         HUD_C_DIM "R/W: %u/%u MiB %s%s " HUD_C_DIM "%s %s%u%s%s%s",
 		         (unsigned)(rd >> 20), (unsigned)(wr >> 20), c, state,
 		         hud_tr(g_lang, HTR_ERR), now[i].errors ? HUD_C_BAD : HUD_C_DIM,
 		         (unsigned)now[i].errors,
@@ -517,8 +517,7 @@ static int rt_line(char *o)
 	uint32_t mib = 0;
 
 	if (vm_stage_ratest_running(&mib)) {
-		snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "RA test" HUD_C_TEXT " %u MiB" HUD_C_DIM
-		         "  overlay: Stop", (unsigned)mib);
+		snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A Test: " HUD_C_TEXT "%u MiB", (unsigned)mib);
 		return 1;
 	}
 	if (g_rt_line[0] && ksceKernelGetSystemTimeLow() - g_rt_us < RT_RESULT_US) {
@@ -564,7 +563,7 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 	g_rt_us = ksceKernelGetSystemTimeLow();
 	if (p.little) {
 		a->offload = before;
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "RA test: %u MiB is too little, play more",
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "R/A Test: %u MiB is too little, play more",
 		         (unsigned)p.mib);
 		return VM_OK;
 	}
@@ -574,11 +573,11 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
 	*save = 1;
 	if (p.ra == VM_RA_ON)
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_GOOD "RA On" HUD_C_TEXT " C %s NC %s %s" HUD_C_DIM
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_GOOD "R/A: On" HUD_C_TEXT " C: %s NC: %s %s" HUD_C_DIM
 		         " %u%% of %u MiB", rt_thr(c, sizeof(c), p.thr[0]), rt_thr(n, sizeof(n), p.thr[1]),
 		         k_ov_off[p.offload], (unsigned)p.pct, (unsigned)p.mib);
 	else
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "RA Off" HUD_C_DIM ": it would only cost, %u MiB",
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "R/A: Off" HUD_C_DIM ", it would only cost, %u MiB",
 		         (unsigned)p.mib);
 	return VM_OK;
 }
@@ -732,7 +731,7 @@ static void overlay_feed(void)
 	}
 	if (vm_stage_ratest_stale()) {            /* it was for another app */
 		vm_stage_ratest_cancel();
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "RA test: another app, stopped");
+		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "R/A Test: another app, stopped");
 		g_rt_us = ksceKernelGetSystemTimeLow();
 	}
 	if (vm_overlay_state() != OV_MENU) {

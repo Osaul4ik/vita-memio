@@ -3188,7 +3188,6 @@ void vm_stage_ratest_stop(VmRaTestPick *o)
 	o->thr[0] = p.thr[0];
 	o->thr[1] = p.thr[1];
 	o->offload = p.copy_nc ? VM_OFFLOAD_ALL : VM_OFFLOAD_ALWAYS;
-	o->pct = p.pct;
 }
 
 int vm_stage_app_save(void)

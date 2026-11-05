@@ -76,7 +76,7 @@ typedef struct VmRaTestPick {
 	int      ra;            /* VM_RA_*                                        */
 	uint32_t thr[2];        /* C, NC: 2..8, 0 the fixed, VM_RA_NEVER: a loss  */
 	int      offload;       /* VM_OFFLOAD_*                                   */
-	uint32_t mib, pct;      /* read during it, the share from read ahead      */
+	uint32_t mib;           /* read during it                                 */
 } VmRaTestPick;
 int  vm_stage_ratest_start(void);              /* VM_OK, VM_ERR_NOT_READY */
 int  vm_stage_ratest_running(uint32_t *mib);

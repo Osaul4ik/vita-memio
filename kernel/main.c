@@ -506,36 +506,15 @@ static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A",
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 static const char *const k_ov_onoff[] = { "Off", "On" };
 
-/* The read ahead test's line (running: from the state; after it: its answer, a
- * while). */
-#define RT_RESULT_US (30u * 1000u * 1000u)
-static char     g_rt_line[VM_HUD_LINE_MAX];
-static uint32_t g_rt_us;
-
+/* The read ahead test's line in the HUD, while it runs. */
 static int rt_line(char *o)
 {
 	uint32_t mib = 0;
 
-	if (vm_stage_ratest_running(&mib)) {
-		snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A Test: " HUD_C_TEXT "%u MiB", (unsigned)mib);
-		return 1;
-	}
-	if (g_rt_line[0] && ksceKernelGetSystemTimeLow() - g_rt_us < RT_RESULT_US) {
-		snprintf(o, VM_HUD_LINE_MAX, "%s", g_rt_line);
-		return 1;
-	}
-	return 0;
-}
-
-static const char *rt_thr(char *o, int cap, uint32_t t)
-{
-	if (t == VM_RA_NEVER)
-		snprintf(o, cap, "never");
-	else if (!t)
-		snprintf(o, cap, "fixed");
-	else
-		snprintf(o, cap, "%u", (unsigned)t);
-	return o;
+	if (!vm_stage_ratest_running(&mib))
+		return 0;
+	snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A Test: " HUD_C_TEXT "%u MiB", (unsigned)mib);
+	return 1;
 }
 
 /* Start (copy on core 3 goes to C + NC All meanwhile), or stop and put in what it
@@ -544,12 +523,10 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 {
 	static int before;                    /* the copy setting it started from */
 	VmRaTestPick p;
-	char c[12], n[12];
 
 	if (!vm_stage_ratest_running(NULL)) {
 		const int r = vm_stage_ratest_start();
 
-		g_rt_line[0] = 0;
 		if (r == VM_OK) {
 			before = a->offload;
 			a->offload = VM_OFFLOAD_FULL;
@@ -558,13 +535,10 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 		return r;
 	}
 	vm_stage_ratest_stop(&p);
-	p.mib %= 100000u;                         /* for the line */
-	p.pct %= 1000u;
-	g_rt_us = ksceKernelGetSystemTimeLow();
 	if (p.little) {
 		a->offload = before;
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "R/A Test: %u MiB is too little, play more",
-		         (unsigned)p.mib);
+		snprintf(msg, cap, HUD_C_WARN "R/A Test: %u MiB is too little, play more",
+		         (unsigned)(p.mib % 100000u));
 		return VM_OK;
 	}
 	a->ra = p.ra;
@@ -572,13 +546,6 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 	a->thr[0] = p.ra == VM_RA_ON ? p.thr[0] : 0;
 	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
 	*save = 1;
-	if (p.ra == VM_RA_ON)
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_GOOD "R/A: On" HUD_C_TEXT " C: %s NC: %s %s" HUD_C_DIM
-		         " %u%% of %u MiB", rt_thr(c, sizeof(c), p.thr[0]), rt_thr(n, sizeof(n), p.thr[1]),
-		         k_ov_off[p.offload], (unsigned)p.pct, (unsigned)p.mib);
-	else
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_TEXT "R/A: Off" HUD_C_DIM ", it would only cost, %u MiB",
-		         (unsigned)p.mib);
 	return VM_OK;
 }
 
@@ -731,8 +698,8 @@ static void overlay_feed(void)
 	}
 	if (vm_stage_ratest_stale()) {            /* it was for another app */
 		vm_stage_ratest_cancel();
-		snprintf(g_rt_line, sizeof(g_rt_line), HUD_C_WARN "R/A Test: another app, stopped");
-		g_rt_us = ksceKernelGetSystemTimeLow();
+		snprintf(msg, sizeof(msg), HUD_C_WARN "R/A Test: another app, stopped");
+		msg_us = ksceKernelGetSystemTimeLow();
 	}
 	if (vm_overlay_state() != OV_MENU) {
 		if (shown) {
@@ -826,8 +793,6 @@ static void overlay_feed(void)
 			save_line = n++;
 		}
 		close_line = n++;
-		if (!vm_stage_ratest_running(NULL) && n < VM_HUD_LINES - 1)
-			n += rt_line(L[n]);
 		vm_overlay_set_mask(mask);
 		if (msg[0] && ksceKernelGetSystemTimeLow() - msg_us < 4u * 1000u * 1000u)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);

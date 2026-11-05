@@ -180,7 +180,6 @@ Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writ
 - Writes depend mostly on the card itself, and cards differ a lot.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
-- Known issue: opening Settings with VitaShell running once gave error C1-2569-3. The cause is not known yet.
 - The Settings page follows the system language. Only English is written by a person; corrections are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer

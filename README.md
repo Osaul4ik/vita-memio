@@ -174,6 +174,15 @@ Measured with the tester (quick profile: 16 MiB file, 3 runs, every byte checked
 - **Writes vary between runs,** because the card sometimes pauses to do its own housekeeping. *Read ahead* and *GPU-safe reads* do not change how writes work, so differences in those rows are not from them.
 - Most game loading is not limited by storage, so games gain less than file copies.
 
+## Error C1-2569-2
+
+This error means the system is out of kernel memory. It can also appear as a crash right after you switch the plugin on, or when you open Settings while another app is running.
+
+1. If another app is running, close it first.
+2. Leave the plugin on for only one storage. Each storage you switch on takes 256 KiB.
+3. Switch off *Read ahead*, *Overlapped reads* and *Copy on the system core*.
+4. Remove other kernel plugins from your taiHEN config.
+
 ## Good to know
 
 - Only the storages you switch on are touched. Game cards, USB storage and Wi-Fi never are.

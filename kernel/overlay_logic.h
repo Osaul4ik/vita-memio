@@ -48,11 +48,11 @@
  * then the actions. Which are shown is the worker's (a mask of 1 << item): the
  * thresholds only with read ahead On, nothing but Close with no app in front. */
 enum {
-	OV_ITEM_RA = 0,      /* read ahead: Global / Off / On                     */
+	OV_ITEM_TEST = 0,    /* the read ahead test: start / stop                 */
+	OV_ITEM_RA,          /* read ahead: Global / Off / On                     */
 	OV_ITEM_C,           /* ... On: reads in a row before it starts, cached   */
 	OV_ITEM_NC,          /* ... non-cacheable                                 */
 	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
-	OV_ITEM_TEST,        /* the read ahead test: start / stop                 */
 	OV_ITEM_ADV,         /* the two below shown or not                        */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */

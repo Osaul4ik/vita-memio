@@ -104,11 +104,14 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
 	hold(&o, OV_BTN_RIGHT, 500);
-	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_RA);
+	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_TEST);   /* the top line */
+	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_RA);
 	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_C);
 	tap(&o, 0, OV_BTN_UP);
 	tap(&o, 0, OV_BTN_UP);
+	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_CLOSE);                 /* wraps */
+	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_RA);
 	/* a value: left for the worker, one at a time */
@@ -144,15 +147,14 @@ static void test_menu(void)
 	CHECK(o.cursor == OV_ITEM_OFFLOAD);
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_RA);
-	o.cursor = OV_ITEM_OFFLOAD;
-	tap(&o, 0, OV_BTN_DOWN);
-	CHECK(o.cursor == OV_ITEM_TEST);
+	o.cursor = OV_ITEM_TEST;
 	/* the test: an action, Cross only */
 	tap(&o, 0, OV_BTN_LEFT);
 	CHECK(!o.op);
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.op == OV_OP(OV_ITEM_TEST, 0));
 	o.op = 0;
+	o.cursor = OV_ITEM_OFFLOAD;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_ADV);
 	tap(&o, 0, OV_BTN_RIGHT);

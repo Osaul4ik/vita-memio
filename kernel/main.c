@@ -746,6 +746,15 @@ static void overlay_feed(void)
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_TEST) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
+			{
+				uint32_t mib = 0;
+				const int run = vm_stage_ratest_running(&mib);
+
+				if (run)
+					snprintf(v, sizeof(v), "(X) %u MiB", (unsigned)mib);
+				ov_line(L[n++], cur, OV_ITEM_TEST, 0, run ? "Stop R/A Test" : "Start R/A Test",
+				        HUD_C_TEXT, run ? v : "(X)");
+			}
 			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 2);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
 			        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);
@@ -769,15 +778,6 @@ static void overlay_feed(void)
 			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
 			ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
 			        ov_color(an.cur.offload, an.saved.offload, an.global.offload), v);
-			{
-				uint32_t mib = 0;
-
-				if (vm_stage_ratest_running(&mib))
-					snprintf(v, sizeof(v), "(X) stop, %u MiB", (unsigned)mib);
-				else
-					snprintf(v, sizeof(v), "(X) start");
-				ov_line(L[n++], cur, OV_ITEM_TEST, 0, "Read ahead test", HUD_C_TEXT, v);
-			}
 			ov_line(L[n++], cur, OV_ITEM_ADV, 0, g_ov_adv ? "Hide advanced" : "Show advanced",
 			        HUD_C_TEXT, "(X)");
 			mask |= 1u << OV_ITEM_ADV;

@@ -17,7 +17,7 @@ On my console, with a microSD in an SD2Vita (GPU-safe reads on, every byte check
 | Graphics data (non-cacheable memory), 128 KiB | | 19.2 MiB/s | **40.1 MiB/s** |
 | Opening small files | | 187 files/s | **238 files/s** |
 
-Your numbers will depend on your console, card and game. Most game loading is not limited by storage, so games gain less than file copies, and how much depends on how each game reads.
+These are benchmark figures, and the *Read ahead* gain in real use is smaller (all values are under [Read ahead](#read-ahead)). Your numbers will depend on your console, card and game. Most game loading is not limited by storage, so games gain less than file copies, and how much depends on how each game reads.
 
 **Your data is safe by design.** A program reads exactly what it would read without the plugin. Writes are never delayed: when a write returns, the data is on the card. If anything goes wrong, that storage goes back to the normal way for the rest of the session.
 
@@ -100,6 +100,31 @@ While a file is being read in order, the spare core reads the next part early, s
 Data read early is thrown away if anything writes over it, so it can never be stale, and *Verify transfers* checks it like everything else. It uses about 40 KiB more memory per storage.
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
+
+| Test | Unit | Read ahead off | Read ahead on |
+|---|---|---:|---:|
+| Sequential read 1 MiB | MiB/s | 18.7 | **21.8** |
+| Sequential read 128 KiB | MiB/s | 16.6 | **27.9** |
+| Random read 4 KiB | IOPS | 370.4 | 371 |
+| Random read 32 KiB | IOPS | 359.9 | 360.2 |
+| Random read 128 KiB | IOPS | 132.9 | 132.8 |
+| Random read 1 MiB | IOPS | 18.8 | 18.4 |
+| Graphics data (NC) read 1 MiB | MiB/s | 20.6 | **24.2** |
+| Graphics data (NC) read 128 KiB | MiB/s | 19.2 | **40.1** |
+| NCphy read 1 MiB | MiB/s | 20.7 | **24.3** |
+| CDRAM read 1 MiB | MiB/s | 20.6 | **25** |
+| Files read | files/s | 187 | **237.5** |
+| Files created | files/s | 110.4 | 114.3 |
+| Files deleted | files/s | 216.9 | 217.1 |
+| Sequential write 1 MiB | MiB/s | 14.2 | 15.6 |
+| Random write 4 KiB | IOPS | 180.4 | 180.6 |
+| Random write 32 KiB | IOPS | 292.3 | 374.8 |
+| Random write 128 KiB | IOPS | 116.5 | 119.2 |
+| Random write 1 MiB | IOPS | 16.2 | 15.6 |
+
+**These gains are from the benchmark, which reads files strictly in order. In real use the gain is smaller**, and in games it depends on how each game reads: some gain a lot, some almost nothing.
+
+Read ahead does not touch random reads or writes, so differences in those rows are just normal variation between runs. Measured with the tester (quick profile: 16 MiB file, 3 runs), microSD in an SD2Vita, PCH-1000 on firmware 3.65, GPU-safe reads and Overlapped reads *Auto* on.
 
 ## Overlay
 

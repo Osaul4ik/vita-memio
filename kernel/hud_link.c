@@ -132,12 +132,33 @@ static void release(void)
 	VM_KLOGI("hud: closed, unloading the HUD module");
 }
 
+/* On a thread of its own, as the load: stopping and unloading a module
+ * takes more stack than the worker has (on the worker it crashed the
+ * console). */
+static int unload_thread(SceSize args, void *argp)
+{
+	int status = 0;
+
+	(void)args; (void)argp;
+	return ksceKernelStopUnloadModule(g_modid, 0, NULL, 0, NULL, &status);
+}
+
 static void unload(void)
 {
-	int status;
+	SceUID th;
+	int r = -1;
 
-	if (g_modid >= 0)
-		ksceKernelStopUnloadModule(g_modid, 0, NULL, 0, NULL, &status);
+	if (g_modid >= 0) {
+		th = ksceKernelCreateThread("SceVitaMemioHudUnload", unload_thread, 0x80, 0x4000,
+		                            0, 0, NULL);
+		if (th >= 0) {
+			if (ksceKernelStartThread(th, 0, NULL) >= 0)
+				ksceKernelWaitThreadEnd(th, &r, NULL);
+			ksceKernelDeleteThread(th);
+		}
+		if (r < 0)
+			VM_KLOGW("hud: HUD module not unloaded (0x%08x)", (unsigned)r);
+	}
 	g_modid = -1;
 	g_released_us = 0;
 }

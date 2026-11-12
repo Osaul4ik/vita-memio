@@ -58,7 +58,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
-| Read ahead | Reads the next part of a file before it is asked for: **On**, **Adaptive** or **Off**. See below | On |
+| Read ahead | Reads the next part of a file before it is asked for: **Adaptive**, **On** or **Off**. See below | Adaptive |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
 | Overlay (SELECT + arrows) | A small menu over any game, see below. Off takes effect at once; On after a restart, if it was off when the console started | On |
 
@@ -91,7 +91,7 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and moves it while you play: it starts sooner while what it reads early is used, and later while much of it is thrown away. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never.
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and moves it while you play: it starts sooner while what it reads early is used, and later while much of it is thrown away. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
 
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 

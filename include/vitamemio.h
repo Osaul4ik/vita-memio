@@ -159,7 +159,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_GPUSAFE   VM_GPUSAFE_NODMA /* clean after CPU copies; DMA writes memory */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
 #define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL   /* "C + NC R/A"; without read ahead as Cached only */
-#define VM_DEF_READAHEAD 1   /* VM_RA_ON                                       */
+#define VM_DEF_READAHEAD 2   /* VM_RA_ADAPTIVE                                 */
 #define VM_DEF_OVERLAY   1   /* on: it takes SELECT + arrows from games        */
 #define VM_DEF_DMACOPY   1   /* on; stops itself on errors or a mismatch       */
 

@@ -1825,12 +1825,17 @@ static uint32_t ra_base_threshold(int nc)
 	return nc ? RA_STREAK_NC : RA_STREAK;
 }
 
-/* The threshold in effect for a stream of kind nc. */
+/* The threshold in effect for a stream of kind nc. While the R/A Test runs,
+ * the standard one (5), whatever the app has or Adaptive made of it: the
+ * test then sees read ahead as it is out of the box. */
 static uint32_t ra_threshold(int nc)
 {
-	const uint32_t t = ra_base_threshold(nc);
+	uint32_t t;
 	int v;
 
+	if (__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE))
+		return nc ? RA_STREAK_NC : RA_STREAK;
+	t = ra_base_threshold(nc);
 	if (t == RA_THR_NONE || LD(g_ra_mode) != VM_RA_ADAPTIVE)
 		return t;
 	v = (int)t + LD(g_ra_adj[nc]);
@@ -1855,8 +1860,8 @@ static void ra_adapt_note(int nc, uint32_t used, uint32_t unused)
 	int64_t gain, loss;
 	int dir;
 
-	if (LD(g_ra_mode) != VM_RA_ADAPTIVE)
-		return;
+	if (LD(g_ra_mode) != VM_RA_ADAPTIVE || __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE))
+		return;                           /* not while the R/A Test runs */
 	nc = !!nc;
 	u = __atomic_add_fetch(&g_ra_used[nc], used, __ATOMIC_RELAXED);
 	w = __atomic_add_fetch(&g_ra_unused[nc], unused, __ATOMIC_RELAXED);
@@ -3745,7 +3750,8 @@ void vm_stage_ra_now(VmRaNow *o)
 	o->mode = LD(g_ra_mode);
 	for (int k = 0; k < 2; k++) {
 		o->thr[k] = ra_threshold(k);
-		o->set[k] = ra_base_threshold(k);
+		/* the R/A Test running: the standard one is set too */
+		o->set[k] = __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) ? o->thr[k] : ra_base_threshold(k);
 	}
 }
 

@@ -738,7 +738,7 @@ static void test_defaults_together(void)
 	s.readahead = VM_DEF_READAHEAD;
 	s.overlay = VM_DEF_OVERLAY;
 	s.dmacopy = VM_DEF_DMACOPY;
-	CHECK(s.stats == 0 && s.dmacopy == 1 && s.readahead == VM_RA_ON && s.small == 1 &&
+	CHECK(s.stats == 0 && s.dmacopy == 1 && s.readahead == VM_RA_ADAPTIVE && s.small == 1 &&
 	      s.gpusafe == VM_GPUSAFE_NODMA && s.pipeline == VM_PIPE_AUTO &&
 	      s.offload == VM_OFFLOAD_ALL);
 	vm_stage_apply(&s);
@@ -2321,7 +2321,7 @@ static void test_readahead(void)
 	int saved_live = g_live;
 
 	/* on by default; switched off here: nothing made for it */
-	CHECK(VM_DEF_READAHEAD == VM_RA_ON && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) &&
+	CHECK(VM_DEF_READAHEAD == VM_RA_ADAPTIVE && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) &&
 	      vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) && !vm_setting_valid(VM_KEY_READAHEAD, 3));
 	reset();
 	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);
@@ -3183,6 +3183,14 @@ static void test_readahead_adaptive(void)
 		ra_adapt_note(1, RA_ADAPT_SECTORS, 0);
 	}
 	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);
+	/* while the R/A Test runs: the standard 5 and 5, nothing adapts */
+	CHECK(vm_stage_ratest_start() == VM_OK);
+	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 1);
+	vm_stage_ratest_cancel();
+	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);   /* back as it was */
 	as_app(0x42);                                        /* another in front: afresh */
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);

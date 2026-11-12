@@ -3186,7 +3186,7 @@ void vm_stage_apply(const VmSettings *s)
 	}
 	ST(g_min_sectors, s->small ? 1u : (uint32_t)MIN_SECTORS);
 	ST(g_stats, s->stats ? 1 : 0);
-	ST(g_count_cfg, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
+	ST(g_count_cfg, s->stats ? 1 : 0);   /* the HUD asks while shown (count_hud) */
 	/* DMA copy: switched on (again) is a fresh start */
 	if (s->dmacopy && !LD(g_dma_want)) {
 		ST(g_dma_errors, 0);

@@ -113,19 +113,13 @@ static const char *state_color(const VmDevState *d, int slow)
 	}
 }
 
-/* With the overlay switched on, the HUD shows only by its keys (SELECT +
- * Right from the overlay), in the PSVshell style, as the HUD setting says
- * (Extended while that is Off). */
+/* The HUD is the overlay's: it shows only by the overlay's keys (SELECT +
+ * Right from the overlay), Extended, in the PSVshell style; with the
+ * overlay off there is none. */
 static void hud_effective(VmSettings *s)
 {
-	if (!s->overlay || !vm_overlay_installed())
-		return;
-	if (vm_overlay_state() == OV_HUD) {
-		if (s->hud == VM_HUD_OFF)
-			s->hud = VM_HUD_EXTENDED;
-	} else {
-		s->hud = VM_HUD_OFF;
-	}
+	s->hud = s->overlay && vm_overlay_installed() && vm_overlay_state() == OV_HUD
+	         ? VM_HUD_EXTENDED : VM_HUD_OFF;
 }
 
 /* Where copies run is counted (vm_stage_count_cores) while the overlay is
@@ -233,7 +227,7 @@ static void hud_feed(const VmDevState *now)
 
 	vm_settings_copy(&s);
 	/* the overlay draws through the HUD's hook too */
-	if ((s.hud != VM_HUD_OFF || s.overlay) && !vm_hud_installed() && !hud_failed &&
+	if (s.overlay && !vm_hud_installed() && !hud_failed &&
 	    vm_hud_init() != VM_OK) {
 		hud_failed = 1;
 		VM_KLOGW("hud: could not install - HUD unavailable");
@@ -641,7 +635,7 @@ static int hud_busy(void)
 	vm_settings_copy(&s);
 	if (s.overlay && vm_overlay_installed())
 		return vm_overlay_state() == OV_HUD ? VM_HUD_SHOWN : VM_HUD_IDLE;
-	return s.hud != VM_HUD_OFF ? VM_HUD_SHOWN : VM_HUD_IDLE;
+	return VM_HUD_IDLE;                   /* the HUD is the overlay's only */
 }
 
 static void hud_fini_all(void)

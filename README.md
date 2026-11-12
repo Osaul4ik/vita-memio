@@ -121,7 +121,7 @@ It judges from how the game reads and cannot see the frame rate. The result depe
 
 ## HUD
 
-With *Overlay* on, the HUD shows through the overlay's keys; with *Overlay* off, it is always on screen. It shows, for the storage the game reads from:
+The HUD is part of the overlay and shows through its keys; with *Overlay* off there is no HUD. It shows, for the storage the game reads from:
 
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
@@ -131,7 +131,7 @@ Streak  C: 5  NC: 3
 Core 3  C: 98%  NC: 0%
 ```
 
-- **R / W:** speed right now. **R/W:** total read and written since the console started.
+- **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
 - **Streak:** reads in a row before read ahead starts.
 - **Core 3, C:** the share of copying done on the spare core since the HUD opened. Copies of graphics data from read ahead count here.
 - **Core 3, NC:** the share of graphics data reads done on the spare core. It stays at 0% unless copying is on *C + NC All*.
@@ -185,7 +185,7 @@ This error means the system is out of kernel memory. It can also appear as a cra
 ## Good to know
 
 - Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more.
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The overlay and the HUD take about 40 KiB more; with *Overlay* off, nothing.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 - The Settings page and the HUD are in English.

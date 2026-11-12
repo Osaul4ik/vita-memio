@@ -51,7 +51,7 @@
 [VM_I18N_HINT_READAHEAD] = "While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected.",
 [VM_I18N_ITEM_RA_ON] = "On",
 [VM_I18N_ROW_OVERLAY] = "Overlay (SELECT + arrows)",
-[VM_I18N_HINT_OVERLAY] = "SELECT + Right held ½ s opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. While this is on, the HUD only shows through these keys; off, the HUD is always on screen.",
+[VM_I18N_HINT_OVERLAY] = "SELECT + Right held ½ s opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. The HUD shows only through these keys. Off: no overlay and no HUD.",
 [VM_I18N_ROW_DMACOPY] = "DMA copy",
 [VM_I18N_HINT_DMACOPY] = "Copies read data out of the plugin's buffer with the console's DMA controller instead of the CPU, for reads of 16 KiB and up: copying takes about half the time and the spare core is freer. If the controller refuses copies, or Verify transfers finds a difference, it stops by itself until you switch it off and on.",
 [VM_I18N_DMA_ON] = "Now: in use, copies made:",

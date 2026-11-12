@@ -111,7 +111,7 @@ void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void))
 
 	__atomic_store_n(&g_wake, wake, __ATOMIC_RELEASE);
 	vm_settings_copy(&s);
-	want = s.hud != VM_HUD_OFF || s.overlay;
+	want = s.overlay;                     /* the HUD shows only through it */
 	if (!want)
 		g_failed = 0;                     /* switched on again: try again */
 	if (want && !g_hud && !g_failed)

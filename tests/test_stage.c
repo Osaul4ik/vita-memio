@@ -107,6 +107,8 @@ static void reset(void)
 		if (g_dev[i].pipe_made)
 			pipe_release(&g_dev[i]);       /* a test that left its helper */
 	fakes_reset();
+	memset(g_mapfail, 0, sizeof(g_mapfail));
+	g_mapfail_n = g_mapfail_logged = 0;
 	for (size_t i = 0; i < sizeof(disk); i++)
 		disk[i] = (uint8_t)(i * 31 + (i >> 9));
 	memset(d, 0, sizeof(*d));
@@ -2129,6 +2131,14 @@ static void test_offload(void)
 	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
 	CHECK(copies_elsewhere == 0 && g_off_maperr == 1 && g_offload_state == 0);
 	CHECK(g_offload_err == (int)0x80020001 && sems_empty(d) && g_off_reads == 0);
+	/* ... and described for the log: once, by the worker */
+	CHECK(g_mapfail_n == 1 && g_mapfail[0].ready && g_mapfail[0].which == 0 &&
+	      g_mapfail[0].err == (int)0x80020001 && g_mapfail[0].pid == 0x42 &&
+	      g_mapfail[0].len == 700 * 512 && g_mapfail[0].b0 >= 0 && g_mapfail[0].binfo == 0);
+	vm_stage_worker_tick();
+	CHECK(g_mapfail_logged == 1);
+	vm_stage_worker_tick();
+	CHECK(g_mapfail_logged == 1);
 	fake_usermap_err = 0;
 	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
 	CHECK(g_off_reads >= 1 && g_offload_state == 1);

@@ -509,6 +509,28 @@ typedef struct OffMap {
 } OffMap;
 static void off_map(OffMap *m);
 
+/* Mappings of a caller's buffer that the system refused (copy on the system
+ * core, "C + NC All"): the first MAPFAIL_LOG described for the log, each
+ * written once by the worker - the error, the buffer and what the system
+ * says about the memory block(s) it lies in - so a refusal seen on a console
+ * can be looked into. Only on a refusal (rare): nothing on the hot path. */
+#define MAPFAIL_LOG 8
+typedef struct MapFail {
+	int      ready;            /* atomic: the fields below are written      */
+	int      which;            /* 0 copy on the system core, 1 C + NC All   */
+	int      err;              /* what ksceKernelProcUserMap returned       */
+	SceUID   pid;
+	uint32_t user, len;        /* the buffer in the app's space             */
+	int      mt, nc;           /* its memory type as the caller saw it, NC  */
+	SceUID   b0, b1;           /* the block at its start and at its end     */
+	uint32_t btype, bbase, bsize;   /* the start's block (GetInfoEx)        */
+	int      binfo;            /* GetInfoEx's result                        */
+	char     title[16];        /* the app in front                          */
+} MapFail;
+static MapFail           g_mapfail[MAPFAIL_LOG];
+static volatile uint32_t g_mapfail_n;          /* refusals described (claimed) */
+static uint32_t          g_mapfail_logged;     /* the worker's                 */
+
 /* VM_OFFLOAD_FULL ("C + NC"): a game's read into
  * NON-cacheable memory, which otherwise takes the standard path on the game's
  * own thread, is read by the helper on the system core straight into the
@@ -1286,6 +1308,48 @@ static void off_refuse(int state, int err, uint32_t type)
  *     read right (its memory type is the one at the address);
  *   - the same memory type as the caller's buffer at both ends of both
  *     (cached: one coherent copy of the data for every core). */
+static char g_fg_title[16];               /* (with the app events, below) */
+
+static void mapfail_note(int which, const OffMap *m, int err)
+{
+	const uint32_t i = __atomic_fetch_add(&g_mapfail_n, 1, __ATOMIC_RELAXED);
+	MapFail *f;
+	VmMemBlockInfoEx info;
+
+	if (i >= MAPFAIL_LOG)
+		return;
+	f = &g_mapfail[i];
+	f->which = which;
+	f->err = err;
+	f->pid = m->pid;
+	f->user = (uint32_t)(uintptr_t)m->user;
+	f->len = m->len;
+	f->mt = m->mt;
+	f->nc = m->nc;
+	f->b0 = ksceKernelFindProcMemBlockByAddr(m->pid, m->user, 0);
+	f->b1 = m->len ? ksceKernelFindProcMemBlockByAddr(m->pid, m->user + m->len - 1, 0) : f->b0;
+	f->binfo = -1;
+	if (f->b0 >= 0) {
+		memset(&info, 0, sizeof(info));
+		info.size = sizeof(info);
+		f->binfo = ksceKernelMemBlockGetInfoEx(f->b0, &info);
+		if (f->binfo >= 0) {
+			f->btype = info.type;
+			f->bbase = (uint32_t)(uintptr_t)info.mapped_base;
+			f->bsize = info.mapped_size;
+		}
+	}
+	memcpy(f->title, g_fg_title, sizeof(f->title) - 1);
+	f->title[sizeof(f->title) - 1] = 0;
+	__atomic_store_n(&f->ready, 1, __ATOMIC_RELEASE);
+	{
+		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
+
+		if (fn)
+			fn();                         /* the worker writes it now */
+	}
+}
+
 static void off_map(OffMap *m)
 {
 	void *page = NULL;
@@ -1302,6 +1366,7 @@ static void off_map(OffMap *m)
 	if (uid < 0) {
 		ADD(g_off_maperr, 1);
 		ST(g_offload_err, uid);
+		mapfail_note(0, m, uid);
 		return;
 	}
 	if (!page || size < off || size - off < m->len) {
@@ -2589,6 +2654,7 @@ static void ncd_map(OffMap *m)
 	if (uid < 0) {
 		ADD(g_ncd_maperr, 1);
 		ST(g_ncd_err, uid);
+		mapfail_note(1, m, uid);
 		return;
 	}
 	if (!page || size < off || size - off < m->len) {
@@ -3547,6 +3613,25 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ncd_reads), (unsigned)(LD(g_ncd_kib) / 1024),
 			         (unsigned)LD(g_ncd_busy), (unsigned)LD(g_ncd_fail),
 			         (unsigned)LD(g_ncd_maperr), (unsigned)LD(g_ncd_err));
+	}
+	/* Refused mappings, each once (see MapFail). */
+	while (g_mapfail_logged < MAPFAIL_LOG && g_mapfail_logged < LD(g_mapfail_n) &&
+	       __atomic_load_n(&g_mapfail[g_mapfail_logged].ready, __ATOMIC_ACQUIRE)) {
+		const MapFail *f = &g_mapfail[g_mapfail_logged++];
+
+		VM_KLOGW("stage: map refused (%s) 0x%08x: app %s pid 0x%08x, buffer 0x%08x + %u B, "
+		         "memory type 0x%04x%s", f->which ? "C + NC All" : "copy on core 3",
+		         (unsigned)f->err, f->title[0] ? f->title : "-", (unsigned)f->pid,
+		         (unsigned)f->user, (unsigned)f->len, (unsigned)f->mt & 0xFFFFu,
+		         f->nc ? " (NC)" : "");
+		VM_KLOGW("stage: map refused: block 0x%08x (end 0x%08x%s), GetInfoEx 0x%08x: type "
+		         "0x%08x at 0x%08x + %u B%s", (unsigned)f->b0, (unsigned)f->b1,
+		         f->b0 != f->b1 ? ", another block" : "", (unsigned)f->binfo,
+		         (unsigned)f->btype, (unsigned)f->bbase, (unsigned)f->bsize,
+		         f->binfo >= 0 && (f->user < f->bbase || f->user - f->bbase + f->len > f->bsize)
+		         ? ", the buffer goes past it" : "");
+		if (g_mapfail_logged == MAPFAIL_LOG)
+			VM_KLOGW("stage: map refused: only the first %u are described", MAPFAIL_LOG);
 	}
 	/* Copy on the system core: whether the mapping was found usable, once. */
 	{

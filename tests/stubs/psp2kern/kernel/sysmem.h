@@ -13,6 +13,7 @@ int ksceKernelGetMemBlockBase(SceUID uid, void **base);
 int ksceKernelFreeMemBlock(SceUID uid);
 int ksceKernelVAtoPA(const void *va, uintptr_t *pa);
 SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size);
+SceUID ksceKernelFindProcMemBlockByAddr(SceUID pid, const void *addr, SceSize size);
 typedef unsigned int SceUInt32;
 SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const void *user_buf,
                              SceSize size, void **kernel_page, SceSize *kernel_size,

@@ -21,8 +21,16 @@ static uint32_t copy_cost_us;
 /* Which thread copied: the test's own (the caller) or another (the copier). */
 static pthread_t test_thread;
 static int copies_here, copies_elsewhere;
+/* 1: the staging copies go through the plugin's own choice (DMA or CPU), as on
+ * the console; the DMA tests set it. */
+static int use_copy_out;
+static void stage_copy_out(void *dst, const void *src, size_t n);
 static void *fake_copy(void *d, const void *s, size_t n)
 {
+	if (use_copy_out && s != NULL) {
+		stage_copy_out(d, s, n);
+		return d;
+	}
 	__sync_fetch_and_add(&fake_now_us, copy_cost_us);
 	if (pthread_equal(pthread_self(), test_thread))
 		__sync_fetch_and_add(&copies_here, 1);
@@ -150,6 +158,11 @@ static void reset(void)
 	io_calls = fail_at_call = corrupt_staged = 0;
 	last_buf = NULL;
 	copy_cost_us = 0;
+	use_copy_out = 0;
+	g_dmac_memcpy = NULL;
+	g_dma_want = g_dma_stop = g_dma_logged = 0;
+	g_dma_copies = g_dma_kib = g_dma_us = g_dma_cpu = g_dma_errors = 0;
+	g_dma_last_err = 0;
 }
 
 static uint8_t *user_buf(size_t sectors)
@@ -514,6 +527,166 @@ static void test_write_verify_mismatch(void)
 	CHECK(g_shadow_busy == 0);
 	free(g_shadow);
 	g_shadow = NULL;
+	free(u);
+}
+
+/* ---- DMA copy (VM_KEY_DMACOPY) ------------------------------------------------- */
+
+/* The system's ksceDmacMemcpy, faked: copies, or refuses (having written junk
+ * into part of dst first), or "copies" wrong data (as a controller that missed
+ * the CPU's cache would leave it). */
+static int dmac_calls, dmac_fail, dmac_corrupt;
+static int fake_dmac(void *dst, const void *src, SceSize n)
+{
+	dmac_calls++;
+	if (dmac_fail) {
+		memset(dst, 0xA5, n / 2);
+		return (int)0x80020005;
+	}
+	memcpy(dst, src, n);
+	if (dmac_corrupt)
+		((uint8_t *)dst)[n / 3] ^= 0x40;
+	return 0;
+}
+
+/* A buffer on a cache line, as the DMA copy needs (exact size for ASan). */
+static uint8_t *line_buf(size_t n)
+{
+	void *p = NULL;
+
+	return posix_memalign(&p, 64, n) == 0 ? p : NULL;
+}
+
+static VmSettings dma_settings(int on)
+{
+	VmSettings s;
+
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.dmacopy = on;
+	return s;
+}
+
+static void fill(uint8_t *p, size_t n, unsigned seed)
+{
+	for (size_t i = 0; i < n; i++)
+		p[i] = (uint8_t)(i * 13 + seed);
+}
+
+static void test_dma_copy_choice(void)
+{
+	const size_t big = 64 * 1024;
+	uint8_t *src = line_buf(big + 64), *dst = line_buf(big + 64);
+	VmSettings s;
+	VmDma st;
+
+	reset();
+	dmac_calls = dmac_fail = dmac_corrupt = 0;
+	fill(src, big + 64, 7);
+
+	/* off: never the controller, even when there is one */
+	g_dmac_memcpy = fake_dmac;
+	s = dma_settings(0);
+	vm_stage_apply(&s);
+	stage_copy_out(dst, src, big);
+	CHECK(dmac_calls == 0 && memcmp(dst, src, big) == 0 && dma_state() == VM_DMA_OFF);
+
+	/* on: whole cache lines from 32 KiB up go to the controller */
+	s = dma_settings(1);
+	vm_stage_apply(&s);
+	CHECK(dma_state() == VM_DMA_ON);
+	memset(dst, 0, big);
+	stage_copy_out(dst, src, big);
+	CHECK(dmac_calls == 1 && memcmp(dst, src, big) == 0);
+	CHECK(g_dma_copies == 1 && g_dma_kib == 64 && g_dma_cpu == 0);
+
+	/* the rest is the CPU's: too small, an odd start, an odd end */
+	memset(dst, 0, big + 64);
+	stage_copy_out(dst, src, VM_DMA_MIN_BYTES - 512);
+	stage_copy_out(dst + 4, src, big);
+	stage_copy_out(dst, src + 512 + 8, big - 512);
+	stage_copy_out(dst, src, big + 32);
+	CHECK(dmac_calls == 1 && g_dma_cpu == 4);
+	CHECK(memcmp(dst, src, big + 32) == 0);           /* the last one, all of it */
+	stage_copy_out(dst, src, VM_DMA_MIN_BYTES);       /* exactly the smallest: DMA */
+	CHECK(dmac_calls == 2);
+
+	/* refused: the CPU copies all of it, junk and all overwritten */
+	dmac_fail = 1;
+	memset(dst, 0, big);
+	stage_copy_out(dst, src, big);
+	CHECK(memcmp(dst, src, big) == 0 && g_dma_errors == 1 && dma_state() == VM_DMA_ON);
+	CHECK(g_dma_last_err == (int32_t)0x80020005);
+	for (unsigned i = 1; i < VM_DMA_MAX_ERRORS; i++)
+		stage_copy_out(dst, src, big);
+	CHECK(dma_state() == VM_DMA_STOPPED && g_dma_stop == VM_DMA_WHY_ERRORS);
+	{
+		const int calls = dmac_calls;
+
+		dmac_fail = 0;
+		memset(dst, 0, big);
+		stage_copy_out(dst, src, big);              /* stopped: the CPU, not tried */
+		CHECK(dmac_calls == calls && memcmp(dst, src, big) == 0);
+	}
+	vm_stage_dma(&st);
+	CHECK(st.size == sizeof(st) && st.magic == VM_DMA_MAGIC && st.state == VM_DMA_STOPPED &&
+	      st.stop_why == VM_DMA_WHY_ERRORS && st.errors == VM_DMA_MAX_ERRORS && st.copies == 2);
+
+	/* the worker says why, once */
+	g_live = 1;
+	vm_stage_worker_tick();
+	CHECK(g_dma_logged == 1);
+	g_live = 0;
+
+	/* still on in Settings: stays stopped; off and on: a fresh start */
+	vm_stage_apply(&s);
+	CHECK(dma_state() == VM_DMA_STOPPED);
+	s = dma_settings(0);
+	vm_stage_apply(&s);
+	s = dma_settings(1);
+	vm_stage_apply(&s);
+	CHECK(dma_state() == VM_DMA_ON && g_dma_errors == 0 && g_dma_last_err == 0 &&
+	      !g_dma_logged);
+
+	/* no ksceDmacMemcpy on this system: on in Settings, the CPU copies */
+	g_dmac_memcpy = NULL;
+	CHECK(dma_state() == VM_DMA_UNAVAIL);
+	memset(dst, 0, big);
+	stage_copy_out(dst, src, big);
+	CHECK(memcmp(dst, src, big) == 0);
+	free(src);
+	free(dst);
+}
+
+/* Through a real read: the controller makes the copy, and with verify on a
+ * copy that came out wrong is caught - the caller gets the standard data and
+ * DMA copy stops at once. */
+static void test_dma_copy_reads(void)
+{
+	const uint32_t n = 128;                           /* 64 KiB: one staged chunk */
+	uint8_t *u = line_buf(n * 512);
+	VmSettings s;
+
+	reset();
+	dmac_calls = dmac_fail = dmac_corrupt = 0;
+	use_copy_out = 1;
+	g_dmac_memcpy = fake_dmac;
+	s = dma_settings(1);
+	vm_stage_apply(&s);
+	CHECK(rd(u, 30, n) == 0);
+	CHECK(memcmp(u, disk + 30 * 512, n * 512) == 0 && dmac_calls == 1 && g_dma_copies == 1);
+
+	g_verify = 1;
+	g_shadow = calloc(1, STAGE_BYTES);
+	dmac_corrupt = 1;
+	memset(u, 0, n * 512);
+	CHECK(rd(u, 50, n) == 0);
+	CHECK(memcmp(u, disk + 50 * 512, n * 512) == 0);  /* the standard data */
+	CHECK(g_dev[M].st.mismatches == 1);
+	CHECK(dma_state() == VM_DMA_STOPPED && g_dma_stop == VM_DMA_WHY_MISMATCH);
+	free(g_shadow);
+	g_shadow = NULL;
+	g_verify = 0;
 	free(u);
 }
 
@@ -3188,6 +3361,8 @@ int main(void)
 	RUN(test_staged_write);
 	RUN(test_write_error_finishes_stock);
 	RUN(test_read_verify_mismatch);
+	RUN(test_dma_copy_choice);
+	RUN(test_dma_copy_reads);
 	RUN(test_write_verify_mismatch);
 	RUN(test_shadow_not_leaked_without_read_ref);
 	RUN(test_busy_and_disabled_go_stock);

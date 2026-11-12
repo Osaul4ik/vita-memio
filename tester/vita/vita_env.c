@@ -234,6 +234,22 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 			out->wr_copy_us = t->wr_copy_us;
 		}
 	}
+	{
+		/* Optional too: vmGetDma is newer than 1.3.0. */
+		VmDma dm;
+
+		memset(&dm, 0, sizeof(dm));
+		if (vmGetDma(&dm) == VM_OK && dm.magic == VM_DMA_MAGIC && dm.size == sizeof(dm)) {
+			out->dma_ok = 1;
+			out->dma_state = dm.state;
+			out->dma_stop_why = dm.stop_why;
+			out->dma_copies = dm.copies;
+			out->dma_kib = dm.kib;
+			out->dma_cpu = dm.cpu_copies;
+			out->dma_errors = dm.errors;
+			out->dma_last_err = dm.last_err;
+		}
+	}
 	return 0;
 }
 

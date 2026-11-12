@@ -743,6 +743,21 @@ void bench_verify(const BenchResult *res, BenchVerify *out)
 	}
 }
 
+void bench_dma(const BenchResult *res, BenchDma *out)
+{
+	memset(out, 0, sizeof(*out));
+	for (int i = 0; i < res->nruns; i++) {
+		const BenchPluginState *b = &res->runs[i].before, *a = &res->runs[i].after;
+
+		if (!res->runs[i].complete || !b->dma_ok || !a->dma_ok)
+			continue;
+		out->copies += a->dma_copies - b->dma_copies;
+		out->kib += a->dma_kib - b->dma_kib;
+		out->cpu += a->dma_cpu - b->dma_cpu;
+		out->errors += a->dma_errors - b->dma_errors;
+	}
+}
+
 uint32_t bench_passthru(const BenchResult *res)
 {
 	uint32_t n = 0;

@@ -100,6 +100,46 @@ int vmGetBuild(char *out, int size);
  * Returns VM_OK or VM_ERR_IO (the guard file could not be written). */
 int vmResetSafeMode(void);
 
+/* DMA copy (VM_KEY_DMACOPY, experimental): reads copied out of the staging
+ * buffer by the console's DMA controller (the system's ksceDmacMemcpy) instead
+ * of the CPU, for copies of whole cache lines from VM_DMA_MIN_BYTES up. Any
+ * copy it refuses is made by the CPU instead; after VM_DMA_MAX_ERRORS refusals,
+ * or one verify-mode difference while it is on, it stops until the setting is
+ * switched off and on. Counters only grow and wrap. */
+#define VM_DMA_MIN_BYTES   (32u * 1024u)
+#define VM_DMA_ALIGN       64u        /* the Cortex-A9's cache line */
+#define VM_DMA_MAX_ERRORS  8u
+
+#define VM_DMA_OFF         0   /* the setting is off                              */
+#define VM_DMA_ON          1   /* in use                                          */
+#define VM_DMA_UNAVAIL     2   /* this system has no ksceDmacMemcpy to call        */
+#define VM_DMA_STOPPED     3   /* stopped itself: see stop_why                     */
+
+#define VM_DMA_WHY_NONE      0
+#define VM_DMA_WHY_ERRORS    1   /* VM_DMA_MAX_ERRORS refusals (last_err)          */
+#define VM_DMA_WHY_MISMATCH  2   /* verify mode found a difference                 */
+
+typedef struct VmDma {
+	uint32_t size;           /* sizeof(VmDma), set by the kernel                 */
+	uint32_t magic;          /* VM_DMA_MAGIC                                     */
+	int32_t  state;          /* VM_DMA_*                                         */
+	int32_t  stop_why;       /* VM_DMA_WHY_*                                     */
+	uint32_t copies;         /* copies the DMA controller made                   */
+	uint32_t kib;            /* ... their data, KiB                              */
+	uint32_t us;             /* ... time in ksceDmacMemcpy, us                   */
+	uint32_t cpu_copies;     /* copies left to the CPU while on (too small, not  */
+	                         /* whole cache lines)                               */
+	uint32_t errors;         /* copies it refused (the CPU made them)            */
+	int32_t  last_err;       /* the last refusal's error code, 0 if none         */
+} VmDma;
+
+#define VM_DMA_MAGIC  0x544D4441u   /* 'TMDA' */
+_Static_assert(sizeof(VmDma) == 40, "VmDma: grow only through a new call");
+
+/* Copy the DMA copy state to *out (user pointer). Returns VM_OK or
+ * VM_ERR_ARG. Newer than 1.3.0: an older module does not have it. */
+int vmGetDma(VmDma *out);
+
 /* An app's threshold in the overlay: read ahead never starts for it. */
 #define VM_RA_NEVER      0xFFFF
 

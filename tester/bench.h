@@ -88,6 +88,12 @@ typedef struct BenchPluginState {
 	int      timing_ok;
 	uint32_t rd_sectors, rd_io_us, rd_copy_us;
 	uint32_t wr_sectors, wr_io_us, wr_copy_us;
+	/* DMA copy (vmGetDma; an older kernel module does not have it: dma_ok = 0). */
+	int      dma_ok;
+	int      dma_state;      /* VM_DMA_*                                        */
+	int      dma_stop_why;   /* VM_DMA_WHY_*                                    */
+	uint32_t dma_copies, dma_kib, dma_cpu, dma_errors;
+	int32_t  dma_last_err;
 } BenchPluginState;
 
 /* What the plugin does for the device under test, read from its state. */
@@ -269,6 +275,13 @@ void bench_verify_run(const BenchRun *r, BenchVerify *out);
  * in use, over the completed runs (ON only). Near 0: a second buffer would not
  * help. */
 uint32_t bench_passthru(const BenchResult *res);
+
+/* DMA copy during the complete runs: copies the controller made (and their
+ * KiB), copies left to the CPU while it was on, copies it refused. */
+typedef struct BenchDma {
+	uint32_t copies, kib, cpu, errors;
+} BenchDma;
+void bench_dma(const BenchResult *res, BenchDma *out);
 int bench_valid(const BenchResult *res);           /* ran to the end */
 
 #endif /* VITAMEMIO_TESTER_BENCH_H */

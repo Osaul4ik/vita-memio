@@ -69,6 +69,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
 | Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
 | Statistics | Collects timings for the tester app | On |
+| DMA copy (experimental) | Large reads are copied by the console's DMA controller instead of the CPU. Test it with *Verify transfers* on and compare in the tester; it switches itself off if anything goes wrong | Off |
 
 If the plugin ever could not start properly, a **Reset safe mode** row appears under *Driver*.
 

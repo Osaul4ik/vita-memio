@@ -38,6 +38,9 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active);
 /* Where faster-path time goes: system read/write vs the CPU copy. */
 void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT]);
 
+/* DMA copy's state and counters (VM_KEY_DMACOPY). */
+void vm_stage_dma(VmDma *out);
+
 /* An app's own settings (the overlay; kept in its profile): each -1 for the
  * global one (Settings), else a value of that setting; thr: its thresholds
  * with read ahead On (cached, non-cacheable), 0 for the fixed one, else

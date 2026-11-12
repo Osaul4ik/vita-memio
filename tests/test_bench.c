@@ -45,6 +45,9 @@ typedef struct Fake {
 	int      offload;            /* ... and its "copy on the system core"       */
 	int      gpusafe;            /* ... and "GPU-safe reads"                    */
 	int      readahead;          /* ... and "read ahead"                        */
+	int      dma;                /* ... and "DMA copy": its counters move per look */
+	int      dma_stop_at_get;    /* from this look on it has stopped (mismatch)  */
+	uint32_t dma_copies;
 	int      sf_corrupt;         /* small files read back wrong                 */
 	int      sf_fail_remove;     /* deleting a small file fails                 */
 	int      busy_seen;
@@ -257,6 +260,16 @@ static int f_get(void *c, BenchPluginState *o)
 	o->offload = f->offload;
 	o->gpusafe = f->gpusafe;
 	o->readahead = f->readahead;
+	if (f->dma) {
+		f->dma_copies += 2;
+		o->dma_ok = 1;
+		o->dma_state = f->dma_stop_at_get && f->get_calls >= f->dma_stop_at_get ? VM_DMA_STOPPED
+		             : VM_DMA_ON;
+		o->dma_stop_why = o->dma_state == VM_DMA_STOPPED ? VM_DMA_WHY_MISMATCH : 0;
+		o->dma_copies = f->dma_copies;
+		o->dma_kib = f->dma_copies * 1024;           /* 1 MiB a copy */
+		o->dma_cpu = f->dma_copies / 2;
+	}
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
 	o->verify_ready = f->verify_ready;
@@ -632,6 +645,53 @@ static void test_passthru_counted(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], want);
 	CHECK(found);
+	free(text);
+	free(r);
+	free(f.data);
+}
+
+/* DMA copy: shown only while it is on, with what it did over the runs, and
+ * how it ended if it stopped during the test. */
+static const BenchProfile with_dma_profile = { "dma", 2, 2, { 4, 4, 2, 1 }, { 2, 2, 2, 1 }, 0 };
+
+static void test_report_dma(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &with_dma_profile, "ux0:data/t/" };
+	BenchEnv e;
+	BenchDma dm;
+	char *text = malloc(40000);
+	char lines[REPORT_LINES_MAX][REPORT_LINE_MAX];
+	ReportMeta m = { "2026-01-01 00:00:00", "9.9", "ux0:data/t/" };
+	int n, found = 0;
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
+	report_format(r, &m, text, 40000);
+	CHECK(!strstr(text, "DMA"));                     /* off (or an older module): nothing */
+
+	fake_init(&f, 1);
+	f.dma = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
+	bench_dma(r, &dm);
+	CHECK(dm.copies > 0 && dm.kib == dm.copies * 1024 && dm.errors == 0);
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin DMA copy: on\n"));
+	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
+	for (int i = 0; i < n; i++)
+		found |= !strcmp(lines[i], "DMA copy: on");
+	CHECK(found);
+
+	fake_init(&f, 1);
+	f.dma = 1;
+	f.dma_stop_at_get = 3;                           /* stops during the test */
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_valid(r));
+	report_format(r, &m, text, 40000);
+	CHECK(strstr(text, "plugin DMA copy: stopped itself (a verify difference)\n"));
 	free(text);
 	free(r);
 	free(f.data);
@@ -1356,6 +1416,7 @@ int main(void)
 	RUN(test_timing_math);
 	RUN(test_aggregate_skips_incomplete);
 	RUN(test_report_text);
+	RUN(test_report_dma);
 	RUN(test_screen_lines);
 	RUN(test_formatters);
 	RUN(test_results_file);

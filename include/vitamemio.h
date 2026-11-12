@@ -78,6 +78,7 @@ enum vm_key {
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
 	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read              */
 	VM_KEY_OVERLAY,        /* 0/1: the SELECT + arrows overlay (and HUD by keys) */
+	VM_KEY_DMACOPY,        /* 0/1: copy reads out with the DMA controller (experimental) */
 	VM_KEY_COUNT
 };
 
@@ -147,6 +148,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL   /* "C + NC R/A"; without read ahead as Cached only */
 #define VM_DEF_READAHEAD 0   /* opt-in                                         */
 #define VM_DEF_OVERLAY   0   /* opt-in: it takes SELECT + arrows from games    */
+#define VM_DEF_DMACOPY   0   /* experimental, developer settings               */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -164,6 +166,7 @@ typedef struct VmSettings {
 	int32_t offload;
 	int32_t readahead;
 	int32_t overlay;
+	int32_t dmacopy;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -192,6 +195,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_GPUSAFE:
 	case VM_KEY_OVERLAY:
+	case VM_KEY_DMACOPY:
 		return v == 0 || v == 1;
 	case VM_KEY_READAHEAD:
 		return v == VM_RA_OFF || v == VM_RA_ON;
@@ -209,6 +213,9 @@ static inline int vm_setting_valid(int key, int v)
 		return 0;
 	}
 }
+
+_Static_assert(sizeof(VmSettings) == VM_KEY_COUNT * sizeof(int32_t),
+               "VmSettings: one int32 per key, in enum vm_key order");
 
 static inline int32_t *vm_setting_field(VmSettings *s, int key)
 {

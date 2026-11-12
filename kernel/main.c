@@ -340,6 +340,18 @@ int vmGetTiming(VmTiming *out)
 	return VM_OK;
 }
 
+int vmGetDma(VmDma *out)
+{
+	VmDma k;
+
+	if (!out)
+		return VM_ERR_ARG;
+	vm_stage_dma(&k);
+	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
+		return VM_ERR_ARG;
+	return VM_OK;
+}
+
 int vmGetSetting(int key)
 {
 	VmSettings cur;

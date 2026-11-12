@@ -58,7 +58,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
  * (NULL: a reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
 	"sd2vita", NULL, "verify", "hud", NULL, "log", "memcard", "small", "stats", "gpusafe",
-	"pipeline", "offload", "readahead", "overlay",
+	"pipeline", "offload", "readahead", "overlay", "dmacopy",
 };
 
 #define ROW_LIST(k) \
@@ -105,6 +105,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 			ROW_TOGGLE("verify") \
 			ROW_TOGGLE("log") \
 			ROW_TOGGLE("stats") \
+			ROW_TOGGLE("dmacopy") \
 		"</setting_list>" \
 	"</setting_list>" \
 	"</setting_list>"
@@ -288,6 +289,58 @@ static const vm_u16 *device_hint(int dev, int help_id)
 	return o;
 }
 
+static void l_dec(Line *l, uint32_t v)
+{
+	char d[11];
+	int n = 0;
+
+	do {
+		d[n++] = (char)('0' + v % 10);
+		v /= 10;
+	} while (v && n < (int)sizeof(d));
+	while (n && l->n < (int)sizeof(l->s) - 1)
+		l->s[l->n++] = d[--n];
+	l->s[l->n] = 0;
+}
+
+/* DMA copy's help, and what it is doing now (vmGetDma: a kernel module that
+ * does not answer, or an older one, adds nothing). */
+static const vm_u16 *dma_hint(void)
+{
+	VmDma dm;
+	Line l = { {0}, 0 };
+
+	for (unsigned i = 0; i < sizeof(dm); i++)
+		((char *)&dm)[i] = 0;
+	l_put(&l, vm_i18n(VM_I18N_HINT_DMACOPY));
+	if (vmGetDma(&dm) == VM_OK && dm.magic == VM_DMA_MAGIC && dm.size == sizeof(dm)) {
+		if (dm.state == VM_DMA_ON) {
+			l_put(&l, " ");
+			l_put(&l, vm_i18n(VM_I18N_DMA_ON));
+			l_put(&l, " ");
+			l_dec(&l, dm.copies);
+			l_put(&l, " (");
+			l_dec(&l, dm.kib / 1024);
+			l_put(&l, " MiB).");
+		} else if (dm.state == VM_DMA_UNAVAIL) {
+			l_put(&l, " ");
+			l_put(&l, vm_i18n(VM_I18N_DMA_UNAVAIL));
+		} else if (dm.state == VM_DMA_STOPPED && dm.stop_why == VM_DMA_WHY_MISMATCH) {
+			l_put(&l, " ");
+			l_put(&l, vm_i18n(VM_I18N_DMA_STOP_MISMATCH));
+		} else if (dm.state == VM_DMA_STOPPED) {
+			l_put(&l, " ");
+			l_put(&l, vm_i18n(VM_I18N_DMA_STOP_ERRORS));
+			l_put(&l, " ");
+			l_hex(&l, (uint32_t)dm.last_err);
+			l_put(&l, ".");
+		}
+	}
+	vm_u16 *o = next_buf();
+	vm_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
+	return o;
+}
+
 /* Row title / help ids per setting key. */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA,
@@ -297,6 +350,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_ROW_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_ROW_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_ROW_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_ROW_OVERLAY,
+	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
@@ -306,6 +360,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_HINT_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_HINT_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_HINT_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_HINT_OVERLAY,
+	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */
@@ -356,6 +411,8 @@ static const vm_u16 *vm_text(const char *id)
 			return device_hint(VM_DEV_SD2VITA, k_hint[k]);
 		if (k == VM_KEY_MEMCARD)
 			return device_hint(VM_DEV_MEMCARD, k_hint[k]);
+		if (k == VM_KEY_DMACOPY)
+			return dma_hint();
 		return fixed_text(k_hint[k]);
 	}
 	if (s_pfx(id, "vm_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])

@@ -80,7 +80,7 @@
 #include "fastcopy.h"
 #include "vm_memblock.h"
 #ifndef vm_copy_from_stage
-#define vm_copy_from_stage vm_fast_copy
+#define vm_copy_from_stage stage_copy_out   /* the DMA controller or the CPU (below) */
 #endif
 #ifndef vm_copy_to_stage
 #define vm_copy_to_stage memcpy
@@ -814,6 +814,90 @@ static inline void vm_dsb(void)
 #else
 	__sync_synchronize();
 #endif
+}
+
+/* ---- DMA copy (VM_KEY_DMACOPY, experimental) --------------------------------
+ *
+ * A read's data copied out of the staging buffer by the console's DMA
+ * controller instead of the CPU: the system's own ksceDmacMemcpy (SceDmacmgr),
+ * the call the system offers for this. It is expected to deal with the CPU
+ * caches itself, since games use it on their own cached memory through
+ * sceDmacMemcpy; that is not documented, so verify mode is how it is checked
+ * on a console (a difference stops it). Looked up at start: a system without
+ * it reads as before.
+ *
+ * Only for copies that cannot share a cache line with anything else: whole
+ * lines (VM_DMA_ALIGN) at both ends, from VM_DMA_MIN_BYTES up (below that,
+ * starting the controller costs more than the copy). Everything else, and
+ * any copy it refuses, is the CPU's (vm_fast_copy), so the caller's data is
+ * the same either way. It stops itself after VM_DMA_MAX_ERRORS refusals, or
+ * at the first verify-mode difference while it is on (dma_stop), until the
+ * setting is switched off and on (vm_stage_apply). Hot path: counters only;
+ * the worker logs. */
+#define LIB_DMAC_DRIVER  0xEB4E3738    /* SceDmacmgrForDriver                    */
+#define NID_DMAC_MEMCPY  0x00896B11    /* ksceDmacMemcpy(dst, src, size)        */
+
+static int (*g_dmac_memcpy)(void *dst, const void *src, SceSize size);
+static volatile int      g_dma_want;           /* the setting                   */
+static volatile int      g_dma_stop;           /* VM_DMA_WHY_*: stopped itself  */
+static volatile int      g_dma_logged;         /* the worker logged the stop    */
+static volatile uint32_t g_dma_copies, g_dma_kib, g_dma_us, g_dma_cpu, g_dma_errors;
+static volatile int32_t  g_dma_last_err;
+
+static int dma_state(void)
+{
+	if (!LD(g_dma_want))
+		return VM_DMA_OFF;
+	if (!g_dmac_memcpy)
+		return VM_DMA_UNAVAIL;
+	return LD(g_dma_stop) ? VM_DMA_STOPPED : VM_DMA_ON;
+}
+
+/* First reason wins; the worker logs it once. */
+static void dma_stop(int why)
+{
+	int none = VM_DMA_WHY_NONE;
+
+	__atomic_compare_exchange_n(&g_dma_stop, &none, why, 0, __ATOMIC_RELAXED,
+	                            __ATOMIC_RELAXED);
+}
+
+/* 1 if the DMA controller made the copy, 0 if the CPU has to. */
+static int dma_try(void *dst, const void *src, size_t n)
+{
+	uint32_t t0;
+	int r;
+
+	if (dma_state() != VM_DMA_ON)
+		return 0;
+	if (n < VM_DMA_MIN_BYTES ||
+	    (((uintptr_t)dst | (uintptr_t)src | (uintptr_t)n) & (VM_DMA_ALIGN - 1u))) {
+		ADD(g_dma_cpu, 1);
+		return 0;
+	}
+	t0 = ksceKernelGetSystemTimeLow();
+	r = g_dmac_memcpy(dst, src, (SceSize)n);
+	if (r < 0) {
+		ST(g_dma_last_err, r);
+		if (__atomic_add_fetch(&g_dma_errors, 1, __ATOMIC_RELAXED) >= VM_DMA_MAX_ERRORS)
+			dma_stop(VM_DMA_WHY_ERRORS);
+		return 0;
+	}
+	ADD(g_dma_us, ksceKernelGetSystemTimeLow() - t0);
+	ADD(g_dma_copies, 1);
+	ADD(g_dma_kib, (uint32_t)(n >> 10));
+	return 1;
+}
+
+/* Out of the staging buffer into the caller's: the DMA controller when it
+ * can, else the CPU. A refused DMA copy may have written part of `dst`: the
+ * CPU copy then writes all of it. */
+static void __attribute__((unused)) stage_copy_out(void *dst, const void *src, size_t n)
+{
+	if (dma_try(dst, src, n))
+		__sync_synchronize();   /* the controller's data before what follows */
+	else
+		vm_fast_copy(dst, src, n);
 }
 
 /* Copy the parts of the current job into dst as each one arrives (sem_done),
@@ -2197,6 +2281,8 @@ static int ra_verify(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t 
 			if (memcmp(p, shadow, (size_t)k * 512) != 0) {
 				ADD(d->st.mismatches, 1);
 				ST(d->fallback, 1);
+				if (dma_state() == VM_DMA_ON)   /* it may be the DMA copy's */
+					dma_stop(VM_DMA_WHY_MISMATCH);
 				bad = 1;
 				memcpy(p, shadow, (size_t)k * 512);
 				if (clean)
@@ -2724,6 +2810,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 			if (memcmp(p, shadow, bytes) != 0) {
 				ADD(d->st.mismatches, 1);
 				ST(d->fallback, 1);
+				if (!write && dma_state() == VM_DMA_ON)   /* it may be the DMA copy's */
+					dma_stop(VM_DMA_WHY_MISMATCH);
 				problem = 1;
 				if (write) {
 					/* rewrite this chunk the stock way, from the caller's data */
@@ -2871,6 +2959,10 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceAppMgr", LIB_APPMGR_DRIVER,
 		                           NID_EXCLUSIVE_RUNNING, &f) >= 0 && f)
 			g_exclusive_fn = (int (*)(const char *))f;
+		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceKernelDmacMgr", LIB_DMAC_DRIVER,
+		                           NID_DMAC_MEMCPY, &f) >= 0 && f)
+			g_dmac_memcpy = (int (*)(void *, const void *, SceSize))f;
 
 	}
 	/* Buffers for the devices already switched on, now at boot while
@@ -3056,6 +3148,14 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_min_sectors, s->small ? 1u : (uint32_t)MIN_SECTORS);
 	ST(g_stats, s->stats ? 1 : 0);
 	ST(g_count_cfg, (s->stats || s->hud != VM_HUD_OFF) ? 1 : 0);
+	/* DMA copy: switched on (again) is a fresh start */
+	if (s->dmacopy && !LD(g_dma_want)) {
+		ST(g_dma_errors, 0);
+		ST(g_dma_last_err, 0);
+		ST(g_dma_logged, 0);
+		ST(g_dma_stop, VM_DMA_WHY_NONE);
+	}
+	ST(g_dma_want, s->dmacopy ? 1 : 0);
 	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
@@ -3236,6 +3336,21 @@ void vm_stage_worker_tick(void)
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
 		         "reads take the standard path");
 	}
+	/* DMA copy: why it is not in use, once (again after it is switched off and on) */
+	if (LD(g_dma_want) && LD(g_live) && !LD(g_dma_logged)) {
+		const int st = dma_state();
+
+		if (st == VM_DMA_UNAVAIL) {
+			ST(g_dma_logged, 1);
+			VM_KLOGW("stage: DMA copy is on but ksceDmacMemcpy was not found - the CPU copies");
+		} else if (st == VM_DMA_STOPPED) {
+			ST(g_dma_logged, 1);
+			VM_KLOGW("stage: DMA copy stopped (%s) after %u copies, %u refused (last 0x%08x) - "
+			         "the CPU copies", LD(g_dma_stop) == VM_DMA_WHY_MISMATCH ?
+			         "a verify difference" : "refused too often", (unsigned)LD(g_dma_copies),
+			         (unsigned)LD(g_dma_errors), (unsigned)LD(g_dma_last_err));
+		}
+	}
 	/* Once a minute, if anything changed: how much went to non-cacheable
 	 * buffers the standard way, and how much GPU-safe reads cleaned. */
 	if (now_us - last_log_us >= 60u * 1000u * 1000u &&
@@ -3249,6 +3364,11 @@ void vm_stage_worker_tick(void)
 		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB, "
 		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
 		         (unsigned)(last_max / 2));
+		if (LD(g_dma_want))
+			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms), left to the CPU %u, refused %u",
+			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
+			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_cpu),
+			         (unsigned)LD(g_dma_errors));
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
 		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),
 		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
@@ -3543,6 +3663,21 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 		                !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) ? VM_ST_NO_BUFFER :
 		                LD(d->fallback) ? VM_ST_FALLBACK : VM_ST_ACTIVE;
 	}
+}
+
+void vm_stage_dma(VmDma *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->size = sizeof(*out);
+	out->magic = VM_DMA_MAGIC;
+	out->state = dma_state();
+	out->stop_why = LD(g_dma_stop);
+	out->copies = LD(g_dma_copies);
+	out->kib = LD(g_dma_kib);
+	out->us = LD(g_dma_us);
+	out->cpu_copies = LD(g_dma_cpu);
+	out->errors = LD(g_dma_errors);
+	out->last_err = LD(g_dma_last_err);
 }
 
 void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])

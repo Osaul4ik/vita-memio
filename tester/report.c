@@ -122,6 +122,29 @@ static const char *pipe_short(int v)
 	     : "unknown";
 }
 
+static const char *dma_state_text(int st, int why)
+{
+	return st == VM_DMA_ON ? "on" : st == VM_DMA_OFF ? "off"
+	     : st == VM_DMA_UNAVAIL ? "on, but not available on this system"
+	     : why == VM_DMA_WHY_MISMATCH ? "stopped itself (a verify difference)"
+	     : st == VM_DMA_STOPPED ? "stopped itself (refused copies)" : "unknown";
+}
+
+/* DMA copy in effect at the start, or how it ended if it stopped during the test. */
+static const char *dma_text(const BenchResult *r)
+{
+	for (int i = r->nruns - 1; i >= 0; i--)
+		if (r->runs[i].complete && r->runs[i].after.dma_ok &&
+		    r->runs[i].after.dma_state == VM_DMA_STOPPED)
+			return dma_state_text(VM_DMA_STOPPED, r->runs[i].after.dma_stop_why);
+	return dma_state_text(r->plugin0.dma_state, r->plugin0.dma_stop_why);
+}
+
+static int dma_shown(const BenchResult *r)
+{
+	return r->plugin0.dma_ok && r->plugin0.dma_state != VM_DMA_OFF;
+}
+
 static const char *small_text(const BenchResult *r)
 {
 	return onoff(r->plugin0.small);
@@ -214,6 +237,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
 		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on"
 		    : res->plugin0.readahead == VM_RA_OFF ? "off" : "unknown");
+		if (dma_shown(res))
+			put(&o, "plugin DMA copy: %s\n", dma_text(res));
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
@@ -416,6 +441,15 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 			     : res->plugin0.offload == VM_OFFLOAD_FULL ? "C + NC All" : "cached only");
 		if (res->plugin0.readahead == VM_RA_ON)
 			line(&s, "read ahead: on");
+		if (dma_shown(res)) {
+			BenchDma dm;
+
+			bench_dma(res, &dm);
+			line(&s, "DMA copy: %s", dma_text(res));
+			line(&s, "DMA copies %u (%u MiB), left to the CPU %u, refused %u",
+			     (unsigned)dm.copies, (unsigned)(dm.kib / 1024), (unsigned)dm.cpu,
+			     (unsigned)dm.errors);
+		}
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}
 	{

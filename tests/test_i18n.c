@@ -157,12 +157,32 @@ static void test_device_hint_fits(void)
 		}
 }
 
+/* DMA copy's help shows "<help> <what it is doing now>[ numbers]" in one
+ * buffer: the longest numbers it can add, 10 + 7 digits or a hex code. */
+static void test_dma_hint_fits(void)
+{
+	static const int now[] = { VM_I18N_DMA_ON, VM_I18N_DMA_UNAVAIL, VM_I18N_DMA_STOP_ERRORS,
+	                           VM_I18N_DMA_STOP_MISMATCH };
+	int a, b;
+
+	valid_utf8(vm_i18n(VM_I18N_HINT_DMACOPY), &a);
+	for (unsigned i = 0; i < sizeof(now) / sizeof(now[0]); i++) {
+		valid_utf8(vm_i18n(now[i]), &b);
+		if (a + 1 + b + (int)sizeof(" 4294967295 (4194303 MiB).") >= PAGE_UNITS) {
+			printf("  FAIL DMA help + status %u: %d units, page holds %d\n", i,
+			       a + 1 + b + (int)sizeof(" 4294967295 (4194303 MiB)."), PAGE_UNITS - 1);
+			vm_failures++;
+		}
+	}
+}
+
 int main(void)
 {
 	RUN(test_conversion);
 	RUN(test_conversion_limits);
 	RUN(test_table);
 	RUN(test_device_hint_fits);
+	RUN(test_dma_hint_fits);
 
 	printf(vm_failures ? "test_i18n: %d FAILED\n" : "test_i18n: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

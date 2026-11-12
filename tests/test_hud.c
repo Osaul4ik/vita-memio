@@ -63,6 +63,21 @@ static const char *const k_lines[] = {
 	HUD_C_DIM "  3/0 MiB " HUD_C_BAD "STANDARD " HUD_C_DIM "ERR " HUD_C_BAD "1",
 };
 
+/* The font keeps the panel the same size on the screen: the one nearest
+ * 24 px x width/960; the cache is the size of the panel in that font. */
+static void test_font_by_width(void)
+{
+	HudText t;
+
+	CHECK(hud_font_for(960).h == TER24_H && hud_font_for(1280).h == TER24_H);
+	CHECK(hud_font_for(800).h == TER18_H && hud_font_for(720).h == TER18_H);
+	CHECK(hud_font_for(640).h == TER14_H && hud_font_for(480).h == TER14_H);
+	set_text(&t, k_lines, 4);
+	CHECK(hud_cache_bytes(&t, 640) < hud_cache_bytes(&t, 720));
+	CHECK(hud_cache_bytes(&t, 720) < hud_cache_bytes(&t, 960));
+	CHECK(hud_cache_bytes(&t, 800) == hud_cache_bytes(&t, 720));
+}
+
 static void test_panel_sizes(void)
 {
 	static const int sizes[][2] = { { 960, 544 }, { 720, 408 }, { 640, 368 } };
@@ -156,7 +171,7 @@ static void test_panel_cache(void)
 
 	set_text(&t, k_lines, 4);
 	t.gen = 1;
-	c.bytes = hud_cache_bytes(&t);
+	c.bytes = hud_cache_bytes(&t, 960);
 	c.px = malloc((size_t)c.bytes);
 	for (int i = 0; i < 960 * 544; i++) a[i] = b[i] = BG;
 	hud_draw_panel(a, 960, 960, 544, &t, row);
@@ -243,6 +258,7 @@ static void test_overlay_left(void)
 int main(void)
 {
 	RUN(test_overlay_left);
+	RUN(test_font_by_width);
 	RUN(test_panel_sizes);
 	RUN(test_panel_limits);
 	RUN(test_panel_cache);

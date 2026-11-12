@@ -20,7 +20,6 @@
 #include <psp2kern/kernel/sysmem.h>    /* the panel cache's memory block       */
 #include <psp2kern/kernel/threadmgr.h> /* ksceKernelDelayThread                */
 #include <psp2kern/display.h>
-#include <psp2kern/appmgr.h>      /* is a game running (index 1 layer)    */
 #include <taihen.h>
 
 #include "hud.h"
@@ -28,6 +27,9 @@
 #include "klog.h"
 #include "vm_hook.h"
 #include "../include/vitamemio.h"
+
+int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
+                           uint32_t funcnid, uintptr_t *func);   /* taiHEN */
 
 static SceUID         g_hook = -1;
 static volatile tai_hook_ref_t g_ref;
@@ -73,6 +75,12 @@ static inline void hud_dacr_restore(uint32_t prev)
 /* Which (head, index) pairs the hook has seen, a bit each (head 0..1 x
  * index 0..1, then any other), for the log: vm_hud_planes. */
 static volatile uint32_t g_planes_seen;
+/* The width of the frames drawn on, for the cache's size (its font); until a
+ * frame is seen, the largest font's. */
+static volatile int g_fb_w = 960;
+/* ksceAppMgrIsExclusiveProcessRunning, looked up at vm_hud_init (not every
+ * SDK's stubs have it); NULL: not there - index 1 is then never drawn on. */
+static int (*g_excl_running)(const char *title_id);
 
 uint32_t vm_hud_planes(void)
 {
@@ -94,7 +102,7 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		__atomic_fetch_or(&g_planes_seen, bit, __ATOMIC_RELAXED);
 	if (!head || !pParam || !pParam->base)
 		return;
-	if (index && ksceAppMgrIsExclusiveProcessRunning(NULL) > 0)
+	if (index && (!g_excl_running || g_excl_running(NULL) > 0))
 		return;
 	t = &g_text[g_front];
 	ov = &g_ov[g_ov_front];
@@ -108,6 +116,8 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		return;
 	if (pParam->pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8)
 		return;
+	if (g_fb_w != w)
+		g_fb_w = w;
 
 	uint32_t prev_dacr = hud_dacr_open();
 	if (t->n <= 0) {
@@ -149,6 +159,17 @@ int vm_hud_init(void)
 	 * unchanged in 3.65 and 3.68:
 	 *   SceDisplayForDriver library    = 0x9FED47AC
 	 *   ksceDisplaySetFrameBufInternal = 0x16466675 */
+	{
+		uintptr_t f = 0;
+
+		/* SceAppMgrForDriver 0xDCE180F8, ksceAppMgrIsExclusiveProcessRunning
+		 * 0xA888C2DC (vita-headers db/360/SceAppMgr.yml) */
+		g_excl_running = module_get_export_func(KERNEL_PID, "SceAppMgr", 0xDCE180F8, 0xA888C2DC,
+		                                        &f) >= 0 && f
+		                 ? (int (*)(const char *))f : NULL;
+		if (!g_excl_running)
+			VM_KLOGW("hud: no ksceAppMgrIsExclusiveProcessRunning: the system's layer is left alone");
+	}
 	g_ref = 0;                             /* not the last time's: see vm_hook_ref */
 	g_hook = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_ref,
 	                                        "SceDisplay",
@@ -205,7 +226,7 @@ static void cache_fit(const HudText *t)
 		failed_bytes = 0;
 		return;
 	}
-	want = hud_cache_bytes(t);
+	want = hud_cache_bytes(t, g_fb_w);
 	if (want <= g_cache.bytes || want == failed_bytes)
 		return;
 	size = (want + 0xFFF) & ~0xFFF;

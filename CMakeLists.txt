@@ -117,7 +117,6 @@ target_link_libraries(vitamemio_hud
   SceSysmemForDriver_stub       # the panel cache, user<->kernel copies
   SceSysclibForDriver_stub      # memcpy/memset/strncmp/snprintf for kernel
   SceThreadmgrForDriver_stub    # system time, delays
-  SceAppMgrForDriver_stub       # a game running (the system's layer over it)
 )
 target_link_options(vitamemio_hud PRIVATE -nostartfiles -Wl,-Tdata=0x81100000)
 # vita_create_self appends its "-e <config>" to VITA_ELF_CREATE_FLAGS (see the

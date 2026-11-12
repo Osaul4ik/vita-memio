@@ -72,14 +72,22 @@ static inline uint16_t hud_glyph_row(const HudFont *f, unsigned char c, int gy)
 	return f->glyphs8 ? (uint16_t)(f->glyphs8[i] << 8) : f->glyphs[i];
 }
 
+/* The font for a framebuffer `fb_w` wide: the one nearest the size the 24 px
+ * font has on a 960 one, as the display scales the frame to the screen - so
+ * the panel looks the same size in every game (an 800 wide frame, shown
+ * 1.2 times larger, takes the 18 px font, not the 24). A tie takes the
+ * smaller. */
 static inline HudFont hud_font_for(int fb_w)
 {
 	HudFont f;
+	const int want = TER24_H * fb_w;              /* x 960: the size wanted */
+	const int d14 = TER14_H * 960 - want, d18 = TER18_H * 960 - want, d24 = TER24_H * 960 - want;
+	const int a14 = d14 < 0 ? -d14 : d14, a18 = d18 < 0 ? -d18 : d18, a24 = d24 < 0 ? -d24 : d24;
 
 	f.glyphs8 = 0;
-	if (fb_w <= 640) {
+	if (a14 <= a18 && a14 <= a24) {
 		f.glyphs = 0; f.glyphs8 = &ter14[0][0]; f.w = TER14_W; f.h = TER14_H;
-	} else if (fb_w <= 720) {
+	} else if (a18 <= a24) {
 		f.glyphs = &ter18[0][0]; f.w = TER18_W; f.h = TER18_H;
 	} else {
 		f.glyphs = &ter24[0][0]; f.w = TER24_W; f.h = TER24_H;
@@ -127,11 +135,13 @@ static inline int hud_panel_geom(int w, int h, const HudText *t, HudGeom *g)
 	return t->n > 0 && g->box_w <= HUD_ROW_MAX && g->x0 >= 0 && g->y0 + g->box_h <= h;
 }
 
-/* Bytes a cached panel needs at the largest font (the most any framebuffer can
- * ask for): four bits a pixel, the panel has seven colours. */
-static inline int hud_cache_bytes(const HudText *t)
+/* Bytes a cached panel needs on a framebuffer `fb_w` wide (its font): four
+ * bits a pixel, the panel has seven colours. */
+static inline int hud_cache_bytes(const HudText *t, int fb_w)
 {
-	return ((t->maxlen * TER24_W + 2 * TER24_W + 1) / 2) * (t->n * TER24_H + 2 * (TER24_H / 3));
+	const HudFont f = hud_font_for(fb_w);
+
+	return ((t->maxlen * f.w + 2 * f.w + 1) / 2) * (t->n * f.h + 2 * (f.h / 3));
 }
 
 /* How far row `r` of the box is cut in by the rounded corners. */

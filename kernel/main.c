@@ -406,10 +406,10 @@ static void start_worker(void)
 	vm_stage_on_problem(worker_wake);     /* errors wake it (no-op without g_wake) */
 	/* On the system core, like the overlapped-read helper, so no thread of
 	 * the plugin runs on a game's cores; any core if that is refused. */
-	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0,
+	g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, VM_STACK_WORKER, 0,
 	                                  VM_CPU_SYSTEM, NULL);
 	if (g_worker < 0)
-		g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, 0x2000, 0, 0,
+		g_worker = ksceKernelCreateThread("SceVitaMemioWorker", worker, 0x80, VM_STACK_WORKER, 0, 0,
 		                                  NULL);
 	if (g_worker >= 0)
 		ksceKernelStartThread(g_worker, 0, NULL);

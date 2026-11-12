@@ -430,8 +430,8 @@ static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 mi
  * on the system core), and whether the caller was a system thread (kernel
  * process) or a game (a user process). */
 static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
-/* The least stack each thread has had free (bytes), for the log: whether
- * their 8 KiB could be less. NULL: not found. */
+/* The least stack each thread has had free (bytes), for the log: how much
+ * of VM_STACK_* is left. NULL: not found. */
 static int (*g_stack_free_fn)(SceUID thid);
 /* Graphics data (non-cacheable) from read ahead, copied by the copier on the
  * system core / by the game's thread: they count as NC, not as copies (C). */
@@ -1195,10 +1195,10 @@ static int pipe_setup(Dev *d)
 	/* On the system core (core 3), which games do not run on: the helper then
 	 * starts the tail's read at once even when the game's cores are busy. If
 	 * that is refused, any core. */
-	d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0,
+	d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, VM_STACK_DEV, 0,
 	                               PIPE_CPU_SYSTEM, NULL);
 	if (d->th < 0)
-		d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, 0x2000, 0, 0,
+		d->th = ksceKernelCreateThread("SceVitaMemioPipe", pipe_helper, 0x40, VM_STACK_DEV, 0, 0,
 		                               NULL);
 	if (d->th < 0) {
 		r = d->th;
@@ -1215,10 +1215,10 @@ static int pipe_setup(Dev *d)
 	}
 	/* The copier: also on the system core, one step below the helper, so
 	 * the helper starts the next read at once even while a copy runs. */
-	d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, 0x2000, 0,
+	d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, VM_STACK_DEV, 0,
 	                                PIPE_CPU_SYSTEM, NULL);
 	if (d->th2 < 0)
-		d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, 0x2000, 0, 0,
+		d->th2 = ksceKernelCreateThread("SceVitaMemioCopy", pipe_copier, 0x48, VM_STACK_DEV, 0, 0,
 		                                NULL);
 	if (d->th2 < 0) {
 		r = d->th2;
@@ -2508,10 +2508,10 @@ static int ra_setup(Dev *d)
 		d->t_buf = NULL;
 	}
 	/* on the system core, as the helper: the card goes on at once */
-	d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, 0x2000, 0,
+	d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, VM_STACK_DEV, 0,
 	                                  PIPE_CPU_SYSTEM, NULL);
 	if (d->ra_th < 0)
-		d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, 0x2000, 0, 0,
+		d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, VM_STACK_DEV, 0, 0,
 		                                  NULL);
 	if (d->ra_th < 0) {
 		r = d->ra_th;
@@ -3716,7 +3716,7 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
 		VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
 		if (g_stack_free_fn) {
-			/* the least each has had free, of its 8 KiB (-1: no such thread) */
+			/* the least each has had free, of its stack (-1: no such thread) */
 			int fr[VM_DEV_COUNT][3];
 
 			for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -3725,8 +3725,9 @@ void vm_stage_worker_tick(void)
 				for (int k = 0; k < 3; k++)
 					fr[i][k] = th[k] >= 0 ? g_stack_free_fn(th[k]) : -1;
 			}
-			VM_KLOGI("stage: stack free (bytes of 8192): worker %d; SD2Vita helper %d copier %d "
-			         "ahead %d; memory card %d %d %d", g_stack_free_fn(ksceKernelGetThreadId()),
+			VM_KLOGI("stage: stack free (bytes of %u / %u): worker %d; SD2Vita helper %d copier %d "
+			         "ahead %d; memory card %d %d %d", VM_STACK_WORKER, VM_STACK_DEV,
+			         g_stack_free_fn(ksceKernelGetThreadId()),
 			         fr[VM_DEV_SD2VITA][0], fr[VM_DEV_SD2VITA][1], fr[VM_DEV_SD2VITA][2],
 			         fr[VM_DEV_MEMCARD][0], fr[VM_DEV_MEMCARD][1], fr[VM_DEV_MEMCARD][2]);
 		}

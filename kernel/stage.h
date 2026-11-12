@@ -115,4 +115,11 @@ void vm_stage_count_cores(int on);
  * say (either by keys): every transfer's bytes are counted while it does. */
 void vm_stage_count_hud(int on);
 
+/* Thread stacks. Measured on a console (the log's stack line: the least
+ * each had free over a session with overlapped reads, read ahead, copy on
+ * the system core and a buffer mapped from its 2nd page): worker 2.4 KB used,
+ * the per-storage threads 1.3-1.6 KB. Half again or more is left free. */
+#define VM_STACK_WORKER  0x1800
+#define VM_STACK_DEV     0x1000
+
 #endif /* VITAMEMIO_STAGE_H */

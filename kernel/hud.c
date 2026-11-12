@@ -196,16 +196,25 @@ int vm_hud_init(void)
 
 /* Put `uid`/`px`/`words` in as the cache (uid -1: no cache) and free the old
  * one, with the drawing threads kept out meanwhile. Worker thread only. */
+/* The drawing threads kept out (a frame being drawn: a few us); 0 if one
+ * is held up for longer than 100 ms. Worker thread only. */
+static int busy_take(void)
+{
+	for (int i = 0; i < 1000; i++) {
+		if (!__sync_lock_test_and_set(&g_row_busy, 1))
+			return 1;
+		ksceKernelDelayThread(100);
+	}
+	return 0;
+}
+
 static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 {
 	SceUID old;
-	int got = 0;
 
-	/* a frame being drawn: a few us. If its thread is held up longer, the
-	 * old block stays (its memory too) rather than being freed under it. */
-	for (int i = 0; i < 1000 && !(got = !__sync_lock_test_and_set(&g_row_busy, 1)); i++)
-		ksceKernelDelayThread(100);
-	if (!got) {
+	/* if a drawing thread is held up, the old block stays (its memory too)
+	 * rather than being freed under it */
+	if (!busy_take()) {
 		if (uid >= 0)
 			ksceKernelFreeMemBlock(uid);   /* the new one is not needed then */
 		return;
@@ -254,6 +263,31 @@ static void cache_fit(const HudText *t)
 	cache_swap(uid, base, size);
 }
 
+/* Compose `t` into the cache. Not in place under a frame being drawn: the
+ * cache is marked empty first (the frames meanwhile draw the panel straight
+ * from the text), composed, and only then marked as holding `t`. Composed in
+ * place while a frame copied it, the panel blinked when its text changed. */
+static void cache_compose(const HudText *t)
+{
+	HudCache c;
+	int ok;
+
+	if (!g_cache.px || !busy_take())
+		return;
+	g_cache.w = 0;                     /* empty while composed */
+	c = g_cache;
+	__sync_lock_release(&g_row_busy);
+	ok = hud_cache_compose(t, g_fb_w, g_fb_h, &c);
+	if (!ok || !busy_take())
+		return;
+	if (g_cache.px == c.px) {          /* still the same block */
+		g_cache.gen = c.gen;
+		g_cache.w = c.w;
+		g_cache.h = c.h;
+	}
+	__sync_lock_release(&g_row_busy);
+}
+
 void vm_hud_fini(void)
 {
 	g_text[0].n = g_text[1].n = 0;
@@ -287,7 +321,7 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 		if (same) {
 			if (n > 0 && (g_cache.gen != cur->gen || g_cache.w != g_fb_w || g_cache.h != g_fb_h)) {
 				cache_fit(cur);
-				hud_cache_compose(cur, g_fb_w, g_fb_h, &g_cache);
+				cache_compose(cur);
 			}
 			return;
 		}
@@ -314,7 +348,7 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 	cache_fit(t);
 	/* composed here, on the worker: the frame hook only expands it */
 	if (n > 0)
-		hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
+		cache_compose(t);
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
 	if (n <= 0)
@@ -376,7 +410,7 @@ void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n)
 			if (g_text[g_front].n <= 0 &&
 			    (g_cache.gen != cur->gen || g_cache.w != g_fb_w || g_cache.h != g_fb_h)) {
 				cache_fit(cur);
-				hud_cache_compose(cur, g_fb_w, g_fb_h, &g_cache);
+				cache_compose(cur);
 			}
 			return;
 		}
@@ -385,7 +419,7 @@ void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n)
 	if (g_text[g_front].n <= 0) {      /* the HUD hidden: the cache is the overlay's */
 		cache_fit(t);
 		if (n > 0)
-			hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
+			cache_compose(t);
 	}
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_ov_front = back;

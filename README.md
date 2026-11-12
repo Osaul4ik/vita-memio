@@ -26,7 +26,7 @@ Get `vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx` and, if y
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself the first time you switch on the HUD or the overlay.
+   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself.
 3. Restart the console.
 4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything starts switched off.
 
@@ -60,7 +60,6 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for. See below | On |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
-| Storage HUD | Live speed in the top right corner: **Compact** or **Extended**. With *Overlay* on, it shows through the overlay's keys; with *Overlay* off, always | Extended |
 | Overlay (SELECT + arrows) | A small menu over any game, see below | On |
 
 **Developer settings** (inside *Advanced*)
@@ -122,7 +121,7 @@ It judges from how the game reads and cannot see the frame rate. The result depe
 
 ## HUD
 
-**Extended** shows, for the storage the game reads from:
+With *Overlay* on, the HUD shows through the overlay's keys; with *Overlay* off, it is always on screen. It shows, for the storage the game reads from:
 
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
@@ -181,13 +180,12 @@ This error means the system is out of kernel memory. It can also appear as a cra
 1. If another app is running, close it first.
 2. Leave the plugin on for only one storage. Each storage you switch on takes 256 KiB.
 3. Switch off *Read ahead*, *Overlapped reads* and *Copy on the system core*.
-4. Switch off *Storage HUD* and *Overlay*, then restart.
-5. Remove other kernel plugins from your taiHEN config.
+4. Remove other kernel plugins from your taiHEN config.
 
 ## Good to know
 
 - Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay (both on by default) take about 40 KiB more; switch both off and restart to free it.
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 - The Settings page and the HUD are in English.

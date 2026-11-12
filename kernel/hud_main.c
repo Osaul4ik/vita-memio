@@ -66,7 +66,6 @@ void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
-static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "", "MC  " };   /* compact */
 /* The storages the plugin speeds up, in HUD order (never the internal one). */
 static const int k_hud_order[] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD };
 #define HUD_DEVS ((int)(sizeof(k_hud_order) / sizeof(k_hud_order[0])))
@@ -82,7 +81,8 @@ static void mbps(char *o, int n, uint64_t bytes, uint32_t ms)
 
 /* `s` cut to `max` characters and padded to `width`, on the left (right = 1)
  * or the right. The system snprintf is only relied on for plain %s/%u. */
-static void pad(char *o, int cap, const char *s, int width, int max, int right)
+static void __attribute__((noinline)) pad(char *o, int cap, const char *s, int width, int max,
+                                           int right)
 {
 	int len = 0, n = 0;
 
@@ -272,11 +272,10 @@ static void hud_feed(const VmDevState *now)
 			continue;
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
 		const char *c = state_color(&now[i], dev_slow);
-		const char *name = s.hud == VM_HUD_COMPACT ? k_dev_short[i]
-		                 : i == VM_DEV_MEMCARD ? "MEMORY CARD" : "SD2VITA";
+		const char *name = i == VM_DEV_MEMCARD ? "MEMORY CARD" : "SD2VITA";
 		const char *flag = now[i].status == VM_ST_FALLBACK ? "ERROR"
 		                 : dev_slow ? "SLOW" : "";
-		pad(np, sizeof(np), name, s.hud == VM_HUD_COMPACT ? 4 : 8, 14, 0);
+		pad(np, sizeof(np), name, 8, 14, 0);
 		pad(rp, sizeof(rp), r, 4, 6, 1);
 		pad(wp, sizeof(wp), w, 4, 6, 1);
 		snprintf(L[n++], VM_HUD_LINE_MAX,

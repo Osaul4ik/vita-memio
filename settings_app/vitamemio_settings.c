@@ -19,7 +19,7 @@
  *
  * The page: the driver's status (a button: its title says whether the kernel
  * module runs, its help and its dialog say more), the two storage switches,
- * then an "Advanced" sub-page with verify, logging, the HUD, its style and the
+ * then an "Advanced" sub-page with verify, logging, the overlay and the
  * safe-mode reset.
  *
  * The kernel library is a weak import, so the page also appears when the
@@ -57,7 +57,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
  * (NULL: a reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", NULL, "verify", "hud", NULL, "log", "memcard", "small", "stats", "gpusafe",
+	"sd2vita", NULL, "verify", NULL, NULL, "log", "memcard", "small", "stats", "gpusafe",
 	"pipeline", "offload", "readahead", "overlay", "dmacopy",
 };
 
@@ -100,9 +100,6 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") \
 		"</list>" \
 		ROW_TOGGLE("small") \
-		ROW_LIST("hud") \
-			ITEM("vm_i_hud1", "1") ITEM("vm_i_hud2", "2") \
-		"</list>" \
 		ROW_TOGGLE("overlay") \
 		"<setting_list id=\"vm_developer\" title=\"vm_t_developer\" icon=\"tex_spanner\">" \
 			ROW_TOGGLE("verify") \
@@ -346,7 +343,7 @@ static const vm_u16 *dma_hint(void)
 /* Row title / help ids per setting key. */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA,
-	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
+	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY,
 	[VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
@@ -356,7 +353,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
-	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
+	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY,
 	[VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
@@ -417,8 +414,6 @@ static const vm_u16 *vm_text(const char *id)
 			return dma_hint();
 		return fixed_text(k_hint[k]);
 	}
-	if (s_pfx(id, "vm_i_hud") && id[8] >= '1' && id[8] <= '2' && !id[9])
-		return fixed_text(VM_I18N_ITEM_HUD_COMPACT + (id[8] - '1'));
 	if (s_pfx(id, "vm_i_gs") && id[7] >= '0' && id[7] <= '2' && !id[8])
 		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_OFF_OFF
 		                  : id[7] == '1' ? VM_I18N_ITEM_GS_ALL : VM_I18N_ITEM_GS_NODMA);

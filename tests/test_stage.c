@@ -274,7 +274,7 @@ static void test_statistics_switch(void)
 	CHECK(g_dev[M].all_rd == 0 && g_dev[M].all_wr == 0);
 	CHECK(g_dev[M].st.reads == 1 && g_dev[M].st.writes == 1);
 
-	s.hud = VM_HUD_COMPACT;                   /* the HUD needs its byte counts */
+	s.hud = VM_HUD_EXTENDED;                  /* the HUD needs its byte counts */
 	vm_stage_apply(&s);
 	CHECK(rd(u, 0, 100) == 0);
 	CHECK(g_dev[M].all_rd == 100 * 512 && g_dev[M].tm.rd_sectors == 0 && fake_time_calls == 0);

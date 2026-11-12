@@ -155,7 +155,8 @@ static void test_invalid_set_is_rejected(void)
 	apply_calls = 0;
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_HUD, -1) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_HUD, VM_HUD_OFF) == VM_ERR_ARG);   /* no Off */
+	CHECK(vm_settings_set(VM_KEY_HUD, VM_HUD_OFF) == VM_ERR_ARG);   /* only Extended */
+	CHECK(vm_settings_set(VM_KEY_HUD, VM_HUD_COMPACT) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_HUD_STYLE, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(99, 0) == VM_ERR_ARG);
 	CHECK(vm_settings_set(-1, 0) == VM_ERR_ARG);
@@ -465,7 +466,7 @@ static void test_save_gives_up_after_retries(void)
 	for (int i = 0; i < 10; i++)
 		vm_settings_flush();
 	CHECK(g_dirty == 0);                      /* stopped retrying (and logged) */
-	vm_settings_set(VM_KEY_HUD, 1);           /* the next change tries again */
+	vm_settings_set(VM_KEY_MEMCARD, 1);       /* the next change tries again */
 	CHECK(g_dirty == 1);
 }
 

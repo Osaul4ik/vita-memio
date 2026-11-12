@@ -155,6 +155,7 @@ static void test_invalid_set_is_rejected(void)
 	apply_calls = 0;
 	CHECK(vm_settings_set(VM_KEY_SD2VITA, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_HUD, -1) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_HUD, VM_HUD_OFF) == VM_ERR_ARG);   /* no Off */
 	CHECK(vm_settings_set(VM_KEY_HUD_STYLE, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(99, 0) == VM_ERR_ARG);
 	CHECK(vm_settings_set(-1, 0) == VM_ERR_ARG);
@@ -210,6 +211,22 @@ static void test_older_file_with_fewer_keys(void)
 	CHECK(s.sd2vita == 1 && s.hud == 2);
 	CHECK(s.hud_style == VM_DEF_HUD_STYLE);   /* 3: out of range, the default */
 	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
+}
+
+/* A file from when the HUD had Off: it gets the default (Extended). */
+static void test_stored_hud_off_takes_default(void)
+{
+	uint8_t buf[128];
+	int32_t v[6] = { 1, 0, 0, VM_HUD_OFF, 0, 0 };
+	VmSettings s;
+	size_t n;
+
+	clean();
+	n = make_file(buf, 6, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.hud == VM_DEF_HUD && VM_DEF_HUD == VM_HUD_EXTENDED);
 }
 
 /* GPU-safe reads default to Non-DMA and overlapped reads to auto: a file from
@@ -461,6 +478,7 @@ int main(void)
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
+	RUN(test_stored_hud_off_takes_default);
 	RUN(test_gpusafe_default_and_stored_value);
 	RUN(test_pending);
 	RUN(test_file_with_more_keys);

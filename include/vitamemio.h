@@ -215,8 +215,8 @@ static inline int vm_setting_valid(int key, int v)
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
 		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_ALWAYS && v <= VM_OFFLOAD_FULL);
-	case VM_KEY_HUD:
-		return v >= VM_HUD_OFF && v <= VM_HUD_EXTENDED;
+	case VM_KEY_HUD:                 /* no Off: the overlay's keys hide it */
+		return v >= VM_HUD_COMPACT && v <= VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:
 		return v == VM_HUD_STYLE_CLASSIC || v == VM_HUD_STYLE_PSVSHELL;
 	default:

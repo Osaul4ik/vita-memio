@@ -60,7 +60,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for. See below | On |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
-| Storage HUD | Live speed in the top right corner: **Compact** or **Extended**. With *Overlay* on, it shows through the overlay's keys | Extended |
+| Storage HUD | Live speed in the top right corner: **Compact** or **Extended**. With *Overlay* on, it shows through the overlay's keys; with *Overlay* off, always | Extended |
 | Overlay (SELECT + arrows) | A small menu over any game, see below | On |
 
 **Developer settings** (inside *Advanced*)

@@ -26,7 +26,7 @@ enum vm_i18n_id {
 	VM_I18N_TITLE_ADVANCED,     /* the "Advanced" sub-page                        */
 	VM_I18N_MSG_SAFE_OK,        /* after the reset button                         */
 	VM_I18N_MSG_SAFE_ERR,
-	VM_I18N_ITEM_HUD_OFF,       /* HUD list items, in VM_HUD_* order              */
+	/* HUD list items, in VM_HUD_* order from Compact (there is no Off) */
 	VM_I18N_ITEM_HUD_COMPACT,
 	VM_I18N_ITEM_HUD_EXTENDED,
 	VM_I18N_ST_FALLBACK,        /* added to a storage's help when it isn't working */

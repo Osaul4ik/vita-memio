@@ -79,7 +79,7 @@ add_executable(vitamemio_kernel
 
 target_link_libraries(vitamemio_kernel
   taihenForKernel_stub
-  taihenModuleUtils_stub        # module_get_export_func (registry: HUD language)
+  taihenModuleUtils_stub        # module_get_export_func (DMA copy, the dcache clean)
   SceSysmemForDriver_stub       # memblocks, kernel->user copies
   SceSysclibForDriver_stub      # memcpy/memset/memcmp/snprintf for kernel
   SceThreadmgrForDriver_stub
@@ -114,6 +114,7 @@ add_executable(vitamemio_hud
 )
 target_link_libraries(vitamemio_hud
   taihenForKernel_stub
+  taihenModuleUtils_stub        # module_get_export_func (is a game running)
   SceSysmemForDriver_stub       # the panel cache, user<->kernel copies
   SceSysclibForDriver_stub      # memcpy/memset/strncmp/snprintf for kernel
   SceThreadmgrForDriver_stub    # system time, delays

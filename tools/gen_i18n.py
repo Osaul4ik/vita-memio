@@ -81,7 +81,7 @@ T = [
     ("VM_I18N_ROW_STATS",
      "Statistics"),
     ("VM_I18N_HINT_STATS",
-     "Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way."),
+     "Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way. Switch it on before running the tester."),
     ("VM_I18N_ROW_GPUSAFE",
      "GPU-safe reads"),
     ("VM_I18N_HINT_GPUSAFE",

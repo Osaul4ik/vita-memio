@@ -992,9 +992,30 @@ static void test_timing_math(void)
 	CHECK(t.rd_ok && !t.wr_ok && t.rd_sectors == 2000);
 	CHECK(t.rd_io_us > 20.99 && t.rd_io_us < 21.01);
 	CHECK(t.rd_copy_us > 6.49 && t.rd_copy_us < 6.51);
+	CHECK(!t.no_stats);
 	r->runs[0].before.timing_ok = 0;             /* a reading without timing is skipped */
 	bench_timing(r, &t);
 	CHECK(t.rd_sectors == 1000);
+	free(r);
+}
+
+/* Statistics off (the default): faster transfers but no time counted. */
+static void test_timing_without_stats(void)
+{
+	BenchResult *r = new_result();
+	BenchTiming t;
+
+	r->nruns = 1;
+	r->runs[0].complete = 1;
+	r->runs[0].before.timing_ok = r->runs[0].after.timing_ok = 1;
+	bench_timing(r, &t);
+	CHECK(!t.no_stats && !t.rd_ok);              /* no faster transfer at all */
+	r->runs[0].after.reads = 40;
+	bench_timing(r, &t);
+	CHECK(t.no_stats && !t.rd_ok && !t.wr_ok);
+	r->runs[0].after.rd_sectors = 2048;
+	bench_timing(r, &t);
+	CHECK(!t.no_stats && t.rd_ok);
 	free(r);
 }
 
@@ -1433,6 +1454,7 @@ int main(void)
 	RUN(test_bad_profiles);
 	RUN(test_shipped_profiles);
 	RUN(test_timing_math);
+	RUN(test_timing_without_stats);
 	RUN(test_aggregate_skips_incomplete);
 	RUN(test_report_text);
 	RUN(test_report_dma);

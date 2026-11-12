@@ -245,6 +245,9 @@ typedef struct BenchTiming {
 	uint64_t rd_sectors, wr_sectors;
 	double   rd_io_us, rd_copy_us;     /* per block */
 	double   wr_io_us, wr_copy_us;
+	/* The plugin made faster transfers but counted no time: its Statistics
+	 * setting is off (the default), so there is nothing to show. */
+	int      no_stats;
 } BenchTiming;
 
 void bench_timing_run(const BenchRun *r, BenchTiming *out);

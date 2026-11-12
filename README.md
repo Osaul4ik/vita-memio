@@ -54,10 +54,10 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 
 | Setting | What it does | Default |
 |---|---|---|
-| GPU-safe reads | Makes sure the graphics chip always sees data correctly. **All**: after every read, costs a little speed. **Non-DMA**: not after *DMA copy*'s copies, faster; if a game shows graphics glitches, use All. Recommended for playing | All |
+| GPU-safe reads | Makes sure the graphics chip always sees data correctly. **All**: after every read, costs a little speed. **Non-DMA**: not after *DMA copy*'s copies, faster; if a game shows graphics glitches, use All. Recommended for playing | Non-DMA |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
-| DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | Off |
+| DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for. See below | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB. Try it with *Verify transfers* first | Off |
 | Storage HUD | Live speed in the top right corner: **Compact** or **Extended** | Off |
@@ -69,7 +69,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 |---|---|---|
 | Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
 | Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
-| Statistics | Collects timings for the tester app | On |
+| Statistics | Collects timings for the tester app; switch it on before testing | Off |
 
 If the plugin ever could not start properly, a **Reset safe mode** row appears under *Driver*.
 
@@ -139,7 +139,7 @@ Core 3  C: 98%  NC: 0%
 
 ## Tester
 
-Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writes of several sizes and many small files, checks every byte, and adds each result to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings: to compare, change a setting and run it again.
+Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writes of several sizes and many small files, checks every byte, and adds each result to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings: to compare, change a setting and run it again. For the copy timings in the report, switch on *Statistics* (Advanced > Developer settings) first.
 
 ## Benchmarks
 

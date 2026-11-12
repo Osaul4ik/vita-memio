@@ -291,6 +291,8 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "faster path, time per 512-byte block (system call / CPU copy):\n");
 		if (!res->plugin0.timing_ok) {
 			put(&o, "  n/a (the kernel module is older than this tester)\n");
+		} else if (t.no_stats) {
+			put(&o, "  n/a (turn on Settings > Devices > vita-memio > Statistics for these figures)\n");
 		} else {
 			if (t.rd_ok) {
 				report_fmt1(a, sizeof(a), t.rd_io_us);
@@ -496,6 +498,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		BenchTiming t;
 
 		bench_timing(res, &t);
+		if (t.no_stats)
+			line(&s, "us/block: turn on Statistics");
 		if (t.rd_ok) {
 			report_fmt1(x, sizeof(x), t.rd_io_us);
 			report_fmt1(y, sizeof(y), t.rd_copy_us);

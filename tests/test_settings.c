@@ -212,7 +212,7 @@ static void test_older_file_with_fewer_keys(void)
 	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
 }
 
-/* GPU-safe reads default to on and overlapped reads to auto: a file from
+/* GPU-safe reads default to Non-DMA and overlapped reads to auto: a file from
  * before those keys gets them; a file that stored them keeps its values. */
 static void test_gpusafe_default_and_stored_value(void)
 {
@@ -221,13 +221,13 @@ static void test_gpusafe_default_and_stored_value(void)
 	VmSettings s;
 	size_t n;
 
-	CHECK(VM_DEF_GPUSAFE == 1 && VM_DEF_PIPELINE == VM_PIPE_AUTO);
+	CHECK(VM_DEF_GPUSAFE == VM_GPUSAFE_NODMA && VM_DEF_PIPELINE == VM_PIPE_AUTO);
 	clean();
 	n = make_file(buf, 9, v);                    /* 9 keys: before GPU-safe existed */
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.gpusafe == 1 && s.pipeline == VM_PIPE_AUTO);
+	CHECK(s.sd2vita == 1 && s.gpusafe == VM_GPUSAFE_NODMA && s.pipeline == VM_PIPE_AUTO);
 	clean();
 	n = make_file(buf, VM_KEY_COUNT, v);         /* GPU-safe stored off: kept */
 	put_file("settings.bin", buf, n);
@@ -235,7 +235,7 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_copy(&s);
 	CHECK(s.gpusafe == 0 && s.pipeline == VM_PIPE_OFF);     /* both stored: kept */
 	/* three choices: 1 (the old "on") is All, 2 Non-DMA; nothing past them */
-	CHECK(VM_DEF_GPUSAFE == VM_GPUSAFE_ALL);
+	CHECK(VM_GPUSAFE_ALL == 1 && VM_GPUSAFE_NODMA == 2);
 	CHECK(vm_settings_set(VM_KEY_GPUSAFE, VM_GPUSAFE_NODMA) == VM_OK);
 	vm_settings_copy(&s);
 	CHECK(s.gpusafe == VM_GPUSAFE_NODMA);

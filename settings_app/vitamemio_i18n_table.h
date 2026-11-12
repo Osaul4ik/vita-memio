@@ -37,7 +37,7 @@
 [VM_I18N_ROW_SMALL] = "Small transfers too",
 [VM_I18N_HINT_SMALL] = "Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",
 [VM_I18N_ROW_STATS] = "Statistics",
-[VM_I18N_HINT_STATS] = "Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way.",
+[VM_I18N_HINT_STATS] = "Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way. Switch it on before running the tester.",
 [VM_I18N_ROW_GPUSAFE] = "GPU-safe reads",
 [VM_I18N_HINT_GPUSAFE] = "After a faster read, writes its data out of the CPU cache to memory, as the standard path leaves it, so the graphics chip always reads it correctly. All: after every read; costs some read speed. Non-DMA: not after the copies DMA copy makes, which should not need it; faster, but if a game shows graphics glitches, use All. Off: never. All or Non-DMA while playing games.",
 [VM_I18N_ROW_PIPELINE] = "Overlapped reads",

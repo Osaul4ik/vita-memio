@@ -616,7 +616,7 @@ int bench_metric_measured(const BenchResult *res, int m)
 }
 
 /* Sums of the counter differences, then per block. */
-typedef struct { uint64_t rs, ri, rc, ws, wi, wc; } TimingSum;
+typedef struct { uint64_t rs, ri, rc, ws, wi, wc, fast; } TimingSum;
 
 static void timing_add(TimingSum *t, const BenchRun *r)
 {
@@ -630,6 +630,7 @@ static void timing_add(TimingSum *t, const BenchRun *r)
 	t->ws += (uint32_t)(a->wr_sectors - b->wr_sectors);
 	t->wi += (uint32_t)(a->wr_io_us - b->wr_io_us);
 	t->wc += (uint32_t)(a->wr_copy_us - b->wr_copy_us);
+	t->fast += (uint32_t)(a->reads - b->reads) + (uint64_t)(uint32_t)(a->writes - b->writes);
 }
 
 static void timing_finish(const TimingSum *t, BenchTiming *out)
@@ -637,6 +638,7 @@ static void timing_finish(const TimingSum *t, BenchTiming *out)
 	memset(out, 0, sizeof(*out));
 	out->rd_sectors = t->rs;
 	out->wr_sectors = t->ws;
+	out->no_stats = t->fast && !t->rs && !t->ws;
 	if (t->rs) {
 		out->rd_ok = 1;
 		out->rd_io_us = (double)t->ri / (double)t->rs;

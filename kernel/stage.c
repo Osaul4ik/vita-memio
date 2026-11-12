@@ -841,7 +841,10 @@ static int (*g_dmac_memcpy)(void *dst, const void *src, SceSize size);
 static volatile int      g_dma_want;           /* the setting                   */
 static volatile int      g_dma_stop;           /* VM_DMA_WHY_*: stopped itself  */
 static volatile int      g_dma_logged;         /* the worker logged the stop    */
-static volatile uint32_t g_dma_copies, g_dma_kib, g_dma_us, g_dma_cpu, g_dma_errors;
+static volatile uint32_t g_dma_copies, g_dma_kib, g_dma_us, g_dma_errors;
+/* left to the CPU while on: too small (and of them 16 KiB up), not whole lines */
+static volatile uint32_t g_dma_small, g_dma_small_kib, g_dma_small_16k;
+static volatile uint32_t g_dma_unal, g_dma_unal_kib;
 static volatile int32_t  g_dma_last_err;
 
 static int dma_state(void)
@@ -870,9 +873,16 @@ static int dma_try(void *dst, const void *src, size_t n)
 
 	if (dma_state() != VM_DMA_ON)
 		return 0;
-	if (n < VM_DMA_MIN_BYTES ||
-	    (((uintptr_t)dst | (uintptr_t)src | (uintptr_t)n) & (VM_DMA_ALIGN - 1u))) {
-		ADD(g_dma_cpu, 1);
+	if (n < VM_DMA_MIN_BYTES) {
+		ADD(g_dma_small, 1);
+		ADD(g_dma_small_kib, (uint32_t)(n >> 10));
+		if (n >= VM_DMA_MIN_BYTES / 2)
+			ADD(g_dma_small_16k, 1);
+		return 0;
+	}
+	if (((uintptr_t)dst | (uintptr_t)src | (uintptr_t)n) & (VM_DMA_ALIGN - 1u)) {
+		ADD(g_dma_unal, 1);
+		ADD(g_dma_unal_kib, (uint32_t)(n >> 10));
 		return 0;
 	}
 	t0 = ksceKernelGetSystemTimeLow();
@@ -3364,11 +3374,16 @@ void vm_stage_worker_tick(void)
 		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB, "
 		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
 		         (unsigned)(last_max / 2));
-		if (LD(g_dma_want))
-			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms), left to the CPU %u, refused %u",
+		if (LD(g_dma_want)) {
+			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms), refused %u",
 			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
-			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_cpu),
-			         (unsigned)LD(g_dma_errors));
+			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_errors));
+			VM_KLOGI("stage: DMA left to the CPU: small %u (%u MiB, %u of 16 KiB or more), "
+			         "not aligned %u (%u MiB)",
+			         (unsigned)LD(g_dma_small), (unsigned)(LD(g_dma_small_kib) / 1024),
+			         (unsigned)LD(g_dma_small_16k), (unsigned)LD(g_dma_unal),
+			         (unsigned)(LD(g_dma_unal_kib) / 1024));
+		}
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
 		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),
 		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
@@ -3675,7 +3690,11 @@ void vm_stage_dma(VmDma *out)
 	out->copies = LD(g_dma_copies);
 	out->kib = LD(g_dma_kib);
 	out->us = LD(g_dma_us);
-	out->cpu_copies = LD(g_dma_cpu);
+	out->small = LD(g_dma_small);
+	out->small_kib = LD(g_dma_small_kib);
+	out->small_16k = LD(g_dma_small_16k);
+	out->unaligned = LD(g_dma_unal);
+	out->unaligned_kib = LD(g_dma_unal_kib);
 	out->errors = LD(g_dma_errors);
 	out->last_err = LD(g_dma_last_err);
 }

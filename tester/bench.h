@@ -92,7 +92,8 @@ typedef struct BenchPluginState {
 	int      dma_ok;
 	int      dma_state;      /* VM_DMA_*                                        */
 	int      dma_stop_why;   /* VM_DMA_WHY_*                                    */
-	uint32_t dma_copies, dma_kib, dma_cpu, dma_errors;
+	uint32_t dma_copies, dma_kib, dma_errors;
+	uint32_t dma_small, dma_small_kib, dma_small_16k, dma_unal, dma_unal_kib;
 	int32_t  dma_last_err;
 } BenchPluginState;
 
@@ -277,9 +278,11 @@ void bench_verify_run(const BenchRun *r, BenchVerify *out);
 uint32_t bench_passthru(const BenchResult *res);
 
 /* DMA copy during the complete runs: copies the controller made (and their
- * KiB), copies left to the CPU while it was on, copies it refused. */
+ * KiB), copies it refused, and those left to the CPU while it was on: too
+ * small (of them 16 KiB or more), or not whole cache lines. */
 typedef struct BenchDma {
-	uint32_t copies, kib, cpu, errors;
+	uint32_t copies, kib, errors;
+	uint32_t small, small_kib, small_16k, unal, unal_kib;
 } BenchDma;
 void bench_dma(const BenchResult *res, BenchDma *out);
 int bench_valid(const BenchResult *res);           /* ran to the end */

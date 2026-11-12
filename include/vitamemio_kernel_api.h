@@ -127,14 +127,19 @@ typedef struct VmDma {
 	uint32_t copies;         /* copies the DMA controller made                   */
 	uint32_t kib;            /* ... their data, KiB                              */
 	uint32_t us;             /* ... time in ksceDmacMemcpy, us                   */
-	uint32_t cpu_copies;     /* copies left to the CPU while on (too small, not  */
-	                         /* whole cache lines)                               */
+	/* Copies left to the CPU while it is on (counted only then): */
+	uint32_t small;          /* under VM_DMA_MIN_BYTES                           */
+	uint32_t small_kib;      /* ... their data, KiB                              */
+	uint32_t small_16k;      /* ... of them from 16 KiB up                       */
+	uint32_t unaligned;      /* large enough, but not whole cache lines (the     */
+	                         /* caller's buffer)                                 */
+	uint32_t unaligned_kib;  /* ... their data, KiB                              */
 	uint32_t errors;         /* copies it refused (the CPU made them)            */
 	int32_t  last_err;       /* the last refusal's error code, 0 if none         */
 } VmDma;
 
 #define VM_DMA_MAGIC  0x544D4441u   /* 'TMDA' */
-_Static_assert(sizeof(VmDma) == 40, "VmDma: grow only through a new call");
+_Static_assert(sizeof(VmDma) == 56, "VmDma: grow only through a new call");
 
 /* Copy the DMA copy state to *out (user pointer). Returns VM_OK or
  * VM_ERR_ARG. Newer than 1.3.0: an older module does not have it. */

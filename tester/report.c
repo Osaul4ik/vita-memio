@@ -237,8 +237,17 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
 		put(&o, "plugin read ahead: %s\n", res->plugin0.readahead == VM_RA_ON ? "on"
 		    : res->plugin0.readahead == VM_RA_OFF ? "off" : "unknown");
-		if (dma_shown(res))
+		if (dma_shown(res)) {
+			BenchDma dm;
+
+			bench_dma(res, &dm);
 			put(&o, "plugin DMA copy: %s\n", dma_text(res));
+			put(&o, "plugin DMA copies during the test: %u (%u MiB), refused %u\n",
+			    (unsigned)dm.copies, (unsigned)(dm.kib / 1024), (unsigned)dm.errors);
+			put(&o, "plugin DMA left to the CPU: small %u (%u MiB, %u of 16 KiB or more), "
+			    "not aligned %u (%u MiB)\n", (unsigned)dm.small, (unsigned)(dm.small_kib / 1024),
+			    (unsigned)dm.small_16k, (unsigned)dm.unal, (unsigned)(dm.unal_kib / 1024));
+		}
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
 	put(&o, "profile: %s (%u MiB file, %u runs)\n", res->profile.name,
@@ -446,9 +455,11 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 
 			bench_dma(res, &dm);
 			line(&s, "DMA copy: %s", dma_text(res));
-			line(&s, "DMA copies %u (%u MiB), left to the CPU %u, refused %u",
-			     (unsigned)dm.copies, (unsigned)(dm.kib / 1024), (unsigned)dm.cpu,
-			     (unsigned)dm.errors);
+			line(&s, "DMA copies %u (%u MiB), refused %u", (unsigned)dm.copies,
+			     (unsigned)(dm.kib / 1024), (unsigned)dm.errors);
+			line(&s, "DMA to CPU: small %u (%u MiB, %u >= 16K), unaligned %u (%u MiB)",
+			     (unsigned)dm.small, (unsigned)(dm.small_kib / 1024), (unsigned)dm.small_16k,
+			     (unsigned)dm.unal, (unsigned)(dm.unal_kib / 1024));
 		}
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));
 	}

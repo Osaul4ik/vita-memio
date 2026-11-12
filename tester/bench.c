@@ -753,8 +753,12 @@ void bench_dma(const BenchResult *res, BenchDma *out)
 			continue;
 		out->copies += a->dma_copies - b->dma_copies;
 		out->kib += a->dma_kib - b->dma_kib;
-		out->cpu += a->dma_cpu - b->dma_cpu;
 		out->errors += a->dma_errors - b->dma_errors;
+		out->small += a->dma_small - b->dma_small;
+		out->small_kib += a->dma_small_kib - b->dma_small_kib;
+		out->small_16k += a->dma_small_16k - b->dma_small_16k;
+		out->unal += a->dma_unal - b->dma_unal;
+		out->unal_kib += a->dma_unal_kib - b->dma_unal_kib;
 	}
 }
 

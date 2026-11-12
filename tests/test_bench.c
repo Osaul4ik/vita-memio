@@ -268,7 +268,9 @@ static int f_get(void *c, BenchPluginState *o)
 		o->dma_stop_why = o->dma_state == VM_DMA_STOPPED ? VM_DMA_WHY_MISMATCH : 0;
 		o->dma_copies = f->dma_copies;
 		o->dma_kib = f->dma_copies * 1024;           /* 1 MiB a copy */
-		o->dma_cpu = f->dma_copies / 2;
+		o->dma_small = f->dma_copies;                /* 1 a look ... */
+		o->dma_small_kib = f->dma_copies * 4;        /* ... of 4 KiB */
+		o->dma_unal = f->dma_copies / 2;
 	}
 	o->fingerprint = 0x2e7c52f7;
 	o->verify = f->verify;
@@ -680,6 +682,15 @@ static void test_report_dma(void)
 	CHECK(dm.copies > 0 && dm.kib == dm.copies * 1024 && dm.errors == 0);
 	report_format(r, &m, text, 40000);
 	CHECK(strstr(text, "plugin DMA copy: on\n"));
+	{
+		char want[160];
+
+		snprintf(want, sizeof(want), "plugin DMA copies during the test: %u (%u MiB), refused 0\n",
+		         (unsigned)dm.copies, (unsigned)dm.copies);
+		CHECK(strstr(text, want));
+		CHECK(dm.small == dm.copies && dm.small_kib == dm.copies * 4);
+		CHECK(strstr(text, "plugin DMA left to the CPU: small "));
+	}
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "DMA copy: on");

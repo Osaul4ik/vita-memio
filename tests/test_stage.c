@@ -161,8 +161,8 @@ static void reset(void)
 	use_copy_out = 0;
 	g_dmac_memcpy = NULL;
 	g_dma_want = g_dma_stop = g_dma_logged = 0;
-	g_dma_copies = g_dma_kib = g_dma_us = g_dma_errors = 0;
-	g_dma_small = g_dma_small_kib = g_dma_small_16k = g_dma_unal = g_dma_unal_kib = 0;
+	g_dma_copies = g_dma_kib = g_dma_us = g_dma_errors = g_dma_mid = g_dma_mid_us = 0;
+	g_dma_small = g_dma_small_kib = g_dma_small_half = g_dma_unal = g_dma_unal_kib = 0;
 	g_dma_last_err = 0;
 }
 
@@ -595,7 +595,7 @@ static void test_dma_copy_choice(void)
 	CHECK(dmac_calls == 0 && memcmp(dst + 4, src, big) == 0 && dma_state() == VM_DMA_OFF);
 	CHECK(g_dma_small == 0 && g_dma_unal == 0);
 
-	/* on: whole cache lines from 32 KiB up go to the controller */
+	/* on: whole cache lines from 16 KiB up go to the controller */
 	s = dma_settings(1);
 	vm_stage_apply(&s);
 	CHECK(dma_state() == VM_DMA_ON);
@@ -603,14 +603,15 @@ static void test_dma_copy_choice(void)
 	stage_copy_out(dst, src, big);
 	CHECK(dmac_calls == 1 && memcmp(dst, src, big) == 0);
 	CHECK(g_dma_copies == 1 && g_dma_kib == 64 && g_dma_small == 0 && g_dma_unal == 0);
+	CHECK(g_dma_mid == 0);                          /* 64 KiB: not a 16-32 KiB one */
 
 	/* the rest is the CPU's, each counted by why: too small (and of them the
-	 * ones from 16 KiB up), an odd start, an odd end */
+	 * ones from 8 KiB up), an odd start, an odd end */
 	memset(dst, 0, big + 64);
-	stage_copy_out(dst, src, VM_DMA_MIN_BYTES - 512);   /* 31.5 KiB */
+	stage_copy_out(dst, src, VM_DMA_MIN_BYTES - 512);   /* 15.5 KiB */
 	stage_copy_out(dst, src, 4096);
 	stage_copy_out(dst + 4, src, 4096);                 /* small first, whatever else */
-	CHECK(g_dma_small == 3 && g_dma_small_16k == 1 && g_dma_small_kib == 31 + 4 + 4);
+	CHECK(g_dma_small == 3 && g_dma_small_half == 1 && g_dma_small_kib == 15 + 4 + 4);
 	stage_copy_out(dst + 4, src, big);
 	stage_copy_out(dst, src + 512 + 8, big - 512);
 	stage_copy_out(dst, src, big + 32);
@@ -618,7 +619,11 @@ static void test_dma_copy_choice(void)
 	CHECK(dmac_calls == 1 && g_dma_small == 3);
 	CHECK(memcmp(dst, src, big + 32) == 0);           /* the last one, all of it */
 	stage_copy_out(dst, src, VM_DMA_MIN_BYTES);       /* exactly the smallest: DMA */
-	CHECK(dmac_calls == 2);
+	CHECK(dmac_calls == 2 && g_dma_mid == 1);
+	stage_copy_out(dst, src, 2 * VM_DMA_MIN_BYTES - 512);   /* 31.5 KiB: still 16-32 */
+	stage_copy_out(dst, src, 2 * VM_DMA_MIN_BYTES);         /* 32 KiB: no longer */
+	CHECK(dmac_calls == 4 && g_dma_mid == 2 && g_dma_copies == 4);
+	CHECK(memcmp(dst, src, 2 * VM_DMA_MIN_BYTES) == 0);
 
 	/* refused: the CPU copies all of it, junk and all overwritten */
 	dmac_fail = 1;
@@ -639,7 +644,8 @@ static void test_dma_copy_choice(void)
 	}
 	vm_stage_dma(&st);
 	CHECK(st.size == sizeof(st) && st.magic == VM_DMA_MAGIC && st.state == VM_DMA_STOPPED &&
-	      st.stop_why == VM_DMA_WHY_ERRORS && st.errors == VM_DMA_MAX_ERRORS && st.copies == 2);
+	      st.stop_why == VM_DMA_WHY_ERRORS && st.errors == VM_DMA_MAX_ERRORS && st.copies == 4 &&
+	      st.mid == 2);
 
 	/* the worker says why, once */
 	g_live = 1;

@@ -106,7 +106,7 @@ int vmResetSafeMode(void);
  * copy it refuses is made by the CPU instead; after VM_DMA_MAX_ERRORS refusals,
  * or one verify-mode difference while it is on, it stops until the setting is
  * switched off and on. Counters only grow and wrap. */
-#define VM_DMA_MIN_BYTES   (32u * 1024u)
+#define VM_DMA_MIN_BYTES   (16u * 1024u)   /* the smallest part of an overlapped read */
 #define VM_DMA_ALIGN       64u        /* the Cortex-A9's cache line */
 #define VM_DMA_MAX_ERRORS  8u
 
@@ -127,10 +127,12 @@ typedef struct VmDma {
 	uint32_t copies;         /* copies the DMA controller made                   */
 	uint32_t kib;            /* ... their data, KiB                              */
 	uint32_t us;             /* ... time in ksceDmacMemcpy, us                   */
+	uint32_t mid;            /* ... of them under 2 x VM_DMA_MIN_BYTES (16-32    */
+	uint32_t mid_us;         /* KiB: the parts of overlapped reads), and their us */
 	/* Copies left to the CPU while it is on (counted only then): */
 	uint32_t small;          /* under VM_DMA_MIN_BYTES                           */
 	uint32_t small_kib;      /* ... their data, KiB                              */
-	uint32_t small_16k;      /* ... of them from 16 KiB up                       */
+	uint32_t small_half;     /* ... of them from VM_DMA_MIN_BYTES / 2 up         */
 	uint32_t unaligned;      /* large enough, but not whole cache lines (the     */
 	                         /* caller's buffer)                                 */
 	uint32_t unaligned_kib;  /* ... their data, KiB                              */
@@ -139,7 +141,7 @@ typedef struct VmDma {
 } VmDma;
 
 #define VM_DMA_MAGIC  0x544D4441u   /* 'TMDA' */
-_Static_assert(sizeof(VmDma) == 56, "VmDma: grow only through a new call");
+_Static_assert(sizeof(VmDma) == 64, "VmDma: grow only through a new call");
 
 /* Copy the DMA copy state to *out (user pointer). Returns VM_OK or
  * VM_ERR_ARG. Newer than 1.3.0: an older module does not have it. */

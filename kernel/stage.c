@@ -827,8 +827,10 @@ static inline void vm_dsb(void)
  * it reads as before.
  *
  * Only for copies that cannot share a cache line with anything else: whole
- * lines (VM_DMA_ALIGN) at both ends, from VM_DMA_MIN_BYTES up (below that,
- * starting the controller costs more than the copy). Everything else, and
+ * lines (VM_DMA_ALIGN) at both ends, from VM_DMA_MIN_BYTES up: the smallest
+ * part of an overlapped read, which in games carries most of the data (below
+ * it are the tiny reads, a few MiB). The 16-32 KiB copies are timed apart, to
+ * see whether starting the controller pays for them. Everything else, and
  * any copy it refuses, is the CPU's (vm_fast_copy), so the caller's data is
  * the same either way. It stops itself after VM_DMA_MAX_ERRORS refusals, or
  * at the first verify-mode difference while it is on (dma_stop), until the
@@ -842,8 +844,11 @@ static volatile int      g_dma_want;           /* the setting                   
 static volatile int      g_dma_stop;           /* VM_DMA_WHY_*: stopped itself  */
 static volatile int      g_dma_logged;         /* the worker logged the stop    */
 static volatile uint32_t g_dma_copies, g_dma_kib, g_dma_us, g_dma_errors;
-/* left to the CPU while on: too small (and of them 16 KiB up), not whole lines */
-static volatile uint32_t g_dma_small, g_dma_small_kib, g_dma_small_16k;
+/* ... the 16-32 KiB ones (overlapped reads' parts), to judge the threshold */
+static volatile uint32_t g_dma_mid, g_dma_mid_us;
+/* left to the CPU while on: too small (and of them half the threshold up), not
+ * whole lines */
+static volatile uint32_t g_dma_small, g_dma_small_kib, g_dma_small_half;
 static volatile uint32_t g_dma_unal, g_dma_unal_kib;
 static volatile int32_t  g_dma_last_err;
 
@@ -877,7 +882,7 @@ static int dma_try(void *dst, const void *src, size_t n)
 		ADD(g_dma_small, 1);
 		ADD(g_dma_small_kib, (uint32_t)(n >> 10));
 		if (n >= VM_DMA_MIN_BYTES / 2)
-			ADD(g_dma_small_16k, 1);
+			ADD(g_dma_small_half, 1);
 		return 0;
 	}
 	if (((uintptr_t)dst | (uintptr_t)src | (uintptr_t)n) & (VM_DMA_ALIGN - 1u)) {
@@ -893,7 +898,15 @@ static int dma_try(void *dst, const void *src, size_t n)
 			dma_stop(VM_DMA_WHY_ERRORS);
 		return 0;
 	}
-	ADD(g_dma_us, ksceKernelGetSystemTimeLow() - t0);
+	{
+		const uint32_t us = ksceKernelGetSystemTimeLow() - t0;
+
+		ADD(g_dma_us, us);
+		if (n < 2u * VM_DMA_MIN_BYTES) {
+			ADD(g_dma_mid, 1);
+			ADD(g_dma_mid_us, us);
+		}
+	}
 	ADD(g_dma_copies, 1);
 	ADD(g_dma_kib, (uint32_t)(n >> 10));
 	return 1;
@@ -3375,13 +3388,15 @@ void vm_stage_worker_tick(void)
 		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
 		         (unsigned)(last_max / 2));
 		if (LD(g_dma_want)) {
-			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms), refused %u",
+			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms; %u of 16-32 KiB in %u ms), "
+			         "refused %u",
 			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
-			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_errors));
-			VM_KLOGI("stage: DMA left to the CPU: small %u (%u MiB, %u of 16 KiB or more), "
+			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_mid),
+			         (unsigned)(LD(g_dma_mid_us) / 1000), (unsigned)LD(g_dma_errors));
+			VM_KLOGI("stage: DMA left to the CPU: small %u (%u MiB, %u of 8 KiB or more), "
 			         "not aligned %u (%u MiB)",
 			         (unsigned)LD(g_dma_small), (unsigned)(LD(g_dma_small_kib) / 1024),
-			         (unsigned)LD(g_dma_small_16k), (unsigned)LD(g_dma_unal),
+			         (unsigned)LD(g_dma_small_half), (unsigned)LD(g_dma_unal),
 			         (unsigned)(LD(g_dma_unal_kib) / 1024));
 		}
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
@@ -3690,9 +3705,11 @@ void vm_stage_dma(VmDma *out)
 	out->copies = LD(g_dma_copies);
 	out->kib = LD(g_dma_kib);
 	out->us = LD(g_dma_us);
+	out->mid = LD(g_dma_mid);
+	out->mid_us = LD(g_dma_mid_us);
 	out->small = LD(g_dma_small);
 	out->small_kib = LD(g_dma_small_kib);
-	out->small_16k = LD(g_dma_small_16k);
+	out->small_half = LD(g_dma_small_half);
 	out->unaligned = LD(g_dma_unal);
 	out->unaligned_kib = LD(g_dma_unal_kib);
 	out->errors = LD(g_dma_errors);

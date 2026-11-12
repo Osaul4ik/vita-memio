@@ -245,9 +245,12 @@ static int v_plugin_get(void *ctx, BenchPluginState *out)
 			out->dma_stop_why = dm.stop_why;
 			out->dma_copies = dm.copies;
 			out->dma_kib = dm.kib;
+			out->dma_us = dm.us;
+			out->dma_mid = dm.mid;
+			out->dma_mid_us = dm.mid_us;
 			out->dma_small = dm.small;
 			out->dma_small_kib = dm.small_kib;
-			out->dma_small_16k = dm.small_16k;
+			out->dma_small_half = dm.small_half;
 			out->dma_unal = dm.unaligned;
 			out->dma_unal_kib = dm.unaligned_kib;
 			out->dma_errors = dm.errors;

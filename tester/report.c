@@ -242,11 +242,15 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 
 			bench_dma(res, &dm);
 			put(&o, "plugin DMA copy: %s\n", dma_text(res));
-			put(&o, "plugin DMA copies during the test: %u (%u MiB), refused %u\n",
-			    (unsigned)dm.copies, (unsigned)(dm.kib / 1024), (unsigned)dm.errors);
-			put(&o, "plugin DMA left to the CPU: small %u (%u MiB, %u of 16 KiB or more), "
+			put(&o, "plugin DMA copies during the test: %u (%u MiB in %u ms), refused %u\n",
+			    (unsigned)dm.copies, (unsigned)(dm.kib / 1024), (unsigned)(dm.us / 1000),
+			    (unsigned)dm.errors);
+			if (dm.mid)
+				put(&o, "plugin DMA 16-32 KiB copies: %u, %u us each\n", (unsigned)dm.mid,
+				    (unsigned)(dm.mid_us / dm.mid));
+			put(&o, "plugin DMA left to the CPU: small %u (%u MiB, %u of 8 KiB or more), "
 			    "not aligned %u (%u MiB)\n", (unsigned)dm.small, (unsigned)(dm.small_kib / 1024),
-			    (unsigned)dm.small_16k, (unsigned)dm.unal, (unsigned)(dm.unal_kib / 1024));
+			    (unsigned)dm.small_half, (unsigned)dm.unal, (unsigned)(dm.unal_kib / 1024));
 		}
 	}
 	put(&o, "device: %s   folder: %s\n", bench_device_name(res->device), meta->folder);
@@ -457,8 +461,11 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 			line(&s, "DMA copy: %s", dma_text(res));
 			line(&s, "DMA copies %u (%u MiB), refused %u", (unsigned)dm.copies,
 			     (unsigned)(dm.kib / 1024), (unsigned)dm.errors);
-			line(&s, "DMA to CPU: small %u (%u MiB, %u >= 16K), unaligned %u (%u MiB)",
-			     (unsigned)dm.small, (unsigned)(dm.small_kib / 1024), (unsigned)dm.small_16k,
+			if (dm.mid)
+				line(&s, "DMA 16-32K copies: %u, %u us each", (unsigned)dm.mid,
+				     (unsigned)(dm.mid_us / dm.mid));
+			line(&s, "DMA to CPU: small %u (%u MiB, %u >= 8K), unaligned %u (%u MiB)",
+			     (unsigned)dm.small, (unsigned)(dm.small_kib / 1024), (unsigned)dm.small_half,
 			     (unsigned)dm.unal, (unsigned)(dm.unal_kib / 1024));
 		}
 		line(&s, "buffer busy: %u large transfers went stock", (unsigned)bench_passthru(res));

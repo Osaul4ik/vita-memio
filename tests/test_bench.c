@@ -268,6 +268,9 @@ static int f_get(void *c, BenchPluginState *o)
 		o->dma_stop_why = o->dma_state == VM_DMA_STOPPED ? VM_DMA_WHY_MISMATCH : 0;
 		o->dma_copies = f->dma_copies;
 		o->dma_kib = f->dma_copies * 1024;           /* 1 MiB a copy */
+		o->dma_us = f->dma_copies * 3000;            /* 3 ms each */
+		o->dma_mid = f->dma_copies / 2;              /* half of them 16-32 KiB ... */
+		o->dma_mid_us = o->dma_mid * 90;             /* ... 90 us each */
 		o->dma_small = f->dma_copies;                /* 1 a look ... */
 		o->dma_small_kib = f->dma_copies * 4;        /* ... of 4 KiB */
 		o->dma_unal = f->dma_copies / 2;
@@ -685,8 +688,13 @@ static void test_report_dma(void)
 	{
 		char want[160];
 
-		snprintf(want, sizeof(want), "plugin DMA copies during the test: %u (%u MiB), refused 0\n",
-		         (unsigned)dm.copies, (unsigned)dm.copies);
+		snprintf(want, sizeof(want),
+		         "plugin DMA copies during the test: %u (%u MiB in %u ms), refused 0\n",
+		         (unsigned)dm.copies, (unsigned)dm.copies, (unsigned)dm.copies * 3);
+		CHECK(strstr(text, want));
+		CHECK(dm.mid > 0 && dm.mid_us == dm.mid * 90);
+		snprintf(want, sizeof(want), "plugin DMA 16-32 KiB copies: %u, 90 us each\n",
+		         (unsigned)dm.mid);
 		CHECK(strstr(text, want));
 		CHECK(dm.small == dm.copies && dm.small_kib == dm.copies * 4);
 		CHECK(strstr(text, "plugin DMA left to the CPU: small "));

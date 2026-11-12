@@ -46,9 +46,6 @@ static volatile int g_ov_front = 0;
 static uint32_t     g_row[HUD_ROW_MAX];
 static volatile int g_row_busy;
 static HudCache     g_cache;
-/* Frames in the hook now: vm_hud_fini waits for them after the release, so
- * the module can be unloaded after it. */
-static volatile int g_inflight;
 static SceUID       g_cache_uid = -1;
 static uint32_t     g_gen;
 
@@ -75,28 +72,15 @@ static inline void hud_dacr_restore(uint32_t prev)
 /* ksceDisplaySetFrameBufInternal(head, index, pParam, sync) - the kernel
  * funnel every set-framebuffer call passes through, so the overlay is
  * system-wide. Draw only for the main panel (head 0). */
-static int hud_draw_frame(int head, const SceDisplayFrameBuf *pParam, int ret);
-
 static int hook_set_framebuf(int head, int index,
                              const SceDisplayFrameBuf *pParam, int sync)
 {
-	__atomic_add_fetch(&g_inflight, 1, __ATOMIC_ACQ_REL);
 	const tai_hook_ref_t ref = vm_hook_ref(&g_ref);
-	if (!ref) {
-		__atomic_sub_fetch(&g_inflight, 1, __ATOMIC_ACQ_REL);
-		return VM_HOOK_NO_REF;
-	}
-	int ret = TAI_CONTINUE(int, ref, head, index, pParam, sync);
-
-	ret = hud_draw_frame(head, pParam, ret);
-	__atomic_sub_fetch(&g_inflight, 1, __ATOMIC_ACQ_REL);
-	return ret;
-}
-
-/* After the original: the HUD and the overlay drawn into its framebuffer. */
-static int hud_draw_frame(int head, const SceDisplayFrameBuf *pParam, int ret)
-{
 	const HudText *t;
+
+	if (!ref)
+		return VM_HOOK_NO_REF;
+	int ret = TAI_CONTINUE(int, ref, head, index, pParam, sync);
 
 	if (head != 0 || !pParam || !pParam->base)
 		return ret;
@@ -210,9 +194,6 @@ void vm_hud_fini(void)
 	if (g_hook >= 0) {
 		taiHookReleaseForKernel(g_hook, g_ref);
 		g_hook = -1;
-		/* a frame still in the hook (one waits for the display at most) */
-		for (int i = 0; i < 500 && __atomic_load_n(&g_inflight, __ATOMIC_ACQUIRE); i++)
-			ksceKernelDelayThread(1000);
 	}
 	if (g_cache_uid >= 0)
 		cache_swap(-1, NULL, 0);

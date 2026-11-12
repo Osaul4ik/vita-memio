@@ -401,14 +401,15 @@ int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 	return 0;
 }
 
-/* The block of an address in a process: one per 1 MiB of address (a buffer
- * across such a line spans two), for the refused-mapping log. */
+/* The block of an address in a process: one block for every address (so a
+ * buffer's stretches do not depend on where the test's memory lies), none
+ * in [fake_noblock_lo, fake_noblock_hi). */
 SceUID ksceKernelFindProcMemBlockByAddr(SceUID pid, const void *addr, SceSize size)
 {
 	(void)pid; (void)size;
 	if (fake_noblock_hi && (uintptr_t)addr >= fake_noblock_lo && (uintptr_t)addr < fake_noblock_hi)
 		return (SceUID)0x80020001;
-	return (SceUID)(0x5000 + (((uintptr_t)addr >> 20) & 0xFFF));
+	return (SceUID)0x5001;
 }
 
 int ksceKernelUserUnmap(SceUID uid)

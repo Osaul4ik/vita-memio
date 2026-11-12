@@ -141,11 +141,8 @@ static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 {
 	SceUID old;
 
-	/* a frame being drawn: a few us. No time limit: going on without the
-	 * lock would free the block under a drawing thread (and then release
-	 * that thread's lock). */
-	while (__sync_lock_test_and_set(&g_row_busy, 1))
-		ksceKernelDelayThread(100);
+	for (int i = 0; i < 1000 && __sync_lock_test_and_set(&g_row_busy, 1); i++)
+		ksceKernelDelayThread(100);    /* a frame being drawn: a few us at most */
 	old = g_cache_uid;
 	g_cache_uid = uid;
 	g_cache.px = px;

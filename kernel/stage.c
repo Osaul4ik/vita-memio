@@ -1798,7 +1798,8 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * every RA_ADAPT_SECTORS of them it is weighed as the R/A Test weighs it (a
  * sector used saves RT_GAIN_*_US, a piece read for nothing costs RT_WASTE_US):
  * a loss starts it one read later; little read for nothing (under one in
- * RA_ADAPT_LOW) one sooner. Never off: "never" (the test's) stays never. Back
+ * RA_ADAPT_LOW) one sooner - each only after two such rounds in a row, so
+ * one round that happened to go either way moves nothing. Never off: "never" (the test's) stays never. Back
  * to where On has it when what is in effect changes (eff_update: another app
  * in front, a setting). Counted from any thread, unlocked: a lost count only
  * moves a decision. */
@@ -1807,6 +1808,7 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 #define RA_THR_LO         2u
 #define RA_THR_HI         8u
 static volatile int      g_ra_adj[2];
+static volatile int      g_ra_vote[2];                   /* last round: +1 later, -1 sooner, 0 */
 static volatile uint32_t g_ra_used[2], g_ra_unused[2];   /* sectors, this round */
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
 
@@ -1839,6 +1841,7 @@ static void ra_adapt_reset(void)
 {
 	for (int k = 0; k < 2; k++) {
 		ST(g_ra_adj[k], 0);
+		ST(g_ra_vote[k], 0);
 		ST(g_ra_used[k], 0);
 		ST(g_ra_unused[k], 0);
 	}
@@ -1850,7 +1853,7 @@ static void ra_adapt_note(int nc, uint32_t used, uint32_t unused)
 {
 	uint32_t u, w, t;
 	int64_t gain, loss;
-	int adj;
+	int dir;
 
 	if (LD(g_ra_mode) != VM_RA_ADAPTIVE)
 		return;
@@ -1869,14 +1872,14 @@ static void ra_adapt_note(int nc, uint32_t used, uint32_t unused)
 		return;
 	gain = (int64_t)u * (nc ? RT_GAIN_NC_US : RT_GAIN_C_US);
 	loss = (int64_t)w * RT_WASTE_US / RA_PIECE_SECTORS;
-	adj = LD(g_ra_adj[nc]);
-	if (loss > gain && t < RA_THR_HI)
-		adj++;
-	else if ((uint64_t)w * RA_ADAPT_LOW < (uint64_t)(u + w) && t > RA_THR_LO)
-		adj--;
-	else
+	dir = loss > gain && t < RA_THR_HI ? 1
+	    : (uint64_t)w * RA_ADAPT_LOW < (uint64_t)(u + w) && t > RA_THR_LO ? -1 : 0;
+	if (!dir || LD(g_ra_vote[nc]) != dir) {
+		ST(g_ra_vote[nc], dir);            /* the first such round: wait for the next */
 		return;
-	ST(g_ra_adj[nc], adj);
+	}
+	ST(g_ra_vote[nc], 0);
+	ST(g_ra_adj[nc], LD(g_ra_adj[nc]) + dir);
 	ADD(g_ra_moves[nc], 1);
 }
 

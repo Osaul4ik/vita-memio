@@ -3115,8 +3115,9 @@ static void test_tiny_reads(void)
 
 /* The app in front's own settings, kept in its profile. */
 /* Read ahead Adaptive: the threshold moves from where On has it (5), within
- * 2..8, one step per round of RA_ADAPT_SECTORS: later while what is read is
- * mostly not used, sooner while nearly all of it is; each kind on its own.
+ * 2..8, one step per two rounds of RA_ADAPT_SECTORS in a row that say the
+ * same: later while what is read is mostly not used, sooner while nearly all
+ * of it is; each kind on its own.
  * "never" stays never, On never moves, and what is in effect changing starts
  * afresh. Then the same from reads: a stream that always stops right after
  * read ahead began moves it up. */
@@ -3139,22 +3140,33 @@ static void test_readahead_adaptive(void)
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_readahead && ra_threshold(0) == 5);
-	for (int i = 0; i < 6; i++)                         /* all read for nothing */
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* one round alone moves nothing */
+	CHECK(ra_threshold(0) == 5);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* the second in a row does */
+	CHECK(ra_threshold(0) == 6);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* a round the other way between */
+	ra_adapt_note(0, RA_ADAPT_SECTORS, 0);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	CHECK(ra_threshold(0) == 6);
+	for (int i = 0; i < 12; i++)                        /* all read for nothing */
 		ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
 	CHECK(ra_threshold(0) == 8 && ra_threshold(1) == 5);   /* up to 8, NC as it was */
-	for (int i = 0; i < 10; i++)                        /* all used */
+	for (int i = 0; i < 20; i++)                        /* all used */
 		ra_adapt_note(0, RA_ADAPT_SECTORS, 0);
 	CHECK(ra_threshold(0) == 2);                        /* down to 2, never off */
 	/* in between: neither a loss nor little waste - it stays */
-	ra_adapt_note(0, RA_ADAPT_SECTORS * 3 / 4, RA_ADAPT_SECTORS / 4);
+	for (int i = 0; i < 4; i++)
+		ra_adapt_note(0, RA_ADAPT_SECTORS * 3 / 4, RA_ADAPT_SECTORS / 4);
 	CHECK(ra_threshold(0) == 2);
+	ra_adapt_note(1, 0, RA_ADAPT_SECTORS);
 	ra_adapt_note(1, 0, RA_ADAPT_SECTORS);
 	CHECK(ra_threshold(1) == 6);
 	/* a part of a round only counts */
 	ra_adapt_note(1, 0, RA_ADAPT_SECTORS / 4);
 	CHECK(ra_threshold(1) == 6);
 	vm_stage_apply(&s);                                  /* in effect again: afresh */
-	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ra_used[1] == 0 && g_ra_unused[1] == 0);
+	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ra_used[1] == 0 && g_ra_unused[1] == 0 &&
+	      g_ra_vote[0] == 0 && g_ra_vote[1] == 0);
 
 	/* an app's own thresholds are where it starts; its "never" stays */
 	g_title_fn = fake_title;
@@ -3166,8 +3178,10 @@ static void test_readahead_adaptive(void)
 	a.thr[1] = VM_RA_NEVER;
 	CHECK(vm_stage_app_set(&a) == VM_OK && g_ra_mode == VM_RA_ADAPTIVE);
 	CHECK(ra_threshold(0) == 3 && ra_threshold(1) == VM_RA_NEVER);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
-	ra_adapt_note(1, RA_ADAPT_SECTORS, 0);
+	for (int i = 0; i < 2; i++) {
+		ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+		ra_adapt_note(1, RA_ADAPT_SECTORS, 0);
+	}
 	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);
 	as_app(0x42);                                        /* another in front: afresh */
 	vm_stage_worker_tick();
@@ -3181,7 +3195,7 @@ static void test_readahead_adaptive(void)
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(d->ra_ready && ra_threshold(0) == 5);
-	for (uint32_t run = 0; run < 40 && ra_threshold(0) < 8; run++) {
+	for (uint32_t run = 0; run < 80 && ra_threshold(0) < 8; run++) {
 		const uint32_t at = (run % 3) * 1024;
 
 		for (uint32_t i = 0; i < 6; i++)

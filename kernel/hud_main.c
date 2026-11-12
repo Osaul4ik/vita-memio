@@ -316,7 +316,7 @@ static int rt_line(char *o)
 	return 1;
 }
 
-/* Start (copy on core 3 goes to C + NC All meanwhile), or stop and put in what it
+/* Start (copy on core 3 goes to C + NC R/A meanwhile), or stop and put in what it
  * found, saved in the app's profile. *save: to be saved once in effect. */
 static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 {
@@ -328,7 +328,7 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 
 		if (r == VM_OK) {
 			before = a->offload;
-			a->offload = VM_OFFLOAD_FULL;
+			a->offload = VM_OFFLOAD_ALL;      /* C + NC R/A: All only costs time */
 			snprintf(msg, cap, HUD_C_GOOD "Test on: play, SEL+> shows the HUD");
 		}
 		return r;

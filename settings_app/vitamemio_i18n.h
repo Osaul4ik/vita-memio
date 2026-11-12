@@ -1,9 +1,8 @@
 /*
  * vitamemio_i18n.h - text for the "vita-memio" Settings page.
  *
- * All 20 Vita system languages. English (US/UK) is authoritative; the others
- * are machine translations (see tools/gen_i18n.py). The language follows the
- * system setting and falls back to English (US).
+ * English only, whatever the system language (one string per id, from
+ * tools/gen_i18n.py), so the page carries no other languages' text.
  * C99, no char16_t: UTF-16 output uses plain unsigned short.
  */
 #ifndef VITAMEMIO_I18N_H
@@ -72,19 +71,7 @@ enum vm_i18n_id {
 	VM_I18N_COUNT
 };
 
-/* Vita system-language indices (the raw /CONFIG/SYSTEM/language value). */
-enum vm_lang_id {
-	VM_LANG_JAPANESE = 0, VM_LANG_ENGLISH_US, VM_LANG_FRENCH, VM_LANG_SPANISH,
-	VM_LANG_GERMAN, VM_LANG_ITALIAN, VM_LANG_DUTCH, VM_LANG_PORTUGUESE_PT,
-	VM_LANG_RUSSIAN, VM_LANG_KOREAN, VM_LANG_CHINESE_T, VM_LANG_CHINESE_S,
-	VM_LANG_FINNISH, VM_LANG_SWEDISH, VM_LANG_DANISH, VM_LANG_NORWEGIAN,
-	VM_LANG_POLISH, VM_LANG_PORTUGUESE_BR, VM_LANG_ENGLISH_GB, VM_LANG_TURKISH,
-	VM_LANG_COUNT
-};
-
-int vm_i18n_lang(void);
-const char *vm_i18n_for(int id, int lang);
-const char *vm_i18n(int id);   /* in the current system language */
+const char *vm_i18n(int id);   /* "" for an unknown id */
 
 /* UTF-8 -> UTF-16 (NUL-terminated, truncated to cap units). Returns the length. */
 int vm_i18n_to_u16(const char *utf8, unsigned short *out, int cap);

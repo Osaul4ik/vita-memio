@@ -1,7 +1,7 @@
 /*
  * test_i18n.c - the Settings page text: the UTF-8 -> UTF-16 conversion, and a
- * check over the whole generated translation table (valid UTF-8, English present,
- * every string fits the page's buffers). Run it after editing tools/gen_i18n.py.
+ * check over the whole generated table (every string present, valid UTF-8 and
+ * fitting the page's buffers). Run it after editing tools/gen_i18n.py.
  */
 #include "../settings_app/vitamemio_i18n.c"
 
@@ -10,13 +10,8 @@
 
 #include "vm_test.h"
 
-/* the registry / app-util calls the language lookup makes */
-static int fake_lang = 1;
-int sceRegMgrGetKeyInt(const char *c, const char *n, int *v) { (void)c; (void)n; *v = fake_lang; return 0; }
-int sceAppUtilSystemParamGetInt(int id, int *v) { (void)id; *v = 1; return 0; }
-
-/* sizeof the Settings page's text buffers (vitamemio_settings.c: g_txt[..][576]) */
-#define PAGE_UNITS 576
+/* sizeof the Settings page's text buffers (vitamemio_settings.c: VM_TXT_UNITS) */
+#define PAGE_UNITS 512
 
 static unsigned short *to16(const char *s, int cap, int *n)
 {
@@ -124,24 +119,20 @@ static int valid_utf8(const char *str, int *units)
 static void test_table(void)
 {
 	for (int id = 0; id < VM_I18N_COUNT; id++) {
-		const char *en = g_tbl[id][VM_LANG_ENGLISH_US];
+		const char *t = g_tbl[id];
+		int units = 0;
 
-		CHECK(en != NULL && en[0]);
-		for (int lang = 0; lang < VM_LANG_COUNT; lang++) {
-			const char *t = g_tbl[id][lang];
-			int units;
-
-			if (!t)
-				continue;                    /* falls back to English */
-			if (!valid_utf8(t, &units) || units >= PAGE_UNITS) {
-				printf("  FAIL id %d lang %d: bad UTF-8 or %d units\n", id, lang, units);
-				vm_failures++;
-			}
-			CHECK(strcmp(vm_i18n_for(id, lang), t) == 0);
+		CHECK(t != NULL && t[0]);
+		if (!t)
+			continue;
+		if (!valid_utf8(t, &units) || units >= PAGE_UNITS) {
+			printf("  FAIL id %d: bad UTF-8 or %d units\n", id, units);
+			vm_failures++;
 		}
+		CHECK(vm_i18n(id) == t);
 	}
-	CHECK(vm_i18n_for(-1, 1)[0] == 0 && vm_i18n_for(VM_I18N_COUNT, 1)[0] == 0);
-	CHECK(strcmp(vm_i18n_for(VM_I18N_TITLE, 999), vm_i18n_for(VM_I18N_TITLE, VM_LANG_ENGLISH_US)) == 0);
+	CHECK(vm_i18n(-1)[0] == 0 && vm_i18n(VM_I18N_COUNT)[0] == 0);
+	CHECK(strcmp(vm_i18n(VM_I18N_TITLE), "vita-memio") == 0);
 }
 
 /* The device rows show "<help> <why it is not working>" in one buffer. */
@@ -153,27 +144,17 @@ static void test_device_hint_fits(void)
 	                           VM_I18N_ST_SLOW };
 
 	for (unsigned h = 0; h < sizeof(hints) / sizeof(hints[0]); h++)
-		for (unsigned w = 0; w < sizeof(why) / sizeof(why[0]); w++)
-			for (int lang = 0; lang < VM_LANG_COUNT; lang++) {
-				int a, b;
+		for (unsigned w = 0; w < sizeof(why) / sizeof(why[0]); w++) {
+			int a, b;
 
-				valid_utf8(vm_i18n_for(hints[h], lang), &a);
-				valid_utf8(vm_i18n_for(why[w], lang), &b);
-				if (a + 1 + b >= PAGE_UNITS) {
-					printf("  FAIL hint %u + status %u lang %d: %d units, page holds %d\n",
-					       h, w, lang, a + 1 + b, PAGE_UNITS - 1);
-					vm_failures++;
-				}
+			valid_utf8(vm_i18n(hints[h]), &a);
+			valid_utf8(vm_i18n(why[w]), &b);
+			if (a + 1 + b >= PAGE_UNITS) {
+				printf("  FAIL hint %u + status %u: %d units, page holds %d\n",
+				       h, w, a + 1 + b, PAGE_UNITS - 1);
+				vm_failures++;
 			}
-}
-
-static void test_language_lookup(void)
-{
-	fake_lang = 0;  CHECK(vm_i18n_lang() == 0);
-	fake_lang = 19; CHECK(vm_i18n_lang() == 19);
-	fake_lang = 99; CHECK(vm_i18n_lang() == 1);      /* out of range: via app util -> 1 */
-	fake_lang = -3; CHECK(vm_i18n_lang() == 1);
-	fake_lang = 1;
+		}
 }
 
 int main(void)
@@ -182,7 +163,6 @@ int main(void)
 	RUN(test_conversion_limits);
 	RUN(test_table);
 	RUN(test_device_hint_fits);
-	RUN(test_language_lookup);
 
 	printf(vm_failures ? "test_i18n: %d FAILED\n" : "test_i18n: ok\n", vm_failures);
 	return vm_failures ? 1 : 0;

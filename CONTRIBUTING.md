@@ -67,15 +67,12 @@ When you report a result, include your console model, firmware, storage manager
 (YAMT, StorageMgr...), the SD card's size and speed class, the `status` output and
 the relevant log lines.
 
-## Translations
+## Text
 
-The Settings page is shown in all 20 Vita system languages. Only English is
-written by a person; the rest are machine translations, and corrections from
-native speakers are very welcome. The strings live in `tools/gen_i18n.py`: edit
-them there, then run `python3 tools/gen_i18n.py` to regenerate
-`settings_app/vitamemio_i18n_table.h`. Keep "vita-memio" and "SD2Vita"
-untranslated. The HUD's words are in `kernel/hud_i18n.c` (plain ASCII, accents
-dropped, Latin-script languages only).
+The Settings page and the HUD are in English only. The page's strings live in
+`tools/gen_i18n.py`: edit them there, then run `python3 tools/gen_i18n.py` to
+regenerate `settings_app/vitamemio_i18n_table.h` (`make test` checks that every
+string fits the page). The HUD's words are in `kernel/hud_main.c`.
 
 ## Pull requests
 

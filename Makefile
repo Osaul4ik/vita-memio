@@ -1,6 +1,6 @@
 # vita-memio - build and deploy helpers.
 #
-#   make                      build both modules (uses your VitaSDK if $VITASDK
+#   make                      build the modules (uses your VitaSDK if $VITASDK
 #                             is set, otherwise the pinned VitaSDK Docker image)
 #   make install VITA_IP=...  upload the modules to ur0:tai/ over FTP
 #   make deploy  VITA_IP=...  install, then reboot the Vita so they load
@@ -12,7 +12,8 @@
 #   make clean
 #
 # install/deploy/log talk to vitacompanion (FTP on :1337, commands on :1338)
-# running on the Vita. Output: build/vitamemio_kernel.skprx, build/vitamemio.suprx
+# running on the Vita. Output: build/vitamemio_kernel.skprx, build/vitamemio_hud.skprx
+# (loaded by the kernel module, not listed in config.txt), build/vitamemio.suprx
 
 BUILD   ?= build
 VITA_IP ?=
@@ -29,7 +30,7 @@ ifneq ($(GIT_HASH),)
 CMAKE_ARGS += -DVM_GIT_HASH=$(GIT_HASH)
 endif
 
-MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio.suprx
+MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio_hud.skprx $(BUILD)/vitamemio.suprx
 TESTER_VPK := $(BUILD)/vitamemio_tester.vpk
 FTP      = ftp://$(VITA_IP):1337
 

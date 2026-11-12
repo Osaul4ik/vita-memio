@@ -14,9 +14,9 @@ Faster reads and writes, with the biggest gain in anything that reads files in o
 
 ## Install
 
-Get `vitamemio_kernel.skprx`, `vitamemio.suprx` and, if you want to measure your card, `vitamemio_tester.vpk` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest).
+Get `vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx` and, if you want to measure your card, `vitamemio_tester.vpk` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest).
 
-1. Copy `vitamemio_kernel.skprx` and `vitamemio.suprx` to `ur0:tai/`.
+1. Copy `vitamemio_kernel.skprx`, `vitamemio_hud.skprx` and `vitamemio.suprx` to `ur0:tai/`.
 2. Add these lines to your taiHEN config. If `ux0:tai/config.txt` exists, edit that one, otherwise `ur0:tai/config.txt`:
 
    ```
@@ -26,12 +26,13 @@ Get `vitamemio_kernel.skprx`, `vitamemio.suprx` and, if you want to measure your
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
+   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself the first time you switch on the HUD or the overlay.
 3. Restart the console.
 4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything starts switched off.
 
 That is all: the other defaults are the recommended ones. Back up your cards first, as with any plugin that touches storage.
 
-**To update:** replace both files and restart. Always update the two together.
+**To update:** replace all three files and restart. Always update them together.
 
 **Before a firmware update or downgrade,** switch *Faster internal storage* off, as an extra precaution.
 
@@ -40,7 +41,7 @@ That is all: the other defaults are the recommended ones. Back up your cards fir
 1. In **Settings > Devices > vita-memio**, switch off every storage.
 2. Remove the plugin's lines from `config.txt`.
 3. Restart the console.
-4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio.suprx` and the folder `ur0:data/vita-memio/`.
+4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio_hud.skprx`, `ur0:tai/vitamemio.suprx` and the folder `ur0:data/vita-memio/`.
 
 ## Settings
 
@@ -181,15 +182,16 @@ This error means the system is out of kernel memory. It can also appear as a cra
 1. If another app is running, close it first.
 2. Leave the plugin on for only one storage. Each storage you switch on takes 256 KiB.
 3. Switch off *Read ahead*, *Overlapped reads* and *Copy on the system core*.
-4. Remove other kernel plugins from your taiHEN config.
+4. Switch off *Storage HUD* and *Overlay*, then restart.
+5. Remove other kernel plugins from your taiHEN config.
 
 ## Good to know
 
 - Only the storages you switch on are touched. Game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*.
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more from the first time you switch one on until the next restart; with both off they take nothing.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
-- The Settings page follows the system language. Only English is written by a person; corrections are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+- The Settings page and the HUD are in English.
 
 ## Disclaimer
 

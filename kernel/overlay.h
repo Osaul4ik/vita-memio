@@ -1,6 +1,7 @@
 /*
  * overlay.h - the SELECT + arrows overlay: keys (SceCtrl hooks) and state.
- * The worker (main.c) draws it through the HUD and makes its changes.
+ * The worker (hud_main.c, called by the kernel module's worker) draws it
+ * through the HUD and makes its changes.
  */
 #ifndef VITAMEMIO_OVERLAY_H
 #define VITAMEMIO_OVERLAY_H

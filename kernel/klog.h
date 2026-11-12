@@ -22,6 +22,7 @@
 #ifndef VITAMEMIO_KLOG_H
 #define VITAMEMIO_KLOG_H
 
+#include <stdarg.h>
 #include <stdint.h>
 
 #include "../include/vitamemio.h"
@@ -48,6 +49,8 @@ void vm_klog_fini(void);
 void vm_klog_set_enabled(int on);
 
 void vm_klog(int level, const char *fmt, ...);
+/* The same with a va_list (the HUD module logs through it, kernel/hud_link.h). */
+void vm_vklog(int level, const char *fmt, va_list ap);
 
 #define VM_KLOGE(...) vm_klog(VM_KLOG_ERR,   __VA_ARGS__)
 #define VM_KLOGW(...) vm_klog(VM_KLOG_WARN,  __VA_ARGS__)

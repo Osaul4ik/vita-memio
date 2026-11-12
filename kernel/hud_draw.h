@@ -61,14 +61,24 @@ static inline uint32_t hud_color(int code)
 
 #define HUD_PANEL_BG  HUD_ABGR(0, 0, 0)
 
-typedef struct { const uint16_t *glyphs; int w, h; } HudFont;
+/* glyphs: 16 bits a row; glyphs8 instead for a font 8 px wide (8x14). */
+typedef struct { const uint16_t *glyphs; const uint8_t *glyphs8; int w, h; } HudFont;
+
+/* Row `gy` of character `c`'s glyph, the leftmost pixel in bit 15. */
+static inline uint16_t hud_glyph_row(const HudFont *f, unsigned char c, int gy)
+{
+	const int i = (c - TER_FIRST) * f->h + gy;
+
+	return f->glyphs8 ? (uint16_t)(f->glyphs8[i] << 8) : f->glyphs[i];
+}
 
 static inline HudFont hud_font_for(int fb_w)
 {
 	HudFont f;
 
+	f.glyphs8 = 0;
 	if (fb_w <= 640) {
-		f.glyphs = &ter14[0][0]; f.w = TER14_W; f.h = TER14_H;
+		f.glyphs = 0; f.glyphs8 = &ter14[0][0]; f.w = TER14_W; f.h = TER14_H;
 	} else if (fb_w <= 720) {
 		f.glyphs = &ter18[0][0]; f.w = TER18_W; f.h = TER18_H;
 	} else {
@@ -154,7 +164,7 @@ static inline void hud_compose_row(const HudText *t, const HudGeom *g, int r, ui
 			continue;
 		}
 		if (c >= TER_FIRST && c <= TER_LAST &&
-		    (bits = g->f.glyphs[(c - TER_FIRST) * g->f.h + gy]) != 0)
+		    (bits = hud_glyph_row(&g->f, c, gy)) != 0)
 			for (int dx = 0; dx < g->f.w; dx++)
 				if (bits & (0x8000u >> dx))
 					row[cx + dx] = color;
@@ -212,7 +222,7 @@ static inline void hud_pack_row(const HudText *t, const HudGeom *g, int r, uint8
 				continue;
 			}
 			if (c >= TER_FIRST && c <= TER_LAST &&
-			    (bits = g->f.glyphs[(c - TER_FIRST) * g->f.h + gy]) != 0)
+			    (bits = hud_glyph_row(&g->f, c, gy)) != 0)
 				for (int dx = 0; dx < g->f.w; dx++)
 					if (bits & (0x8000u >> dx)) {
 						const int x = cx + dx;

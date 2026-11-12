@@ -1,6 +1,6 @@
 /*
  * settings_ui.h - Settings-app (NPXS10015) hooks of vitamemio.suprx.
- * settings_app/main.c installs them at module_start.
+ * user/main.c installs them at module_start.
  */
 #ifndef VITAMEMIO_SETTINGS_UI_H
 #define VITAMEMIO_SETTINGS_UI_H

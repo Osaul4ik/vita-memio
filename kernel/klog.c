@@ -157,6 +157,15 @@ static const char *level_name(int level)
 
 void vm_klog(int level, const char *fmt, ...)
 {
+	va_list ap;
+
+	va_start(ap, fmt);
+	vm_vklog(level, fmt, ap);
+	va_end(ap);
+}
+
+void vm_vklog(int level, const char *fmt, va_list ap)
+{
 	if (level > g_level || !fmt || g_enabled == 0)   /* off: not even formatted */
 		return;
 
@@ -179,10 +188,7 @@ void vm_klog(int level, const char *fmt, ...)
 	while (*lvl && pos < (int)sizeof(line) - 1) line[pos++] = *lvl++;
 	if (pos < (int)sizeof(line) - 1) line[pos++] = ' ';
 
-	va_list ap;
-	va_start(ap, fmt);
 	pos += vm_fmt_v(line + pos, (int)sizeof(line) - pos, fmt, ap);
-	va_end(ap);
 
 	if (pos > (int)sizeof(line) - 1)
 		pos = (int)sizeof(line) - 1;

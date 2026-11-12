@@ -1,12 +1,17 @@
 # CMake build for vita-memio, the PS Vita storage plugin (firmware 3.60-3.74,
 # taiHEN/HENkaku).
 #
-# Two artifacts:
+# Three modules (and the tester app below):
 #   vitamemio_kernel.skprx - kernel module: the faster storage path (staging),
-#                               settings, the HUD, the boot guard, and the
-#                               user-callable SceVitaMemio syscall library.
+#                            settings, the boot guard, the log and the
+#                            user-callable SceVitaMemio syscall library.
+#   vitamemio_hud.skprx    - kernel module: the HUD and the SELECT + arrows
+#                            overlay. Not in config.txt: the kernel module
+#                            loads it from its own folder the first time the
+#                            HUD or the overlay is switched on, so with both
+#                            off it takes no kernel memory (kernel/hud_link.h).
 #   vitamemio.suprx        - user module, listed under *NPXS10015 (the
-#                               Settings app: the vita-memio page under Devices).
+#                            Settings app: the vita-memio page under Devices).
 #
 # BUILD REQUIREMENTS: the VitaSDK toolchain (https://vitasdk.org) and taiHEN's
 # headers/stubs (taihen):
@@ -69,9 +74,7 @@ add_executable(vitamemio_kernel
   kernel/klog.c
   kernel/settings.c
   kernel/stage.c
-  kernel/hud.c
-  kernel/hud_i18n.c
-  kernel/overlay.c
+  kernel/hud_link.c              # loads the HUD module on demand
 )
 
 target_link_libraries(vitamemio_kernel
@@ -83,6 +86,7 @@ target_link_libraries(vitamemio_kernel
   SceDebugForDriver_stub        # ksceDebugPrintf (kernel logger)
   SceIofilemgrForDriver_stub    # ksceIo* (log, settings, boot guard)
   SceSdifForDriver_stub         # ksceSdifGetSdContextGlobal (which port a call is for)
+  SceModulemgrForDriver_stub    # ksceKernelLoadStartModule (the HUD module)
 )
 # taiHEN modules enter via module_start, not crt0's main - drop startup files.
 # -Tdata: as for the user module below - vita-elf-create appends ~1.5 KB of
@@ -95,6 +99,34 @@ vita_create_self(vitamemio_kernel.skprx vitamemio_kernel
   UNSAFE)
 vita_create_stubs(vitamemio-stubs vitamemio_kernel
   ${CMAKE_SOURCE_DIR}/vitamemio_kernel.yml KERNEL)
+
+# --------------------------------------------------------------------------
+# HUD module: vitamemio_hud.skprx (loaded by the kernel module, on demand)
+# --------------------------------------------------------------------------
+# It imports nothing of the kernel module: the functions it needs are handed
+# to it at module_start (kernel/hud_link.h), so it links against the system
+# libraries only. The SceCtrl and SceDisplay functions it hooks are found by
+# taiHEN at run time.
+add_executable(vitamemio_hud
+  kernel/hud_main.c              # module entry, the HUD's and the overlay's text
+  kernel/hud.c                   # drawing over the framebuffer
+  kernel/overlay.c               # the overlay's keys
+)
+target_link_libraries(vitamemio_hud
+  taihenForKernel_stub
+  SceSysmemForDriver_stub       # the panel cache, user<->kernel copies
+  SceSysclibForDriver_stub      # memcpy/memset/strncmp/snprintf for kernel
+  SceThreadmgrForDriver_stub    # system time, delays
+)
+target_link_options(vitamemio_hud PRIVATE -nostartfiles -Wl,-Tdata=0x81100000)
+# vita_create_self appends its "-e <config>" to VITA_ELF_CREATE_FLAGS (see the
+# tester below): this module gets its own only, the next ones as before.
+set(VM_SAVED_ELF_CREATE_FLAGS "${VITA_ELF_CREATE_FLAGS}")
+set(VITA_ELF_CREATE_FLAGS "")
+vita_create_self(vitamemio_hud.skprx vitamemio_hud
+  CONFIG ${CMAKE_SOURCE_DIR}/vitamemio_hud.yml
+  UNSAFE)
+set(VITA_ELF_CREATE_FLAGS "${VM_SAVED_ELF_CREATE_FLAGS}")
 
 # --------------------------------------------------------------------------
 # User module: vitamemio.suprx (the Settings app)
@@ -126,8 +158,7 @@ target_link_libraries(vitamemio
   SceLibKernel_stub_weak        # sceKernel* / sceIo* helpers
   SceIofilemgr_stub_weak        # sceIoOpen/Write/Close (the log file)
   SceProcessmgr_stub_weak       # sceKernelGetProcessTimeWide (log stamps)
-  SceRegistryMgr_stub_weak      # sceRegMgrGetKeyInt (system language)
-  SceAppUtil_stub_weak          # sceAppUtilSystemParamGetInt (language fallback)
+  SceSysmem_stub_weak           # sceKernelAllocMemBlock (the page, on demand)
 )
 
 # -Tdata: vita-elf-create appends ~1.5 KB of module info to the end of the text

@@ -58,22 +58,23 @@ jobs:
       - name: Build (pinned VitaSDK image)
         run: make build
 
-      - name: Check both modules exist and are not empty
+      - name: Check the modules exist and are not empty
         run: |
-          for f in build/vitamemio_kernel.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do
+          for f in build/vitamemio_kernel.skprx build/vitamemio_hud.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do
             test -s "$f" || { echo "missing or empty: $f"; exit 1; }
           done
 
       - name: SHA-256 sums
         run: |
           cd build
-          sha256sum vitamemio_kernel.skprx vitamemio.suprx vitamemio_tester.vpk | tee SHA256SUMS
+          sha256sum vitamemio_kernel.skprx vitamemio_hud.skprx vitamemio.suprx vitamemio_tester.vpk | tee SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: vita-memio-${{ github.sha }}
           path: |
             build/vitamemio_kernel.skprx
+            build/vitamemio_hud.skprx
             build/vitamemio.suprx
             build/vitamemio_tester.vpk
             build/SHA256SUMS

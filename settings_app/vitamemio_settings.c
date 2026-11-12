@@ -31,6 +31,7 @@
  * page simply doesn't appear; nothing crashes.
  */
 #include <psp2/kernel/modulemgr.h>
+#include <psp2/kernel/sysmem.h>
 #include <taihen.h>
 
 #include "../include/vitamemio.h"
@@ -109,8 +110,12 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 	"</setting_list>" \
 	"</setting_list>"
 
-static const char X_PAGE[] = X_OPEN X_REST;
-static const char X_PAGE_SAFE[] = X_OPEN X_SAFE X_REST;
+/* The page is put together from these as it is spliced in (xml_hook): the
+ * safe-mode row only in safe mode, and no second copy of the rest for it. */
+static const char X_PAGE_OPEN[] = X_OPEN;
+static const char X_PAGE_SAFE[] = X_SAFE;
+static const char X_PAGE_REST[] = X_REST;
+#define X_LEN(x)  ((int)sizeof(x) - 1)
 
 /* Accept a Devices page up to this size; leave it alone if it is ever bigger.
  * The stock page is a few KB; YAMT replaces it with its own (~50 KB), and when
@@ -122,10 +127,13 @@ static const char X_PAGE_SAFE[] = X_OPEN X_SAFE X_REST;
 
 /* The Settings renderer resolves title= and hint= through
  * scePafToplevelGetText and wants UTF-16; literal text in the XML shows blank.
- * A small ring of buffers, so the visible strings never share one. */
+ * A small ring of buffers, so the visible strings never share one. Each holds
+ * the longest text (a help with its status after it); tests/test_i18n.c
+ * checks every one fits. */
 typedef unsigned short vm_u16;
 
-static vm_u16 g_txt[6][576];
+#define VM_TXT_UNITS 512
+static vm_u16 g_txt[6][VM_TXT_UNITS];
 static int    g_txt_next = 0;
 
 static vm_u16 *next_buf(void)
@@ -171,7 +179,50 @@ static void l_hex(Line *l, uint32_t v)
 	l_put(l, h);
 }
 
-static char g_pagebuf[VM_PAGE_ORIG_MAX + sizeof(X_PAGE_SAFE)];
+/* The Devices page with our group spliced in. A memory block of the page's
+ * size, made the first time the page opens (the stock page: a few KiB) and kept
+ * for the next time; made bigger only if a page needs more (another plugin's
+ * page). The block it replaces is kept until the next replacement, in case the
+ * page still uses it, then freed. Nothing while the page was never opened. */
+static SceUID g_page_uid = -1, g_page_old = -1;
+static char  *g_page;
+static int    g_page_cap;
+
+static char *page_buf(int need)
+{
+	SceUID uid;
+	void *base = NULL;
+	int cap;
+
+	if (g_page && need <= g_page_cap)
+		return g_page;
+	cap = (need + 0xFFF) & ~0xFFF;
+	uid = sceKernelAllocMemBlock("vitamemio_page", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, cap, NULL);
+	if (uid < 0 || sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+		if (uid >= 0)
+			sceKernelFreeMemBlock(uid);
+		VM_LOGI("[SET] no memory for the page (%d bytes, 0x%08x)", cap, (unsigned)uid);
+		return 0;
+	}
+	if (g_page_old >= 0)
+		sceKernelFreeMemBlock(g_page_old);
+	g_page_old = g_page_uid;
+	g_page_uid = uid;
+	g_page = base;
+	g_page_cap = cap;
+	return g_page;
+}
+
+static void page_free(void)
+{
+	if (g_page_uid >= 0)
+		sceKernelFreeMemBlock(g_page_uid);
+	if (g_page_old >= 0)
+		sceKernelFreeMemBlock(g_page_old);
+	g_page_uid = g_page_old = -1;
+	g_page = 0;
+	g_page_cap = 0;
+}
 
 /* The status row: title and help (also the dialog it opens). */
 static const vm_u16 *status_text(int hint)
@@ -389,18 +440,27 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 		const char *ins = devices_insert_at(s, size);
 		VmState st;
 		const int safe = get_state(&st) && st.disabled == VM_DIS_SAFE;
-		const char *const page = safe ? X_PAGE_SAFE : X_PAGE;
-		const int hl = (safe ? (int)sizeof(X_PAGE_SAFE) : (int)sizeof(X_PAGE)) - 1;
+		const int hl = X_LEN(X_PAGE_OPEN) + (safe ? X_LEN(X_PAGE_SAFE) : 0) + X_LEN(X_PAGE_REST);
 		if (!ins)
 			VM_LOGI("[SET] devices page (size=%d): insert point not found - page not added",
 			        size);
-		if (ins) {
+		char *const pb = ins ? page_buf(size + hl) : 0;
+
+		if (pb) {
 			int head = (int)(ins - s);
 
-			s_cpy(g_pagebuf, s, head);
-			s_cpy(g_pagebuf + head, page, hl);
-			s_cpy(g_pagebuf + head + hl, ins, size - head);
-			buf = g_pagebuf; size = size + hl;
+			char *at = pb + head;
+
+			s_cpy(pb, s, head);
+			s_cpy(at, X_PAGE_OPEN, X_LEN(X_PAGE_OPEN));
+			at += X_LEN(X_PAGE_OPEN);
+			if (safe) {
+				s_cpy(at, X_PAGE_SAFE, X_LEN(X_PAGE_SAFE));
+				at += X_LEN(X_PAGE_SAFE);
+			}
+			s_cpy(at, X_PAGE_REST, X_LEN(X_PAGE_REST));
+			s_cpy(pb + head + hl, ins, size - head);
+			buf = pb; size = size + hl;
 		}
 	}
 	return TAI_CONTINUE(int, r_xml, out, buf, size, a4);
@@ -531,4 +591,5 @@ void vm_settings_hooks_release(void)
 	if (g_h_xml>=0)  { taiHookRelease(g_h_xml,  r_xml);  g_h_xml=-1;  }
 	if (g_h_init>=0) { taiHookRelease(g_h_init, r_init); g_h_init=-1; }
 	if (g_h_load>=0) { taiHookRelease(g_h_load, r_load); g_h_load=-1; }
+	page_free();
 }

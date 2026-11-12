@@ -1,58 +1,21 @@
 /*
- * vitamemio_i18n.c - text for the vita-memio Settings page.
- *
- * MACHINE-TRANSLATED CONTENT. Only English (US/UK) is authoritative; the
- * other languages are machine translations so the page is legible in all 20
- * Vita system languages. Corrections from native speakers are welcome: edit
- * tools/gen_i18n.py and regenerate vitamemio_i18n_table.h.
- *
- * Needs SceRegistryMgr_stub_weak and SceAppUtil_stub_weak (both resident in
- * NPXS10015).
+ * vitamemio_i18n.c - text for the vita-memio Settings page (English only, see
+ * vitamemio_i18n.h; the strings are in tools/gen_i18n.py).
  */
 #include "vitamemio_i18n.h"
 
-extern int sceRegMgrGetKeyInt(const char *category, const char *name, int *value);
-extern int sceAppUtilSystemParamGetInt(int paramId, int *value);
-
-#define VM_SYSTEM_PARAM_ID_LANG 1
-
-static const char *const g_tbl[VM_I18N_COUNT][VM_LANG_COUNT] = {
+static const char *const g_tbl[VM_I18N_COUNT] = {
 #include "vitamemio_i18n_table.h"
 };
 
-int vm_i18n_lang(void)
-{
-	int lang = -1;
-
-	/* The registry is the canonical store and has no init gate. */
-	if (sceRegMgrGetKeyInt("/CONFIG/SYSTEM", "language", &lang) >= 0 &&
-	    lang >= 0 && lang < VM_LANG_COUNT)
-		return lang;
-	/* Only answers once the host app has called sceAppUtilInit(). */
-	lang = -1;
-	if (sceAppUtilSystemParamGetInt(VM_SYSTEM_PARAM_ID_LANG, &lang) >= 0 &&
-	    lang >= 0 && lang < VM_LANG_COUNT)
-		return lang;
-	return VM_LANG_ENGLISH_US;
-}
-
-const char *vm_i18n_for(int id, int lang)
+const char *vm_i18n(int id)
 {
 	const char *s;
 
 	if (id < 0 || id >= VM_I18N_COUNT)
 		return "";
-	if (lang < 0 || lang >= VM_LANG_COUNT)
-		lang = VM_LANG_ENGLISH_US;
-	s = g_tbl[id][lang];
-	if (!s)
-		s = g_tbl[id][VM_LANG_ENGLISH_US];
+	s = g_tbl[id];
 	return s ? s : "";
-}
-
-const char *vm_i18n(int id)
-{
-	return vm_i18n_for(id, vm_i18n_lang());
 }
 
 int vm_i18n_to_u16(const char *utf8, unsigned short *out, int cap)

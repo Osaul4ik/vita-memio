@@ -134,7 +134,7 @@ Core 3  C: 98%  NC: 0%
 ```
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
-- **Streak:** reads in a row before read ahead starts (with *Adaptive*, where it is now).
+- **Streak:** reads in a row before read ahead starts. With *Adaptive* as set:now, for example `C: 5:6`: set at 5, at 6 now.
 - **Core 3, C:** the share of copying done on the spare core since the HUD opened. Copies of graphics data from read ahead count here.
 - **Core 3, NC:** the share of graphics data reads done on the spare core. It stays at 0% unless copying is on *C + NC All*.
 

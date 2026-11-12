@@ -55,6 +55,8 @@ typedef struct VmApp {
 typedef struct VmRaNow {
 	int      mode;          /* VM_RA_* in effect (global, or the app's)       */
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)   */
+	uint32_t set[2];        /* ... as set (the app's or the fixed): Adaptive
+	                         * moves thr from there                            */
 } VmRaNow;
 void vm_stage_ra_now(VmRaNow *out);
 

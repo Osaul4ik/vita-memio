@@ -142,18 +142,23 @@ static void pct_text(char *o, int cap, int p)
 		         (unsigned)(p > 100 ? 100 : p));
 }
 
-/* A threshold for the HUD: the number, or "never" (never starts). */
-static void hud_thr(char *o, int cap, uint32_t t)
+/* A threshold for the HUD: the number, or "never" (never starts); with
+ * Adaptive "set:now", e.g. "5:6". */
+static void hud_thr(char *o, int cap, uint32_t set, uint32_t now, int adaptive)
 {
-	if (t == VM_RA_NEVER)
+	if (now == VM_RA_NEVER)
 		snprintf(o, cap, HUD_C_DIM "never");
+	else if (adaptive)
+		snprintf(o, cap, HUD_C_TEXT "%u:" HUD_C_GOOD "%u", (unsigned)(set > 99 ? 99 : set),
+		         (unsigned)(now > 99 ? 99 : now));
 	else
-		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(t > 99 ? 99 : t));
+		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(now > 99 ? 99 : now));
 }
 
 /* Read ahead in the HUD, for the app in front:
  *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
- *   Streak  C: 5  NC: never              (reads in a row before it starts, now)
+ *   Streak  C: 5  NC: never              (reads in a row before it starts;
+ *                                         Adaptive: as set:now, C: 5:6)
  *   Core 3  C: 98%  NC: 100%             (since the HUD came up)
  * Off: no Streak line. Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, int on)
@@ -180,12 +185,12 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	/* in effect for the app in front (its own, or the global one) */
 	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" :
 	       now.mode == VM_RA_ADAPTIVE ? HUD_C_TEXT "Adaptive" : HUD_C_DIM "Off";
-	hud_thr(c, sizeof(c), now.thr[0]);
-	hud_thr(nc, sizeof(nc), now.thr[1]);
+	hud_thr(c, sizeof(c), now.set[0], now.thr[0], now.mode == VM_RA_ADAPTIVE);
+	hud_thr(nc, sizeof(nc), now.set[1], now.thr[1], now.mode == VM_RA_ADAPTIVE);
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room)
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.7s" HUD_C_DIM
-		         "  NC: %.7s", c, nc);
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.9s" HUD_C_DIM
+		         "  NC: %.9s", c, nc);
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;
 		char a[16], b[16];

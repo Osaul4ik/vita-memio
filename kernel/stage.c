@@ -3743,8 +3743,10 @@ void vm_stage_ra_now(VmRaNow *o)
 {
 	memset(o, 0, sizeof(*o));
 	o->mode = LD(g_ra_mode);
-	for (int k = 0; k < 2; k++)
+	for (int k = 0; k < 2; k++) {
 		o->thr[k] = ra_threshold(k);
+		o->set[k] = ra_base_threshold(k);
+	}
 }
 
 void vm_stage_fg(VmFg *o)

@@ -234,6 +234,15 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.gpusafe == 0 && s.pipeline == VM_PIPE_OFF);     /* both stored: kept */
+	/* three choices: 1 (the old "on") is All, 2 Non-DMA; nothing past them */
+	CHECK(VM_DEF_GPUSAFE == VM_GPUSAFE_ALL);
+	CHECK(vm_settings_set(VM_KEY_GPUSAFE, VM_GPUSAFE_NODMA) == VM_OK);
+	vm_settings_copy(&s);
+	CHECK(s.gpusafe == VM_GPUSAFE_NODMA);
+	CHECK(vm_settings_set(VM_KEY_GPUSAFE, 3) == VM_ERR_ARG);
+	vm_settings_copy(&s);
+	CHECK(s.gpusafe == VM_GPUSAFE_NODMA);
+	vm_settings_set(VM_KEY_GPUSAFE, 0);
 	v[VM_KEY_PIPELINE] = VM_PIPE_FIXED;
 	clean();
 	n = make_file(buf, VM_KEY_COUNT, v);

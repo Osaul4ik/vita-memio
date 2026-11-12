@@ -749,7 +749,7 @@ static void test_small_files(void)
 	CHECK(strstr(text, "plugin small transfers too: on"));
 	CHECK(strstr(text, "plugin overlapped reads: auto\n"));
 	CHECK(strstr(text, "plugin copy on the system core: C + NC All (cached and non-cacheable, also the reads themselves)\n"));
-	CHECK(strstr(text, "plugin GPU-safe reads: on\n"));
+	CHECK(strstr(text, "plugin GPU-safe reads: all\n"));
 	CHECK(strstr(text, "plugin read ahead: on\n"));
 	CHECK(r->plugin0.offload == VM_OFFLOAD_FULL);
 	n = report_screen_lines(r, lines, REPORT_LINES_MAX);
@@ -762,7 +762,7 @@ static void test_small_files(void)
 	CHECK(found);
 	found = 0;
 	for (int i = 0; i < n; i++)
-		found |= !strcmp(lines[i], "GPU-safe reads: on");
+		found |= !strcmp(lines[i], "GPU-safe reads: all");
 	CHECK(found);
 	CHECK(strstr(lines[n - 6], "files delete"));      /* then the NC reads */
 	CHECK(strstr(lines[n - 4], "NC read 128K"));

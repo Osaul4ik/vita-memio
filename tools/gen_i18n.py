@@ -85,7 +85,7 @@ T = [
     ("VM_I18N_ROW_GPUSAFE",
      "GPU-safe reads"),
     ("VM_I18N_HINT_GPUSAFE",
-     "After each faster read, writes the data out of the CPU cache to memory, as the standard path leaves it, so the graphics chip always reads it correctly. Costs some read speed; compare with the tester app. Recommended while playing games."),
+     "After a faster read, writes its data out of the CPU cache to memory, as the standard path leaves it, so the graphics chip always reads it correctly. All: after every read; costs some read speed. Non-DMA: not after the copies DMA copy makes, which should not need it; faster, but if a game shows graphics glitches, use All. Off: never. All or Non-DMA while playing games."),
     ("VM_I18N_ROW_PIPELINE",
      "Overlapped reads"),
     ("VM_I18N_HINT_PIPELINE",
@@ -132,6 +132,10 @@ T = [
      "Now: stopped by itself, the DMA controller refused copies. Last error:"),
     ("VM_I18N_DMA_STOP_MISMATCH",
      "Now: stopped by itself, Verify transfers found a difference. The CPU copies."),
+    ("VM_I18N_ITEM_GS_NODMA",
+     "Non-DMA"),
+    ("VM_I18N_ITEM_GS_ALL",
+     "All"),
 ]
 
 

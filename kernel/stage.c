@@ -267,6 +267,7 @@ static void (*g_dcache_clean)(void *start, unsigned int size);
 static volatile int g_gpu_safe;
 static int g_gpu_safe_logged;
 static volatile uint32_t g_gpu_cleaned_kib, g_nc_stock_kib;   /* for the log */
+static volatile uint32_t g_gpu_dma_kib;   /* ... of it not cleaned: DMA copies, "Non-DMA" */
 
 /* SceSysmemForDriver: the memory type at an address of the current address
  * space, masked with 0xFF00 (0xD000 cached, 0x4000 L1 write-back only,
@@ -914,13 +915,34 @@ static int dma_try(void *dst, const void *src, size_t n)
 
 /* Out of the staging buffer into the caller's: the DMA controller when it
  * can, else the CPU. A refused DMA copy may have written part of `dst`: the
- * CPU copy then writes all of it. */
-static void __attribute__((unused)) stage_copy_out(void *dst, const void *src, size_t n)
+ * CPU copy then writes all of it. 1 if the DMA controller made it. */
+static int __attribute__((unused)) stage_copy_out(void *dst, const void *src, size_t n)
 {
-	if (dma_try(dst, src, n))
+	if (dma_try(dst, src, n)) {
 		__sync_synchronize();   /* the controller's data before what follows */
-	else
-		vm_fast_copy(dst, src, n);
+		return 1;
+	}
+	vm_fast_copy(dst, src, n);
+	return 0;
+}
+
+/* A read's data out of the staging buffer, then, with GPU-safe reads
+ * (`clean`), out of the CPU cache to memory - except, with GPU-safe
+ * "Non-DMA", after a copy the DMA controller made: its data was written by
+ * the controller, not through the CPU's cache, which is what that setting
+ * relies on (the graphics chip shows whether it holds). */
+static void copy_out(void *dst, const void *src, uint32_t n, int clean)
+{
+	const int dma = vm_copy_from_stage(dst, src, n);
+
+	if (!clean)
+		return;
+	if (dma && LD(g_gpu_safe) == VM_GPUSAFE_NODMA) {
+		ADD(g_gpu_dma_kib, n >> 10);
+		vm_dsb();
+		return;
+	}
+	clean_out(dst, n);
 }
 
 /* Copy the parts of the current job into dst as each one arrives (sem_done),
@@ -945,9 +967,7 @@ static int copy_parts(Dev *d, uint8_t *dst, int clean, uint32_t *done, uint32_t 
 		if (f && f - 1 <= i)
 			return d->job_ret;              /* this part on is read again stock */
 		c0 = timed ? ksceKernelGetSystemTimeLow() : 0;
-		vm_copy_from_stage(dst + off * 512, cur, sz[i] * 512);
-		if (clean)
-			clean_out(dst + off * 512, sz[i] * 512);
+		copy_out(dst + off * 512, cur, sz[i] * 512, clean);
 		if (timed)
 			*cp_us += ksceKernelGetSystemTimeLow() - c0;
 		off += sz[i];
@@ -1210,9 +1230,7 @@ static int pipe_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 		const void *cur = ((i - 1) & 1) ? d->buf2 : d->buf;
 		uint32_t c0 = timed ? ksceKernelGetSystemTimeLow() : 0;
 
-		vm_copy_from_stage(p + off * 512, cur, n * 512);
-		if (clean)
-			clean_out(p + off * 512, n * 512);
+		copy_out(p + off * 512, cur, n * 512, clean);
 		if (timed)
 			cp_us += ksceKernelGetSystemTimeLow() - c0;
 		off += n;
@@ -1581,7 +1599,7 @@ static int ra_app_ok(const VmApp *a)
 {
 	return a->ra >= -1 && a->ra <= VM_RA_ON && (a->offload == -1 || vm_setting_valid(VM_KEY_OFFLOAD, a->offload)) &&
 	       a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
-	       a->gpusafe >= -1 && a->gpusafe <= 1 &&
+	       a->gpusafe >= -1 && a->gpusafe <= VM_GPUSAFE_NODMA &&
 	       (!a->thr[0] || ra_thr_ok(a->thr[0])) && (!a->thr[1] || ra_thr_ok(a->thr[1]));
 }
 
@@ -2030,9 +2048,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 
 		at = 0;
 		for (int j = 0; j < cnt; j++) {
-			vm_copy_from_stage(p + (size_t)at * 512, src[j], sz[j] * 512);
-			if (clean)
-				clean_out(p + (size_t)at * 512, sz[j] * 512);
+			copy_out(p + (size_t)at * 512, src[j], sz[j] * 512, clean);
 			at += sz[j];
 		}
 		if (!clean)
@@ -2367,10 +2383,8 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_epoch = LD(d->ra_epoch);
 		d->t_us = ksceKernelGetSystemTimeLow();
 	}
-	vm_copy_from_stage(p, (uint8_t *)d->t_buf + (size_t)(sector - LD(d->t_start)) * 512, n * 512);
-	if (clean)
-		clean_out(p, n * 512);
-	else
+	copy_out(p, (uint8_t *)d->t_buf + (size_t)(sector - LD(d->t_start)) * 512, n * 512, clean);
+	if (!clean)
 		vm_dsb();
 	ADD(g_ra_tiny_reads, 1);
 	*ret = 0;
@@ -2706,6 +2720,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const int stats = LD(g_stats);
 	int problem = 0;                    /* an error or a mismatch: wake the worker */
 	const int clean = !write && LD(g_gpu_safe) && g_dcache_clean;
+	/* what the split plans for: no clean after the DMA copies with "Non-DMA" */
+	const int plan_clean = clean && !(LD(g_gpu_safe) == VM_GPUSAFE_NODMA &&
+	                                  dma_state() == VM_DMA_ON);
 	const int ready = !write && __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
 	const int mode = LD(g_pipeline);    /* one value for the whole request */
 	const int pipe = ready && !verify && mode;
@@ -2774,7 +2791,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 			if (!(pipe &&
 			      n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
-			      (k = pipe_plan(d, n, clean, sz)) >= 2)) {
+			      (k = pipe_plan(d, n, plan_clean, sz)) >= 2)) {
 				k = 1;
 				sz[0] = n;
 			}
@@ -2796,7 +2813,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				ADD(g_pipe_reads3, 1);
 		} else if (pipe &&
 		           n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
-		           (k = pipe_plan(d, n, clean, sz)) >= 2) {
+		           (k = pipe_plan(d, n, plan_clean, sz)) >= 2) {
 			/* Overlapped, this chunk in 2-3 parts (see pipe_run). */
 			uint32_t done = 0;
 
@@ -2817,9 +2834,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				break;
 			if (stats)
 				t2 = ksceKernelGetSystemTimeLow();
-			vm_copy_from_stage(p, d->buf, bytes);
-			if (clean)
-				clean_out(p, bytes);   /* counted as copy time */
+			copy_out(p, d->buf, bytes, clean);   /* the clean counted as copy time */
 			own += n;
 			if (stats) {
 				t3 = ksceKernelGetSystemTimeLow();
@@ -3121,7 +3136,8 @@ static void eff_update(void)
 	offload = a.offload >= 0 ? a.offload : LD(g_glob_offload);
 	gpusafe = a.gpusafe >= 0 ? a.gpusafe : LD(g_glob_gpu);
 	ra = a.ra >= 0 ? a.ra : LD(g_glob_ra);
-	ST(g_gpu_safe, gpusafe ? 1 : 0);
+	ST(g_gpu_safe, gpusafe >= VM_GPUSAFE_OFF && gpusafe <= VM_GPUSAFE_NODMA ? gpusafe
+	                                                                        : VM_GPUSAFE_ALL);
 	if (pipeline != LD(g_pipeline))
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			ST(g_dev[i].est_cp_ns[0], 0u);    /* measured afresh */
@@ -3183,7 +3199,8 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
 	/* the global ones, then what is in effect */
-	ST(g_glob_gpu, s->gpusafe ? 1 : 0);
+	ST(g_glob_gpu, s->gpusafe >= VM_GPUSAFE_OFF && s->gpusafe <= VM_GPUSAFE_NODMA ? s->gpusafe
+	                                                                         : VM_GPUSAFE_ALL);
 	ST(g_glob_pipe, s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
 	                                                                         : VM_PIPE_OFF);
 	ST(g_glob_offload, vm_setting_valid(VM_KEY_OFFLOAD, s->offload) ? s->offload : VM_OFFLOAD_OFF);
@@ -3384,9 +3401,9 @@ void vm_stage_worker_tick(void)
 		last_nc = LD(g_nc_stock_kib);
 		last_max = __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED);
 		/* each line under the log's 192 characters */
-		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB, "
-		         "largest read %u KiB", (unsigned)last_nc, (unsigned)last_cleaned,
-		         (unsigned)(last_max / 2));
+		VM_KLOGI("stage: non-cacheable (standard path) %u KiB, GPU-safe cleaned %u KiB "
+		         "(not after DMA: %u KiB), largest read %u KiB", (unsigned)last_nc,
+		         (unsigned)last_cleaned, (unsigned)LD(g_gpu_dma_kib), (unsigned)(last_max / 2));
 		if (LD(g_dma_want)) {
 			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms; %u of 16-32 KiB in %u ms), "
 			         "refused %u",

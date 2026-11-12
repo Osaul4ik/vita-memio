@@ -54,7 +54,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 
 | Setting | What it does | Default |
 |---|---|---|
-| GPU-safe reads | Makes sure the graphics chip always sees data correctly. Costs a little speed; recommended for playing | On |
+| GPU-safe reads | Makes sure the graphics chip always sees data correctly. **All**: after every read, costs a little speed. **Non-DMA**: not after *DMA copy*'s copies, faster; if a game shows graphics glitches, use All. Recommended for playing | All |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | Off |

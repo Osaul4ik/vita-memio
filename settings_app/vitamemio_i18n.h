@@ -72,6 +72,8 @@ enum vm_i18n_id {
 	VM_I18N_DMA_UNAVAIL,
 	VM_I18N_DMA_STOP_ERRORS,
 	VM_I18N_DMA_STOP_MISMATCH,
+	VM_I18N_ITEM_GS_NODMA,      /* GPU-safe reads' choices (Off: ITEM_OFF_OFF)    */
+	VM_I18N_ITEM_GS_ALL,
 	VM_I18N_COUNT
 };
 

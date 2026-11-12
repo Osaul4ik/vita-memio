@@ -24,19 +24,19 @@ static int copies_here, copies_elsewhere;
 /* 1: the staging copies go through the plugin's own choice (DMA or CPU), as on
  * the console; the DMA tests set it. */
 static int use_copy_out;
-static void stage_copy_out(void *dst, const void *src, size_t n);
-static void *fake_copy(void *d, const void *s, size_t n)
+static int stage_copy_out(void *dst, const void *src, size_t n);
+/* 1 if the DMA controller made the copy (as stage_copy_out says) */
+static int fake_copy(void *d, const void *s, size_t n)
 {
-	if (use_copy_out && s != NULL) {
-		stage_copy_out(d, s, n);
-		return d;
-	}
+	if (use_copy_out && s != NULL)
+		return stage_copy_out(d, s, n);
 	__sync_fetch_and_add(&fake_now_us, copy_cost_us);
 	if (pthread_equal(pthread_self(), test_thread))
 		__sync_fetch_and_add(&copies_here, 1);
 	else
 		__sync_fetch_and_add(&copies_elsewhere, 1);
-	return memcpy(d, s, n);
+	memcpy(d, s, n);
+	return 0;
 }
 #define vm_copy_from_stage fake_copy
 #define vm_copy_to_stage fake_copy
@@ -702,6 +702,48 @@ static void test_dma_copy_reads(void)
 	free(g_shadow);
 	g_shadow = NULL;
 	g_verify = 0;
+	free(u);
+}
+
+/* GPU-safe "Non-DMA": the copies the DMA controller made are not cleaned, the
+ * CPU's still are; "All" cleans both. */
+static void test_gpu_safe_non_dma(void)
+{
+	uint8_t *u = line_buf(1100 * 512);
+	VmSettings s;
+
+	reset();
+	dmac_calls = dmac_fail = dmac_corrupt = 0;
+	use_copy_out = 1;
+	g_dmac_memcpy = fake_dmac;
+	s = dma_settings(1);
+	s.gpusafe = VM_GPUSAFE_NODMA;
+	vm_stage_apply(&s);
+	g_dcache_clean = fake_clean;
+	clean_calls = 0; clean_lo = clean_hi = 0; clean_copy_seen = 0; clean_user = NULL;
+	CHECK(rd(u, 10, 1100) == 0);                     /* 256 + 256 + 38 KiB: all DMA */
+	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+	CHECK(dmac_calls == 3 && clean_calls == 0 && g_gpu_dma_kib == 256 + 256 + 38);
+	CHECK(rd(u, 0, 512 + 20) == 0);                  /* 256 KiB DMA, 10 KiB the CPU's */
+	CHECK(memcmp(u, disk, (512 + 20) * 512) == 0);
+	CHECK(dmac_calls == 4 && clean_calls == 1);       /* only the CPU's copy */
+
+	/* DMA copy off: every copy is the CPU's, every one cleaned */
+	s.dmacopy = 0;
+	vm_stage_apply(&s);
+	g_dcache_clean = fake_clean;
+	clean_calls = 0;
+	CHECK(rd(u, 10, 1100) == 0 && clean_calls == 3 && dmac_calls == 4);
+
+	/* "All": the DMA copies cleaned too */
+	s.dmacopy = 1;
+	s.gpusafe = VM_GPUSAFE_ALL;
+	vm_stage_apply(&s);
+	g_dcache_clean = fake_clean;
+	clean_calls = 0;
+	CHECK(rd(u, 10, 1100) == 0 && clean_calls == 3 && dmac_calls == 7);
+	CHECK(memcmp(u, disk + 10 * 512, 1100 * 512) == 0);
+	g_dcache_clean = NULL;
 	free(u);
 }
 
@@ -3378,6 +3420,7 @@ int main(void)
 	RUN(test_read_verify_mismatch);
 	RUN(test_dma_copy_choice);
 	RUN(test_dma_copy_reads);
+	RUN(test_gpu_safe_non_dma);
 	RUN(test_write_verify_mismatch);
 	RUN(test_shadow_not_leaked_without_read_ref);
 	RUN(test_busy_and_disabled_go_stock);

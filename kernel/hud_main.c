@@ -309,7 +309,8 @@ static void hud_feed(const VmDevState *now)
 static const char *const k_ov_ra[] = { "Off", "On" };
 static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A", "C + NC All" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
-static const char *const k_ov_onoff[] = { "Off", "On" };
+/* GPU-safe reads, by value (VM_GPUSAFE_*) */
+static const char *const k_ov_gs[] = { "Off", "All", "Non-DMA" };
 
 /* The read ahead test's line in the HUD, while it runs. */
 static int rt_line(char *o)
@@ -365,7 +366,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
 	                           VM_OFFLOAD_FULL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
-	static const int onoff[] = { VM_APP_GLOBAL, 0, 1 };
+	static const int gs[] = { VM_APP_GLOBAL, VM_GPUSAFE_OFF, VM_GPUSAFE_NODMA, VM_GPUSAFE_ALL };
 	static const int thr[] = { 0, 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };   /* 0: the fixed */
 	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
 	VmAppNow an;
@@ -397,7 +398,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		a.pipe = ov_step(pipe, 4, a.pipe, dir);
 		break;
 	case OV_ITEM_GPUSAFE:
-		a.gpusafe = ov_step(onoff, 3, a.gpusafe, dir);
+		a.gpusafe = ov_step(gs, 4, a.gpusafe, dir);
 		break;
 	case OV_ITEM_TEST:
 		r = rt_toggle(&a, msg, cap, &save);
@@ -591,7 +592,7 @@ static void overlay_feed(void)
 				ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
 				ov_line(L[n++], cur, OV_ITEM_PIPE, 1, "Overlapped reads",
 				        ov_color(an.cur.pipe, an.saved.pipe, an.global.pipe), v);
-				ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_onoff, 2);
+				ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_gs, 3);
 				ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
 				        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
 			}

@@ -122,6 +122,12 @@ static const char *pipe_short(int v)
 	     : "unknown";
 }
 
+static const char *gpusafe_text(int v)
+{
+	return v == VM_GPUSAFE_ALL ? "all" : v == VM_GPUSAFE_NODMA ? "non-DMA"
+	     : v == VM_GPUSAFE_OFF ? "off" : "unknown";
+}
+
 static const char *dma_state_text(int st, int why)
 {
 	return st == VM_DMA_ON ? "on" : st == VM_DMA_OFF ? "off"
@@ -230,8 +236,7 @@ size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, 
 		put(&o, "%s\n", vt);
 	if (res->plugin_mode == BPM_ON) {
 		put(&o, "plugin small transfers too: %s\n", small_text(res));
-		put(&o, "plugin GPU-safe reads: %s\n", res->plugin0.gpusafe == 1 ? "on"
-		    : res->plugin0.gpusafe == 0 ? "off" : "unknown");
+		put(&o, "plugin GPU-safe reads: %s\n", gpusafe_text(res->plugin0.gpusafe));
 		put(&o, "plugin overlapped reads: %s%s\n", pipe_text(res->plugin0.pipeline),
 		    res->plugin0.verify && res->plugin0.pipeline > 0 ? " (not used: verify is on)" : "");
 		put(&o, "plugin copy on the system core: %s\n", offload_text(res->plugin0.offload));
@@ -444,8 +449,8 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		line(&s, "%s", vt);
 	if (res->plugin_mode == BPM_ON) {
 		line(&s, "small transfers too: %s", small_text(res));
-		if (res->plugin0.gpusafe == 1)
-			line(&s, "GPU-safe reads: on");
+		if (res->plugin0.gpusafe > 0)
+			line(&s, "GPU-safe reads: %s", gpusafe_text(res->plugin0.gpusafe));
 		line(&s, "overlapped reads: %s%s", pipe_short(res->plugin0.pipeline),
 		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
 		if (res->plugin0.offload > 0)

@@ -73,7 +73,7 @@ enum vm_key {
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
 	VM_KEY_SMALL,          /* 0/1: small transfers (< 32 KiB) faster too     */
 	VM_KEY_STATS,          /* VM_STATS_*: timers and counters */
-	VM_KEY_GPUSAFE,        /* 0/1: write read data out of the CPU cache      */
+	VM_KEY_GPUSAFE,        /* VM_GPUSAFE_*: write read data out of the CPU cache */
 	VM_KEY_PIPELINE,       /* VM_PIPE_*: overlapped reads                    */
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
 	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read              */
@@ -120,6 +120,15 @@ static inline int vm_offload_direct(int v)
 	return v == VM_OFFLOAD_FULL;
 }
 
+/* GPU-safe reads: after a faster read, its data is written out of the CPU
+ * cache to memory, so the graphics chip sees it: never; after every copy
+ * except those the DMA controller made (VM_KEY_DMACOPY), whose data it wrote
+ * itself; after every copy. 1 was "on" before the choice existed and stays
+ * "all". */
+#define VM_GPUSAFE_OFF     0
+#define VM_GPUSAFE_ALL     1
+#define VM_GPUSAFE_NODMA   2   /* "Non-DMA" */
+
 /* Statistics: off; on (per-transfer timers and data counters, for the tester). */
 #define VM_STATS_OFF       0
 #define VM_STATS_ON        1
@@ -143,7 +152,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_MEMCARD   0
 #define VM_DEF_SMALL     0   /* opt-in: small transfers are file-system bookkeeping */
 #define VM_DEF_STATS     1   /* on; switch off to save the work               */
-#define VM_DEF_GPUSAFE   1   /* on: the graphics chip always sees read data    */
+#define VM_DEF_GPUSAFE   VM_GPUSAFE_ALL   /* the graphics chip always sees read data */
 #define VM_DEF_PIPELINE  1   /* VM_PIPE_AUTO: overlapped reads tune themselves */
 #define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL   /* "C + NC R/A"; without read ahead as Cached only */
 #define VM_DEF_READAHEAD 0   /* opt-in                                         */
@@ -193,10 +202,11 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_MEMCARD:
 	case VM_KEY_LOG:
 	case VM_KEY_SMALL:
-	case VM_KEY_GPUSAFE:
 	case VM_KEY_OVERLAY:
 	case VM_KEY_DMACOPY:
 		return v == 0 || v == 1;
+	case VM_KEY_GPUSAFE:
+		return v >= VM_GPUSAFE_OFF && v <= VM_GPUSAFE_NODMA;
 	case VM_KEY_READAHEAD:
 		return v == VM_RA_OFF || v == VM_RA_ON;
 	case VM_KEY_STATS:

@@ -86,7 +86,9 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 	ROW_TOGGLE("sd2vita") \
 	ROW_TOGGLE("memcard") \
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">" \
-		ROW_TOGGLE("gpusafe") \
+		ROW_LIST("gpusafe") \
+			ITEM("vm_i_gs0", "0") ITEM("vm_i_gs2", "2") ITEM("vm_i_gs1", "1") \
+		"</list>" \
 		ROW_LIST("pipeline") \
 			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2") \
 		"</list>" \
@@ -417,6 +419,9 @@ static const vm_u16 *vm_text(const char *id)
 	}
 	if (s_pfx(id, "vm_i_hud") && id[8] >= '0' && id[8] <= '2' && !id[9])
 		return fixed_text(VM_I18N_ITEM_HUD_OFF + (id[8] - '0'));
+	if (s_pfx(id, "vm_i_gs") && id[7] >= '0' && id[7] <= '2' && !id[8])
+		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_OFF_OFF
+		                  : id[7] == '1' ? VM_I18N_ITEM_GS_ALL : VM_I18N_ITEM_GS_NODMA);
 	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '1' && !id[8])
 		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF : VM_I18N_ITEM_RA_ON);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])

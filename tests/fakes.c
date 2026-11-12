@@ -348,6 +348,11 @@ SceUID ksceKernelGetProcessId(void)
 	return fake_pid;
 }
 
+SceUID ksceKernelGetThreadId(void)
+{
+	return 0x7001;
+}
+
 /* Addresses in no memory block ([lo, hi)): a mapping that takes any of them
  * is refused, and the block lookup finds none there. */
 uintptr_t fake_noblock_lo, fake_noblock_hi;

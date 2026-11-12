@@ -6,6 +6,7 @@ int ksceKernelDelayThread(unsigned us);
 uint32_t ksceKernelGetSystemTimeLow(void);
 long long ksceKernelGetSystemTimeWide(void);
 SceUID ksceKernelGetProcessId(void);
+SceUID ksceKernelGetThreadId(void);
 SceUID ksceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int initPriority,
                               SceSize stackSize, SceUInt attr, int cpuAffinityMask,
                               const void *option);

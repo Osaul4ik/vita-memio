@@ -138,7 +138,8 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 	if (t->n > 0 &&
 	    !hud_cache_blit((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
 		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
-	if (ov->n > 0)
+	if (ov->n > 0 &&
+	    !hud_cache_blit((uint32_t *)pParam->base, pitch, w, h, ov, &g_cache, g_row))
 		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, g_row);
 	hud_dacr_restore(prev_dacr);
 	__sync_lock_release(&g_row_busy);
@@ -222,6 +223,8 @@ static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 /* A cache big enough for `t` (at the largest font), or none if the HUD is off
  * If the memory is not there, the panel is just
  * composed every frame. */
+static void cache_release_if_unused(void);
+
 static void cache_fit(const HudText *t)
 {
 	static int failed_bytes;           /* the size that could not be had */
@@ -231,8 +234,6 @@ static void cache_fit(const HudText *t)
 	int want, size;
 
 	if (t->n <= 0) {
-		if (g_cache_uid >= 0)
-			cache_swap(-1, NULL, 0);
 		failed_bytes = 0;
 		return;
 	}
@@ -316,6 +317,8 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 		hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
+	if (n <= 0)
+		cache_release_if_unused();     /* hidden: freed, if the overlay is not shown */
 }
 
 /* Fill `t` (the back copy) as a top-left panel. */
@@ -345,11 +348,47 @@ static void panel_fill(HudText *t, const char lines[][VM_HUD_LINE_MAX], int n, i
 	t->gen = ++g_gen;
 }
 
+/* The cache freed once neither the HUD nor the overlay is shown (they share
+ * it: never both at once). After a flip. */
+static void cache_release_if_unused(void)
+{
+	if (g_cache_uid >= 0 && g_text[g_front].n <= 0 && g_ov[g_ov_front].n <= 0)
+		cache_swap(-1, NULL, 0);
+}
+
+/* The overlay: composed here into the cache the HUD uses (they are never
+ * shown at once: the HUD's text is empty while the menu is open), so the
+ * frame hook only expands it, as for the HUD; the same text again (it is
+ * set four times a second) is not composed again. */
 void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n)
 {
 	int back = g_ov_front ^ 1;
+	HudText *t = &g_ov[back];
+	const HudText *cur = &g_ov[g_ov_front];
 
-	panel_fill(&g_ov[back], lines, n, 1);
+	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
+	if (n == cur->n && n > 0) {
+		int same = 1;
+
+		for (int i = 0; i < n && same; i++)
+			same = !strncmp(lines[i], cur->lines[i], VM_HUD_LINE_MAX);
+		if (same) {
+			if (g_text[g_front].n <= 0 &&
+			    (g_cache.gen != cur->gen || g_cache.w != g_fb_w || g_cache.h != g_fb_h)) {
+				cache_fit(cur);
+				hud_cache_compose(cur, g_fb_w, g_fb_h, &g_cache);
+			}
+			return;
+		}
+	}
+	panel_fill(t, lines, n, 1);
+	if (g_text[g_front].n <= 0) {      /* the HUD hidden: the cache is the overlay's */
+		cache_fit(t);
+		if (n > 0)
+			hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
+	}
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_ov_front = back;
+	if (n <= 0)
+		cache_release_if_unused();     /* closed: freed, if the HUD is not shown */
 }

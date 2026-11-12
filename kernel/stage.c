@@ -430,6 +430,9 @@ static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 mi
  * on the system core), and whether the caller was a system thread (kernel
  * process) or a game (a user process). */
 static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
+/* The least stack each thread has had free (bytes), for the log: whether
+ * their 8 KiB could be less. NULL: not found. */
+static int (*g_stack_free_fn)(SceUID thid);
 /* Graphics data (non-cacheable) from read ahead, copied by the copier on the
  * system core / by the game's thread: they count as NC, not as copies (C). */
 static uint32_t g_ra_nc_sys_kib, g_ra_nc_own_kib;                  /* atomics */
@@ -3260,6 +3263,13 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceKernelDmacMgr", LIB_DMAC_DRIVER,
 		                           NID_DMAC_MEMCPY, &f) >= 0 && f)
 			g_dmac_memcpy = (int (*)(void *, const void *, SceSize))f;
+		/* ksceKernelGetThreadStackFreeSize (SceThreadmgrForDriver
+		 * 0xE2C40624, 0x7B278A0B in vita-headers db/360): the log's stack
+		 * line only */
+		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceKernelThreadMgr", 0xE2C40624, 0x7B278A0B,
+		                           &f) >= 0 && f)
+			g_stack_free_fn = (int (*)(SceUID))f;
 
 	}
 	/* Buffers for the devices already switched on, now at boot while
@@ -3705,6 +3715,21 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
 		VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
+		if (g_stack_free_fn) {
+			/* the least each has had free, of its 8 KiB (-1: no such thread) */
+			int fr[VM_DEV_COUNT][3];
+
+			for (int i = 0; i < VM_DEV_COUNT; i++) {
+				const SceUID th[3] = { g_dev[i].th, g_dev[i].th2, g_dev[i].ra_th };
+
+				for (int k = 0; k < 3; k++)
+					fr[i][k] = th[k] >= 0 ? g_stack_free_fn(th[k]) : -1;
+			}
+			VM_KLOGI("stage: stack free (bytes of 8192): worker %d; SD2Vita helper %d copier %d "
+			         "ahead %d; memory card %d %d %d", g_stack_free_fn(ksceKernelGetThreadId()),
+			         fr[VM_DEV_SD2VITA][0], fr[VM_DEV_SD2VITA][1], fr[VM_DEV_SD2VITA][2],
+			         fr[VM_DEV_MEMCARD][0], fr[VM_DEV_MEMCARD][1], fr[VM_DEV_MEMCARD][2]);
+		}
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB (%u from the 2nd page), "
 			         "mapping failed %u (0x%08x)",

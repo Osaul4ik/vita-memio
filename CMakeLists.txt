@@ -166,9 +166,14 @@ target_link_libraries(vitamemio
 # segment; a fixed data address leaves room regardless.
 target_link_options(vitamemio PRIVATE -nostartfiles -Wl,-Tdata=0x81100000)
 
-# Size-optimise the Settings-page UI code (not timing-sensitive).
+# Size-optimise code that is not timing-sensitive: the Settings page; in the
+# kernel module the log, the settings file, the start and the HUD module's
+# loader; in the HUD module the text and the overlay's keys. The transfer
+# path (stage.c) and the frame drawing (hud.c) stay at -O2.
 set_source_files_properties(settings_app/vitamemio_settings.c
-  settings_app/vitamemio_i18n.c PROPERTIES COMPILE_OPTIONS -Os)
+  settings_app/vitamemio_i18n.c
+  kernel/klog.c kernel/settings.c kernel/main.c kernel/hud_link.c
+  kernel/hud_main.c kernel/overlay.c PROPERTIES COMPILE_OPTIONS -Os)
 
 vita_create_self(vitamemio.suprx vitamemio
   CONFIG ${CMAKE_SOURCE_DIR}/vitamemio.yml

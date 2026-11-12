@@ -77,7 +77,7 @@ T = [
     ("VM_I18N_ROW_SMALL",
      "Small transfers too"),
     ("VM_I18N_HINT_SMALL",
-     "Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers."),
+     "Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). If anything goes wrong with files, switch it off."),
     ("VM_I18N_ROW_STATS",
      "Statistics"),
     ("VM_I18N_HINT_STATS",

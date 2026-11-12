@@ -58,10 +58,10 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
-| Read ahead | Reads the next part of a file before it is asked for. See below | Off |
-| Small transfers too | Also speeds up transfers under 32 KiB. Try it with *Verify transfers* first | Off |
-| Storage HUD | Live speed in the top right corner: **Compact** or **Extended** | Off |
-| Overlay (SELECT + arrows) | A small menu over any game, see below | Off |
+| Read ahead | Reads the next part of a file before it is asked for. See below | On |
+| Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
+| Storage HUD | Live speed in the top right corner: **Compact** or **Extended**. With *Overlay* on, it shows through the overlay's keys | Extended |
+| Overlay (SELECT + arrows) | A small menu over any game, see below | On |
 
 **Developer settings** (inside *Advanced*)
 
@@ -96,7 +96,7 @@ All benchmark values are under [Benchmarks](#benchmarks). The gain in real use i
 
 ## Overlay
 
-Switch on *Overlay* in *Advanced*, then, in any game:
+*Overlay* in *Advanced* is on by default. In any game:
 
 | Keys | |
 |---|---|
@@ -187,7 +187,7 @@ This error means the system is out of kernel memory. It can also appear as a cra
 ## Good to know
 
 - Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more from the first time you switch one on until the next restart; with both off they take nothing.
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay (both on by default) take about 40 KiB more; switch both off and restart to free it.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 - The Settings page and the HUD are in English.

@@ -2241,8 +2241,8 @@ static void test_readahead(void)
 	Dev *d = &g_dev[M];
 	int saved_live = g_live;
 
-	/* off by default, and nothing made for it */
-	CHECK(VM_DEF_READAHEAD == VM_RA_OFF && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) &&
+	/* on by default; switched off here: nothing made for it */
+	CHECK(VM_DEF_READAHEAD == VM_RA_ON && vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) &&
 	      vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ON) && !vm_setting_valid(VM_KEY_READAHEAD, 3));
 	reset();
 	offload_on(&s, 0, VM_OFFLOAD_OFF, 1);

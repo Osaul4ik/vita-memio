@@ -35,7 +35,7 @@
 [VM_I18N_HINT_STATUS_ACTIVE] = "The kernel plugin is loaded and working; each storage below shows its own state.",
 [VM_I18N_HINT_STATUS_NO_KERNEL] = "vitamemio_kernel.skprx is not running. Check that it is in ur0:tai/ and listed under *KERNEL in ur0:tai/config.txt, then restart the console.",
 [VM_I18N_ROW_SMALL] = "Small transfers too",
-[VM_I18N_HINT_SMALL] = "Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). Experimental: test with Verify transfers.",
+[VM_I18N_HINT_SMALL] = "Also speeds up transfers under 32 KiB: the file system's own bookkeeping (folders, file entries, opening and creating files). If anything goes wrong with files, switch it off.",
 [VM_I18N_ROW_STATS] = "Statistics",
 [VM_I18N_HINT_STATS] = "Times every faster transfer (system call and copy) and counts the data moved, for the tester app. Off: none of that is done, which saves a little work on every transfer. The HUD counts its own speeds while it is on. Overlapped reads measure what they need either way. Switch it on before running the tester.",
 [VM_I18N_ROW_GPUSAFE] = "GPU-safe reads",

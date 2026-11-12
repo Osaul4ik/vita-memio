@@ -16,6 +16,11 @@ TESTS := test_stage test_settings test_hud test_util test_i18n test_bench test_f
 .PHONY: all run clean
 all: run
 
+# Every test sees the shared headers (defaults, limits, the kernel API): a
+# change there rebuilds them all, not only the test whose own file changed.
+COMMON := $(wildcard ../include/*.h) $(wildcard ../kernel/*.h) vm_test.h
+$(TESTS): $(COMMON)
+
 run: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done; echo "all host tests passed"
 

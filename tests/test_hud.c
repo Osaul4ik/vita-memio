@@ -190,10 +190,15 @@ static void test_panel_cache(void)
 	changed_box(a, 960, 960, 544, &x0, &y0, &x1, &y1);
 	CHECK(memcmp(a, b, 960 * 544 * 4) != 0);
 
-	/* new text: composed again, the mark is gone */
+	/* the frame hook's part alone: new text not composed yet - it does not
+	 * expand the old one (the caller draws uncached); composed (the worker's
+	 * part), it does, the mark gone */
 	t.gen = 2;
-	hud_draw_panel_cached(b, 960, 960, 544, &t, &c, row);
+	CHECK(hud_cache_blit(b, 960, 960, 544, &t, &c, row) == 0);
+	CHECK(hud_cache_compose(&t, 960, 544, &c) == 1 && c.gen == 2);
+	CHECK(hud_cache_blit(b, 960, 960, 544, &t, &c, row) == 1);
 	CHECK(memcmp(a, b, 960 * 544 * 4) == 0);
+	CHECK(hud_cache_blit(b, 960, 960, 544 - 2, &t, &c, row) == 0);   /* another size */
 
 	/* another framebuffer size (a smaller font): composed again, still fits */
 	{

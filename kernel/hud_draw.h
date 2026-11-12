@@ -244,10 +244,33 @@ static inline void hud_pack_row(const HudText *t, const HudGeom *g, int r, uint8
 	}
 }
 
-/* 0 if the cache is too small for this panel (then draw it uncached). `row`: at
- * least HUD_ROW_MAX words of ordinary memory, for the copy in one straight run. */
-static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, const HudText *t,
-                                        HudCache *c, uint32_t *row)
+/* Compose `t` into the cache for a w x h framebuffer (as PSVshell builds its
+ * panel away from the frame hook): 0 if it is too small, or there is nothing
+ * to draw there. */
+static inline int hud_cache_compose(const HudText *t, int w, int h, HudCache *c)
+{
+	HudGeom g;
+	int stride;
+
+	if (!hud_panel_geom(w, h, t, &g))
+		return 0;
+	stride = (g.box_w + 1) / 2;
+	if (!c->px || stride * g.box_h > c->bytes)
+		return 0;
+	for (int r = 0; r < g.box_h; r++)
+		hud_pack_row(t, &g, r, c->px + r * stride, stride);
+	c->gen = t->gen;
+	c->w = w;
+	c->h = h;
+	return 1;
+}
+
+/* The composed panel onto the frame: only expanding it, row by row (the frame
+ * hook's whole work). 0 if the cache does not hold this text for this size
+ * (then draw it uncached). `row`: at least HUD_ROW_MAX words of ordinary
+ * memory, for the copy in one straight run. */
+static inline int hud_cache_blit(uint32_t *fb, int pitch, int w, int h, const HudText *t,
+                                 const HudCache *c, uint32_t *row)
 {
 	uint32_t pal[16];
 	HudGeom g;
@@ -256,15 +279,8 @@ static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, c
 	if (!hud_panel_geom(w, h, t, &g))
 		return 1;                       /* nothing to draw is not a failure */
 	stride = (g.box_w + 1) / 2;
-	if (!c->px || stride * g.box_h > c->bytes)
+	if (!c->px || stride * g.box_h > c->bytes || c->gen != t->gen || c->w != w || c->h != h)
 		return 0;
-	if (c->gen != t->gen || c->w != w || c->h != h) {
-		for (int r = 0; r < g.box_h; r++)
-			hud_pack_row(t, &g, r, c->px + r * stride, stride);
-		c->gen = t->gen;
-		c->w = w;
-		c->h = h;
-	}
 	pal[0] = HUD_PANEL_BG;
 	for (int i = 1; i < 16; i++)
 		pal[i] = hud_color(i);
@@ -288,6 +304,19 @@ static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, c
 		memcpy(fb + (g.y0 + r) * pitch + g.x0 + in, row + in, (size_t)(end - in) * 4);
 	}
 	return 1;
+}
+
+/* Compose if needed, then expand (both at once: the tests). */
+static inline int hud_draw_panel_cached(uint32_t *fb, int pitch, int w, int h, const HudText *t,
+                                        HudCache *c, uint32_t *row)
+{
+	HudGeom g;
+
+	if (!hud_panel_geom(w, h, t, &g))
+		return 1;
+	if ((c->gen != t->gen || c->w != w || c->h != h) && !hud_cache_compose(t, w, h, c))
+		return 0;
+	return hud_cache_blit(fb, pitch, w, h, t, c, row);
 }
 
 #endif /* VITAMEMIO_HUD_DRAW_H */

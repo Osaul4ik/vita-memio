@@ -77,7 +77,8 @@ static inline void hud_dacr_restore(uint32_t prev)
 static volatile uint32_t g_planes_seen;
 /* The width of the frames drawn on, for the cache's size (its font); until a
  * frame is seen, the largest font's. */
-static volatile int g_fb_w = 960;
+static volatile int g_fb_w = 960, g_fb_h = 544;
+static int g_text_width;               /* the HUD's widest line while shown */
 /* ksceAppMgrIsExclusiveProcessRunning, looked up at vm_hud_init (not every
  * SDK's stubs have it); NULL: not there - index 1 is then never drawn on. */
 static int (*g_excl_running)(const char *title_id);
@@ -116,22 +117,31 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		return;
 	if (pParam->pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8)
 		return;
-	if (g_fb_w != w)
+	if (g_fb_w != w || g_fb_h != h) {
 		g_fb_w = w;
+		g_fb_h = h;
+	}
 
+	/* the lock is held only for a few instructions elsewhere (the cache
+	 * swapped): wait for it rather than leave a frame without the panel */
+	{
+		int got = 0;
+
+		for (int i = 0; i < 4096 && !(got = !__sync_lock_test_and_set(&g_row_busy, 1)); i++)
+			__asm__ volatile("" ::: "memory");
+		if (!got)
+			return;                      /* not had: not drawn this once */
+	}
 	uint32_t prev_dacr = hud_dacr_open();
-	if (t->n <= 0) {
-		/* only the overlay */
-	} else if (!__sync_lock_test_and_set(&g_row_busy, 1)) {
-		if (!hud_draw_panel_cached((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
-			hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
-		__sync_lock_release(&g_row_busy);
-	}
-	if (ov->n > 0 && !__sync_lock_test_and_set(&g_row_busy, 1)) {
+	/* the HUD: from the cache the worker composed (vm_hud_set_text); only if
+	 * it is not there for this text and size, composed here */
+	if (t->n > 0 &&
+	    !hud_cache_blit((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
+		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
+	if (ov->n > 0)
 		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, g_row);
-		__sync_lock_release(&g_row_busy);
-	}
 	hud_dacr_restore(prev_dacr);
+	__sync_lock_release(&g_row_busy);
 }
 
 /* ksceDisplaySetFrameBufInternal(head, index, pParam, sync) - the kernel
@@ -267,13 +277,19 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 	const HudText *cur = &g_text[g_front];
 	if (n < 0) n = 0;
 	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
-	/* The same text as on screen: nothing to do (the cache stays valid). */
+	/* The same text as on screen: nothing to do (the cache stays valid),
+	 * unless the frames are another size now. */
 	if (n == cur->n) {
 		int same = 1;
 		for (int i = 0; i < n && same; i++)
 			same = !strncmp(lines[i], cur->lines[i], VM_HUD_LINE_MAX);
-		if (same)
+		if (same) {
+			if (n > 0 && (g_cache.gen != cur->gen || g_cache.w != g_fb_w || g_cache.h != g_fb_h)) {
+				cache_fit(cur);
+				hud_cache_compose(cur, g_fb_w, g_fb_h, &g_cache);
+			}
 			return;
+		}
 	}
 	t->maxlen = 0;
 	for (int i = 0; i < n; i++) {
@@ -287,9 +303,17 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 		if (len > t->maxlen)
 			t->maxlen = len;
 	}
-		t->n = n;
+	/* as wide as it has been while shown: a number one character longer no
+	 * longer moves the panel's edge (PSVshell's panel has a fixed frame) */
+	if (n > 0 && t->maxlen < g_text_width)
+		t->maxlen = g_text_width;
+	g_text_width = n > 0 ? t->maxlen : 0;
+	t->n = n;
 	t->gen = ++g_gen;
 	cache_fit(t);
+	/* composed here, on the worker: the frame hook only expands it */
+	if (n > 0)
+		hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
 	__sync_synchronize();   /* the text must be visible before the flip */
 	g_front = back;
 }
@@ -297,6 +321,8 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 /* Fill `t` (the back copy) as a top-left panel. */
 static void panel_fill(HudText *t, const char lines[][VM_HUD_LINE_MAX], int n, int where)
 {
+	static int width;                  /* as wide as it has been while shown */
+
 	if (n < 0) n = 0;
 	if (n > VM_HUD_LINES) n = VM_HUD_LINES;
 	t->maxlen = 0;
@@ -311,6 +337,9 @@ static void panel_fill(HudText *t, const char lines[][VM_HUD_LINE_MAX], int n, i
 		if (len > t->maxlen)
 			t->maxlen = len;
 	}
+	if (n > 0 && t->maxlen < width)
+		t->maxlen = width;
+	width = n > 0 ? t->maxlen : 0;
 	t->left = where;
 	t->n = n;
 	t->gen = ++g_gen;

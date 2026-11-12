@@ -20,6 +20,7 @@
 #include <psp2kern/kernel/sysmem.h>    /* the panel cache's memory block       */
 #include <psp2kern/kernel/threadmgr.h> /* ksceKernelDelayThread                */
 #include <psp2kern/display.h>
+#include <psp2kern/appmgr.h>      /* is a game running (index 1 layer)    */
 #include <taihen.h>
 
 #include "hud.h"
@@ -69,12 +70,31 @@ static inline void hud_dacr_restore(uint32_t prev)
 	__asm__ volatile("isb");
 }
 
-/* The HUD and the overlay drawn into the frame (head 0 only). */
-static void draw_frame(int head, const SceDisplayFrameBuf *pParam)
+/* Which (head, index) pairs the hook has seen, a bit each (head 0..1 x
+ * index 0..1, then any other), for the log: vm_hud_planes. */
+static volatile uint32_t g_planes_seen;
+
+uint32_t vm_hud_planes(void)
+{
+	return __atomic_load_n(&g_planes_seen, __ATOMIC_RELAXED);
+}
+
+/* The HUD and the overlay drawn into the frame, as PSVshell draws (which
+ * does not blink): on the head that is not 0, and on index 1 (the system's
+ * own layer over a game: its menus and notices) only while no game runs.
+ * Drawn on head 0 and on that layer as well, it blinked at times and showed
+ * where it should not. */
+static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 {
 	const HudText *t, *ov;
+	const uint32_t bit = head >= 0 && head < 2 && index >= 0 && index < 2
+	                     ? 1u << (head * 2 + index) : 1u << 4;
 
-	if (head != 0 || !pParam || !pParam->base)
+	if (!(__atomic_load_n(&g_planes_seen, __ATOMIC_RELAXED) & bit))
+		__atomic_fetch_or(&g_planes_seen, bit, __ATOMIC_RELAXED);
+	if (!head || !pParam || !pParam->base)
+		return;
+	if (index && ksceAppMgrIsExclusiveProcessRunning(NULL) > 0)
 		return;
 	t = &g_text[g_front];
 	ov = &g_ov[g_ov_front];
@@ -116,7 +136,7 @@ static int hook_set_framebuf(int head, int index,
 
 	if (!ref)
 		return VM_HOOK_NO_REF;
-	draw_frame(head, pParam);
+	draw_frame(head, index, pParam);
 	return TAI_CONTINUE(int, ref, head, index, pParam, sync);
 }
 

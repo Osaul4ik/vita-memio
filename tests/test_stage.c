@@ -709,6 +709,81 @@ static void test_dma_copy_reads(void)
 	free(u);
 }
 
+/* Every default at once, as a fresh install has them (with one storage
+ * switched on): Auto overlapped reads, copy on the system core, read ahead,
+ * small transfers, DMA copy, GPU-safe Non-DMA, Statistics off. Streams,
+ * large, small and scattered reads all give the disk's data; DMA makes the
+ * large copies, Auto learns without Statistics, nothing is left behind. */
+static void test_defaults_together(void)
+{
+	uint8_t *u = line_buf(1100 * 512);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int saved_live = g_live;
+
+	reset();
+	dmac_calls = dmac_fail = dmac_corrupt = 0;
+	use_copy_out = 1;
+	g_dmac_memcpy = fake_dmac;
+	memset(&s, 0, sizeof(s));
+	s.memcard = 1;
+	s.verify = VM_DEF_VERIFY;
+	s.hud = VM_DEF_HUD;
+	s.log = VM_DEF_LOG;
+	s.small = VM_DEF_SMALL;
+	s.stats = VM_DEF_STATS;
+	s.gpusafe = VM_DEF_GPUSAFE;
+	s.pipeline = VM_DEF_PIPELINE;
+	s.offload = VM_DEF_OFFLOAD;
+	s.readahead = VM_DEF_READAHEAD;
+	s.overlay = VM_DEF_OVERLAY;
+	s.dmacopy = VM_DEF_DMACOPY;
+	CHECK(s.stats == 0 && s.dmacopy == 1 && s.readahead == VM_RA_ON && s.small == 1 &&
+	      s.gpusafe == VM_GPUSAFE_NODMA && s.pipeline == VM_PIPE_AUTO &&
+	      s.offload == VM_OFFLOAD_ALL);
+	vm_stage_apply(&s);
+	g_live = 1;
+	vm_stage_worker_tick();
+	g_dcache_clean = fake_clean;
+	clean_calls = 0;
+	CHECK(d->pipe_made && d->ra_made && d->ra_ready && dma_state() == VM_DMA_ON);
+
+	for (uint32_t i = 0; i < 12; i++) {           /* a stream of 128 KiB reads */
+		memset(u, 0, 256 * 512);
+		CHECK(rd(u, i * 256, 256) == 0 && memcmp(u, disk + (size_t)i * 256 * 512, 256 * 512) == 0);
+	}
+	CHECK(g_ra_hits >= 6 && g_ra_bad == 0);
+	memset(u, 0, 1100 * 512);                     /* elsewhere, large: overlapped */
+	copy_cost_us = 300;                           /* a copy that takes time: Auto learns it */
+	CHECK(rd(u, 2900, 1100) == 0 && memcmp(u, disk + 2900 * 512, 1100 * 512) == 0);
+	copy_cost_us = 0;
+	for (uint32_t i = 0; i < 40; i++) {           /* scattered 4 KiB (small transfers) */
+		const uint32_t at = (i * 977u) % (DISK_SECTORS - 8);
+
+		memset(u, 0, 8 * 512);
+		CHECK(rd(u, at, 8) == 0 && memcmp(u, disk + (size_t)at * 512, 8 * 512) == 0);
+	}
+	for (uint32_t i = 0; i < 4; i++) {            /* writes, read back */
+		memcpy(u, disk + 100 * 512, 64 * 512);
+		CHECK(wr(u, 1000 + i * 64, 64, REF_RD) == 0);
+	}
+	memset(u, 0, 256 * 512);
+	CHECK(rd(u, 1000, 256) == 0);
+	for (uint32_t i = 0; i < 4; i++)
+		CHECK(memcmp(u + (size_t)i * 64 * 512, disk + 100 * 512, 64 * 512) == 0);
+
+	CHECK(dmac_calls > 0 && g_dma_copies > 0 && g_dma_errors == 0 && dma_state() == VM_DMA_ON);
+	CHECK(d->est_cp_ns[0] != 0 || d->est_cp_ns[1] != 0);   /* Auto learnt, Statistics off */
+	CHECK(d->tm.rd_sectors == 0 && d->rd_bytes == 0);   /* no tester figures */
+	CHECK(d->st.errors == 0 && d->st.mismatches == 0 && !d->fallback);
+	vm_stage_fini();
+	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
+	g_dmac_memcpy = NULL;
+	use_copy_out = 0;
+	g_live = saved_live;
+	free(u);
+}
+
 /* GPU-safe "Non-DMA": the copies the DMA controller made are not cleaned, the
  * CPU's still are; "All" cleans both. */
 static void test_gpu_safe_non_dma(void)
@@ -3425,6 +3500,7 @@ int main(void)
 	RUN(test_dma_copy_choice);
 	RUN(test_dma_copy_reads);
 	RUN(test_gpu_safe_non_dma);
+	RUN(test_defaults_together);
 	RUN(test_write_verify_mismatch);
 	RUN(test_shadow_not_leaked_without_read_ref);
 	RUN(test_busy_and_disabled_go_stock);

@@ -6,9 +6,10 @@
  * test menu) are two kernel modules. Only the first is in config.txt. It loads
  * the second itself, from the same folder, at the start when the overlay is
  * on (the HUD is the overlay's), so with it off none of the HUD's code, fonts
- * or buffers are in kernel memory. The overlay setting takes effect at the
- * next start: the module and its hooks are never put in or taken out while
- * apps run (hooks released under running apps crashed the console). The HUD
+ * or buffers are in kernel memory. The module and its hooks are never put in
+ * or taken out while apps run (hooks released under running apps crashed the
+ * console): switched off, the overlay stops acting at once; switched on, it
+ * acts only if it was on at the start, else from the next start. The HUD
  * module sees the overlay as it is in effect (VmCoreApi.settings_copy).
  *
  * No exported library and no NIDs: the kernel module passes a pointer to a

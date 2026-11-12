@@ -22,10 +22,12 @@ static const char *const k_paths[] = {
 
 static void (*g_wake)(void);
 
-/* The overlay as the console started with it (-1: not read yet). Switching
- * it in Settings takes effect at the next start: its button hooks and the
- * HUD module are never put in or taken out while apps run, which crashed the
- * console (apps read the buttons all the time, from several threads). */
+/* The overlay as the console started with it (-1: not read yet). Its button
+ * hooks and the HUD module go in at the start if it was on, and are never put
+ * in or taken out while apps run, which crashed the console (apps read the
+ * buttons all the time, from several threads). Switched off, it stops acting
+ * at once (the hooks stay, doing nothing); switched on, it acts at once only
+ * if it was on at the start, else from the next start. */
 static int g_ov_boot = -1;
 
 /* The settings, with the overlay as it is in effect. */
@@ -33,7 +35,7 @@ static void settings_in_effect(VmSettings *out)
 {
 	vm_settings_copy(out);
 	if (g_ov_boot >= 0)
-		out->overlay = g_ov_boot;
+		out->overlay = g_ov_boot && out->overlay;
 }
 
 static void core_wake(void)

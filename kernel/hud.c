@@ -3,8 +3,8 @@
  *
  * Technique (the standard taiHEN overlay idiom): hook
  * SceDisplay's set-framebuffer funnel. The caller hands us the framebuffer
- * base, pitch and size every frame; we let the original run, then draw our
- * text into the same buffer before the display controller scans it out.
+ * base, pitch and size every frame; we draw our text into that buffer, then
+ * let the original hand it to the display (drawn after, it blinked).
  *
  * Strictly read + overdraw: no storage state is touched here. The text comes
  * from the worker (hud_main.c, every second while the HUD is on) through vm_hud_set_text(), double-buffered so
@@ -69,33 +69,25 @@ static inline void hud_dacr_restore(uint32_t prev)
 	__asm__ volatile("isb");
 }
 
-/* ksceDisplaySetFrameBufInternal(head, index, pParam, sync) - the kernel
- * funnel every set-framebuffer call passes through, so the overlay is
- * system-wide. Draw only for the main panel (head 0). */
-static int hook_set_framebuf(int head, int index,
-                             const SceDisplayFrameBuf *pParam, int sync)
+/* The HUD and the overlay drawn into the frame (head 0 only). */
+static void draw_frame(int head, const SceDisplayFrameBuf *pParam)
 {
-	const tai_hook_ref_t ref = vm_hook_ref(&g_ref);
-	const HudText *t;
-
-	if (!ref)
-		return VM_HOOK_NO_REF;
-	int ret = TAI_CONTINUE(int, ref, head, index, pParam, sync);
+	const HudText *t, *ov;
 
 	if (head != 0 || !pParam || !pParam->base)
-		return ret;
+		return;
 	t = &g_text[g_front];
-	const HudText *ov = &g_ov[g_ov_front];
+	ov = &g_ov[g_ov_front];
 	if (t->n <= 0 && ov->n <= 0)
-		return ret;
+		return;
 	int w = (int)pParam->width, h = (int)pParam->height,
 	    pitch = (int)pParam->pitch;
 
 	/* Plausibility guard: only draw into a sane 32bpp linear buffer. */
 	if (w <= 0 || h <= 0 || pitch < w || pitch > 2048 || w > 1920 || h > 1088)
-		return ret;
+		return;
 	if (pParam->pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8)
-		return ret;
+		return;
 
 	uint32_t prev_dacr = hud_dacr_open();
 	if (t->n <= 0) {
@@ -110,7 +102,22 @@ static int hook_set_framebuf(int head, int index,
 		__sync_lock_release(&g_row_busy);
 	}
 	hud_dacr_restore(prev_dacr);
-	return ret;
+}
+
+/* ksceDisplaySetFrameBufInternal(head, index, pParam, sync) - the kernel
+ * funnel every set-framebuffer call passes through, so the overlay is
+ * system-wide. Drawn before the frame is handed on: once the original has it, the display
+ * may already be showing it, and a frame whose panel took longer (the text
+ * just changed, so the panel is composed again) blinked without it. */
+static int hook_set_framebuf(int head, int index,
+                             const SceDisplayFrameBuf *pParam, int sync)
+{
+	const tai_hook_ref_t ref = vm_hook_ref(&g_ref);
+
+	if (!ref)
+		return VM_HOOK_NO_REF;
+	draw_frame(head, pParam);
+	return TAI_CONTINUE(int, ref, head, index, pParam, sync);
 }
 
 int vm_hud_init(void)

@@ -6,11 +6,10 @@
 #                            settings, the boot guard, the log and the
 #                            user-callable SceVitaMemio syscall library.
 #   vitamemio_hud.skprx    - kernel module: the HUD and the SELECT + arrows
-#                            overlay's drawing. Not in config.txt: the kernel
-#                            module loads it from its own folder while the
-#                            HUD or the overlay is on screen, and unloads it
-#                            when, with the overlay on, both are closed
-#                            (kernel/hud_link.h).
+#                            overlay. Not in config.txt: the kernel module
+#                            loads it from its own folder the first time the
+#                            HUD or the overlay is switched on, so with both
+#                            off it takes no kernel memory (kernel/hud_link.h).
 #   vitamemio.suprx        - user module, listed under *NPXS10015 (the
 #                            Settings app: the vita-memio page under Devices).
 #
@@ -75,8 +74,7 @@ add_executable(vitamemio_kernel
   kernel/klog.c
   kernel/settings.c
   kernel/stage.c
-  kernel/hud_link.c              # loads and unloads the HUD module
-  kernel/overlay.c               # the overlay's keys (stay while the HUD module goes)
+  kernel/hud_link.c              # loads the HUD module on demand
 )
 
 target_link_libraries(vitamemio_kernel
@@ -107,11 +105,12 @@ vita_create_stubs(vitamemio-stubs vitamemio_kernel
 # --------------------------------------------------------------------------
 # It imports nothing of the kernel module: the functions it needs are handed
 # to it at module_start (kernel/hud_link.h), so it links against the system
-# libraries only. The SceDisplay function it hooks is found by taiHEN at run
-# time; the overlay's SceCtrl hooks are the kernel module's.
+# libraries only. The SceCtrl and SceDisplay functions it hooks are found by
+# taiHEN at run time.
 add_executable(vitamemio_hud
   kernel/hud_main.c              # module entry, the HUD's and the overlay's text
   kernel/hud.c                   # drawing over the framebuffer
+  kernel/overlay.c               # the overlay's keys
 )
 target_link_libraries(vitamemio_hud
   taihenForKernel_stub

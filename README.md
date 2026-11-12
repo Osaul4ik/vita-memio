@@ -26,7 +26,7 @@ Get `vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx` and, if y
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself when the HUD or the overlay is shown.
+   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself the first time you switch on the HUD or the overlay.
 3. Restart the console.
 4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything starts switched off.
 
@@ -187,7 +187,7 @@ This error means the system is out of kernel memory. It can also appear as a cra
 ## Good to know
 
 - Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more while they are on screen. With *Overlay* on, that is freed a few seconds after you close them with the keys (not while an R/A Test runs).
+- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay (both on by default) take about 40 KiB more; switch both off and restart to free it.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 - The Settings page and the HUD are in English.

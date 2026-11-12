@@ -5,12 +5,10 @@
  * vitamemio_hud.skprx (the HUD, the SELECT + arrows overlay and its read ahead
  * test menu) are two kernel modules. Only the first is in config.txt. It loads
  * the second itself, from the same folder, the first time the HUD or the
- * overlay is switched on. With the overlay on, the HUD shows only by the
- * overlay's keys, so the module is unloaded again a few seconds after the
- * overlay and the HUD are closed (not while a read ahead test runs), and
- * loaded again when the keys open them. The keys themselves (overlay.c) are
- * in the kernel module, so they stay. The module goes only a while after its
- * hook is released: a frame being drawn may still be in its code.
+ * overlay is switched on, so with both off (the default) none of the HUD's
+ * code, fonts or buffers are in kernel memory. Once loaded, it stays until the
+ * next start: its hooks may still be running when they are released, so its
+ * code must not go away under them.
  *
  * No exported library and no NIDs: the kernel module passes a pointer to a
  * VmHudLink as module_start's argument; the HUD module checks it, keeps the
@@ -29,7 +27,7 @@
 #include "stage.h"
 
 #define VM_HUD_LINK_MAGIC    0x4C44554Du   /* "MUDL" */
-#define VM_HUD_LINK_VERSION  2
+#define VM_HUD_LINK_VERSION  1
 
 /* The kernel module's functions, for the HUD module. */
 typedef struct VmCoreApi {
@@ -53,12 +51,6 @@ typedef struct VmCoreApi {
 	int  (*ratest_stale)(void);
 	void (*ratest_cancel)(void);
 	void (*ratest_stop)(VmRaTestPick *out);
-	/* the overlay's keys (overlay.h), in the kernel module */
-	int      (*ov_installed)(void);
-	int      (*ov_state)(void);
-	int      (*ov_cursor)(void);
-	void     (*ov_set_mask)(uint32_t mask);
-	uint32_t (*ov_take_op)(void);
 } VmCoreApi;
 
 /* What the worker should wake for, from VmHudApi.busy. */
@@ -72,7 +64,7 @@ typedef struct VmHudApi {
 	/* The HUD's and the overlay's text, their hooks as the settings say. */
 	void (*tick)(const VmDevState now[VM_DEV_COUNT]);
 	int  (*busy)(void);                   /* VM_HUD_*                           */
-	void (*fini)(void);                   /* its hook released, cache freed     */
+	void (*fini)(void);                   /* every hook released                */
 } VmHudApi;
 
 typedef struct VmHudLink {
@@ -84,9 +76,8 @@ typedef struct VmHudLink {
 
 /* ---- the kernel module's side (kernel/hud_link.c), worker thread only ---- */
 
-/* Load the HUD module while it is needed (a failed load is tried again only
- * after the HUD and the overlay were both off), unload it when it is not, put
- * the overlay's keys in as the setting says, then let it draw. */
+/* Load the HUD module if the HUD or the overlay is on (once; a failed load is
+ * tried again only after both were off), then let it draw. */
 void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void));
 int  vm_hud_link_busy(void);           /* VM_HUD_*; VM_HUD_IDLE without it   */
 void vm_hud_link_fini(void);           /* module_stop: release and unload it */

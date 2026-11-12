@@ -5,9 +5,8 @@
  * Not in config.txt: the kernel module (vitamemio_kernel.skprx) loads it when
  * the HUD or the overlay is first switched on, and calls it from its worker
  * (kernel/hud_link.h). Each call writes the HUD's and the overlay's text from
- * the kernel module's state and settings; the drawing is in hud.c. The keys
- * (overlay.c) are in the kernel module, which unloads this one while the
- * overlay is closed. Everything it reads or changes is the kernel module's, through
+ * the kernel module's state and settings; the drawing is in hud.c, the keys in
+ * overlay.c. Everything it reads or changes is the kernel module's, through
  * the functions it was handed (g_core), so this module holds no state of the
  * plugin's: only its own hooks, text and the panel cache.
  */
@@ -64,11 +63,6 @@ int  vm_stage_ratest_running(uint32_t *mib)     { return g_core->ratest_running(
 int  vm_stage_ratest_stale(void)                { return g_core->ratest_stale(); }
 void vm_stage_ratest_cancel(void)               { g_core->ratest_cancel(); }
 void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
-int  vm_overlay_installed(void)                 { return g_core->ov_installed(); }
-int  vm_overlay_state(void)                     { return g_core->ov_state(); }
-int  vm_overlay_cursor(void)                    { return g_core->ov_cursor(); }
-void vm_overlay_set_mask(uint32_t mask)         { g_core->ov_set_mask(mask); }
-uint32_t vm_overlay_take_op(void)               { return g_core->ov_take_op(); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
@@ -232,7 +226,6 @@ static void hud_feed(const VmDevState *now)
 	static int hud_failed;           /* tried once and failed: do not retry */
 	const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
 	const uint32_t ms = last_us ? (uint32_t)((now_us - last_us) / 1000u) : 1000u;
-	const int first = !last_us;      /* loaded just now (again): no speed yet */
 	VmSettings s;
 	int n = 0;
 
@@ -268,10 +261,6 @@ static void hud_feed(const VmDevState *now)
 		char r[12], w[12], rp[12], wp[12], np[16];
 
 		vm_stage_bytes(i, &rd, &wr);
-		if (first) {                 /* not everything since the start */
-			last_rd[i] = rd;
-			last_wr[i] = wr;
-		}
 		mbps(r, sizeof(r), rd - last_rd[i], ms);
 		mbps(w, sizeof(w), wr - last_wr[i], ms);
 		last_rd[i] = rd;
@@ -502,9 +491,12 @@ static void overlay_feed(void)
 	static uint32_t base_core[4], base_ncs, base_nco;
 	static char msg[VM_HUD_LINE_MAX];
 	static uint32_t msg_us;
+	VmSettings s;
 	uint32_t op;
 	int n = 0;
 
+	vm_settings_copy(&s);
+	vm_overlay_enable(s.overlay && vm_hud_installed(), g_core->wake);
 	op = vm_overlay_take_op();
 	if (op) {
 		overlay_op(op, msg, sizeof(msg));
@@ -655,7 +647,8 @@ static int hud_busy(void)
 
 static void hud_fini_all(void)
 {
-	vm_hud_fini();                        /* the keys are the kernel module's */
+	vm_overlay_enable(0, NULL);
+	vm_hud_fini();
 }
 
 /* ---- module lifecycle ------------------------------------------------------------ */

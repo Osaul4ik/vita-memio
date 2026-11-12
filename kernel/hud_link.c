@@ -1,8 +1,7 @@
 /*
  * hud_link.c - the kernel module's side of the HUD module (see hud_link.h):
- * loads vitamemio_hud.skprx while the HUD or the overlay needs it, hands it
- * the functions it needs, calls it from the worker, and unloads it again
- * when, with the overlay on, both are closed.
+ * loads vitamemio_hud.skprx when the HUD or the overlay is first switched on,
+ * hands it the functions it needs, and calls it from the worker.
  */
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysclib.h>
@@ -10,8 +9,6 @@
 
 #include "hud_link.h"
 #include "klog.h"
-#include "overlay.h"
-#include "overlay_logic.h"
 #include "settings.h"
 #include "stage.h"
 
@@ -53,26 +50,13 @@ static const VmCoreApi k_core = {
 	.ratest_stale   = vm_stage_ratest_stale,
 	.ratest_cancel  = vm_stage_ratest_cancel,
 	.ratest_stop    = vm_stage_ratest_stop,
-	.ov_installed   = vm_overlay_installed,
-	.ov_state       = vm_overlay_state,
-	.ov_cursor      = vm_overlay_cursor,
-	.ov_set_mask    = vm_overlay_set_mask,
-	.ov_take_op     = vm_overlay_take_op,
 };
 
 static VmHudLink        g_link;
 static VmHudLink *const g_link_ptr = &g_link;   /* module_start's argument */
 static const VmHudApi  *g_hud;                   /* NULL: not loaded           */
-static SceUID           g_modid = -1;            /* loaded (g_hud) or released */
+static SceUID           g_modid = -1;
 static int              g_failed;                /* tried; again once both off */
-static uint32_t         g_idle_us;               /* not needed since; 0: needed */
-static uint32_t         g_released_us;           /* released at; 0: not        */
-
-/* Closed this long (overlay on), the module's hook is released; this long
- * after that, the module is unloaded (any frame then in its hook is done:
- * a frame takes 17 ms). */
-#define HUD_IDLE_US    3000000u
-#define HUD_UNLOAD_US  1000000u
 
 /* The load runs on a thread of its own: loading a module takes more stack
  * than the worker has. Its exit status is the module id or an error. */
@@ -120,58 +104,17 @@ static void load(void)
 	         "vitamemio_kernel.skprx, from the same release", (unsigned)id);
 }
 
-/* Its hook released: nothing calls into it any more, except a frame that
- * may still be drawing. */
-static void release(void)
-{
-	const VmHudApi *const h = g_hud;
-
-	__atomic_store_n(&g_hud, NULL, __ATOMIC_RELEASE);
-	h->fini();
-	g_released_us = ksceKernelGetSystemTimeLow() | 1u;
-	VM_KLOGI("hud: closed, unloading the HUD module");
-}
-
-static void unload(void)
-{
-	int status;
-
-	if (g_modid >= 0)
-		ksceKernelStopUnloadModule(g_modid, 0, NULL, 0, NULL, &status);
-	g_modid = -1;
-	g_released_us = 0;
-}
-
 void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void))
 {
-	const uint32_t t = ksceKernelGetSystemTimeLow();
 	VmSettings s;
-	int want, need;
+	int want;
 
 	__atomic_store_n(&g_wake, wake, __ATOMIC_RELEASE);
 	vm_settings_copy(&s);
 	want = s.hud != VM_HUD_OFF || s.overlay;
 	if (!want)
 		g_failed = 0;                     /* switched on again: try again */
-	/* the keys: with the setting, and only while the module can be loaded
-	 * to draw what they open (else the game would lose its buttons to an
-	 * overlay nobody sees) */
-	vm_overlay_enable(s.overlay && !g_failed, core_wake);
-	/* With the overlay on, the HUD shows only by its keys: the module is
-	 * needed while they have something open, or a read ahead test runs. */
-	need = want && (!s.overlay || !vm_overlay_installed() ||
-	                vm_overlay_state() != OV_CLOSED || vm_stage_ratest_running(NULL));
-	if (need) {
-		g_idle_us = 0;
-	} else if (g_hud) {
-		if (!g_idle_us)
-			g_idle_us = t | 1u;
-		else if (t - g_idle_us >= HUD_IDLE_US)
-			release();
-	}
-	if (g_released_us && !g_hud && t - g_released_us >= HUD_UNLOAD_US)
-		unload();
-	if (need && !g_hud && !g_released_us && !g_failed)
+	if (want && !g_hud && !g_failed)
 		load();
 	if (g_hud)
 		g_hud->tick(now);                 /* also when off: it hides them */
@@ -181,30 +124,19 @@ int vm_hud_link_busy(void)
 {
 	const VmHudApi *const h = __atomic_load_n(&g_hud, __ATOMIC_ACQUIRE);
 
-	if (h) {
-		const int b = h->busy();
-
-		/* closed, but still loaded: a tick a second to unload it on time */
-		return b == VM_HUD_IDLE && g_idle_us ? VM_HUD_SHOWN : b;
-	}
-	if (g_released_us)
-		return VM_HUD_SHOWN;              /* to unload it on time */
-	/* not loaded: the keys opened the overlay, load it at once */
-	return vm_overlay_state() == OV_MENU ? VM_HUD_MENU :
-	       vm_overlay_state() == OV_HUD ? VM_HUD_SHOWN : VM_HUD_IDLE;
+	return h ? h->busy() : VM_HUD_IDLE;
 }
 
 void vm_hud_link_fini(void)
 {
-	vm_overlay_enable(0, NULL);          /* the keys' hooks out */
-	if (g_hud) {
-		const VmHudApi *const h = g_hud;
-
-		__atomic_store_n(&g_hud, NULL, __ATOMIC_RELEASE);
-		h->fini();
-	}
+	if (!g_hud)
+		return;
+	g_hud->fini();
+	__atomic_store_n(&g_hud, NULL, __ATOMIC_RELEASE);
 	if (g_modid >= 0) {
-		ksceKernelDelayThread(50000);     /* a frame still in its hook */
-		unload();
+		int status;
+
+		ksceKernelStopUnloadModule(g_modid, 0, NULL, 0, NULL, &status);
+		g_modid = -1;
 	}
 }

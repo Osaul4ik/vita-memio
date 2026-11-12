@@ -109,7 +109,7 @@ T = [
     ("VM_I18N_ROW_OVERLAY",
      "Overlay (SELECT + arrows)"),
     ("VM_I18N_HINT_OVERLAY",
-     "SELECT + Right held ½ s opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. The HUD shows only through these keys. Off: no overlay and no HUD."),
+     "SELECT + Right held ½ s opens the overlay; again: closes it and shows the HUD. SELECT + Left goes back to the overlay (HUD closed); again: closes it. SELECT + Up or Down closes both. While the overlay is open, the game gets no buttons. The HUD shows only through these keys. Off: no overlay and no HUD. Takes effect after a restart."),
     ("VM_I18N_ROW_DMACOPY",
      "DMA copy"),
     ("VM_I18N_HINT_DMACOPY",

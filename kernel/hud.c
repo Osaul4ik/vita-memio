@@ -140,12 +140,17 @@ int vm_hud_init(void)
 static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 {
 	SceUID old;
+	int got = 0;
 
-	/* a frame being drawn: a few us. No time limit: going on without the
-	 * lock would free the block under a drawing thread (and then release
-	 * that thread's lock). */
-	while (__sync_lock_test_and_set(&g_row_busy, 1))
+	/* a frame being drawn: a few us. If its thread is held up longer, the
+	 * old block stays (its memory too) rather than being freed under it. */
+	for (int i = 0; i < 1000 && !(got = !__sync_lock_test_and_set(&g_row_busy, 1)); i++)
 		ksceKernelDelayThread(100);
+	if (!got) {
+		if (uid >= 0)
+			ksceKernelFreeMemBlock(uid);   /* the new one is not needed then */
+		return;
+	}
 	old = g_cache_uid;
 	g_cache_uid = uid;
 	g_cache.px = px;

@@ -6,7 +6,8 @@
  * hooked in the kernel. After the original fills the caller's buffers, the
  * newest one is looked at; while the overlay is open the buttons in all of
  * them are cleared (sticks left alone), so the game does not act on them.
- * Nothing else is changed, and with the setting off the hooks are not there.
+ * Nothing else is changed, and with the overlay off at the start the hooks
+ * are not there (the setting takes effect at the next start: hud_link.c).
  */
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/kernel/sysmem.h>
@@ -41,9 +42,7 @@ static const struct {
 
 static SceUID         g_hook[OV_FNS];
 static volatile tai_hook_ref_t g_ref[OV_FNS];
-static int            g_installed;      /* the hooks are in (worker only)   */
-static volatile int   g_active;         /* ... and act: the setting is on   */
-#define LD_ACTIVE()   __atomic_load_n(&g_active, __ATOMIC_ACQUIRE)
+static int            g_installed;
 
 static OvLogic        g_ov;
 static volatile int   g_lock;
@@ -120,7 +119,7 @@ static void on_pad(int port, SceCtrlData *pad, int count, int negative)
 	{                                                                            \
 		const tai_hook_ref_t ref = vm_hook_ref(&g_ref[i]);                       \
 		int r = ref ? TAI_CONTINUE(int, ref, port, pad, count) : VM_HOOK_NO_REF; \
-		if (r > 0 && LD_ACTIVE())                                                \
+		if (r > 0)                                                               \
 			on_pad(port, pad, r < count ? r : count, k_fn[i].negative);          \
 		return r;                                                                \
 	}
@@ -131,75 +130,55 @@ static const void *const k_hooks[OV_FNS] = {
 	ov_fn0, ov_fn1, ov_fn2, ov_fn3, ov_fn4, ov_fn5, ov_fn6, ov_fn7, ov_fn8, ov_fn9,
 };
 
-/* The hooks are put in once, the first time the setting is on, and stay
- * until the module stops: switching the setting off only stops them acting
- * (g_active). Taking them out while games call the SceCtrl functions from
- * several threads, many times a frame, rebooted the console (Overlay
- * switched off in Settings while it was showing): a call already past its
- * hook's entry can still read the released hook. Left in, an inactive hook
- * costs one load per call. */
-static void hooks_install(void)
-{
-	int ok = 0;
-
-	for (int i = 0; i < OV_FNS; i++) {
-		g_ref[i] = 0;                  /* not the last time's: see vm_hook_ref */
-		g_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_ref[i],
-		                                           "SceCtrl", TAI_ANY_LIBRARY, k_fn[i].nid,
-		                                           k_hooks[i]);
-		ok += g_hook[i] >= 0;
-	}
-	g_installed = 1;
-	if (ok == OV_FNS)
-		VM_KLOGI("overlay: ready (SELECT + arrows)");
-	else
-		VM_KLOGW("overlay: %d of %d button hooks installed", ok, OV_FNS);
-}
-
-static void state_reset(void)
-{
-	while (__sync_lock_test_and_set(&g_lock, 1))
-		ksceKernelDelayThread(100);
-	memset(&g_ov, 0, sizeof(g_ov));       /* OV_CLOSED, nothing hidden */
-	__sync_lock_release(&g_lock);
-}
-
 void vm_overlay_enable(int on, void (*wake)(void))
 {
 	__atomic_store_n(&g_wake, wake, __ATOMIC_RELEASE);
-	if (on && !LD_ACTIVE()) {
-		state_reset();                    /* afresh: nothing of an earlier time */
-		if (!g_installed)
-			hooks_install();
-		__atomic_store_n(&g_active, 1, __ATOMIC_RELEASE);
-	} else if (!on && LD_ACTIVE()) {
-		__atomic_store_n(&g_active, 0, __ATOMIC_RELEASE);
-		state_reset();                    /* closed: the game gets its buttons */
-	}
-}
+	if (on && !g_installed) {
+		int ok = 0;
 
-void vm_overlay_fini(void)
-{
-	__atomic_store_n(&g_active, 0, __ATOMIC_RELEASE);
-	if (!g_installed)
-		return;
-	for (int i = 0; i < OV_FNS; i++)
-		if (g_hook[i] >= 0) {
-			taiHookReleaseForKernel(g_hook[i], g_ref[i]);
-			g_hook[i] = -1;
+		/* afresh: nothing of an earlier time (a hook still running when they
+		 * were released may have left a state) */
+		while (__sync_lock_test_and_set(&g_lock, 1))
+			ksceKernelDelayThread(100);
+		memset(&g_ov, 0, sizeof(g_ov));
+		__sync_lock_release(&g_lock);
+
+		for (int i = 0; i < OV_FNS; i++) {
+			g_ref[i] = 0;                  /* not the last time's: see vm_hook_ref */
+			g_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_ref[i],
+			                                           "SceCtrl", TAI_ANY_LIBRARY, k_fn[i].nid,
+			                                           k_hooks[i]);
+			ok += g_hook[i] >= 0;
 		}
-	g_installed = 0;
-	state_reset();
+		g_installed = 1;
+		if (ok == OV_FNS)
+			VM_KLOGI("overlay: ready (SELECT + arrows)");
+		else
+			VM_KLOGW("overlay: %d of %d button hooks installed", ok, OV_FNS);
+	} else if (!on && g_installed) {
+		for (int i = 0; i < OV_FNS; i++)
+			if (g_hook[i] >= 0) {
+				taiHookReleaseForKernel(g_hook[i], g_ref[i]);
+				g_hook[i] = -1;
+			}
+		g_installed = 0;
+		while (__sync_lock_test_and_set(&g_lock, 1))
+			ksceKernelDelayThread(100);
+		g_ov.state = OV_CLOSED;
+		g_ov.op = 0;
+		g_ov.hide = 0;
+		__sync_lock_release(&g_lock);
+	}
 }
 
 int vm_overlay_installed(void)
 {
-	return LD_ACTIVE();
+	return g_installed;
 }
 
 int vm_overlay_state(void)
 {
-	return LD_ACTIVE() ? __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) : OV_CLOSED;
+	return g_installed ? __atomic_load_n(&g_ov.state, __ATOMIC_RELAXED) : OV_CLOSED;
 }
 
 int vm_overlay_cursor(void)

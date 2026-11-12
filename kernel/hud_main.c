@@ -2,8 +2,8 @@
  * hud_main.c - vitamemio_hud.skprx, the HUD module: the HUD, the SELECT +
  * arrows overlay and its read ahead test menu.
  *
- * Not in config.txt: the kernel module (vitamemio_kernel.skprx) loads it when
- * the HUD or the overlay is first switched on, and calls it from its worker
+ * Not in config.txt: the kernel module (vitamemio_kernel.skprx) loads it at
+ * the start when the overlay is on, and calls it from its worker
  * (kernel/hud_link.h). Each call writes the HUD's and the overlay's text from
  * the kernel module's state and settings; the drawing is in hud.c, the keys in
  * overlay.c. Everything it reads or changes is the kernel module's, through
@@ -640,7 +640,7 @@ static int hud_busy(void)
 
 static void hud_fini_all(void)
 {
-	vm_overlay_fini();
+	vm_overlay_enable(0, NULL);
 	vm_hud_fini();
 }
 

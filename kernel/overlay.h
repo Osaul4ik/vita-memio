@@ -8,11 +8,8 @@
 
 #include <stdint.h>
 
-/* Worker thread. `on`: the setting. The button hooks go in the first time
- * and then only stop acting while it is off; vm_overlay_fini (module stop)
- * takes them out. vm_overlay_installed: on and acting. */
+/* Install / release the button hooks (worker thread). `on`: the setting. */
 void vm_overlay_enable(int on, void (*wake)(void));
-void vm_overlay_fini(void);
 int  vm_overlay_installed(void);
 
 /* OV_CLOSED, OV_MENU or OV_HUD (overlay_logic.h); OV_CLOSED when off. */

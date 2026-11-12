@@ -1,6 +1,7 @@
 /*
  * hud_link.c - the kernel module's side of the HUD module (see hud_link.h):
- * loads vitamemio_hud.skprx when the HUD or the overlay is first switched on,
+ * loads vitamemio_hud.skprx at the start when the overlay is on (a change to
+ * that setting takes effect at the next start),
  * hands it the functions it needs, and calls it from the worker.
  */
 #include <psp2kern/kernel/modulemgr.h>
@@ -21,6 +22,20 @@ static const char *const k_paths[] = {
 
 static void (*g_wake)(void);
 
+/* The overlay as the console started with it (-1: not read yet). Switching
+ * it in Settings takes effect at the next start: its button hooks and the
+ * HUD module are never put in or taken out while apps run, which crashed the
+ * console (apps read the buttons all the time, from several threads). */
+static int g_ov_boot = -1;
+
+/* The settings, with the overlay as it is in effect. */
+static void settings_in_effect(VmSettings *out)
+{
+	vm_settings_copy(out);
+	if (g_ov_boot >= 0)
+		out->overlay = g_ov_boot;
+}
+
 static void core_wake(void)
 {
 	void (*const fn)(void) = __atomic_load_n(&g_wake, __ATOMIC_ACQUIRE);
@@ -34,7 +49,7 @@ static const VmCoreApi k_core = {
 	.build          = VM_BUILD_STR,
 	.wake           = core_wake,
 	.vlog           = vm_vklog,
-	.settings_copy  = vm_settings_copy,
+	.settings_copy  = settings_in_effect,
 	.bytes          = vm_stage_bytes,
 	.memcard_slow   = vm_stage_memcard_slow,
 	.fg             = vm_stage_fg,
@@ -110,12 +125,13 @@ void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void))
 	int want;
 
 	__atomic_store_n(&g_wake, wake, __ATOMIC_RELEASE);
-	vm_settings_copy(&s);
-	want = s.overlay;                     /* the HUD shows only through it */
-	if (!want)
-		g_failed = 0;                     /* switched on again: try again */
+	if (g_ov_boot < 0) {                  /* the first tick: as the console started */
+		vm_settings_copy(&s);
+		g_ov_boot = s.overlay ? 1 : 0;
+	}
+	want = g_ov_boot;                     /* the HUD shows only through it */
 	if (want && !g_hud && !g_failed)
-		load();
+		load();                           /* once: a failed load is not tried again */
 	if (g_hud)
 		g_hud->tick(now);                 /* also when off: it hides them */
 }

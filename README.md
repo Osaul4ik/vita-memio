@@ -60,7 +60,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for. See below | On |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
-| Overlay (SELECT + arrows) | A small menu over any game, see below | On |
+| Overlay (SELECT + arrows) | A small menu over any game, see below. Takes effect after a restart | On |
 
 **Developer settings** (inside *Advanced*)
 
@@ -95,7 +95,7 @@ All benchmark values are under [Benchmarks](#benchmarks). The gain in real use i
 
 ## Overlay
 
-*Overlay* in *Advanced* is on by default. In any game:
+*Overlay* in *Advanced* is on by default; switching it takes effect after a restart. In any game:
 
 | Keys | |
 |---|---|

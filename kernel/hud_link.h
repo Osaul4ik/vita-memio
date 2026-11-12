@@ -4,11 +4,12 @@
  * vitamemio_kernel.skprx (the storage path, settings, boot guard, log) and
  * vitamemio_hud.skprx (the HUD, the SELECT + arrows overlay and its read ahead
  * test menu) are two kernel modules. Only the first is in config.txt. It loads
- * the second itself, from the same folder, the first time the HUD or the
- * overlay is switched on, so with both off (the default) none of the HUD's
- * code, fonts or buffers are in kernel memory. Once loaded, it stays until the
- * next start: its hooks may still be running when they are released, so its
- * code must not go away under them.
+ * the second itself, from the same folder, at the start when the overlay is
+ * on (the HUD is the overlay's), so with it off none of the HUD's code, fonts
+ * or buffers are in kernel memory. The overlay setting takes effect at the
+ * next start: the module and its hooks are never put in or taken out while
+ * apps run (hooks released under running apps crashed the console). The HUD
+ * module sees the overlay as it is in effect (VmCoreApi.settings_copy).
  *
  * No exported library and no NIDs: the kernel module passes a pointer to a
  * VmHudLink as module_start's argument; the HUD module checks it, keeps the
@@ -76,8 +77,8 @@ typedef struct VmHudLink {
 
 /* ---- the kernel module's side (kernel/hud_link.c), worker thread only ---- */
 
-/* Load the HUD module if the HUD or the overlay is on (once; a failed load is
- * tried again only after both were off), then let it draw. */
+/* Load the HUD module if the overlay was on at the start (once), then let it
+ * draw. */
 void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void));
 int  vm_hud_link_busy(void);           /* VM_HUD_*; VM_HUD_IDLE without it   */
 void vm_hud_link_fini(void);           /* module_stop: release and unload it */

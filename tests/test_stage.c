@@ -137,6 +137,7 @@ static void reset(void)
 	g_ncd_reads = g_ncd_kib = g_ncd_maperr = g_ncd_busy = g_ncd_fail = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
+	g_ra_nc_sys_kib = g_ra_nc_own_kib = 0;
 	g_cp_sys_kib = g_cp_game_kib = 0;
 	test_thread = pthread_self();
 	copies_here = copies_elsewhere = 0;
@@ -2468,6 +2469,7 @@ static void test_readahead(void)
 
 		reset();
 		ra_settings(&s, 1, modes[mode], VM_PIPE_AUTO);
+		g_count_cores = 1;                        /* the overlay open: where they ran */
 		fake_pid = 0x42;
 		fake_memtype = MEMTYPE_NC;
 		fake_meminfo_type = 0x10208006;           /* the mapping: non-cacheable, RW */
@@ -2491,6 +2493,17 @@ static void test_readahead(void)
 		           : g_nc_stock_kib == 5 * 128 && g_ncd_reads == 0);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
+		/* graphics data counts as NC, in "Core 3 NC", not as copies (C) */
+		{
+			uint32_t core[4], ncs, nco;
+
+			vm_stage_core_stats(core, &ncs, &nco);
+			CHECK(core[0] + core[1] + core[2] + core[3] == 0);
+			CHECK(offl ? g_ra_nc_sys_kib == 7 * 128 && g_ra_nc_own_kib == 0
+			           : g_ra_nc_own_kib == 7 * 128 && g_ra_nc_sys_kib == 0);
+			CHECK(ncs == (direct ? 5u * 128 : 0u) + g_ra_nc_sys_kib &&
+			      nco == (direct ? 0u : 5u * 128) + g_ra_nc_own_kib);
+		}
 		/* elsewhere: dropped, straight in */
 		CHECK(rd_ok(u, 3500, 300) && ra_idle(d) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
 		vm_stage_fini();

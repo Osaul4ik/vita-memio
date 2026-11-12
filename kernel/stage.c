@@ -430,6 +430,9 @@ static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 mi
  * on the system core), and whether the caller was a system thread (kernel
  * process) or a game (a user process). */
 static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
+/* Graphics data (non-cacheable) from read ahead, copied by the copier on the
+ * system core / by the game's thread: they count as NC, not as copies (C). */
+static uint32_t g_ra_nc_sys_kib, g_ra_nc_own_kib;                  /* atomics */
 static volatile int g_log_diag;            /* the log is on: count            */
 static volatile int g_count_cores;         /* the overlay is open: count too  */
 #define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
@@ -1076,8 +1079,12 @@ static int pipe_copier(SceSize args, void *argp)
 				m->uid = -1;
 			}
 		}
-		if (done && COUNT_CORES())
-			__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
+		if (done && COUNT_CORES()) {
+			if (d->cjob_map && d->cjob_map->nc)   /* graphics data: NC */
+				__atomic_fetch_add(&g_ra_nc_sys_kib, done / 2, __ATOMIC_RELAXED);
+			else
+				__atomic_fetch_add(&g_cp_core_kib[cpu_id()], done / 2, __ATOMIC_RELAXED);
+		}
 		d->cjob_ret = r;
 		d->cjob_done = done;
 		d->cjob_cp_us = cp;
@@ -2718,8 +2725,8 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		ADD(g_ra_nc_kib, got / 2);
 	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec, 1))
 		ra_refill(d, io, ref, part);
-	if (COUNT_CORES() && own)
-		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
+	if (COUNT_CORES() && own)                  /* graphics data the game's thread copied */
+		__atomic_fetch_add(&g_ra_nc_own_kib, own / 2, __ATOMIC_RELAXED);
 	__sync_lock_release(&d->busy);
 	if (bad) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
@@ -3999,8 +4006,10 @@ void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t
 {
 	for (int i = 0; i < 4; i++)
 		cp_core_kib[i] = __atomic_load_n(&g_cp_core_kib[i], __ATOMIC_RELAXED);
-	*nc_sys_kib = LD(g_ncd_kib);
-	*nc_own_kib = LD(g_nc_stock_kib);
+	/* graphics data: read on the system core ("C + NC All") or copied there
+	 * from read ahead, against read the standard way or copied by the game */
+	*nc_sys_kib = LD(g_ncd_kib) + LD(g_ra_nc_sys_kib);
+	*nc_own_kib = LD(g_nc_stock_kib) + LD(g_ra_nc_own_kib);
 }
 
 void vm_stage_count_cores(int on)

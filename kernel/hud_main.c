@@ -114,12 +114,12 @@ static const char *state_color(const VmDevState *d, int slow)
 }
 
 /* The HUD is the overlay's: it shows only by the overlay's keys (SELECT +
- * Right from the overlay), Extended, in the PSVshell style; with the
- * overlay off there is none. */
-static void hud_effective(VmSettings *s)
+ * Right from the overlay), always the extended one; with the overlay off
+ * there is none. */
+static int hud_shown(const VmSettings *s)
 {
-	s->hud = s->overlay && vm_overlay_installed() && vm_overlay_state() == OV_HUD
-	         ? VM_HUD_EXTENDED : VM_HUD_OFF;
+	return s->overlay && vm_overlay_installed() && vm_overlay_state() == OV_HUD &&
+	       vm_hud_installed();
 }
 
 /* Where copies run is counted (vm_stage_count_cores) while the overlay is
@@ -142,38 +142,35 @@ static void pct_text(char *o, int cap, int p)
 		         (unsigned)(p > 100 ? 100 : p));
 }
 
-/* A threshold for the HUD: the number, or "no" / "never" (never starts). */
-static void hud_thr(char *o, int cap, uint32_t t, int compact)
+/* A threshold for the HUD: the number, or "never" (never starts). */
+static void hud_thr(char *o, int cap, uint32_t t)
 {
 	if (t == VM_RA_NEVER)
-		snprintf(o, cap, HUD_C_DIM "%s", compact ? "no" : "never");
+		snprintf(o, cap, HUD_C_DIM "never");
 	else
 		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(t > 99 ? 99 : t));
 }
 
 /* Read ahead in the HUD, for the app in front:
- *   compact   R/A: On C: 5 NC: no
- *   extended  R/A: On  TitleID: PCSB00777
- *             Streak  C: 5  NC: never    (reads in a row before it starts)
- *             Core 3  C: 98%  NC: 100%   (since the HUD came up)
- * Off: just "R/A: Off". Returns the lines added (at most `room`). */
-static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *s,
-                        const VmFg *fg, int on)
+ *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
+ *   Streak  C: 5  NC: never              (reads in a row before it starts, now)
+ *   Core 3  C: 98%  NC: 100%             (since the HUD came up)
+ * Off: no Streak line. Returns the lines added (at most `room`). */
+static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, int on)
 {
 	static int counting;
 	static uint32_t base_core[4], base_ncs, base_nco;
-	const int ext = s->hud == VM_HUD_EXTENDED;
 	char c[16], nc[16];
 	const char *mode;
 	VmRaNow now;
 	int n = 0;
 
-	/* where copies run: counted only while the extended HUD shows it */
-	if (on && ext && !counting) {
+	/* where copies run: counted only while the HUD shows it */
+	if (on && !counting) {
 		count_cores_want(&g_cnt_hud, 1);
 		vm_stage_core_stats(base_core, &base_ncs, &base_nco);
 		counting = 1;
-	} else if ((!on || !ext) && counting) {
+	} else if (!on && counting) {
 		count_cores_want(&g_cnt_hud, 0);
 		counting = 0;
 	}
@@ -181,17 +178,10 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmSettings *
 		return 0;
 	vm_stage_ra_now(&now);
 	/* in effect for the app in front (its own, or the global one) */
-	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" : HUD_C_DIM "Off";
-	hud_thr(c, sizeof(c), now.thr[0], !ext);
-	hud_thr(nc, sizeof(nc), now.thr[1], !ext);
-	if (!ext) {
-		if (now.mode == VM_RA_OFF)
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s", mode);
-		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s " HUD_C_DIM "C: %.7s "
-			         HUD_C_DIM "NC: %.7s", mode, c, nc);
-		return n;
-	}
+	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" :
+	       now.mode == VM_RA_ADAPTIVE ? HUD_C_TEXT "Adaptive" : HUD_C_DIM "Off";
+	hud_thr(c, sizeof(c), now.thr[0]);
+	hud_thr(nc, sizeof(nc), now.thr[1]);
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room)
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.7s" HUD_C_DIM
@@ -218,10 +208,11 @@ static void hud_feed(const VmDevState *now)
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
 	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
 	static int hud_failed;           /* tried once and failed: do not retry */
+	static int was_shown;            /* on screen at the last call         */
 	const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
 	const uint32_t ms = last_us ? (uint32_t)((now_us - last_us) / 1000u) : 1000u;
 	VmSettings s;
-	int n = 0;
+	int n = 0, shown, fresh;
 
 	last_us = now_us;
 
@@ -232,12 +223,13 @@ static void hud_feed(const VmDevState *now)
 		hud_failed = 1;
 		VM_KLOGW("hud: could not install - HUD unavailable");
 	}
-	hud_effective(&s);
-	if (!vm_hud_installed())
-		s.hud = VM_HUD_OFF;
-	/* transfers counted while anything shows them, also by the overlay's keys
-	 * with the HUD's own setting off */
-	vm_stage_count_hud(s.hud != VM_HUD_OFF || vm_overlay_state() == OV_MENU);
+	shown = hud_shown(&s);
+	/* just shown: nothing was counted while it was not, so no speed yet (the
+	 * time since the last call is not the time counted) */
+	fresh = shown && !was_shown;
+	was_shown = shown;
+	/* transfers counted while anything shows them */
+	vm_stage_count_hud(shown || vm_overlay_state() == OV_MENU);
 	/* One line per storage that has seen any I/O since boot (an SD2Vita line
 	 * only appears with one fitted): live speed of all its transfers, whether
 	 * or not they took the faster path, coloured by what the faster path is
@@ -255,13 +247,13 @@ static void hud_feed(const VmDevState *now)
 		char r[12], w[12], rp[12], wp[12];
 
 		vm_stage_bytes(i, &rd, &wr);
-		mbps(r, sizeof(r), rd - last_rd[i], ms);
-		mbps(w, sizeof(w), wr - last_wr[i], ms);
+		mbps(r, sizeof(r), fresh ? 0 : rd - last_rd[i], ms);
+		mbps(w, sizeof(w), fresh ? 0 : wr - last_wr[i], ms);
 		last_rd[i] = rd;
 		last_wr[i] = wr;
 		seen[i] |= rd | wr;
 		/* a storage switched off in Settings is not shown */
-		if (s.hud == VM_HUD_OFF || !seen[i] || now[i].status == VM_ST_OFF ||
+		if (!shown || !seen[i] || now[i].status == VM_ST_OFF ||
 		    (fg.dev >= 0 && i != fg.dev))
 			continue;
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
@@ -275,8 +267,6 @@ static void hud_feed(const VmDevState *now)
 		snprintf(L[n++], VM_HUD_LINE_MAX,
 		         HUD_C_TEXT "%s " HUD_C_DIM "R: %s%s " HUD_C_DIM "W: %s%s " HUD_C_DIM "MB/s%s%s%s",
 		         np, c, rp, c, wp, flag[0] ? " " : "", c, flag);
-		if (s.hud != VM_HUD_EXTENDED)
-			continue;
 		const char *state =
 			now[i].status == VM_ST_ACTIVE   ? "ON" :
 			now[i].status == VM_ST_OFF      ? "OFF" :
@@ -289,17 +279,17 @@ static void hud_feed(const VmDevState *now)
 		         (unsigned)now[i].errors,
 		         s.verify ? " " : "", HUD_C_WARN, s.verify ? "VERIFY" : "");
 	}
-	n += hud_ra_lines(&L[n], VM_HUD_LINES - n, &s, &fg, s.hud != VM_HUD_OFF);
-	if (s.hud != VM_HUD_OFF && n < VM_HUD_LINES)
+	n += hud_ra_lines(&L[n], VM_HUD_LINES - n, &fg, shown);
+	if (shown && n < VM_HUD_LINES)
 		n += rt_line(L[n]);
 	if (vm_hud_installed())
-		vm_hud_set_text(L, s.hud == VM_HUD_OFF ? 0 : n);
+		vm_hud_set_text(L, shown ? n : 0);
 }
 
 
 /* ---- the overlay (SELECT + arrows) ------------------------------------------ */
 
-static const char *const k_ov_ra[] = { "Off", "On" };
+static const char *const k_ov_ra[] = { "Off", "On", "Adaptive" };   /* VM_RA_* */
 static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A", "C + NC All" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 /* GPU-safe reads, by value (VM_GPUSAFE_*) */
@@ -317,8 +307,10 @@ static int rt_line(char *o)
 }
 
 /* Start (copy on core 3 goes to C + NC R/A meanwhile), or stop and put in what it
- * found, saved in the app's profile. *save: to be saved once in effect. */
-static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
+ * found, saved in the app's profile. `ra` the read ahead in effect: Adaptive
+ * stays Adaptive (from the thresholds found) when the test keeps it on.
+ * *save: to be saved once in effect. */
+static int rt_toggle(VmApp *a, int ra, char *msg, int cap, int *save)
 {
 	static int before;                    /* the copy setting it started from */
 	VmRaTestPick p;
@@ -335,12 +327,13 @@ static int rt_toggle(VmApp *a, char *msg, int cap, int *save)
 	}
 	vm_stage_ratest_stop(&p);
 	if (p.little) {
-		a->offload = before;
+		if (a->offload == VM_OFFLOAD_ALL)     /* as the test set it, not changed since */
+			a->offload = before;
 		snprintf(msg, cap, HUD_C_WARN "R/A Test: %u MiB is too little, play more",
 		         (unsigned)(p.mib % 100000u));
 		return VM_OK;
 	}
-	a->ra = p.ra;
+	a->ra = p.ra == VM_RA_ON && ra == VM_RA_ADAPTIVE ? VM_RA_ADAPTIVE : p.ra;
 	a->offload = p.offload;
 	a->thr[0] = p.ra == VM_RA_ON ? p.thr[0] : 0;
 	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
@@ -355,7 +348,7 @@ static int g_ov_adv;
  * settings (in effect at once; kept only by Save), or an action. */
 static void overlay_op(uint32_t op, char *msg, int cap)
 {
-	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON };
+	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON, VM_RA_ADAPTIVE };
 	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
 	                           VM_OFFLOAD_FULL };   /* as on the Settings page */
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
@@ -375,7 +368,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	a = an.cur;
 	switch (item) {
 	case OV_ITEM_RA:
-		a.ra = ov_step(ra, 3, a.ra, dir);
+		a.ra = ov_step(ra, 4, a.ra, dir);
 		break;
 	case OV_ITEM_C:
 	case OV_ITEM_NC: {
@@ -394,7 +387,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		a.gpusafe = ov_step(gs, 4, a.gpusafe, dir);
 		break;
 	case OV_ITEM_TEST:
-		r = rt_toggle(&a, msg, cap, &save);
+		r = rt_toggle(&a, a.ra == VM_APP_GLOBAL ? an.global.ra : a.ra, msg, cap, &save);
 		break;
 	case OV_ITEM_SAVE:
 		r = vm_stage_app_save();
@@ -554,15 +547,21 @@ static void overlay_feed(void)
 				ov_line(L[n++], cur, OV_ITEM_TEST, 0, run ? "Stop R/A Test" : "Start R/A Test",
 				        HUD_C_TEXT, run ? v : "(X)");
 			}
-			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 2);
+			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
 			        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);
-			if (ra == VM_RA_ON) {                 /* its thresholds: On only */
+			if (ra != VM_RA_OFF) {                /* its thresholds: On and Adaptive */
+				VmRaNow rn;
+
+				vm_stage_ra_now(&rn);             /* Adaptive: where it is now */
 				for (int k = 0; k < 2; k++) {
 					const uint32_t t = an.cur.thr[k] ? an.cur.thr[k] : an.global.thr[k];
 
 					if (t == VM_RA_NEVER)
 						snprintf(v, sizeof(v), "never");
+					else if (ra == VM_RA_ADAPTIVE && rn.thr[k] != t)
+						snprintf(v, sizeof(v), "%u%s, now %u", (unsigned)t,
+						         an.cur.thr[k] ? "" : " (fixed)", (unsigned)rn.thr[k]);
 					else
 						snprintf(v, sizeof(v), "%u%s", (unsigned)t,
 						         an.cur.thr[k] ? "" : " (fixed)");

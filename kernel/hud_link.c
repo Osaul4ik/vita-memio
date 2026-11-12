@@ -1,8 +1,9 @@
 /*
  * hud_link.c - the kernel module's side of the HUD module (see hud_link.h):
- * loads vitamemio_hud.skprx at the start when the overlay is on (a change to
- * that setting takes effect at the next start),
- * hands it the functions it needs, and calls it from the worker.
+ * loads vitamemio_hud.skprx at the start when the overlay is on, hands it the
+ * functions it needs, and calls it from the worker. Switched off later, the
+ * overlay stops acting at once; switched on, it acts at once only if it was
+ * on at the start (g_ov_boot).
  */
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysclib.h>
@@ -73,7 +74,7 @@ static VmHudLink        g_link;
 static VmHudLink *const g_link_ptr = &g_link;   /* module_start's argument */
 static const VmHudApi  *g_hud;                   /* NULL: not loaded           */
 static SceUID           g_modid = -1;
-static int              g_failed;                /* tried; again once both off */
+static int              g_failed;                /* tried and failed: not again  */
 
 /* The load runs on a thread of its own: loading a module takes more stack
  * than the worker has. Its exit status is the module id or an error. */

@@ -142,6 +142,7 @@ typedef struct RaPiece {
 	uint32_t       epoch, t_done;     /* see ra_valid                          */
 	int            ok;                /* read, and no write was running then    */
 	int            dirty;             /* a write touched it since it was queued */
+	int            nc;                /* read for a non-cacheable stream (adaptive) */
 } RaPiece;
 
 typedef struct Dev {
@@ -1597,7 +1598,7 @@ static int ra_thr_ok(uint32_t t)
  * thresholds 0 (the fixed) or 2..8 / never. */
 static int ra_app_ok(const VmApp *a)
 {
-	return a->ra >= -1 && a->ra <= VM_RA_ON && (a->offload == -1 || vm_setting_valid(VM_KEY_OFFLOAD, a->offload)) &&
+	return a->ra >= -1 && a->ra <= VM_RA_ADAPTIVE && (a->offload == -1 || vm_setting_valid(VM_KEY_OFFLOAD, a->offload)) &&
 	       a->pipe >= -1 && a->pipe <= VM_PIPE_FIXED &&
 	       a->gpusafe >= -1 && a->gpusafe <= VM_GPUSAFE_NODMA &&
 	       (!a->thr[0] || ra_thr_ok(a->thr[0])) && (!a->thr[1] || ra_thr_ok(a->thr[1]));
@@ -1791,8 +1792,27 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 	return ref ? TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6) : 0;
 }
 
-/* The threshold for a stream of kind nc: the app in front's own, or the fixed. */
-static uint32_t ra_threshold(int nc)
+/* Adaptive (VM_RA_ADAPTIVE): the threshold of each kind (0 cached, 1 NC)
+ * moved by ra_adj from where On would have it, within 2..8. What the pieces
+ * of a kind brought is added up (sectors used, sectors read for nothing);
+ * every RA_ADAPT_SECTORS of them it is weighed as the R/A Test weighs it (a
+ * sector used saves RT_GAIN_*_US, a piece read for nothing costs RT_WASTE_US):
+ * a loss starts it one read later; little read for nothing (under one in
+ * RA_ADAPT_LOW) one sooner. Never off: "never" (the test's) stays never. Back
+ * to where On has it when what is in effect changes (eff_update: another app
+ * in front, a setting). Counted from any thread, unlocked: a lost count only
+ * moves a decision. */
+#define RA_ADAPT_SECTORS  (16u * RA_PIECE_SECTORS)   /* 16 pieces, 2 MiB */
+#define RA_ADAPT_LOW      5u
+#define RA_THR_LO         2u
+#define RA_THR_HI         8u
+static volatile int      g_ra_adj[2];
+static volatile uint32_t g_ra_used[2], g_ra_unused[2];   /* sectors, this round */
+static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
+
+/* The threshold On has for a stream of kind nc: the app in front's own, or
+ * the fixed. */
+static uint32_t ra_base_threshold(int nc)
 {
 	const SceUID app = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE);
 	uint32_t t;
@@ -1801,6 +1821,63 @@ static uint32_t ra_threshold(int nc)
 	    (t = __atomic_load_n(&g_app_cur.thr[nc], __ATOMIC_RELAXED)) != 0)
 		return t;
 	return nc ? RA_STREAK_NC : RA_STREAK;
+}
+
+/* The threshold in effect for a stream of kind nc. */
+static uint32_t ra_threshold(int nc)
+{
+	const uint32_t t = ra_base_threshold(nc);
+	int v;
+
+	if (t == RA_THR_NONE || LD(g_ra_mode) != VM_RA_ADAPTIVE)
+		return t;
+	v = (int)t + LD(g_ra_adj[nc]);
+	return v < (int)RA_THR_LO ? RA_THR_LO : v > (int)RA_THR_HI ? RA_THR_HI : (uint32_t)v;
+}
+
+static void ra_adapt_reset(void)
+{
+	for (int k = 0; k < 2; k++) {
+		ST(g_ra_adj[k], 0);
+		ST(g_ra_used[k], 0);
+		ST(g_ra_unused[k], 0);
+	}
+}
+
+/* What a piece of kind nc brought: `used` sectors handed out, `unused` read
+ * for nothing. */
+static void ra_adapt_note(int nc, uint32_t used, uint32_t unused)
+{
+	uint32_t u, w, t;
+	int64_t gain, loss;
+	int adj;
+
+	if (LD(g_ra_mode) != VM_RA_ADAPTIVE)
+		return;
+	nc = !!nc;
+	u = __atomic_add_fetch(&g_ra_used[nc], used, __ATOMIC_RELAXED);
+	w = __atomic_add_fetch(&g_ra_unused[nc], unused, __ATOMIC_RELAXED);
+	if (u + w < RA_ADAPT_SECTORS)
+		return;
+	/* one thread decides this round: the one that takes the counts */
+	u = __atomic_exchange_n(&g_ra_used[nc], 0, __ATOMIC_RELAXED);
+	w = __atomic_exchange_n(&g_ra_unused[nc], 0, __ATOMIC_RELAXED);
+	if (u + w < RA_ADAPT_SECTORS / 2)
+		return;
+	t = ra_threshold(nc);
+	if (t == RA_THR_NONE)
+		return;
+	gain = (int64_t)u * (nc ? RT_GAIN_NC_US : RT_GAIN_C_US);
+	loss = (int64_t)w * RT_WASTE_US / RA_PIECE_SECTORS;
+	adj = LD(g_ra_adj[nc]);
+	if (loss > gain && t < RA_THR_HI)
+		adj++;
+	else if ((uint64_t)w * RA_ADAPT_LOW < (uint64_t)(u + w) && t > RA_THR_LO)
+		adj--;
+	else
+		return;
+	ST(g_ra_adj[nc], adj);
+	ADD(g_ra_moves[nc], 1);
 }
 
 static uint8_t *ra_ptr(const Dev *d, int i)
@@ -1898,8 +1975,10 @@ static void ra_drop(Dev *d)
 
 		if (st != RA_FREE) {
 			any = 1;
-			if (st == RA_READY)
+			if (st == RA_READY) {
 				waste += d->ra[i].n - d->ra[i].off;
+				ra_adapt_note(d->ra[i].nc, 0, d->ra[i].n - d->ra[i].off);
+			}
 			__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
 		}
 	}
@@ -2061,6 +2140,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		RaPiece *pc = &d->ra[idx[j]];
 
 		pc->off += sz[j];
+		ra_adapt_note(pc->nc, sz[j], 0);
 		if (pc->off >= pc->n)
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 	}
@@ -2190,6 +2270,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		pc->part = part;
 		pc->epoch = LD(d->ra_epoch);
 		pc->ok = 0;
+		pc->nc = nc;
 		next += RA_PIECE_SECTORS;
 		__atomic_store_n(&pc->state, RA_QUEUED, __ATOMIC_RELEASE);
 		ksceKernelSignalSema(d->ra_go, 1);
@@ -3158,6 +3239,7 @@ static void eff_update(void)
 			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
 	ST(g_ra_mode, ra);
 	ST(g_readahead, ra != VM_RA_OFF ? 1 : 0);
+	ra_adapt_reset();                     /* adaptive: afresh from where On is */
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || ra))
@@ -3204,7 +3286,7 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_glob_pipe, s->pipeline >= VM_PIPE_OFF && s->pipeline <= VM_PIPE_FIXED ? s->pipeline
 	                                                                         : VM_PIPE_OFF);
 	ST(g_glob_offload, vm_setting_valid(VM_KEY_OFFLOAD, s->offload) ? s->offload : VM_OFFLOAD_OFF);
-	ST(g_glob_ra, s->readahead == VM_RA_ON ? VM_RA_ON : VM_RA_OFF);
+	ST(g_glob_ra, vm_setting_valid(VM_KEY_READAHEAD, s->readahead) ? s->readahead : VM_RA_OFF);
 	eff_update();
 	if (!s->verify)
 		ST(g_shadow_failed, 0);   /* turning verify off and on again retries the buffer */
@@ -3278,8 +3360,8 @@ int vm_stage_app_set(const VmApp *a)
 	if (!app_in_front())
 		return VM_ERR_NOT_READY;
 	v = *a;
-	/* its thresholds only mean something with read ahead On for it */
-	if ((v.ra == VM_APP_GLOBAL ? LD(g_glob_ra) : v.ra) != VM_RA_ON)
+	/* its thresholds only mean something with read ahead on for it */
+	if ((v.ra == VM_APP_GLOBAL ? LD(g_glob_ra) : v.ra) == VM_RA_OFF)
 		v.thr[0] = v.thr[1] = 0;
 	eff_lock();
 	g_app_cur = v;
@@ -3435,6 +3517,10 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+		if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
+			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, moved %u / %u times",
+			         (unsigned)ra_threshold(0), (unsigned)ra_threshold(1),
+			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]));
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),
@@ -3459,10 +3545,14 @@ void vm_stage_worker_tick(void)
 		const int st = __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE);
 
 		if (LD(g_offload) && st != LD(g_offload_logged)) {
+			static uint32_t ready_type;  /* the last one logged: once, not per app */
+
 			ST(g_offload_logged, st);
-			if (st > 0)
+			if (st > 0 && LD(g_offload_type) != ready_type) {
+				ready_type = LD(g_offload_type);
 				VM_KLOGI("stage: copy on the system core ready (mapping type 0x%08x)",
-				         (unsigned)LD(g_offload_type));
+				         (unsigned)ready_type);
+			}
 			else if (st == -1)
 				VM_KLOGW("stage: copy on the system core refused: the mapping is not "
 				         "writable (type 0x%08x) - games copy as before",
@@ -3526,10 +3616,14 @@ void vm_stage_worker_tick(void)
 		const int st = __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE);
 
 		if (vm_offload_direct(LD(g_offload)) && st != LD(g_ncd_logged)) {
+			static uint32_t ready_type;  /* the last one logged: once, not per app */
+
 			ST(g_ncd_logged, st);
-			if (st > 0)
+			if (st > 0 && LD(g_ncd_type) != ready_type) {
+				ready_type = LD(g_ncd_type);
 				VM_KLOGI("stage: uncached reads on the system core ready (mapping type 0x%08x)",
-				         (unsigned)LD(g_ncd_type));
+				         (unsigned)ready_type);
+			}
 			else if (st < 0)
 				VM_KLOGW("stage: uncached reads on the system core refused (%d, type 0x%08x) - "
 				         "standard path", st, (unsigned)LD(g_ncd_type));

@@ -3114,6 +3114,89 @@ static void test_tiny_reads(void)
 }
 
 /* The app in front's own settings, kept in its profile. */
+/* Read ahead Adaptive: the threshold moves from where On has it (5), within
+ * 2..8, one step per round of RA_ADAPT_SECTORS: later while what is read is
+ * mostly not used, sooner while nearly all of it is; each kind on its own.
+ * "never" stays never, On never moves, and what is in effect changing starts
+ * afresh. Then the same from reads: a stream that always stops right after
+ * read ahead began moves it up. */
+static void test_readahead_adaptive(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	VmApp a;
+	Dev *d = &g_dev[M];
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	CHECK(vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ADAPTIVE) && !vm_setting_valid(VM_KEY_READAHEAD, 3));
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On */
+	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* On: nothing moves */
+	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);
+
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_readahead && ra_threshold(0) == 5);
+	for (int i = 0; i < 6; i++)                         /* all read for nothing */
+		ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	CHECK(ra_threshold(0) == 8 && ra_threshold(1) == 5);   /* up to 8, NC as it was */
+	for (int i = 0; i < 10; i++)                        /* all used */
+		ra_adapt_note(0, RA_ADAPT_SECTORS, 0);
+	CHECK(ra_threshold(0) == 2);                        /* down to 2, never off */
+	/* in between: neither a loss nor little waste - it stays */
+	ra_adapt_note(0, RA_ADAPT_SECTORS * 3 / 4, RA_ADAPT_SECTORS / 4);
+	CHECK(ra_threshold(0) == 2);
+	ra_adapt_note(1, 0, RA_ADAPT_SECTORS);
+	CHECK(ra_threshold(1) == 6);
+	/* a part of a round only counts */
+	ra_adapt_note(1, 0, RA_ADAPT_SECTORS / 4);
+	CHECK(ra_threshold(1) == 6);
+	vm_stage_apply(&s);                                  /* in effect again: afresh */
+	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ra_used[1] == 0 && g_ra_unused[1] == 0);
+
+	/* an app's own thresholds are where it starts; its "never" stays */
+	g_title_fn = fake_title;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	ra_app_global(&a);
+	a.ra = VM_RA_ADAPTIVE;
+	a.thr[0] = 3;
+	a.thr[1] = VM_RA_NEVER;
+	CHECK(vm_stage_app_set(&a) == VM_OK && g_ra_mode == VM_RA_ADAPTIVE);
+	CHECK(ra_threshold(0) == 3 && ra_threshold(1) == VM_RA_NEVER);
+	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	ra_adapt_note(1, RA_ADAPT_SECTORS, 0);
+	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);
+	as_app(0x42);                                        /* another in front: afresh */
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);
+	vm_stage_fini();
+
+	/* from reads: runs of 6 reads in a row, each followed by one elsewhere,
+	 * leave the pieces read for the sixth unused */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	CHECK(d->ra_ready && ra_threshold(0) == 5);
+	for (uint32_t run = 0; run < 40 && ra_threshold(0) < 8; run++) {
+		const uint32_t at = (run % 3) * 1024;
+
+		for (uint32_t i = 0; i < 6; i++)
+			CHECK(rd(u, at + i * 256, 256) == 0 && memcmp(u, disk + (size_t)(at + i * 256) * 512, 256 * 512) == 0);
+		for (int k = 0; k < RA_PIECES; k++)               /* the pieces read, then ... */
+			for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE)); t++)
+				usleep(500);
+		CHECK(rd(u, 4000, 64) == 0);                     /* ... elsewhere: dropped unused */
+	}
+	CHECK(ra_threshold(0) > 5 && g_ra_moves[0] > 0);
+	CHECK(d->st.errors == 0 && !d->fallback);
+	vm_stage_fini();
+	g_title_fn = NULL;
+}
+
 static void test_app_settings(void)
 {
 	VmSettings s;
@@ -3133,7 +3216,7 @@ static void test_app_settings(void)
 	vm_stage_app_now(&an);
 	CHECK(!strcmp(an.title, "PCSB00777") && an.cur.ra == VM_APP_GLOBAL &&
 	      !memcmp(&an.cur, &an.saved, sizeof(an.cur)));
-	a.ra = 2;                                         /* "Auto" is no value now */
+	a.ra = 3;                                         /* past Adaptive: no value */
 	CHECK(vm_stage_app_set(&a) == VM_ERR_ARG);
 	ra_app_global(&a);
 	a.ra = VM_RA_ON;
@@ -3210,7 +3293,7 @@ static void test_profiles(void)
 		ksceIoClose(fd);
 		CHECK(!ra_prof_load("PCSE00001", &pf));
 		v.check ^= 1;
-		v.ra = 2;                                     /* out of range */
+		v.ra = 3;                                     /* out of range */
 		v.check = ra_profile_check(&v);
 		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 		ksceIoWrite(fd, &v, sizeof(v));
@@ -3485,6 +3568,7 @@ int main(void)
 	RUN(test_ra_slow_stream);
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
+	RUN(test_readahead_adaptive);
 	RUN(test_app_settings);
 	RUN(test_profiles);
 	RUN(test_review_fixes);

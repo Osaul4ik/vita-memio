@@ -82,6 +82,6 @@ typedef struct VmHudLink {
  * draw. */
 void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void));
 int  vm_hud_link_busy(void);           /* VM_HUD_*; VM_HUD_IDLE without it   */
-void vm_hud_link_fini(void);           /* module_stop: release and unload it */
+void vm_hud_link_fini(void);           /* module_stop: its hooks out, unloaded */
 
 #endif /* VITAMEMIO_HUD_LINK_H */

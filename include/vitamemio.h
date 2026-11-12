@@ -67,7 +67,7 @@ enum vm_key {
 	VM_KEY_SD2VITA = 0,    /* 0/1: faster SD2Vita reads and writes           */
 	VM_KEY_INTERNAL,       /* reserved, always 0: was faster internal storage */
 	VM_KEY_VERIFY,         /* 0/1: check every faster transfer (diagnostic)  */
-	VM_KEY_HUD,            /* VM_HUD_*                                       */
+	VM_KEY_HUD,            /* reserved: the HUD is always Extended (VM_HUD_*) */
 	VM_KEY_HUD_STYLE,      /* reserved: the HUD has one look now             */
 	VM_KEY_LOG,            /* 0/1: write kernel.log / user.log at all        */
 	VM_KEY_MEMCARD,        /* 0/1: faster memory card (added after 0.1.0)    */
@@ -133,9 +133,13 @@ static inline int vm_offload_direct(int v)
 #define VM_STATS_OFF       0
 #define VM_STATS_ON        1
 
-/* Read ahead: off; on. */
+/* Read ahead: off; on (it starts after a fixed number of reads in a row: the
+ * app's, from the R/A Test, or the standard one); adaptive (from that number,
+ * moved by what it brings: started sooner while what it reads is used, later
+ * while much is read for nothing; never off). */
 #define VM_RA_OFF          0
 #define VM_RA_ON           1
+#define VM_RA_ADAPTIVE     2
 
 /* The HUD always sits in the top right corner. */
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
@@ -208,7 +212,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_GPUSAFE:
 		return v >= VM_GPUSAFE_OFF && v <= VM_GPUSAFE_NODMA;
 	case VM_KEY_READAHEAD:
-		return v == VM_RA_OFF || v == VM_RA_ON;
+		return v >= VM_RA_OFF && v <= VM_RA_ADAPTIVE;
 	case VM_KEY_STATS:
 		return v == VM_STATS_OFF || v == VM_STATS_ON;
 	case VM_KEY_PIPELINE:

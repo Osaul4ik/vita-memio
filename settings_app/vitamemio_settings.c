@@ -97,7 +97,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 		"</list>" \
 		ROW_TOGGLE("dmacopy") \
 		ROW_LIST("readahead") \
-			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") \
+			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") ITEM("vm_i_ra2", "2") \
 		"</list>" \
 		ROW_TOGGLE("small") \
 		ROW_TOGGLE("overlay") \
@@ -417,8 +417,9 @@ static const vm_u16 *vm_text(const char *id)
 	if (s_pfx(id, "vm_i_gs") && id[7] >= '0' && id[7] <= '2' && !id[8])
 		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_OFF_OFF
 		                  : id[7] == '1' ? VM_I18N_ITEM_GS_ALL : VM_I18N_ITEM_GS_NODMA);
-	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '1' && !id[8])
-		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF : VM_I18N_ITEM_RA_ON);
+	if (s_pfx(id, "vm_i_ra") && id[7] >= '0' && id[7] <= '2' && !id[8])
+		return fixed_text(id[7] == '0' ? VM_I18N_ITEM_PIPE_OFF
+		                  : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_RA_ADAPTIVE);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '3' && !id[9])

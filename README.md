@@ -58,7 +58,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
-| Read ahead | Reads the next part of a file before it is asked for. See below | On |
+| Read ahead | Reads the next part of a file before it is asked for: **On**, **Adaptive** or **Off**. See below | On |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
 | Overlay (SELECT + arrows) | A small menu over any game, see below. Off takes effect at once; On after a restart, if it was off when the console started | On |
 
@@ -91,6 +91,8 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and moves it while you play: it starts sooner while what it reads early is used, and later while much of it is thrown away. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never.
+
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 
 ## Overlay
@@ -115,7 +117,7 @@ The overlay sets things **for this game only**; each setting is *Global* until y
 2. Play for a few minutes, including a loading screen. The HUD shows how much was read.
 3. Open the overlay and choose **Stop R/A Test**.
 
-The plugin works out what read ahead brings this game and saves the result for it: on or off, when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
+The plugin works out what read ahead brings this game and saves the result for it: on or off (*Adaptive* stays *Adaptive*), when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
 
 It judges from how the game reads and cannot see the frame rate. The result depends on what you played, so test the part you care about. Test during play only and it may decide read ahead is not worth it, because it never saw the loading.
 
@@ -132,7 +134,7 @@ Core 3  C: 98%  NC: 0%
 ```
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
-- **Streak:** reads in a row before read ahead starts.
+- **Streak:** reads in a row before read ahead starts (with *Adaptive*, where it is now).
 - **Core 3, C:** the share of copying done on the spare core since the HUD opened. Copies of graphics data from read ahead count here.
 - **Core 3, NC:** the share of graphics data reads done on the spare core. It stays at 0% unless copying is on *C + NC All*.
 
@@ -180,7 +182,8 @@ This error means the system is out of kernel memory. It can also appear as a cra
 1. If another app is running, close it first.
 2. Leave the plugin on for only one storage. Each storage you switch on takes 256 KiB.
 3. Switch off *Read ahead*, *Overlapped reads* and *Copy on the system core*.
-4. Remove other kernel plugins from your taiHEN config.
+4. Switch off *Overlay*, then restart.
+5. Remove other kernel plugins from your taiHEN config.
 
 ## Good to know
 

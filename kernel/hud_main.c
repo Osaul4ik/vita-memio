@@ -647,7 +647,7 @@ static int hud_busy(void)
 
 static void hud_fini_all(void)
 {
-	vm_overlay_fini();
+	vm_overlay_enable(0, NULL);
 	vm_hud_fini();
 }
 

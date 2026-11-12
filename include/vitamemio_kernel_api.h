@@ -100,7 +100,7 @@ int vmGetBuild(char *out, int size);
  * Returns VM_OK or VM_ERR_IO (the guard file could not be written). */
 int vmResetSafeMode(void);
 
-/* DMA copy (VM_KEY_DMACOPY, experimental): reads copied out of the staging
+/* DMA copy (VM_KEY_DMACOPY): reads copied out of the staging
  * buffer by the console's DMA controller (the system's ksceDmacMemcpy) instead
  * of the CPU, for copies of whole cache lines from VM_DMA_MIN_BYTES up. Any
  * copy it refuses is made by the CPU instead; after VM_DMA_MAX_ERRORS refusals,

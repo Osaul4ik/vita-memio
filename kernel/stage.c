@@ -816,7 +816,7 @@ static inline void vm_dsb(void)
 #endif
 }
 
-/* ---- DMA copy (VM_KEY_DMACOPY, experimental) --------------------------------
+/* ---- DMA copy (VM_KEY_DMACOPY) ---------------------------------------------
  *
  * A read's data copied out of the staging buffer by the console's DMA
  * controller instead of the CPU: the system's own ksceDmacMemcpy (SceDmacmgr),

@@ -78,7 +78,7 @@ enum vm_key {
 	VM_KEY_OFFLOAD,        /* VM_OFFLOAD_*: copy on the system core          */
 	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read              */
 	VM_KEY_OVERLAY,        /* 0/1: the SELECT + arrows overlay (and HUD by keys) */
-	VM_KEY_DMACOPY,        /* 0/1: copy reads out with the DMA controller (experimental) */
+	VM_KEY_DMACOPY,        /* 0/1: copy reads out with the DMA controller    */
 	VM_KEY_COUNT
 };
 
@@ -148,7 +148,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_OFFLOAD   VM_OFFLOAD_ALL   /* "C + NC R/A"; without read ahead as Cached only */
 #define VM_DEF_READAHEAD 0   /* opt-in                                         */
 #define VM_DEF_OVERLAY   0   /* opt-in: it takes SELECT + arrows from games    */
-#define VM_DEF_DMACOPY   0   /* experimental, developer settings               */
+#define VM_DEF_DMACOPY   0   /* opt-in (Advanced)                              */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {

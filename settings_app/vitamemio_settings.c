@@ -93,6 +93,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 		ROW_LIST("offload") \
 			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "2") ITEM("vm_i_off2", "3") ITEM("vm_i_off3", "4") \
 		"</list>" \
+		ROW_TOGGLE("dmacopy") \
 		ROW_LIST("readahead") \
 			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") \
 		"</list>" \
@@ -105,7 +106,6 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 			ROW_TOGGLE("verify") \
 			ROW_TOGGLE("log") \
 			ROW_TOGGLE("stats") \
-			ROW_TOGGLE("dmacopy") \
 		"</setting_list>" \
 	"</setting_list>" \
 	"</setting_list>"

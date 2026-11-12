@@ -57,6 +57,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | GPU-safe reads | Makes sure the graphics chip always sees data correctly. Costs a little speed; recommended for playing | On |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
+| DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | Off |
 | Read ahead | Reads the next part of a file before it is asked for. See below | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB. Try it with *Verify transfers* first | Off |
 | Storage HUD | Live speed in the top right corner: **Compact** or **Extended** | Off |
@@ -69,7 +70,6 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
 | Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
 | Statistics | Collects timings for the tester app | On |
-| DMA copy (experimental) | Large reads are copied by the console's DMA controller instead of the CPU. Test it with *Verify transfers* on and compare in the tester; it switches itself off if anything goes wrong | Off |
 
 If the plugin ever could not start properly, a **Reset safe mode** row appears under *Driver*.
 

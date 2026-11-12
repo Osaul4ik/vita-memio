@@ -66,7 +66,7 @@ enum vm_i18n_id {
 	VM_I18N_ROW_OVERLAY,        /* Advanced > Overlay (SELECT + arrows)           */
 	VM_I18N_HINT_OVERLAY,
 	VM_I18N_TITLE_DEVELOPER,
-	VM_I18N_ROW_DMACOPY,        /* Developer settings > DMA copy (experimental)   */
+	VM_I18N_ROW_DMACOPY,        /* Advanced > DMA copy                            */
 	VM_I18N_HINT_DMACOPY,
 	VM_I18N_DMA_ON,             /* ... its help adds what it is doing now         */
 	VM_I18N_DMA_UNAVAIL,

@@ -488,6 +488,10 @@ static uint32_t     g_offload_type;        /* the first mapping's memblock type 
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
 static uint32_t     g_off_headed;          /* requests mapped from their 2nd page */
+/* The counters as they were when the app now in front was started (for
+ * VmRaNow.bufmap: its own buffers only). */
+static uint32_t     g_bm_reads, g_bm_headed, g_bm_fail;
+static SceUID       g_bm_pid;
 /* Read ahead into non-cacheable buffers: their mapping did not fit (memory
  * type or access) - the caller copies those from then on; cached ones are not
  * affected. */
@@ -3807,6 +3811,12 @@ void vm_stage_worker_tick(void)
 		static SceUID last_fg;
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
+		if (fg && fg != LD(g_bm_pid)) {    /* another app: its buffers from now */
+			ST(g_bm_reads, LD(g_off_reads) + LD(g_ncd_reads));
+			ST(g_bm_headed, LD(g_off_headed));
+			ST(g_bm_fail, LD(g_off_maperr) + LD(g_ncd_maperr));
+			ST(g_bm_pid, fg);
+		}
 		if (__atomic_exchange_n(&g_app_reload, 0, __ATOMIC_ACQ_REL))
 			app_load(fg ? fg : __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE));
 		else if (fg && fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE))
@@ -3947,6 +3957,20 @@ void vm_stage_ra_now(VmRaNow *o)
 		o->thr[k] = ra_threshold(k);
 		/* the R/A Test running: the standard one is set too */
 		o->set[k] = __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) ? o->thr[k] : ra_base_threshold(k);
+	}
+	{
+		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+		if (!fg || fg != LD(g_bm_pid) || !LD(g_offload))
+			o->bufmap = VM_BUFMAP_NONE;
+		else if (LD(g_off_maperr) + LD(g_ncd_maperr) != LD(g_bm_fail))
+			o->bufmap = VM_BUFMAP_REFUSED;
+		else if (LD(g_off_headed) != LD(g_bm_headed))
+			o->bufmap = VM_BUFMAP_WORKAROUND;
+		else if (LD(g_off_reads) + LD(g_ncd_reads) != LD(g_bm_reads))
+			o->bufmap = VM_BUFMAP_OK;
+		else
+			o->bufmap = VM_BUFMAP_NONE;
 	}
 }
 

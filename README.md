@@ -128,12 +128,13 @@ The HUD is part of the overlay and shows through its keys; with *Overlay* off th
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
 R/W: 909/1 MiB On Err: 0
-R/A: On  TitleID: PCSF00024
+R/A: On  TitleID: PCSF00024  B
 Streak  C: 5  NC: 3
 Core 3  C: 98%  NC: 0%
 ```
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
+- **B:** the game's buffers for copying on the spare core, since it started (also in the overlay): **green** all usable; **yellow** some had a first page the system cannot share, so that part was copied on the game's core; **red** some could not be used at all, and were copied on the game's core. The data is right either way. Not shown while nothing has been copied there yet.
 - **Streak:** reads in a row before read ahead starts. With *Adaptive* as set:now, for example `C: 5:6`: set at 5, at 6 now.
 - **Core 3, C:** the share of copying done on the spare core since the HUD opened. Copies of graphics data from read ahead count here.
 - **Core 3, NC:** the share of graphics data reads done on the spare core. It stays at 0% unless copying is on *C + NC All*.

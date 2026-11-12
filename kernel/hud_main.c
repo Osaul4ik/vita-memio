@@ -155,8 +155,17 @@ static void hud_thr(char *o, int cap, uint32_t set, uint32_t now, int adaptive)
 		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(now > 99 ? 99 : now));
 }
 
+/* "B": the app's buffers for the system core (VmRaNow.bufmap) - green all
+ * mapped, yellow some from their 2nd page (worked around), red some refused;
+ * nothing while none is mapped (or the setting is off). */
+static const char *hud_bufmap(int b)
+{
+	return b == VM_BUFMAP_OK ? "  " HUD_C_GOOD "B" : b == VM_BUFMAP_WORKAROUND ? "  " HUD_C_WARN "B"
+	     : b == VM_BUFMAP_REFUSED ? "  " HUD_C_BAD "B" : "";
+}
+
 /* Read ahead in the HUD, for the app in front:
- *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
+ *   R/A: On  TitleID: PCSB00777  B       (On, Adaptive or Off; B: hud_bufmap)
  *   Streak  C: 5  NC: never              (reads in a row before it starts;
  *                                         Adaptive: as set:now, C: 5:6)
  *   Core 3  C: 98%  NC: 100%             (since the HUD came up)
@@ -187,7 +196,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	       now.mode == VM_RA_ADAPTIVE ? HUD_C_TEXT "Adaptive" : HUD_C_DIM "Off";
 	hud_thr(c, sizeof(c), now.set[0], now.thr[0], now.mode == VM_RA_ADAPTIVE);
 	hud_thr(nc, sizeof(nc), now.set[1], now.thr[1], now.mode == VM_RA_ADAPTIVE);
-	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT "%.15s", mode, fg->title);
+	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT
+	         "%.15s%s", mode, fg->title, hud_bufmap(now.bufmap));
 	if (now.mode != VM_RA_OFF && n < room)
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.9s" HUD_C_DIM
 		         "  NC: %.9s", c, nc);
@@ -530,11 +540,16 @@ static void overlay_feed(void)
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_ACCENT "vita-memio" HUD_C_DIM
 		         "                SEL+> HUD");
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_TEXT "%.15s" HUD_C_DIM " %s" HUD_C_DIM
-		         "  core 3 C %.7s" HUD_C_DIM " NC %.7s",
-		         an.title[0] ? an.title : "home screen",
-		         fg.dev == VM_DEV_SD2VITA ? "SD2Vita" : fg.dev == VM_DEV_MEMCARD ? "memory card"
-		         : "", a, b);
+		{
+			VmRaNow rn;
+
+			vm_stage_ra_now(&rn);
+			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_TEXT "%.15s" HUD_C_DIM " %s" HUD_C_DIM
+			         "  core 3 C %.7s" HUD_C_DIM " NC %.7s%s",
+			         an.title[0] ? an.title : "home screen",
+			         fg.dev == VM_DEV_SD2VITA ? "SD2Vita" : fg.dev == VM_DEV_MEMCARD ? "memory card"
+			         : "", a, b, hud_bufmap(rn.bufmap));
+		}
 		if (!an.title[0]) {
 			mask = 1u << OV_ITEM_CLOSE;
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");

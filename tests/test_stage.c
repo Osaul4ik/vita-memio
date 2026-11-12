@@ -3299,6 +3299,48 @@ static void test_readahead_adaptive(void)
 	g_title_fn = NULL;
 }
 
+/* "B" in the HUD and the overlay: the app in front's buffers for the system
+ * core since it was started - none yet (or the setting off), all mapped,
+ * some from their 2nd page, some refused; another app starts afresh. */
+static void test_bufmap_state(void)
+{
+	VmSettings s;
+	VmRaNow rn;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	g_title_fn = fake_title;
+	as_app(0x42);
+	vm_stage_worker_tick();
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_NONE);              /* nothing mapped yet */
+	ADD(g_off_reads, 1);
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_OK);
+	ADD(g_off_headed, 1);
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_WORKAROUND);
+	ADD(g_ncd_maperr, 1);
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_REFUSED);
+	as_app(0x44);                                    /* another app: afresh */
+	vm_stage_worker_tick();
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_NONE);
+	ADD(g_off_reads, 1);
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_OK);
+	s.offload = VM_OFFLOAD_OFF;                       /* the setting off: nothing shown */
+	vm_stage_apply(&s);
+	vm_stage_ra_now(&rn);
+	CHECK(rn.bufmap == VM_BUFMAP_NONE);
+	vm_stage_fini();
+	g_title_fn = NULL;
+	as_app(0x42);                                    /* as test_app_settings expects to change */
+}
+
 static void test_app_settings(void)
 {
 	VmSettings s;
@@ -3671,6 +3713,7 @@ int main(void)
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
+	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);
 	RUN(test_review_fixes);

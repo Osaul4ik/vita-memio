@@ -477,6 +477,7 @@ static void diag_note(uint32_t nsec, uint32_t own)
  * system reads in 32 KiB pieces, so this covers most of a game's small reads.
  * Under 16 KiB the copy is too short to be worth a hand-off. */
 #define OFFLOAD_MIN_SECTORS 32
+#define OFF_PAGE            4096u      /* the system's page (OffMap.head)   */
 /* "C + NC": the game's thread maps its own buffer for the helper,
  * so only reads of 64 KiB and up. */
 #define NCD_MIN_SECTORS     128
@@ -486,6 +487,7 @@ static int          g_offload_logged;      /* the state the worker last logged *
 static uint32_t     g_offload_type;        /* the first mapping's memblock type */
 static int          g_offload_err;         /* why refused / the last map error */
 static uint32_t     g_off_reads, g_off_kib, g_off_maperr;      /* atomics      */
+static uint32_t     g_off_headed;          /* requests mapped from their 2nd page */
 /* Read ahead into non-cacheable buffers: their mapping did not fit (memory
  * type or access) - the caller copies those from then on; cached ones are not
  * affected. */
@@ -506,6 +508,11 @@ typedef struct OffMap {
 	                            * the caller: an address of its own space), or -1 */
 	int      nc;               /* a non-cacheable buffer (read ahead): a mapping
 	                            * that does not fit refuses only those */
+	uint32_t head;             /* bytes at its start the mapping leaves out: a
+	                            * first page the system has in no memory block
+	                            * (PCSB00724's buffer at the very start of its
+	                            * block); a chunk that takes any of them is the
+	                            * caller's to copy, the rest the copier's      */
 } OffMap;
 static void off_map(OffMap *m);
 
@@ -1046,7 +1053,13 @@ static int pipe_copier(SceSize args, void *argp)
 			 * copies (nothing of the job has been taken yet) */
 			if (!m->tried)
 				off_map(m);
-			if (m->uid < 0) {
+			/* no mapping, or a chunk that takes bytes it leaves out: the
+			 * caller copies this one (the mapping stays for the rest) */
+			if (m->uid < 0 || d->cjob_off < m->head) {
+				if (d->cjob_last && m->uid >= 0) {
+					ksceKernelUserUnmap(m->uid);
+					m->uid = -1;
+				}
 				d->cjob_nomap = 1;
 				__sync_synchronize();
 				ksceKernelSignalSema(d->sem_fin, 1);
@@ -1427,23 +1440,25 @@ static void off_map(OffMap *m)
 	int r, mt;
 
 	m->tried = 1;
-	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioCopy", VM_USERMAP_RW, m->user, m->len, &page,
-	                            &size, &off);
+	/* from m->head on (0 but for a first page in no block, off_memtype) */
+	uid = ksceKernelProcUserMap(m->pid, "SceVitaMemioCopy", VM_USERMAP_RW, m->user + m->head,
+	                            m->len - m->head, &page, &size, &off);
 	if (uid < 0) {
 		ADD(g_off_maperr, 1);
 		ST(g_offload_err, uid);
 		mapfail_note(0, m, uid);
 		return;
 	}
-	if (!page || size < off || size - off < m->len) {
+	if (!page || size < off || size - off < m->len - m->head) {
 		ksceKernelUserUnmap(uid);
 		ADD(g_off_maperr, 1);
 		ST(g_offload_err, VM_ERR_NOMEM);
 		return;
 	}
-	kern = (uint8_t *)page + off;
+	/* kern + o is the buffer's byte o, for o >= head (the only ones used) */
+	kern = (uint8_t *)page + off - m->head;
 	mt = m->mt;
-	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(kern) != mt ||
+	if (mt < 0 || ksceKernelGetMemBlockMemtypeByAddr(kern + m->head) != mt ||
 	    ksceKernelGetMemBlockMemtypeByAddr(kern + m->len - 1) != mt) {
 		ksceKernelUserUnmap(uid);
 		if (m->nc)
@@ -1478,6 +1493,8 @@ static void off_map(OffMap *m)
 	}
 	m->uid = uid;
 	m->kern = kern;
+	if (m->head)
+		ADD(g_off_headed, 1);
 }
 
 /* One chunk (plan sz/k) of a game's read, copied on the system core: the
@@ -2175,9 +2192,19 @@ static void off_memtype(OffMap *om)
 {
 	if (!om->tried && om->mt == -2) {
 		const int mt = om->first != -2 ? om->first : ksceKernelGetMemBlockMemtypeByAddr(om->user);
+		const int end = ksceKernelGetMemBlockMemtypeByAddr(om->user + om->len - 1);
 
-		om->mt = mt >= 0 && ksceKernelGetMemBlockMemtypeByAddr(om->user + om->len - 1) == mt
-		       ? mt : -1;
+		om->mt = mt >= 0 && end == mt ? mt : -1;
+		/* its first page in no block (the system has none there), the rest
+		 * in one: mapped from the next page, that page the caller's */
+		if (mt < 0 && end >= 0) {
+			const uint32_t head = OFF_PAGE - ((uint32_t)(uintptr_t)om->user & (OFF_PAGE - 1));
+
+			if (head < om->len && ksceKernelGetMemBlockMemtypeByAddr(om->user + head) == end) {
+				om->head = head;
+				om->mt = end;
+			}
+		}
 	}
 }
 
@@ -3668,9 +3695,11 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
 		VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
-			VM_KLOGI("stage: copied on the system core %u reads %u MiB, mapping failed %u (0x%08x)",
+			VM_KLOGI("stage: copied on the system core %u reads %u MiB (%u from the 2nd page), "
+			         "mapping failed %u (0x%08x)",
 			         (unsigned)__atomic_load_n(&g_off_reads, __ATOMIC_RELAXED),
 			         (unsigned)(__atomic_load_n(&g_off_kib, __ATOMIC_RELAXED) / 1024),
+			         (unsigned)LD(g_off_headed),
 			         (unsigned)__atomic_load_n(&g_off_maperr, __ATOMIC_RELAXED),
 			         (unsigned)LD(g_offload_err));
 		if (vm_offload_direct(LD(g_offload)) || LD(g_ncd_reads))

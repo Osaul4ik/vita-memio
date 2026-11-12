@@ -2179,6 +2179,41 @@ static void test_offload(void)
 	fake_noblock_lo = fake_noblock_hi = 0;
 	vm_stage_fini();
 
+	/* ... and as on the console, where the caller sees no memory type on
+	 * that first page either: mapped from the next page, nothing refused;
+	 * the chunk that takes the first page is the caller's, the rest the
+	 * copier's; every byte right; the mapping gone after */
+	reset();
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	fake_pid = 0x42;
+	{
+		const uintptr_t pg = ((uintptr_t)u + 4095) & ~(uintptr_t)4095;   /* u's next page */
+
+		fake_noblock_lo = (uintptr_t)u;
+		fake_noblock_hi = pg;
+		fake_memtype_from = u;
+		fake_memtype_to = (const void *)pg;
+		fake_memtype_above = -1;
+		if (pg == (uintptr_t)u) {                      /* u on a page: its first page */
+			fake_noblock_hi = pg + 4096;
+			fake_memtype_to = (const void *)(pg + 4096);
+		}
+	}
+	copies_here = copies_elsewhere = 0;
+	memset(u, 0, 700 * 512);
+	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
+	CHECK(g_off_maperr == 0 && g_mapfail_n == 0 && g_off_headed == 1 && g_offload_state == 1);
+	CHECK(copies_here > 0 && copies_elsewhere > 0 && g_off_reads >= 1);
+	CHECK(fake_usermap_live == 0 && sems_empty(d));
+	/* a read that is one chunk: all the caller's, the mapping still unmapped */
+	copies_here = copies_elsewhere = 0;
+	memset(u, 0, 64 * 512);
+	CHECK(rd(u, 9, 64) == 0 && memcmp(u, disk + 9 * 512, 64 * 512) == 0);
+	CHECK(copies_elsewhere == 0 && fake_usermap_live == 0 && sems_empty(d));
+	fake_noblock_lo = fake_noblock_hi = 0;
+	fake_memtype_from = fake_memtype_to = NULL;
+	vm_stage_fini();
+
 	/* not writable: refused until switched again; the caller copies */
 	reset();
 	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);

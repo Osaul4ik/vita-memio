@@ -252,7 +252,7 @@ static void hud_feed(const VmDevState *now)
 		static uint64_t seen[VM_DEV_COUNT];
 		int i = k_hud_order[o];
 		uint64_t rd, wr;
-		char r[12], w[12], rp[12], wp[12], np[16];
+		char r[12], w[12], rp[12], wp[12];
 
 		vm_stage_bytes(i, &rd, &wr);
 		mbps(r, sizeof(r), rd - last_rd[i], ms);
@@ -266,10 +266,10 @@ static void hud_feed(const VmDevState *now)
 			continue;
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
 		const char *c = state_color(&now[i], dev_slow);
-		const char *name = i == VM_DEV_MEMCARD ? "MEMORY CARD" : "SD2VITA";
+		/* as wide as the names were padded to (8), not cut */
+		const char *np = i == VM_DEV_MEMCARD ? "MEMORY CARD" : "SD2VITA ";
 		const char *flag = now[i].status == VM_ST_FALLBACK ? "ERROR"
 		                 : dev_slow ? "SLOW" : "";
-		pad(np, sizeof(np), name, 8, 14, 0);
 		pad(rp, sizeof(rp), r, 4, 6, 1);
 		pad(wp, sizeof(wp), w, 4, 6, 1);
 		snprintf(L[n++], VM_HUD_LINE_MAX,

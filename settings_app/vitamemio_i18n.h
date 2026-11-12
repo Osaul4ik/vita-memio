@@ -11,14 +11,12 @@
 enum vm_i18n_id {
 	VM_I18N_TITLE = 0,          /* "vita-memio"                                */
 	VM_I18N_ROW_SD2VITA,        /* row titles                                     */
-	VM_I18N_ROW_INTERNAL,
 	VM_I18N_ROW_HUD,
 	VM_I18N_ROW_MEMCARD,
 	VM_I18N_ROW_VERIFY,
 	VM_I18N_ROW_LOG,
 	VM_I18N_ROW_SAFE,
 	VM_I18N_HINT_SD2VITA,       /* help text                                      */
-	VM_I18N_HINT_INTERNAL,
 	VM_I18N_HINT_HUD,
 	VM_I18N_HINT_MEMCARD,
 	VM_I18N_HINT_VERIFY,

@@ -66,9 +66,10 @@ void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
-static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "INT ", "MC  " };   /* compact */
-/* HUD order: the removable storages first. */
-static const int k_hud_order[VM_DEV_COUNT] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD, VM_DEV_INTERNAL };
+static const char *const k_dev_short[VM_DEV_COUNT] = { "SD2V", "", "MC  " };   /* compact */
+/* The storages the plugin speeds up, in HUD order (never the internal one). */
+static const int k_hud_order[] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD };
+#define HUD_DEVS ((int)(sizeof(k_hud_order) / sizeof(k_hud_order[0])))
 
 /* `bytes` moved in `ms` milliseconds, as MiB/s with one decimal. The worker
  * does not always wake exactly a second apart (a changed setting wakes it
@@ -253,7 +254,7 @@ static void hud_feed(const VmDevState *now)
 
 	vm_stage_fg(&fg);
 
-	for (int o = 0; o < VM_DEV_COUNT; o++) {
+	for (int o = 0; o < HUD_DEVS; o++) {
 		static uint64_t seen[VM_DEV_COUNT];
 		int i = k_hud_order[o];
 		uint64_t rd, wr;
@@ -272,8 +273,7 @@ static void hud_feed(const VmDevState *now)
 		int dev_slow = i == VM_DEV_MEMCARD && slow;
 		const char *c = state_color(&now[i], dev_slow);
 		const char *name = s.hud == VM_HUD_COMPACT ? k_dev_short[i]
-		                 : i == VM_DEV_INTERNAL ? "INTERNAL"
-		                 : i == VM_DEV_MEMCARD  ? "MEMORY CARD" : "SD2VITA";
+		                 : i == VM_DEV_MEMCARD ? "MEMORY CARD" : "SD2VITA";
 		const char *flag = now[i].status == VM_ST_FALLBACK ? "ERROR"
 		                 : dev_slow ? "SLOW" : "";
 		pad(np, sizeof(np), name, s.hud == VM_HUD_COMPACT ? 4 : 8, 14, 0);
@@ -542,7 +542,7 @@ static void overlay_feed(void)
 		         "  core 3 C %.7s" HUD_C_DIM " NC %.7s",
 		         an.title[0] ? an.title : "home screen",
 		         fg.dev == VM_DEV_SD2VITA ? "SD2Vita" : fg.dev == VM_DEV_MEMCARD ? "memory card"
-		         : fg.dev == VM_DEV_INTERNAL ? "internal" : "", a, b);
+		         : "", a, b);
 		if (!an.title[0]) {
 			mask = 1u << OV_ITEM_CLOSE;
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");

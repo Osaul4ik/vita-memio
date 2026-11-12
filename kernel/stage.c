@@ -19,11 +19,10 @@
  * Hooked exports (SceSdifForDriver), all pass-through unless a transfer
  * qualifies:
  *   ksceSdifReadSectorSd / ksceSdifWriteSectorSd    -> SD2Vita (port 1, SD card)
- *   ksceSdifReadSectorMmc / ksceSdifWriteSectorMmc  -> internal (port 0 only;
- *                                                      game cards stay stock)
  * and (SceMsifForDriver):
  *   ksceMsifReadSector / ksceMsifWriteSector        -> the memory card (one slot)
- * Never touched: small transfers (< 32 KiB: file-system metadata; unless
+ * Never touched: the internal storage (the MMC functions, which the system's
+ * own data and game cards go through, are not hooked at all), small transfers (< 32 KiB: file-system metadata; unless
  * "small transfers" is switched on, then every transfer qualifies), other ports
  * (the Wi-Fi chip is on its own port and never calls these), USB storage.
  *
@@ -100,8 +99,6 @@
 #define LIB_SDIF       0x96D306FA    /* SceSdifForDriver                       */
 #define NID_READ_SD    0xB9593652    /* ksceSdifReadSectorSd                   */
 #define NID_WRITE_SD   0xE0781171    /* ksceSdifWriteSectorSd                  */
-#define NID_READ_MMC   0x6F8D529B    /* ksceSdifReadSectorMmc                  */
-#define NID_WRITE_MMC  0x175543D2    /* ksceSdifWriteSectorMmc                 */
 #define LIB_MSIF       0xB706084A    /* SceMsifForDriver                       */
 #define NID_READ_MS    0x58654AA3    /* ksceMsifReadSector(sector, buf, count) */
 #define NID_WRITE_MS   0x329035EF    /* ksceMsifWriteSector                    */
@@ -236,6 +233,7 @@ static Dev g_dev[VM_DEV_COUNT] = {
 	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
 	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
 	                      .ra_th = -1, .ra_go = -1, .ra_done = -1, .t_uid = -1 },
+	/* the internal storage: never sped up, nothing reaches it (no hooks) */
 	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
 	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
 	                      .ra_th = -1, .ra_go = -1, .ra_done = -1, .t_uid = -1 },
@@ -303,10 +301,10 @@ static volatile int g_shadow_failed;   /* allocation failed: do not retry every 
  * continuation (SCE_ERROR_ERRNO_EIO): a failed transfer, never a jump to NULL. */
 #define VM_IO_ERROR  ((int)0x80010005)
 
-enum { H_RD_SD, H_WR_SD, H_RD_MMC, H_WR_MMC, H_RD_MS, H_WR_MS, H_COUNT };
+enum { H_RD_SD, H_WR_SD, H_RD_MS, H_WR_MS, H_COUNT };
 #define H_SDIF_COUNT H_RD_MS          /* the SceSdif hooks come first          */
 static volatile tai_hook_ref_t g_ref[H_COUNT];
-static SceUID g_hook[H_COUNT] = { -1, -1, -1, -1, -1, -1 };
+static SceUID g_hook[H_COUNT] = { -1, -1, -1, -1 };
 
 static int io_sdif(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
 {
@@ -2810,7 +2808,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	return r;
 }
 
-/* The six hooks: a read and a write per device, SceSdif with a card context,
+/* The four hooks: a read and a write per device, SceSdif with a card context,
  * SceMsif without. */
 #define SDIF_HOOKS(name, dev, h_rd, h_wr)                                                  \
 	static int h_rd_##name(void *part, uint32_t sector, void *buf, uint32_t nsec)      \
@@ -2828,7 +2826,6 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	}
 
 SDIF_HOOKS(sd,  VM_DEV_SD2VITA,  H_RD_SD,  H_WR_SD)
-SDIF_HOOKS(mmc, VM_DEV_INTERNAL, H_RD_MMC, H_WR_MMC)
 
 static int h_rd_ms(uint32_t sector, void *buf, uint32_t nsec)
 {
@@ -2852,8 +2849,6 @@ int vm_stage_init(void)
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
 		{ H_RD_SD,  NID_READ_SD,   h_rd_sd  },
 		{ H_WR_SD,  NID_WRITE_SD,  h_wr_sd  },
-		{ H_RD_MMC, NID_READ_MMC,  h_rd_mmc },
-		{ H_WR_MMC, NID_WRITE_MMC, h_wr_mmc },
 		{ H_RD_MS,  NID_READ_MS,   h_rd_ms  },
 		{ H_WR_MS,  NID_WRITE_MS,  h_wr_ms  },
 	};
@@ -3042,7 +3037,8 @@ static void eff_update(void)
 
 void vm_stage_apply(const VmSettings *s)
 {
-	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, s->internal, s->memcard };
+	/* the internal storage never: its setting is reserved (VM_KEY_INTERNAL) */
+	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, 0, s->memcard };
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];

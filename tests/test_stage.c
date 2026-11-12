@@ -699,14 +699,17 @@ static void test_init_all_hooks(void)
 	CHECK(fake_alloc_calls == 0);             /* nothing yet (could be safe mode) */
 	CHECK(vm_stage_init() == VM_OK);
 	count_free_bufs(&n);
-	CHECK(n == 3 && fake_alloc_calls == 3 && fake_hook_calls == 7);   /* + the app events */
+	/* the internal storage asked for too: no buffer, no hook of its own (the
+	 * SceSdif MMC functions are never hooked) */
+	CHECK(n == 2 && fake_alloc_calls == 2 && fake_hook_calls == 5);   /* 4 + the app events */
+	CHECK(g_dev[VM_DEV_INTERNAL].buf == NULL && !g_dev[VM_DEV_INTERNAL].enabled);
 	vm_stage_fini();
-	CHECK(fake_hook_releases == 7 && fake_free_calls == 3);
+	CHECK(fake_hook_releases == 5 && fake_free_calls == 2);
 	count_free_bufs(&n);
 	CHECK(n == 0);
 	vm_stage_apply(&s);                       /* after fini: nothing allocated again */
 	count_free_bufs(&n);
-	CHECK(n == 0 && fake_alloc_calls == 3);
+	CHECK(n == 0 && fake_alloc_calls == 2);
 }
 
 static void test_init_sdif_hook_fails_releases_everything(void)
@@ -719,7 +722,7 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 	fake_hook_fail_at = 2;                    /* the second SDIF hook fails */
 	CHECK(vm_stage_init() == VM_ERR_RESOLVE);
 	count_free_bufs(&n);
-	CHECK(n == 0 && fake_free_calls == 3);    /* all buffers given back */
+	CHECK(n == 0 && fake_free_calls == 2);    /* all buffers given back */
 	CHECK(fake_hook_releases == 1);           /* and the one hook that was live */
 }
 
@@ -730,20 +733,20 @@ static void test_init_memcard_hook_fails_only_memcard_stock(void)
 
 	boot_state();
 	vm_stage_apply(&s);
-	fake_hook_fail_at = 6;                    /* the memory card's write hook fails */
+	fake_hook_fail_at = 4;                    /* the memory card's write hook fails */
 	CHECK(vm_stage_init() == VM_OK);
 	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 1);
-	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf != NULL);
+	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf == NULL);
 	CHECK(fake_hook_releases == 1);           /* the memory card's read hook */
 	s.memcard = 0;                            /* switching it again allocates nothing */
 	vm_stage_apply(&s);
 	s.memcard = 1;
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 3);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 2);
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_fini();
-	CHECK(fake_hook_releases == 6);   /* 1 + the four SDIF hooks + the app events */
+	CHECK(fake_hook_releases == 4);   /* 1 + the two SDIF hooks + the app events */
 }
 
 /* A buffer only for the devices that are on; one switched on later gets its
@@ -761,21 +764,23 @@ static void test_buffers_on_demand(void)
 	count_free_bufs(&n);
 	CHECK(n == 1 && g_dev[VM_DEV_SD2VITA].buf && fake_alloc_calls == 1);
 
-	s.internal = 1;                           /* switched on in Settings */
+	s.internal = 1;                           /* the internal storage: never */
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_INTERNAL].buf != NULL && fake_alloc_calls == 2);
-	s.internal = 0;                           /* off again: the buffer is kept */
+	CHECK(g_dev[VM_DEV_INTERNAL].buf == NULL && !g_dev[VM_DEV_INTERNAL].enabled &&
+	      fake_alloc_calls == 1);
+	s.internal = 0;
+	s.sd2vita = 0;                            /* off again: the buffer is kept */
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_INTERNAL].buf != NULL && fake_free_calls == 0);
-	s.internal = 1;
+	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && fake_free_calls == 0);
+	s.sd2vita = 1;
 	vm_stage_apply(&s);
-	CHECK(fake_alloc_calls == 2);
+	CHECK(fake_alloc_calls == 1);
 
 	fake_alloc_fail = 1;                      /* the memory card: no memory left */
 	s.memcard = 1;
 	vm_stage_apply(&s);
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 3);   /* tried once */
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 2);   /* tried once */
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_worker_tick();
@@ -785,11 +790,11 @@ static void test_buffers_on_demand(void)
 	vm_stage_apply(&s);
 	s.memcard = 1;
 	vm_stage_apply(&s);                       /* off and on: a fresh try */
-	CHECK(g_dev[VM_DEV_MEMCARD].buf != NULL && fake_alloc_calls == 4);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf != NULL && fake_alloc_calls == 3);
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_ACTIVE);
 	vm_stage_fini();
-	CHECK(fake_free_calls == 3);
+	CHECK(fake_free_calls == 2);
 }
 
 /* ---- overlapped reads ------------------------------------------------------ */
@@ -2611,11 +2616,12 @@ static void *stress_stats(void *argp)
 static void test_stress_concurrency(void)
 {
 	VmSettings s;
-	Dev *in = &g_dev[VM_DEV_INTERNAL];
+	Dev *in = &g_dev[VM_DEV_SD2VITA];              /* the second storage */
 	uint8_t *staging2 = calloc(1, STAGE_BYTES);
 	pthread_t th[5];
-	StressArg args[3] = { { M, 1, 0, 1, 0 }, { M, 2, 0, 0, 0 }, { VM_DEV_INTERNAL, 3, 0, 1, 0 } };
+	StressArg args[3] = { { M, 1, 0, 1, 0 }, { M, 2, 0, 0, 0 }, { VM_DEV_SD2VITA, 3, 0, 1, 0 } };
 	int saved_live = g_live;
+	const Dev saved_in = *in;                       /* put back as it was, for the next tests */
 
 	reset();
 	as_app(0x42);                                /* a game: copy on the system core too */
@@ -2628,7 +2634,8 @@ static void test_stress_concurrency(void)
 	in->uid = -1;
 	memset(&s, 0, sizeof(s));
 	s.memcard = 1;
-	s.internal = 1;
+	s.sd2vita = 1;
+	s.internal = 1;                                 /* asked for: never on */
 	s.pipeline = VM_PIPE_AUTO;
 	vm_stage_apply(&s);
 	g_live = 1;
@@ -2654,8 +2661,7 @@ static void test_stress_concurrency(void)
 		sched_yield();
 	}
 	/* read ahead left on until the card's stream has used it (the other
-	 * card reader paused: it would break the stream); never on the
-	 * internal storage */
+	 * card reader paused: it would break the stream) */
 	s.readahead = 1;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();                         /* at least once: g_ra_hits may be > 0 already */
@@ -2673,11 +2679,12 @@ static void test_stress_concurrency(void)
 	CHECK(g_dev[M].st.errors == 0 && in->st.errors == 0 && !g_dev[M].fallback && !in->fallback);
 	CHECK(g_dev[M].st.passthru > 0);                /* the two card readers met */
 	CHECK(g_ra_hits > 0);                           /* the stream read ahead */
-	CHECK(!in->ra_made && in->ra_th == -1 && in->pipe_made);
+	CHECK(in->pipe_made);
+	CHECK(!g_dev[VM_DEV_INTERNAL].enabled && !g_dev[VM_DEV_INTERNAL].pipe_made &&
+	      !g_dev[VM_DEV_INTERNAL].ra_made && g_dev[VM_DEV_INTERNAL].buf == NULL);
 	vm_stage_fini();
 	CHECK(fake_threads_live == 0 && fake_semas_live == 0);
-	in->unusable = 0;
-	in->buf = NULL;
+	*in = saved_in;
 	g_live = saved_live;
 	free(staging2);
 }
@@ -2782,7 +2789,7 @@ static void test_tiny_reads(void)
 	CHECK(d->st.verified >= 8 && d->st.mismatches == 0 && !d->fallback);
 	vm_stage_fini();
 
-	/* read ahead off, or the internal storage: never */
+	/* read ahead off: never */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();

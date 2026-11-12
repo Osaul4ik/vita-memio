@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo.png" alt="vita-memio: faster storage for PS Vita" width="720"></p>
 
-**Faster storage for your PS Vita.** vita-memio speeds up a microSD in an SD2Vita, the Sony memory card and the internal storage. Copies, VPK installs and game loading get quicker, and your files stay exactly as they are.
+**Faster storage for your PS Vita.** vita-memio speeds up a microSD in an SD2Vita and the Sony memory card. Copies, VPK installs and game loading get quicker, and your files stay exactly as they are.
 
 It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia), whose idea and research it builds on.
 
@@ -34,8 +34,6 @@ That is all: the other defaults are the recommended ones. Back up your cards fir
 
 **To update:** replace all three files and restart. Always update them together.
 
-**Before a firmware update or downgrade,** switch *Faster internal storage* off, as an extra precaution.
-
 ## Uninstall
 
 1. In **Settings > Devices > vita-memio**, switch off every storage.
@@ -50,7 +48,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Setting | What it does | Default |
 |---|---|---|
 | Driver | Shows whether the plugin is running. Select it for details | |
-| Faster SD2Vita / memory card / internal storage | Speeds up that storage | Off |
+| Faster SD2Vita / memory card | Speeds up that storage | Off |
 
 **Advanced**
 
@@ -59,7 +57,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | GPU-safe reads | Makes sure the graphics chip always sees data correctly. Costs a little speed; recommended for playing | On |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
-| Read ahead | Reads the next part of a file before it is asked for. See below. Never used on the internal storage | Off |
+| Read ahead | Reads the next part of a file before it is asked for. See below | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB. Try it with *Verify transfers* first | Off |
 | Storage HUD | Live speed in the top right corner: **Compact** or **Extended** | Off |
 | Overlay (SELECT + arrows) | A small menu over any game, see below | Off |
@@ -187,7 +185,7 @@ This error means the system is out of kernel memory. It can also appear as a cra
 
 ## Good to know
 
-- Only the storages you switch on are touched. Game cards, USB storage and Wi-Fi never are.
+- Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
 - Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The HUD and the overlay take about 40 KiB more from the first time you switch one on until the next restart; with both off they take nothing.
 - If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

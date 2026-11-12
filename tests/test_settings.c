@@ -173,7 +173,7 @@ static void test_corrupt_file_gives_defaults(void)
 
 	clean();
 	vm_settings_init();
-	vm_settings_set(VM_KEY_INTERNAL, 1);
+	vm_settings_set(VM_KEY_VERIFY, 1);
 	vm_settings_flush();
 	n = get_file("settings.bin", buf, sizeof(buf));
 	CHECK(n == sizeof(VmSettingsFile));
@@ -347,6 +347,29 @@ static void test_one_bad_value_keeps_the_rest(void)
 	CHECK(s.sd2vita == 1 && s.hud_style == 0 && s.memcard == 1);
 }
 
+/* The internal storage is never sped up: a file from an older build with it
+ * switched on loads with it off and everything else kept, and it cannot be
+ * switched on. */
+static void test_internal_storage_stays_off(void)
+{
+	uint8_t buf[128];
+	int32_t v[7] = { 1, 1 /* internal */, 0, 2, 0, 1, 1 };
+	VmSettings s;
+	size_t n;
+
+	clean();
+	n = make_file(buf, 7, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.internal == 0);
+	CHECK(s.sd2vita == 1 && s.hud == 2 && s.log == 1 && s.memcard == 1);
+	CHECK(vm_settings_set(VM_KEY_INTERNAL, 1) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_INTERNAL, 0) == VM_OK);
+	vm_settings_copy(&s);
+	CHECK(s.internal == 0);
+}
+
 /* A file of another version (1, before slots 4 and 5 changed meaning) is
  * not used. */
 static void test_other_version_gives_defaults(void)
@@ -395,7 +418,7 @@ static void test_short_write_leaves_old_file(void)
 	vm_settings_set(VM_KEY_SD2VITA, 1);
 	vm_settings_flush();                      /* good copy A on disk */
 
-	vm_settings_set(VM_KEY_INTERNAL, 1);
+	vm_settings_set(VM_KEY_VERIFY, 1);
 	fake_write_short = 1;                     /* the next save is cut short */
 	vm_settings_flush();
 	CHECK(exists("settings.bin"));            /* the old file was never touched */
@@ -404,7 +427,7 @@ static void test_short_write_leaves_old_file(void)
 	fake_write_short = 0;
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.internal == 0); /* A, not a torn mix */
+	CHECK(s.sd2vita == 1 && s.verify == 0);   /* A, not a torn mix */
 }
 
 static void test_save_gives_up_after_retries(void)
@@ -433,6 +456,7 @@ int main(void)
 	RUN(test_pending);
 	RUN(test_file_with_more_keys);
 	RUN(test_one_bad_value_keeps_the_rest);
+	RUN(test_internal_storage_stays_off);
 	RUN(test_other_version_gives_defaults);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);

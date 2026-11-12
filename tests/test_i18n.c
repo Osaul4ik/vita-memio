@@ -138,7 +138,7 @@ static void test_table(void)
 /* The device rows show "<help> <why it is not working>" in one buffer. */
 static void test_device_hint_fits(void)
 {
-	static const int hints[] = { VM_I18N_HINT_SD2VITA, VM_I18N_HINT_INTERNAL, VM_I18N_HINT_MEMCARD };
+	static const int hints[] = { VM_I18N_HINT_SD2VITA, VM_I18N_HINT_MEMCARD };
 	static const int why[] = { VM_I18N_ST_NO_KERNEL, VM_I18N_ST_FIRMWARE, VM_I18N_ST_HOOKS,
 	                           VM_I18N_ST_SAFE, VM_I18N_ST_FALLBACK, VM_I18N_ST_NO_BUFFER,
 	                           VM_I18N_ST_SLOW };

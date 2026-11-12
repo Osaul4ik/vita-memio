@@ -37,8 +37,22 @@ static const char *const k_roots[] = {
 	"ux0:MemioTest/", "uma0:MemioTest/", "imc0:MemioTest/", "ur0:MemioTest/", "grw0:MemioTest/",
 };
 #define N_ROOTS ((int)(sizeof(k_roots) / sizeof(k_roots[0])))
-/* The folder that usually belongs to each device (enum vm_dev order). */
+/* The folder that usually belongs to each device (enum vm_dev order; the
+ * internal storage is never sped up and never offered). */
 static const int k_root_default[VM_DEV_COUNT] = { 0, 3, 0 };
+
+/* The devices the plugin speeds up, in the order they are offered and shown. */
+static const int k_devs[] = { VM_DEV_SD2VITA, VM_DEV_MEMCARD };
+#define N_DEVS ((int)(sizeof(k_devs) / sizeof(k_devs[0])))
+
+static int dev_step(int dev, int dir)
+{
+	int i = 0;
+
+	while (i < N_DEVS && k_devs[i] != dev)
+		i++;
+	return k_devs[(i + (dir > 0 ? 1 : N_DEVS - 1)) % N_DEVS];
+}
 
 static const BenchProfile *const k_profiles[] = { &bench_profile_quick, &bench_profile_standard };
 #define N_PROFILES 2
@@ -199,9 +213,10 @@ static void plugin_panel(int row, int hl_dev)
 	ui_text(58, row + 1, UI_DIM, "errors");
 	ui_text(67, row + 1, UI_DIM, "verified");
 	ui_text(79, row + 1, UI_DIM, "mismatches");
-	for (int d = 0; d < VM_DEV_COUNT; d++) {
+	for (int i = 0; i < N_DEVS; i++) {
+		const int d = k_devs[i];
 		const VmDevState *ds = &st.dev[d];
-		int r = row + 2 + d;
+		int r = row + 2 + i;
 		const char *w = dev_state(&st, d, &c);
 
 		if (d == hl_dev)
@@ -304,12 +319,6 @@ static void run_test(void)
 	ReportMeta meta;
 	char stamp[48], foot[96];
 	int rc, n, saved;
-
-	if (g_dev == VM_DEV_INTERNAL &&
-	    !confirm("internal storage", "Internal storage is the console's own storage.",
-	             "The test writes one file in the folder and removes it, but the plugin",
-	             "is experimental there. Run the test?"))
-		return;
 
 	cfg.device = g_dev;
 	cfg.profile = k_profiles[g_profile];
@@ -426,7 +435,7 @@ static void menu(void)
 		if ((k & UI_UP) && sel > 0) sel--;
 		if ((k & UI_DOWN) && sel < M_COUNT - 1) sel++;
 		if (sel == M_DEVICE && (k & (UI_LEFT | UI_RIGHT))) {
-			g_dev = (g_dev + ((k & UI_RIGHT) ? 1 : VM_DEV_COUNT - 1)) % VM_DEV_COUNT;
+			g_dev = dev_step(g_dev, (k & UI_RIGHT) ? 1 : -1);
 			g_root = k_root_default[g_dev];
 		}
 		if (sel == M_FOLDER && (k & (UI_LEFT | UI_RIGHT)))

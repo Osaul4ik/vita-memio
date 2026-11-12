@@ -50,7 +50,7 @@
 
 enum vm_dev {
 	VM_DEV_SD2VITA = 0,   /* microSD in the game-card slot (SD2Vita adapter) */
-	VM_DEV_INTERNAL,      /* the console's built-in storage (ur0:, imc0:...) */
+	VM_DEV_INTERNAL,      /* reserved: the built-in storage is never sped up */
 	VM_DEV_MEMCARD,       /* the official PS Vita memory card                */
 	VM_DEV_COUNT
 };
@@ -65,7 +65,7 @@ enum vm_dev {
  * loads with both at their defaults (kernel/settings.c). */
 enum vm_key {
 	VM_KEY_SD2VITA = 0,    /* 0/1: faster SD2Vita reads and writes           */
-	VM_KEY_INTERNAL,       /* 0/1: faster internal storage                   */
+	VM_KEY_INTERNAL,       /* reserved, always 0: was faster internal storage */
 	VM_KEY_VERIFY,         /* 0/1: check every faster transfer (diagnostic)  */
 	VM_KEY_HUD,            /* VM_HUD_*                                       */
 	VM_KEY_HUD_STYLE,      /* reserved: the HUD has one look now             */
@@ -131,8 +131,8 @@ static inline int vm_offload_direct(int v)
 #define VM_HUD_STYLE_CLASSIC   0   /* white text with a shadow, 8x8 font x2     */
 #define VM_HUD_STYLE_PSVSHELL  1   /* a black panel, Terminus font, colours     */
 
-/* Defaults: the SD2Vita, the case the plugin is for, starts on; internal
- * storage (which also holds the system's own data) starts off. */
+/* Defaults. The internal storage (which holds the system's own data) is never
+ * sped up: its key stays, always 0, so settings files keep their layout. */
 #define VM_DEF_SD2VITA   0   /* opt-in: see README, "use it when you need it" */
 #define VM_DEF_INTERNAL  0
 #define VM_DEF_VERIFY    0
@@ -183,8 +183,9 @@ typedef struct VmStateSettings {
 static inline int vm_setting_valid(int key, int v)
 {
 	switch (key) {
-	case VM_KEY_SD2VITA:
 	case VM_KEY_INTERNAL:
+		return v == 0;
+	case VM_KEY_SD2VITA:
 	case VM_KEY_VERIFY:
 	case VM_KEY_MEMCARD:
 	case VM_KEY_LOG:

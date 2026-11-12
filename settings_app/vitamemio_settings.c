@@ -18,7 +18,7 @@
  *     "Reset safe mode" button reaches the kernel module.
  *
  * The page: the driver's status (a button: its title says whether the kernel
- * module runs, its help and its dialog say more), the three storage switches,
+ * module runs, its help and its dialog say more), the two storage switches,
  * then an "Advanced" sub-page with verify, logging, the HUD, its style and the
  * safe-mode reset.
  *
@@ -55,9 +55,9 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 /* ---- the vita-memio page --------------------------------------------- */
 
 /* Registry key names under /CONFIG/VITAMEMIO, in enum vm_key order
- * (NULL: the reserved slot, never on the page). */
+ * (NULL: a reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
-	"sd2vita", "internal", "verify", "hud", NULL, "log", "memcard", "small", "stats", "gpusafe",
+	"sd2vita", NULL, "verify", "hud", NULL, "log", "memcard", "small", "stats", "gpusafe",
 	"pipeline", "offload", "readahead", "overlay",
 };
 
@@ -85,7 +85,6 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 #define X_REST \
 	ROW_TOGGLE("sd2vita") \
 	ROW_TOGGLE("memcard") \
-	ROW_TOGGLE("internal") \
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">" \
 		ROW_TOGGLE("gpusafe") \
 		ROW_LIST("pipeline") \
@@ -291,7 +290,7 @@ static const vm_u16 *device_hint(int dev, int help_id)
 
 /* Row title / help ids per setting key. */
 static const signed char k_row[VM_KEY_COUNT] = {
-	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_ROW_INTERNAL,
+	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA,
 	[VM_KEY_VERIFY] = VM_I18N_ROW_VERIFY, [VM_KEY_HUD] = VM_I18N_ROW_HUD,
 	[VM_KEY_LOG] = VM_I18N_ROW_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_ROW_MEMCARD, [VM_KEY_SMALL] = VM_I18N_ROW_SMALL,
@@ -300,7 +299,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_READAHEAD] = VM_I18N_ROW_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_ROW_OVERLAY,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
-	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA, [VM_KEY_INTERNAL] = VM_I18N_HINT_INTERNAL,
+	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
 	[VM_KEY_VERIFY] = VM_I18N_HINT_VERIFY, [VM_KEY_HUD] = VM_I18N_HINT_HUD,
 	[VM_KEY_LOG] = VM_I18N_HINT_LOG,
 	[VM_KEY_MEMCARD] = VM_I18N_HINT_MEMCARD, [VM_KEY_SMALL] = VM_I18N_HINT_SMALL,
@@ -355,8 +354,6 @@ static const vm_u16 *vm_text(const char *id)
 	if (s_pfx(id, "vm_h_") && (k = key_index(id + 5)) >= 0 && k_hint[k] >= 0) {
 		if (k == VM_KEY_SD2VITA)
 			return device_hint(VM_DEV_SD2VITA, k_hint[k]);
-		if (k == VM_KEY_INTERNAL)
-			return device_hint(VM_DEV_INTERNAL, k_hint[k]);
 		if (k == VM_KEY_MEMCARD)
 			return device_hint(VM_DEV_MEMCARD, k_hint[k]);
 		return fixed_text(k_hint[k]);

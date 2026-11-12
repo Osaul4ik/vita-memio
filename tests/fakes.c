@@ -348,11 +348,20 @@ SceUID ksceKernelGetProcessId(void)
 	return fake_pid;
 }
 
+/* Addresses in no memory block ([lo, hi)): a mapping that takes any of them
+ * is refused, and the block lookup finds none there. */
+uintptr_t fake_noblock_lo, fake_noblock_hi;
+
 SceUID ksceKernelProcUserMap(SceUID pid, const char *name, int permission, const void *user_buf,
                              SceSize size, void **kernel_page, SceSize *kernel_size,
                              SceUInt32 *kernel_offset)
 {
 	uintptr_t a = (uintptr_t)user_buf, page = a & ~(uintptr_t)4095;
+
+	if (fake_noblock_hi && a < fake_noblock_hi && a + size > fake_noblock_lo) {
+		__atomic_fetch_add(&fake_usermap_calls, 1, __ATOMIC_RELAXED);
+		return (SceUID)0x80020001;
+	}
 
 	(void)pid; (void)name;
 	__atomic_store_n(&fake_usermap_thread, pthread_self(), __ATOMIC_RELAXED);
@@ -397,6 +406,8 @@ int ksceKernelMemBlockGetInfoEx(SceUID uid, VmMemBlockInfoEx *info)
 SceUID ksceKernelFindProcMemBlockByAddr(SceUID pid, const void *addr, SceSize size)
 {
 	(void)pid; (void)size;
+	if (fake_noblock_hi && (uintptr_t)addr >= fake_noblock_lo && (uintptr_t)addr < fake_noblock_hi)
+		return (SceUID)0x80020001;
 	return (SceUID)(0x5000 + (((uintptr_t)addr >> 20) & 0xFFF));
 }
 
@@ -415,6 +426,7 @@ void fakes_reset(void)
 	fake_meminfo_type = 0x1020D006;
 	fake_meminfo_err = fake_meminfo_calls = 0;
 	fake_usermap_elsewhere = NULL;
+	fake_noblock_lo = fake_noblock_hi = 0;
 	fake_now_us = 0;
 	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;

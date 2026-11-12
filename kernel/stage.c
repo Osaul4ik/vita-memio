@@ -515,16 +515,35 @@ static void off_map(OffMap *m);
  * says about the memory block(s) it lies in - so a refusal seen on a console
  * can be looked into. Only on a refusal (rare): nothing on the hot path. */
 #define MAPFAIL_LOG 8
+/* What covers a refused buffer: walked in MAPFAIL_STEP steps, up to
+ * MAPFAIL_SEGS stretches of the same block (or of none), and for each block
+ * met (up to MAPFAIL_BLKS) what GetInfoEx says and whether its part of the
+ * buffer maps on its own; a stretch with no block: whether its first step
+ * maps. */
+#define MAPFAIL_STEP 4096u
+#define MAPFAIL_SEGS 6
+#define MAPFAIL_BLKS 4
+typedef struct MapFailSeg {
+	uint32_t off, len;         /* in the buffer                             */
+	SceUID   uid;              /* its block, or the lookup's error          */
+	int      map;              /* mapping just this stretch: 0 it maps, or the error */
+} MapFailSeg;
+typedef struct MapFailBlk {
+	SceUID   uid;
+	int      info;             /* GetInfoEx's result                        */
+	uint32_t type, base, size;
+} MapFailBlk;
 typedef struct MapFail {
 	int      ready;            /* atomic: the fields below are written      */
 	int      which;            /* 0 copy on the system core, 1 C + NC All   */
 	int      err;              /* what ksceKernelProcUserMap returned       */
 	SceUID   pid;
-	uint32_t user, len;        /* the buffer in the app's space             */
+	uintptr_t user;            /* the buffer in the app's space             */
+	uint32_t len;
 	int      mt, nc;           /* its memory type as the caller saw it, NC  */
-	SceUID   b0, b1;           /* the block at its start and at its end     */
-	uint32_t btype, bbase, bsize;   /* the start's block (GetInfoEx)        */
-	int      binfo;            /* GetInfoEx's result                        */
+	int      nseg, nblk, more; /* more: stretches past MAPFAIL_SEGS          */
+	MapFailSeg seg[MAPFAIL_SEGS];
+	MapFailBlk blk[MAPFAIL_BLKS];
 	char     title[16];        /* the app in front                          */
 } MapFail;
 static MapFail           g_mapfail[MAPFAIL_LOG];
@@ -1310,9 +1329,25 @@ static void off_refuse(int state, int err, uint32_t type)
  *     (cached: one coherent copy of the data for every core). */
 static char g_fg_title[16];               /* (with the app events, below) */
 
+/* A stretch of the buffer mapped on its own, and unmapped: 0 or the error. */
+static int mapfail_probe(SceUID pid, uintptr_t user, uint32_t len)
+{
+	void *page = NULL;
+	SceSize size = 0;
+	SceUInt32 off = 0;
+	const SceUID uid = ksceKernelProcUserMap(pid, "SceVitaMemioProbe", VM_USERMAP_RW,
+	                                         (const void *)(uintptr_t)user, len, &page, &size, &off);
+
+	if (uid < 0)
+		return uid;
+	ksceKernelUserUnmap(uid);
+	return 0;
+}
+
 static void mapfail_note(int which, const OffMap *m, int err)
 {
 	const uint32_t i = __atomic_fetch_add(&g_mapfail_n, 1, __ATOMIC_RELAXED);
+	const uintptr_t base = (uintptr_t)m->user;
 	MapFail *f;
 	VmMemBlockInfoEx info;
 
@@ -1322,22 +1357,53 @@ static void mapfail_note(int which, const OffMap *m, int err)
 	f->which = which;
 	f->err = err;
 	f->pid = m->pid;
-	f->user = (uint32_t)(uintptr_t)m->user;
+	f->user = base;
 	f->len = m->len;
 	f->mt = m->mt;
 	f->nc = m->nc;
-	f->b0 = ksceKernelFindProcMemBlockByAddr(m->pid, m->user, 0);
-	f->b1 = m->len ? ksceKernelFindProcMemBlockByAddr(m->pid, m->user + m->len - 1, 0) : f->b0;
-	f->binfo = -1;
-	if (f->b0 >= 0) {
+	f->nseg = f->nblk = f->more = 0;
+	/* the stretches: a step at a time, from the buffer's start (the first
+	 * step from its own address, the rest from page boundaries) */
+	for (uint32_t at = 0; at < m->len;) {
+		const uintptr_t a = base + at;
+		const uint32_t step = MAPFAIL_STEP - (uint32_t)(a & (MAPFAIL_STEP - 1));
+		const uint32_t n = step < m->len - at ? step : m->len - at;
+		const SceUID uid = ksceKernelFindProcMemBlockByAddr(m->pid, (const void *)(uintptr_t)a, 0);
+
+		if (f->nseg && f->seg[f->nseg - 1].uid == uid) {
+			f->seg[f->nseg - 1].len += n;
+		} else if (f->nseg < MAPFAIL_SEGS) {
+			f->seg[f->nseg].off = at;
+			f->seg[f->nseg].len = n;
+			f->seg[f->nseg].uid = uid;
+			f->nseg++;
+		} else {
+			f->more = 1;
+			break;
+		}
+		at += n;
+	}
+	/* each stretch on its own (with no block: its first step), and the blocks */
+	for (int k = 0; k < f->nseg; k++) {
+		MapFailSeg *g = &f->seg[k];
+		int known = 0;
+
+		g->map = mapfail_probe(m->pid, base + g->off,
+		                       g->uid >= 0 || g->len < MAPFAIL_STEP ? g->len : MAPFAIL_STEP);
+		if (g->uid < 0)
+			continue;
+		for (int b = 0; b < f->nblk; b++)
+			known |= f->blk[b].uid == g->uid;
+		if (known || f->nblk >= MAPFAIL_BLKS)
+			continue;
 		memset(&info, 0, sizeof(info));
 		info.size = sizeof(info);
-		f->binfo = ksceKernelMemBlockGetInfoEx(f->b0, &info);
-		if (f->binfo >= 0) {
-			f->btype = info.type;
-			f->bbase = (uint32_t)(uintptr_t)info.mapped_base;
-			f->bsize = info.mapped_size;
-		}
+		f->blk[f->nblk].uid = g->uid;
+		f->blk[f->nblk].info = ksceKernelMemBlockGetInfoEx(g->uid, &info);
+		f->blk[f->nblk].type = info.type;
+		f->blk[f->nblk].base = (uint32_t)(uintptr_t)info.mapped_base;
+		f->blk[f->nblk].size = info.mapped_size;
+		f->nblk++;
 	}
 	memcpy(f->title, g_fg_title, sizeof(f->title) - 1);
 	f->title[sizeof(f->title) - 1] = 0;
@@ -3624,12 +3690,27 @@ void vm_stage_worker_tick(void)
 		         (unsigned)f->err, f->title[0] ? f->title : "-", (unsigned)f->pid,
 		         (unsigned)f->user, (unsigned)f->len, (unsigned)f->mt & 0xFFFFu,
 		         f->nc ? " (NC)" : "");
-		VM_KLOGW("stage: map refused: block 0x%08x (end 0x%08x%s), GetInfoEx 0x%08x: type "
-		         "0x%08x at 0x%08x + %u B%s", (unsigned)f->b0, (unsigned)f->b1,
-		         f->b0 != f->b1 ? ", another block" : "", (unsigned)f->binfo,
-		         (unsigned)f->btype, (unsigned)f->bbase, (unsigned)f->bsize,
-		         f->binfo >= 0 && (f->user < f->bbase || f->user - f->bbase + f->len > f->bsize)
-		         ? ", the buffer goes past it" : "");
+		for (int k = 0; k < f->nseg; k++) {
+			const MapFailSeg *g = &f->seg[k];
+
+			if (g->uid >= 0)
+				VM_KLOGW("stage: map refused: +0x%05x..+0x%05x (%u KiB) block 0x%08x, maps "
+				         "alone: %s (0x%08x)", (unsigned)g->off, (unsigned)(g->off + g->len),
+				         (unsigned)(g->len / 1024), (unsigned)g->uid, g->map >= 0 ? "yes" : "no",
+				         (unsigned)g->map);
+			else
+				VM_KLOGW("stage: map refused: +0x%05x..+0x%05x (%u KiB) no block (0x%08x), "
+				         "its first page maps: %s (0x%08x)", (unsigned)g->off,
+				         (unsigned)(g->off + g->len), (unsigned)(g->len / 1024), (unsigned)g->uid,
+				         g->map >= 0 ? "yes" : "no", (unsigned)g->map);
+		}
+		if (f->more)
+			VM_KLOGW("stage: map refused: more stretches past these");
+		for (int b = 0; b < f->nblk; b++)
+			VM_KLOGW("stage: map refused: block 0x%08x GetInfoEx 0x%08x: type 0x%08x at "
+			         "0x%08x + %u KiB", (unsigned)f->blk[b].uid, (unsigned)f->blk[b].info,
+			         (unsigned)f->blk[b].type, (unsigned)f->blk[b].base,
+			         (unsigned)(f->blk[b].size / 1024));
 		if (g_mapfail_logged == MAPFAIL_LOG)
 			VM_KLOGW("stage: map refused: only the first %u are described", MAPFAIL_LOG);
 	}

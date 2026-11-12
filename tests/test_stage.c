@@ -2134,7 +2134,19 @@ static void test_offload(void)
 	/* ... and described for the log: once, by the worker */
 	CHECK(g_mapfail_n == 1 && g_mapfail[0].ready && g_mapfail[0].which == 0 &&
 	      g_mapfail[0].err == (int)0x80020001 && g_mapfail[0].pid == 0x42 &&
-	      g_mapfail[0].len == 700 * 512 && g_mapfail[0].b0 >= 0 && g_mapfail[0].binfo == 0);
+	      g_mapfail[0].len == 700 * 512 && g_mapfail[0].nseg >= 1 && g_mapfail[0].nblk >= 1 &&
+	      g_mapfail[0].blk[0].info == 0 && g_mapfail[0].seg[0].off == 0);
+	{                                                 /* the stretches cover the buffer */
+		uint32_t cov = 0;
+
+		for (int k = 0; k < g_mapfail[0].nseg; k++) {
+			CHECK(g_mapfail[0].seg[k].off == cov && g_mapfail[0].seg[k].uid >= 0);
+			CHECK(g_mapfail[0].seg[k].map == (int)0x80020001);   /* the fake refuses them all */
+			cov += g_mapfail[0].seg[k].len;
+		}
+		CHECK(cov == 700 * 512 && !g_mapfail[0].more && fake_usermap_live == 0);
+	}
+
 	vm_stage_worker_tick();
 	CHECK(g_mapfail_logged == 1);
 	vm_stage_worker_tick();
@@ -2142,6 +2154,29 @@ static void test_offload(void)
 	fake_usermap_err = 0;
 	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
 	CHECK(g_off_reads >= 1 && g_offload_state == 1);
+	vm_stage_fini();
+
+	/* as PCSB00724's: the buffer starts in no block - described stretch by
+	 * stretch: the start with no block (does not map), the rest in a block
+	 * (maps alone); the data is the caller's copy */
+	reset();
+	offload_on(&s, 1, VM_OFFLOAD_ALWAYS, 1);
+	fake_pid = 0x42;
+	fake_noblock_lo = (uintptr_t)u;
+	fake_noblock_hi = ((uintptr_t)u & ~(uintptr_t)4095) + 8192;   /* its first page or two */
+	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
+	CHECK(g_off_maperr == 1 && g_mapfail_n == 1 && g_mapfail[1 - 1].ready);
+	{
+		const MapFail *f = &g_mapfail[0];
+
+		CHECK(f->nseg == 2 && f->seg[0].off == 0 && f->seg[0].uid < 0 && f->seg[0].map < 0);
+		CHECK(f->seg[1].off == f->seg[0].len && f->seg[1].uid >= 0 && f->seg[1].map == 0);
+		CHECK(f->seg[0].len + f->seg[1].len == 700 * 512 && f->nblk == 1 &&
+		      f->blk[0].uid == f->seg[1].uid);
+	}
+	vm_stage_worker_tick();
+	CHECK(g_mapfail_logged == 1 && fake_usermap_live == 0);
+	fake_noblock_lo = fake_noblock_hi = 0;
 	vm_stage_fini();
 
 	/* not writable: refused until switched again; the caller copies */

@@ -3537,6 +3537,34 @@ static void test_calibration(void)
 	vm_stage_fini();
 }
 
+/* For the log: a game reading two files in turn. Followed as one stream,
+ * every read is a run of its own; as two, two runs of 6, and 10 reads went
+ * on with the stream not read last. A read elsewhere ends the older. */
+static void test_readahead_two_streams(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	for (uint32_t i = 0; i < 6; i++) {
+		CHECK(rd(u, i * 256, 256) == 0 && memcmp(u, disk + (size_t)(i * 256) * 512, 256 * 512) == 0);
+		CHECK(rd(u, 2048 + i * 256, 256) == 0 &&
+		      memcmp(u, disk + (size_t)(2048 + i * 256) * 512, 256 * 512) == 0);
+	}
+	CHECK(rd(u, 1700, 256) == 0 && rd(u, 3700, 256) == 0);   /* two elsewhere: both end */
+	CHECK(g_ad_runs[0][1] == 13);                         /* one stream: all single */
+	CHECK(g_ad2_runs[0][6] == 2 && g_ad2_runs[0][1] == 0 && g_ad2_switch == 10);
+	/* a large write ends them too */
+	CHECK(wr(u, 3000, 256, 0) == 0);
+	CHECK(g_ad2_runs[0][1] == 2);
+	vm_stage_fini();
+}
+
 /* "Deeper read ahead": a 4th piece, its buffer made by the worker while
  * the setting is on (and read ahead runs), four pieces ahead of a stream and
  * the data right; off, the buffer given back once that piece is free, three
@@ -4032,6 +4060,7 @@ int main(void)
 	RUN(test_readahead_adaptive);
 	RUN(test_calibration);
 	RUN(test_readahead_deep);
+	RUN(test_readahead_two_streams);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);

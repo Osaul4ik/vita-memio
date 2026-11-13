@@ -208,6 +208,10 @@ typedef struct Dev {
 	int           ra_waiting;             /* a request sleeps on ra_done      */
 	RaPiece       ra[RA_PIECES];
 	void         *buf3;                   /* the 4th piece's (deeper), atomic  */
+	/* the log's look at two streams at once (ra_two_note): the large reads
+	 * as two streams would be followed, the request holder's */
+	struct { void *part; uint32_t end, len, us; int nc; } ra2[2];
+	int           ra2_last;               /* the one read last                 */
 	SceUID        uid3;
 	int           buf3_failed;
 	uint32_t      ra_seq;                 /* the last piece queued            */
@@ -1984,6 +1988,10 @@ static volatile int      g_ra_adj[2];
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
 static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
+/* For the log: the runs if two streams were followed at once (a game reading
+ * two files in turn breaks one stream at every read), and how often a read
+ * went on with the stream not read last. */
+static uint32_t          g_ad2_runs[2][RT_RUN], g_ad2_switch;
 static volatile int      g_ad_lock;
 
 /* The threshold On has for a stream of kind nc: the app in front's own, or
@@ -2393,6 +2401,10 @@ static void ra_adapt_reset(void)
 	memset(&g_ad, 0, sizeof(g_ad));
 	memset(g_ad_runs, 0, sizeof(g_ad_runs));
 	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < RT_RUN; i++)
+			ST(g_ad2_runs[k][i], 0);
+	ST(g_ad2_switch, 0);
+	for (int k = 0; k < 2; k++)
 		ST(g_ra_adj[k], 0);
 	__sync_lock_release(&g_ad_lock);
 }
@@ -2792,6 +2804,45 @@ static inline void ra_note_small_stock(Dev *d, void *part, uint32_t sector, uint
 
 /* A read [sector, sector + n) has completed: the stream so far. 1 if it
  * counts (then the pieces may be refilled after it). */
+/* A stream of the two the log looks at, ended (len 0: none). */
+static void ra_two_end(Dev *d, int i)
+{
+	const uint32_t len = d->ra2[i].len;
+
+	if (len)
+		ADD(g_ad2_runs[!!d->ra2[i].nc][len < RT_RUN ? len : RT_RUN - 1], 1);
+	d->ra2[i].len = 0;
+}
+
+/* A large read, as two streams would follow it: it goes on with either, or
+ * starts one in place of the one read longer ago. Adaptive only (the log). */
+static void ra_two_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc, uint32_t now,
+                        int ready)
+{
+	int i;
+
+	if (!ra_adapt_on())
+		return;
+	for (i = 0; i < 2; i++)
+		if (d->ra2[i].len && d->ra2[i].part == part && d->ra2[i].end == sector &&
+		    d->ra2[i].nc == nc && (!ready || now - d->ra2[i].us < RA_MAX_AGE_US))
+			break;
+	if (i < 2) {
+		if (i != d->ra2_last)
+			ADD(g_ad2_switch, 1);         /* the other one went on */
+		d->ra2[i].len += d->ra2[i].len < 1000;
+	} else {
+		i = !d->ra2[0].len ? 0 : !d->ra2[1].len ? 1 : !d->ra2_last;
+		ra_two_end(d, i);
+		d->ra2[i].len = 1;
+		d->ra2[i].part = part;
+		d->ra2[i].nc = nc;
+	}
+	d->ra2[i].end = sector + n;
+	d->ra2[i].us = now;
+	d->ra2_last = i;
+}
+
 static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 {
 	d->ra_noted_small = 0;
@@ -2812,6 +2863,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 			d->ra_streak = 1;
 		}
 		ra_adapt_read(0, nc, d->ra_streak, n);
+		ra_two_note(d, part, sector, n, nc, now, ready);
 		d->ra_us = now;
 		d->ra_nc = nc;
 		d->ra_last_part = part;
@@ -3449,6 +3501,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
 		ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
+		if (ra_adapt_on()) {
+			ra_two_end(d, 0);
+			ra_two_end(d, 1);
+		}
 		d->ra_streak = 0;                     /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
 			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
@@ -4181,6 +4237,22 @@ void vm_stage_worker_tick(void)
 				         k ? "NC" : "C", (unsigned)r[1], (unsigned)r[2], (unsigned)r[3],
 				         (unsigned)r[4], (unsigned)r[5], (unsigned)r[6], (unsigned)r[7],
 				         (unsigned)r[8], (unsigned)r[9], (unsigned)r[10]);
+			}
+			/* the same if two streams were followed: much longer runs here
+			 * mean the game reads two files in turn */
+			for (int k = 0; k < 2; k++) {
+				uint32_t r[RT_RUN];
+
+				for (int i = 0; i < RT_RUN; i++)
+					r[i] = LD(g_ad2_runs[k][i]);
+				char turn[24] = "";
+
+				if (k)
+					snprintf(turn, sizeof(turn), "; in turn %u", (unsigned)LD(g_ad2_switch));
+				VM_KLOGI("stage: read ahead runs %s, two streams 1-10+: %u %u %u %u %u %u %u %u "
+				         "%u %u%s", k ? "NC" : "C", (unsigned)r[1], (unsigned)r[2],
+				         (unsigned)r[3], (unsigned)r[4], (unsigned)r[5], (unsigned)r[6],
+				         (unsigned)r[7], (unsigned)r[8], (unsigned)r[9], (unsigned)r[10], turn);
 			}
 		}
 		/* calibration: the medians it has, per storage, and what is in use */

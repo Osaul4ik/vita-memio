@@ -1960,7 +1960,9 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 }
 
 /* Adaptive (VM_RA_ADAPTIVE): the threshold of each kind (0 cached, 1 NC),
- * within 2..8. Read ahead's own streams are counted as the R/A Test counts
+ * within 2..8, and the 32 KiB reads' stream's of each kind, its own, within
+ * 4..32 reads in fours (the counts of both, every threshold, weighed in one
+ * pass: rt_scores). Read ahead's own streams are counted as the R/A Test counts
  * reads (ra_test.h, a copy of its own): runs of reads in a row, by length. Every RA_ADAPT_RUNS runs
  * of a kind it works out, as the test does, what each threshold would have
  * brought over them (a read from the pieces saves RT_GAIN_*_US a sector, a
@@ -1978,6 +1980,8 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 #define RA_THR_LO         2u
 #define RA_THR_HI         8u
 static volatile int      g_ra_adj[2];
+/* the 32 KiB reads' threshold, its own: what Adaptive adds to On's (reads) */
+static volatile int      g_rs_adj[2];
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
 static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
@@ -2022,6 +2026,29 @@ static uint32_t ra_threshold(int nc)
 		return t;
 	v = (int)t + LD(g_ra_adj[nc]);
 	return v < (int)RA_THR_LO ? RA_THR_LO : v > (int)RA_THR_HI ? RA_THR_HI : (uint32_t)v;
+}
+
+/* On's threshold of the 32 KiB reads' stream for a threshold t: 16 reads at
+ * the standard one, else four times t - never under 16. */
+static uint32_t ra_small_on(uint32_t t, int nc)
+{
+	const uint32_t own = t == (nc ? RA_STREAK_NC : RA_STREAK) ? RA_SMALL_STREAK : t * RA_SMALL_FACTOR;
+
+	return own < RA_SMALL_STREAK ? RA_SMALL_STREAK : own;
+}
+
+/* The one in effect, given t = ra_threshold(nc): with Adaptive (and no test
+ * running) its own, 4..32 reads in fours, from where On has it. */
+static uint32_t ra_small_threshold(int nc, uint32_t t)
+{
+	int v;
+
+	if (t == RA_THR_NONE)
+		return t;
+	if (LD(g_ra_mode) != VM_RA_ADAPTIVE || __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE))
+		return ra_small_on(t, nc);
+	v = (int)ra_small_on(ra_base_threshold(nc), nc) + LD(g_rs_adj[nc]);
+	return v < RT_SMALL_LO * 4 ? RT_SMALL_LO * 4 : v > RT_SMALL_HI * 4 ? RT_SMALL_HI * 4 : (uint32_t)v;
 }
 
 /* ---- calibration (VmCal) ------------------------------------------------
@@ -2503,8 +2530,10 @@ static void ra_adapt_reset(void)
 		ksceKernelDelayThread(10);
 	memset(&g_ad, 0, sizeof(g_ad));
 	memset(g_ad_runs, 0, sizeof(g_ad_runs));
-	for (int k = 0; k < 2; k++)
+	for (int k = 0; k < 2; k++) {
 		ST(g_ra_adj[k], 0);
+		ST(g_rs_adj[k], 0);
+	}
 	memset(g_tn_cnt, 0, sizeof(g_tn_cnt));
 	memset(g_tn_reads, 0, sizeof(g_tn_reads));
 	memset(g_tn_sec, 0, sizeof(g_tn_sec));
@@ -2625,15 +2654,18 @@ static void ra_adapt_tick(void)
 	for (int nc = 0; nc < 2; nc++) {
 		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
 		RtCost cost;
-		int pick;
+		int thr = (int)t, sm;
 
 		if (!LD(g_ad_due[nc]))
 			continue;
 		ST(g_ad_due[nc], 0);
 		cal_cost(g_ad_dev[nc], &cost, NULL);   /* that storage's, if measured */
+		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
+		/* both sizes' thresholds, each on its own, in one pass */
 		if (ra_adapt_on() && t != RA_THR_NONE &&
-		    (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN(&cost), &cost)) != (int)t) {
-			ST(g_ra_adj[nc], pick - (int)base);
+		    ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
+			ST(g_ra_adj[nc], thr - (int)base);
+			ST(g_rs_adj[nc], sm * RA_SMALL_FACTOR - (int)ra_small_on(base, nc));
 			ADD(g_ra_moves[nc], 1);
 		}
 		ra_adapt_age(&g_ad, nc);
@@ -3030,12 +3062,8 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	uint32_t thr = ra_threshold(nc), next = small ? d->rs_end : d->ra_last_end;
 	int want, live = 0;
 
-	if (small && thr != RA_THR_NONE) {
-		const uint32_t own = thr == (nc ? RA_STREAK_NC : RA_STREAK) ? RA_SMALL_STREAK
-		                                                           : thr * RA_SMALL_FACTOR;
-
-		thr = own < RA_SMALL_STREAK ? RA_SMALL_STREAK : own;
-	}
+	if (small)
+		thr = ra_small_threshold(nc, thr);
 	if (streak < thr)
 		return;
 	/* the pieces are the large reads' stream's while it has any */
@@ -4374,8 +4402,12 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
-			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, moved %u / %u times",
-			         (unsigned)ra_threshold(0), (unsigned)ra_threshold(1),
+			const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
+
+			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, 32 KiB reads C %u NC %u, "
+			         "moved %u / %u times",
+			         (unsigned)t0, (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
+			         (unsigned)ra_small_threshold(1, t1),
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]));
 			/* read ahead's runs by length 1..10+ since what is in effect
 			 * changed: what the gain and cost figures can be checked against */

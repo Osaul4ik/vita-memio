@@ -154,51 +154,58 @@ static inline void ra_test_note(RaTest *t, const void *key, uint32_t sector, uin
 	}
 }
 
-/* Pieces left unread by the runs that reached `m`, and sectors after it. */
-static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, int32_t gain16,
-                               int32_t waste_us, uint64_t *sectors)
+/* What each threshold m would bring a stream (pos: sectors read by place in
+ * the run, run: runs by length), all in one pass from the end: sect[m] the
+ * sectors after the m-th read (from the pieces), sc[m] what they save less the
+ * pieces read for nothing - a run of length l >= m leaves min(l - m + 1, 3)
+ * unread, which is R(m) + R(m+1) + R(m+2) with R(j) the runs of j or more. */
+typedef struct {
+	int64_t  sc[RT_RUN];
+	uint64_t sect[RT_RUN];
+} RtScores;
+
+static inline void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t gain16,
+                             int32_t waste_us, RtScores *o)
 {
-	uint64_t sect = 0;
-	int64_t waste = 0;
+	uint64_t sect = 0, r0 = 0, r1 = 0, r2 = 0;   /* R(m+1), R(m+2), R(m+3) */
 
-	for (int i = m + 1; i < RT_POS; i++)
-		sect += pos[i];
-	for (int l = m; l < RT_RUN; l++) {
-		const int ahead = l - m + 1;
-
-		waste += (int64_t)run[l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
+	for (int m = RT_RUN - 1; m >= 0; m--) {
+		r2 = r1;
+		r1 = r0;
+		r0 += run[m];
+		o->sect[m] = sect;
+		o->sc[m] = (int64_t)sect * gain16 / 16 - (int64_t)(r0 + r1 + r2) * waste_us;
+		if (m < RT_POS)
+			sect += pos[m];
 	}
-	*sectors += sect;
-	return (int64_t)sect * gain16 / 16 - waste * waste_us;
 }
 
-/* What threshold t would bring for kind k, both sizes. */
+/* Kind k: large[m] for a threshold of m reads, small[b] for the 32 KiB reads'
+ * of 4b (their runs are kept in fours: a piece holds four). */
+static inline void rt_kind_scores(const RaTest *t, int k, const RtCost *cost, RtScores *large,
+                                  RtScores *small)
+{
+	rt_scores(t->pos[k], t->run[k], cost->gain16[k], cost->waste_us, large);
+	rt_scores(t->spos[k], t->srun[k], cost->gain16[k], cost->waste_us, small);
+}
+
+/* On's 32 KiB reads' threshold (in fours) for a threshold thr: 16 reads at
+ * the standard one, else four times it - never under 16. */
+static inline int rt_small_bucket(int thr)
+{
+	return thr == RT_THR_FIXED || thr < RT_SMALL_MIN_BUCKET ? RT_SMALL_MIN_BUCKET : thr;
+}
+
+/* What threshold thr would bring for kind k with On, both sizes. */
 static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCost *cost,
                                     uint64_t *sectors)
 {
-	const int32_t gain16 = cost->gain16[k], waste_us = cost->waste_us;
-	/* 32 KiB reads: from 16 in a row; a threshold of its own, four times it */
-	const int sm = thr == RT_THR_FIXED || thr < RT_SMALL_MIN_BUCKET ? RT_SMALL_MIN_BUCKET : thr;
-	uint64_t ss = 0;
-	int64_t sc = rt_score(t->pos[k], t->run[k], thr, gain16, waste_us, sectors);
+	RtScores l, s;
+	const int sm = rt_small_bucket(thr);
 
-	/* a 32 KiB read at bucket b is from the pieces once b >= sm */
-	{
-		uint64_t from = 0;
-		int64_t waste = 0;
-
-		for (int i = sm; i < RT_POS; i++)
-			from += t->spos[k][i];
-		for (int l = sm; l < RT_RUN; l++) {
-			const int ahead = l - sm + 1;
-
-			waste += (int64_t)t->srun[k][l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
-		}
-		ss = from;
-		sc += (int64_t)from * gain16 / 16 - waste * waste_us;
-	}
-	*sectors += ss;
-	return sc;
+	rt_kind_scores(t, k, cost, &l, &s);
+	*sectors += l.sect[thr] + s.sect[sm];
+	return l.sc[thr] + s.sc[sm];
 }
 
 /* The answer; the runs still open count as ended. */
@@ -218,19 +225,23 @@ static inline void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost *cost)
 	if (p->little)
 		return;
 	for (int k = 0; k < 2; k++) {
+		RtScores l, sm;
 		int best_t = RT_THR_FIXED;
-		uint64_t best_s = 0;
-		const int64_t fixed = rt_kind_score(t, k, RT_THR_FIXED, cost, &best_s);
-		int64_t best = fixed;
+		const int fs = rt_small_bucket(RT_THR_FIXED);
+		uint64_t best_s;
+		int64_t fixed, best;
 
+		rt_kind_scores(t, k, cost, &l, &sm);
+		fixed = best = l.sc[RT_THR_FIXED] + sm.sc[fs];
+		best_s = l.sect[RT_THR_FIXED] + sm.sect[fs];
 		for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
-			uint64_t s = 0;
-			const int64_t sc = rt_kind_score(t, k, i, cost, &s);
+			const int b = rt_small_bucket(i);
+			const int64_t sc = l.sc[i] + sm.sc[b];
 
 			if (sc > best) {
 				best = sc;
 				best_t = i;
-				best_s = s;
+				best_s = l.sect[i] + sm.sect[b];
 			}
 		}
 		if (best > 0) {
@@ -267,23 +278,40 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 	ra_test_pick_cost(t, p, &rt_cost_fixed);
 }
 
-/* Read ahead Adaptive's pick for kind k: the threshold 2..8 that would have
- * brought the most over the runs so far, `cur` unless another is better by
- * more than `margin` (us). */
-static inline int ra_adapt_pick(const RaTest *t, int k, int cur, int64_t margin, const RtCost *cost)
+/* Adaptive's 32 KiB reads' thresholds: in fours, 4..32 reads. */
+#define RT_SMALL_LO        1
+#define RT_SMALL_HI        8
+
+/* The best of sc[lo..hi]: `cur` unless another is better by more than
+ * `margin` (us). */
+static inline int rt_best(const int64_t *sc, int lo, int hi, int cur, int64_t margin)
 {
-	int64_t sc[RT_THR_MAX + 1];
 	int best = cur;
 
-	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
-		uint64_t s = 0;
-
-		sc[i] = rt_kind_score(t, k, i, cost, &s);
-	}
-	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++)
+	for (int i = lo; i <= hi; i++)
 		if (sc[i] > sc[best])
 			best = i;
 	return sc[best] - sc[cur] > margin ? best : cur;
+}
+
+/* Read ahead Adaptive's pick for kind k, worked out in one pass for every
+ * threshold: *thr (2..8) for the large reads, *sm (in fours, RT_SMALL_LO..HI)
+ * for the 32 KiB reads, each on its own - kept unless another is better by
+ * more than `margin`. 1 if either changed. */
+static inline int ra_adapt_pick(const RaTest *t, int k, int *thr, int *sm, int64_t margin,
+                                const RtCost *cost)
+{
+	RtScores l, s;
+	int nt, ns;
+
+	rt_kind_scores(t, k, cost, &l, &s);
+	nt = rt_best(l.sc, RT_THR_MIN, RT_THR_MAX, *thr, margin);
+	ns = rt_best(s.sc, RT_SMALL_LO, RT_SMALL_HI, *sm, margin);
+	if (nt == *thr && ns == *sm)
+		return 0;
+	*thr = nt;
+	*sm = ns;
+	return 1;
 }
 
 /* Kind k's counts halved: what was read long ago weighs less (a game's

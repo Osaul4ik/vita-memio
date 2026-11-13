@@ -90,8 +90,64 @@ static void test_tiny_model(void)
 	CHECK(!rt_tiny_pick(tc, tr, ts, &(int){ 8 }, &(int){ 64 }, INT64_MAX / 2, &rt_tiny_fixed));
 }
 
+/* The one-pass sums (rt_scores) against the sums written out as they read:
+ * the sectors after the m-th read, less min(l - m + 1, 3) pieces a run of l. */
+static void test_scores_one_pass(void)
+{
+	srand(7);
+	for (int n = 0; n < 500; n++) {
+		uint32_t pos[RT_POS], run[RT_RUN];
+		const int32_t g = 1 + rand() % 400, w = rand() % 5000;
+		RtScores o;
+
+		for (int i = 0; i < RT_POS; i++)
+			pos[i] = (uint32_t)(rand() % 100000);
+		for (int i = 0; i < RT_RUN; i++)
+			run[i] = (uint32_t)(rand() % 3000);
+		rt_scores(pos, run, g, w, &o);
+		for (int m = 0; m < RT_RUN; m++) {
+			uint64_t sect = 0;
+			int64_t waste = 0;
+
+			for (int i = m + 1; i < RT_POS; i++)
+				sect += pos[i];
+			for (int l = m; l < RT_RUN; l++)
+				waste += (int64_t)run[l] * (l - m + 1 < 3 ? l - m + 1 : 3);
+			CHECK(o.sect[m] == sect && o.sc[m] == (int64_t)sect * g / 16 - waste * w);
+		}
+	}
+}
+
+/* Adaptive's 32 KiB reads' threshold, on its own: long runs - from 4 reads;
+ * runs of 9 - from 12 (sooner only reads for nothing), and the large reads'
+ * threshold is left as it is; within the margin nothing moves. */
+static void test_small_pick(void)
+{
+	uint32_t at = 0;
+	int thr = 5, sm = RT_SMALL_MIN_BUCKET;
+
+	go();
+	runs(32, 40, 64, 0, &at);
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == 1 && thr == 5);
+	go();
+	runs(32, 9, 64, 0, &at);
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == 3 && thr == 5);
+	sm = RT_SMALL_MIN_BUCKET;                     /* from 16: nothing either way */
+	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == RT_SMALL_MIN_BUCKET);
+	go();
+	runs(32, 40, 64, 0, &at);
+	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, INT64_MAX / 2, &rt_cost_fixed) && sm == RT_SMALL_MIN_BUCKET);
+	/* the large reads' on their own: long runs of them move only theirs */
+	go();
+	runs(32, 20, 256, 0, &at);
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && thr == RT_THR_MIN &&
+	      sm == RT_SMALL_MIN_BUCKET);
+}
+
 int main(void)
 {
+	test_scores_one_pass();
+	test_small_pick();
 	test_tiny_model();
 	uint32_t at = 0;
 

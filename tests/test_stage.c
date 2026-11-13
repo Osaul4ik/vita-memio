@@ -3372,6 +3372,90 @@ static void test_readahead_adaptive(void)
 	g_title_fn = NULL;
 }
 
+/* `count` runs of `len` 32 KiB reads in a row, as their stream tells
+ * Adaptive of them, the worker at once after each. */
+static void adapt_small_runs(int nc, uint32_t len, int count)
+{
+	for (int r = 0; r < count; r++) {
+		for (uint32_t i = 1; i <= len; i++)
+			ra_adapt_read(1, nc, i, 64);
+		ra_adapt_end(&g_dev[M], 1, nc, len);
+		ra_adapt_tick();
+	}
+}
+
+/* Adaptive: the 32 KiB reads' stream has a threshold of its own (4..32 reads,
+ * from On's 16), moved by their own runs both ways, the large reads' left as
+ * they are; afresh when what is in effect changes, 16 with On and while the
+ * R/A Test runs. Then from reads: from 4, read ahead begins after the 4th. */
+static void test_readahead_adaptive_small(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	Dev *d = &g_dev[M];
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;                         /* an app in front (the test) */
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	/* long runs of them: from 4 reads; the large reads' threshold as it was */
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4 && ra_threshold(0) == 5);
+	CHECK(ra_small_threshold(1, ra_threshold(1)) == RA_SMALL_STREAK);   /* NC on its own */
+	/* runs of 9: sooner reads only for nothing - up to 12 */
+	adapt_small_runs(0, 9, 3 * RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 12 && ra_threshold(0) == 5);
+	/* the large reads' threshold moving leaves this one where it is */
+	adapt_runs(0, 20, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12);
+	/* while the R/A Test runs: On's 16 */
+	CHECK(vm_stage_ratest_start() == VM_OK);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	vm_stage_ratest_cancel();
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 12);
+	/* in effect again: afresh */
+	vm_stage_apply(&s);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && g_rs_adj[0] == 0);
+	/* On: the rule as before, whatever Adaptive had */
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	s.readahead = 1;
+	vm_stage_apply(&s);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	vm_stage_fini();
+
+	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
+	 * and every read still gets the disk's data */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	{
+		uint32_t at = 64;
+		const uint32_t h0 = g_ra_hits;
+
+		for (int k = 0; k < 3; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(!ra_any(d));
+		CHECK(rd_ok(u, at, 64));                      /* the 4th: it starts */
+		at += 64;
+		CHECK(ra_any(d) && d->ra_small);
+		for (int k = 0; k < 20; k++, at += 64)
+			CHECK(rd_ok(u, at, 64));
+		CHECK(g_ra_hits > h0 + 12);
+	}
+	vm_stage_fini();
+}
+
 /* Calibration: off, nothing measured and the fixed figures in use; on, a
  * stream's reads before read ahead began count as from the card, those from
  * the pieces as from them, and a piece dropped unused as one read for
@@ -4055,6 +4139,7 @@ int main(void)
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
+	RUN(test_readahead_adaptive_small);
 	RUN(test_calibration);
 	RUN(test_tiny_adaptive);
 	RUN(test_bufmap_state);

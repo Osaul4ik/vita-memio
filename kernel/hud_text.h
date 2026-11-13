@@ -10,7 +10,7 @@
 #include "../include/vitamemio_kernel_api.h"
 #include "hud.h"
 
-/* One kind's part of the Streak line, `k` "C" or "NC":
+/* One kind's part of the read ahead line, `k` "C" or "NC":
  *   C:5:2/16/8   as set : now for large reads / 32 KiB reads / tiny reads
  *   NC:never     the app's "never" (its large and 32 KiB reads)
  * The tiny reads' is one for both kinds. */

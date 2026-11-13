@@ -316,7 +316,7 @@ static void test_helpers(void)
 
 int vm_failures;
 
-/* The HUD's Streak line: as set : large / 32 KiB / tiny reads now, never;
+/* The HUD's read ahead line: as set : large / 32 KiB / tiny reads now, never;
  * the whole line fits a HUD line with its colour codes. */
 static void test_streak_text(void)
 {
@@ -330,7 +330,7 @@ static void test_streak_text(void)
 	/* the widest: two digits everywhere */
 	hud_streak_kind(c, sizeof(c), "C", 99, 99, 99, 99);
 	hud_streak_kind(nc, sizeof(nc), "NC", 99, 99, 99, 99);
-	n = snprintf(line, sizeof(line), HUD_C_DIM "Streak %s %s %sAuto", c, nc, HUD_C_GOOD);
+	n = snprintf(line, sizeof(line), "%s %s %sAuto", c, nc, HUD_C_GOOD);
 	CHECK(n > 0 && n < (int)sizeof(line));
 }
 

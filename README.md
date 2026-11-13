@@ -135,13 +135,13 @@ The HUD is part of the overlay and shows through its keys; with *Overlay* off th
 SD2VITA R: 21.8 W:  0.0 MB/s
 R/W: 909/1 MiB On Err: 0
 R/A: Adaptive  TitleID: PCSF00024
-Streak C:5:5/16/3 NC:3:2/16/3 Auto
+C:5:5/16/3 NC:3:2/16/3 Auto
 Core 3 B C: 98%  NC: 0%
 ```
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
 - **B:** the game's buffers for copying on the spare core, since it started (also in the overlay): **green** all usable; **yellow** some had a first page the system cannot share, so that part was copied on the game's core; **red** some could not be used at all, and were copied on the game's core. The data is right either way. Grey while nothing has been copied there yet.
-- **Streak:** reads in a row before read ahead starts, for cached (C) and non-cacheable (NC) memory, as set:now for large, 32 KiB and very small reads. For example `C:5:2/8/3`: set at 5; now large reads from the 2nd, 32 KiB reads from the 8th, very small reads from the 3rd (one figure for both C and NC). **Auto** at the end is green while *Tuning* measures, grey when it is off.
+- **C / NC:** reads in a row before read ahead starts, for cached (C) and non-cacheable (NC) memory, as set:now for large, 32 KiB and very small reads. For example `C:5:2/8/3`: set at 5; now large reads from the 2nd, 32 KiB reads from the 8th, very small reads from the 3rd (one figure for both C and NC). **Auto** at the end is green while *Tuning* measures, grey when it is off.
 - **Core 3, C:** the share of copying of ordinary data done on the spare core since the HUD opened.
 - **Core 3, NC:** the share of graphics data handled on the spare core: read there (*C + NC All*) or copied there from read ahead (*C + NC R/A* and *All*). Graphics data read the standard way counts against it.
 

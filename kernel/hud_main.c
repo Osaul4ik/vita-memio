@@ -158,11 +158,11 @@ static const char *hud_bufmap(int b)
 
 /* Read ahead in the HUD, for the app in front:
  *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
- *   Streak C:5:2/16/8 NC:never Auto      (reads in a row before it starts:
+ *   C:5:2/16/8 NC:never Auto             (reads in a row before it starts:
  *                                         as set : now for large / 32 KiB /
  *                                         tiny reads; hud_streak_kind)
  *   Core 3 B C: 98%  NC: 100%            (since the HUD came up; B: hud_bufmap)
- * Off: no Streak line. Returns the lines added (at most `room`). */
+ * Off: no such line. Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, int on)
 {
 	static int counting;
@@ -195,7 +195,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 		VmCal cal;
 
 		vm_stage_cal(-1, &cal);             /* tuning: green measuring, grey off */
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak %.20s %.20s %sAuto", c, nc,
+		snprintf(L[n++], VM_HUD_LINE_MAX, "%.20s %.20s %sAuto", c, nc,
 		         cal.on ? HUD_C_GOOD : HUD_C_DIM);
 	}
 	if (n < room) {

@@ -68,6 +68,8 @@ static const VmCoreApi k_core = {
 	.ratest_stale   = vm_stage_ratest_stale,
 	.ratest_cancel  = vm_stage_ratest_cancel,
 	.ratest_stop    = vm_stage_ratest_stop,
+	.cal            = vm_stage_cal,
+	.cal_set        = vm_stage_cal_set,
 };
 
 static VmHudLink        g_link;

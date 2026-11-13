@@ -63,6 +63,8 @@ int  vm_stage_ratest_running(uint32_t *mib)     { return g_core->ratest_running(
 int  vm_stage_ratest_stale(void)                { return g_core->ratest_stale(); }
 void vm_stage_ratest_cancel(void)               { g_core->ratest_cancel(); }
 void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
+void vm_stage_cal(int dev, VmCal *out)          { g_core->cal(dev, out); }
+void vm_stage_cal_set(int on)                   { g_core->cal_set(on); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
@@ -391,6 +393,15 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		g_ov_adv = !g_ov_adv;
 		return;
 	}
+	if (item == OV_ITEM_CALIB) {              /* the console's, not the app's */
+		VmCal c;
+
+		vm_stage_cal(-1, &c);
+		vm_stage_cal_set(!c.on);
+		snprintf(msg, cap, !c.on ? HUD_C_GOOD "Calibration on: just play"
+		                                        : HUD_C_TEXT "Calibration off: kept");
+		return;
+	}
 	vm_stage_app_now(&an);
 	a = an.cur;
 	switch (item) {
@@ -470,6 +481,33 @@ static void ov_line(char *o, int cur, int i, int indent, const char *name, const
 	snprintf(o, VM_HUD_LINE_MAX, "%s%s%s" HUD_C_TEXT "%s%s%.24s",
 	         i == cur ? HUD_C_ACCENT : HUD_C_DIM, i == cur ? "> " : "  ",
 	         indent ? "  " : "", nm, color, val);
+}
+
+/* "2.9" (ms, from us), or "-" without a measured value. */
+static void ms_text(char *o, size_t n, int32_t us, int have)
+{
+	const unsigned u = !have ? 0u : us < 0 ? 0u : us > 99999 ? 99999u : (unsigned)us;
+
+	if (have)
+		snprintf(o, n, "%u.%u", (u / 1000u) % 100u, (u % 1000u) / 100u);
+	else
+		snprintf(o, n, "-");
+}
+
+/* Calibration's line: on / off, and for the storage in use what a read from
+ * the pieces saves (ms per 128 KiB, C and NC) and a piece read for nothing
+ * costs (W) - measured ones, "-" while too little is measured. */
+static void ov_calib(char *line, int cur, int dev)
+{
+	VmCal c;
+	char v[48], g[2][8], w[8];
+
+	vm_stage_cal(dev, &c);
+	for (int k = 0; k < 2; k++)                    /* per 128 KiB: x 256 / 16 */
+		ms_text(g[k], sizeof(g[k]), c.gain16[k] * 16, c.have[k]);
+	ms_text(w, sizeof(w), c.waste_us, c.have_waste);
+	snprintf(v, sizeof(v), "%s C %s NC %s W %s", c.on ? "On" : "Off", g[0], g[1], w);
+	ov_line(line, cur, OV_ITEM_CALIB, 0, "Calibration", c.on ? HUD_C_GOOD : HUD_C_TEXT, v);
 }
 
 /* Characters that take room (colour codes do not). */
@@ -564,9 +602,10 @@ static void overlay_feed(void)
 			         : "", hud_bufmap(rn.bufmap), a, b);
 		}
 		if (!an.title[0]) {
-			mask = 1u << OV_ITEM_CLOSE;
+			mask = (1u << OV_ITEM_CALIB) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
+			ov_calib(L[n++], cur, fg.dev >= 0 ? fg.dev : VM_DEV_SD2VITA);
 		} else {
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
@@ -626,6 +665,8 @@ static void overlay_feed(void)
 				ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
 				        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
 			}
+			ov_calib(L[n++], cur, fg.dev >= 0 ? fg.dev : VM_DEV_SD2VITA);
+			mask |= 1u << OV_ITEM_CALIB;
 			save_line = n++;
 		}
 		close_line = n++;

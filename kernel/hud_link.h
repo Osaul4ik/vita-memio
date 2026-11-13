@@ -29,7 +29,7 @@
 #include "stage.h"
 
 #define VM_HUD_LINK_MAGIC    0x4C44554Du   /* "MUDL" */
-#define VM_HUD_LINK_VERSION  1
+#define VM_HUD_LINK_VERSION  2
 
 /* The kernel module's functions, for the HUD module. */
 typedef struct VmCoreApi {
@@ -53,6 +53,8 @@ typedef struct VmCoreApi {
 	int  (*ratest_stale)(void);
 	void (*ratest_cancel)(void);
 	void (*ratest_stop)(VmRaTestPick *out);
+	void (*cal)(int dev, VmCal *out);
+	void (*cal_set)(int on);
 } VmCoreApi;
 
 /* What the worker should wake for, from VmHudApi.busy. */

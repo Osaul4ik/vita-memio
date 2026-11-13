@@ -143,6 +143,9 @@ typedef struct RaPiece {
 	int            ok;                /* read, and no write was running then    */
 	int            dirty;             /* a write touched it since it was queued */
 	int            nc;                /* read for a non-cacheable stream (adaptive) */
+	uint32_t       wait_from;         /* calibration: atomic, when a request first
+	                                   * came while it was read (0: none)    */
+	uint32_t       held_us;           /* ... how long it held that one up      */
 } RaPiece;
 
 typedef struct Dev {
@@ -2007,6 +2010,277 @@ static uint32_t ra_threshold(int nc)
 	return v < (int)RA_THR_LO ? RA_THR_LO : v > (int)RA_THR_HI ? RA_THR_HI : (uint32_t)v;
 }
 
+/* ---- calibration (VmCal) ------------------------------------------------
+ * Per storage: how long a large read takes from the card in a stream before
+ * read ahead began (plain) and from the pieces (served), per 128 KiB, by kind
+ * (C, NC), in buckets of CAL_STEP_US - the medians' difference is the gain;
+ * and for each piece read for nothing, how long it held up a request that
+ * came while it was read (none came: nothing) - their mean is the cost.
+ * Counted by the request holder (busy), so plainly; read by the worker for
+ * the log and the overlay (relaxed). A series keeps its last CAL_KEEP or so. */
+#define CAL_BUCKETS      64
+#define CAL_STEP_US      250u
+#define CAL_KEEP         4096u
+#define CAL_HELD_MAX_US  16000u
+#define CAL_FILE         VM_DATA_DIR "/calib.bin"
+#define CAL_MAGIC        0x4C41434Du      /* "MCAL" */
+#define CAL_VERSION      1u
+
+typedef struct CalDev {
+	uint16_t plain[2][CAL_BUCKETS], served[2][CAL_BUCKETS];
+	uint32_t n_plain[2], n_served[2];
+	uint32_t waste_us, waste_n;
+} CalDev;
+
+static CalDev        g_cal[VM_DEV_COUNT];
+static volatile int  g_cal_on;
+static volatile int  g_cal_dirty;            /* measured since the last save */
+static int           g_cal_loaded;           /* worker */
+
+/* A request starting (calibration on): the pieces being read now are holding
+ * it up - each notes when the first such request came. Its start time
+ * (never 0), and *held whether a piece was being read. */
+static uint32_t cal_start(Dev *d, int *held)
+{
+	const uint32_t now = ksceKernelGetSystemTimeLow() | 1u;
+
+	*held = 0;
+	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
+		for (int i = 0; i < RA_PIECES; i++)
+			if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING) {
+				uint32_t exp = 0;
+
+				*held = 1;
+				__atomic_compare_exchange_n(&d->ra[i].wait_from, &exp, now, 0,
+				                            __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+			}
+	return now;
+}
+
+static void cal_add(uint16_t *h, uint32_t *n, uint32_t us)
+{
+	const uint32_t b = us / CAL_STEP_US < CAL_BUCKETS ? us / CAL_STEP_US : CAL_BUCKETS - 1;
+	uint32_t total;
+
+	ST(h[b], (uint16_t)(LD(h[b]) + 1));
+	total = LD(*n) + 1;
+	if (total >= CAL_KEEP) {              /* the older half goes */
+		total = 0;
+		for (int i = 0; i < CAL_BUCKETS; i++) {
+			ST(h[i], (uint16_t)(LD(h[i]) >> 1));
+			total += LD(h[i]);
+		}
+	}
+	ST(*n, total);
+	ST(g_cal_dirty, 1);
+}
+
+/* A large read done (its stream noted: ra_note), `got` sectors of it from the
+ * pieces, started at t0 (0: calibration off). Only whole ones count: all from
+ * the pieces, or none and in a stream, with no piece being read meanwhile. */
+static inline void cal_read(Dev *d, int nc, uint32_t nsec, uint32_t got, uint32_t t0, int held)
+{
+	CalDev *c;
+	uint32_t us;
+
+	if (!t0 || nsec < RA_MIN_SECTORS)
+		return;
+	nc = !!nc;
+	if (got != nsec && (got || held || d->ra_streak < 2))
+		return;
+	us = (uint32_t)((uint64_t)(ksceKernelGetSystemTimeLow() - t0) * 256u / nsec);
+	c = &g_cal[d - g_dev];
+	if (got)
+		cal_add(c->served[nc], &c->n_served[nc], us);
+	else
+		cal_add(c->plain[nc], &c->n_plain[nc], us);
+}
+
+/* A piece read for nothing: what it held up. */
+static void cal_waste(Dev *d, const RaPiece *pc)
+{
+	CalDev *c = &g_cal[d - g_dev];
+	uint32_t n;
+
+	if (!LD(g_cal_on))
+		return;
+	ST(c->waste_us, LD(c->waste_us) + pc->held_us);
+	n = LD(c->waste_n) + 1;
+	if (n >= CAL_KEEP) {
+		ST(c->waste_us, LD(c->waste_us) >> 1);
+		n >>= 1;
+	}
+	ST(c->waste_n, n);
+	ST(g_cal_dirty, 1);
+}
+
+/* A series' median, us per 128 KiB (the middle of its bucket). */
+static uint32_t cal_median(const uint16_t *h, uint32_t n)
+{
+	uint32_t cum = 0;
+
+	for (int i = 0; i < CAL_BUCKETS; i++) {
+		cum += LD(h[i]);
+		if (cum * 2 >= n)
+			return (uint32_t)i * CAL_STEP_US + CAL_STEP_US / 2;
+	}
+	return CAL_BUCKETS * CAL_STEP_US;
+}
+
+/* What is in use for storage dev (-1: the fixed figures), and the counts. */
+static void cal_cost(int dev, RtCost *cost, VmCal *o)
+{
+	VmCal v;
+
+	memset(&v, 0, sizeof(v));
+	*cost = rt_cost_fixed;
+	v.on = LD(g_cal_on);
+	if (dev >= 0 && dev < VM_DEV_COUNT) {
+		const CalDev *c = &g_cal[dev];
+
+		for (int k = 0; k < 2; k++) {
+			v.n_plain[k] = LD(c->n_plain[k]);
+			v.n_served[k] = LD(c->n_served[k]);
+			if (v.n_plain[k] >= VM_CAL_MIN_PLAIN && v.n_served[k] >= VM_CAL_MIN_SERVED) {
+				const int32_t diff = (int32_t)cal_median(c->plain[k], v.n_plain[k]) -
+				                     (int32_t)cal_median(c->served[k], v.n_served[k]);
+
+				/* per 128 KiB -> per sector, sixteenths: x 16 / 256 */
+				cost->gain16[k] = diff > 0 ? diff / 16 : 0;
+				v.have[k] = 1;
+			}
+		}
+		v.n_waste = LD(c->waste_n);
+		if (v.n_waste >= VM_CAL_MIN_WASTE) {
+			cost->waste_us = (int32_t)(LD(c->waste_us) / v.n_waste);
+			v.have_waste = 1;
+		}
+	}
+	v.gain16[0] = cost->gain16[0];
+	v.gain16[1] = cost->gain16[1];
+	v.waste_us = cost->waste_us;
+	if (o)
+		*o = v;
+}
+
+void vm_stage_cal(int dev, VmCal *out)
+{
+	RtCost c;
+
+	cal_cost(dev, &c, out);
+}
+
+/* The file: a header, each storage's counts, a check over all of it. Written
+ * aside, then swapped in, as the profiles are; read straight into g_cal and
+ * cleared again if anything is wrong. Worker thread. */
+typedef struct CalHead {
+	uint32_t magic, version, on, devs;
+} CalHead;
+
+static uint32_t cal_fnv(uint32_t c, const void *p, size_t bytes)
+{
+	const uint32_t *w = p;
+
+	for (size_t i = 0; i < bytes / 4; i++)
+		c = (c ^ w[i]) * 16777619u;
+	return c;
+}
+
+static void cal_save(void)
+{
+	CalHead h = { CAL_MAGIC, CAL_VERSION, 0, VM_DEV_COUNT };
+	uint32_t c = 0x811C9DC5u;
+	SceUID fd;
+	int ok;
+
+	if (!g_cal_loaded)
+		return;
+	ST(g_cal_dirty, 0);
+	h.on = (uint32_t)LD(g_cal_on);
+	ksceIoMkdir("ur0:data", 0777);
+	ksceIoMkdir(VM_DATA_DIR, 0777);
+	fd = ksceIoOpen(CAL_FILE ".tmp", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	if (fd < 0)
+		return;
+	ok = ksceIoWrite(fd, &h, sizeof(h)) == (int)sizeof(h);
+	c = cal_fnv(c, &h, sizeof(h));
+	for (int i = 0; i < VM_DEV_COUNT && ok; i++) {
+		CalDev one;                       /* as it is now, the check over the same */
+
+		for (int k = 0; k < 2; k++) {
+			for (int b = 0; b < CAL_BUCKETS; b++) {
+				one.plain[k][b] = LD(g_cal[i].plain[k][b]);
+				one.served[k][b] = LD(g_cal[i].served[k][b]);
+			}
+			one.n_plain[k] = LD(g_cal[i].n_plain[k]);
+			one.n_served[k] = LD(g_cal[i].n_served[k]);
+		}
+		one.waste_us = LD(g_cal[i].waste_us);
+		one.waste_n = LD(g_cal[i].waste_n);
+		ok = ksceIoWrite(fd, &one, sizeof(one)) == (int)sizeof(one);
+		c = cal_fnv(c, &one, sizeof(one));
+	}
+	c ^= 0xA5C3A5C3u;
+	ok = ok && ksceIoWrite(fd, &c, sizeof(c)) == (int)sizeof(c);
+	ksceIoClose(fd);
+	if (ok) {
+		ksceIoRemove(CAL_FILE);
+		ksceIoRename(CAL_FILE ".tmp", CAL_FILE);
+	} else {
+		ksceIoRemove(CAL_FILE ".tmp");
+	}
+}
+
+/* One file into g_cal; 1 if it was whole and right (else g_cal cleared). */
+static int cal_read_file(const char *path)
+{
+	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	CalHead h;
+	uint32_t c = 0x811C9DC5u, check = 0;
+	int ok;
+
+	if (fd < 0)
+		return 0;
+	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && h.magic == CAL_MAGIC &&
+	     h.version == CAL_VERSION && h.devs == VM_DEV_COUNT &&
+	     ksceIoRead(fd, g_cal, sizeof(g_cal)) == (int)sizeof(g_cal) &&
+	     ksceIoRead(fd, &check, sizeof(check)) == (int)sizeof(check);
+	ksceIoClose(fd);
+	if (ok) {
+		c = cal_fnv(cal_fnv(c, &h, sizeof(h)), g_cal, sizeof(g_cal)) ^ 0xA5C3A5C3u;
+		ok = c == check;
+		for (int i = 0; i < VM_DEV_COUNT && ok; i++)
+			for (int k = 0; k < 2; k++)
+				if (g_cal[i].n_plain[k] >= CAL_KEEP || g_cal[i].n_served[k] >= CAL_KEEP)
+					ok = 0;
+	}
+	if (!ok) {
+		memset(g_cal, 0, sizeof(g_cal));
+		return 0;
+	}
+	ST(g_cal_on, h.on ? 1 : 0);
+	return 1;
+}
+
+/* Once, by the worker: what was measured before (the copy a save cut short,
+ * if the file is not whole). */
+static void cal_load(void)
+{
+	if (g_cal_loaded)
+		return;
+	g_cal_loaded = 1;
+	if (!cal_read_file(CAL_FILE))
+		cal_read_file(CAL_FILE ".tmp");
+}
+
+void vm_stage_cal_set(int on)
+{
+	cal_load();
+	ST(g_cal_on, on ? 1 : 0);
+	cal_save();                           /* the switch kept, and what was measured */
+	VM_KLOGI("stage: calibration %s", on ? "on" : "off");
+}
+
 static void ra_adapt_reset(void)
 {
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
@@ -2047,7 +2321,7 @@ static void ra_adapt_read(int small, int nc, uint32_t at, uint32_t n)
 
 /* A stream of `len` reads has ended; every RA_ADAPT_RUNS of a kind, its
  * threshold weighed again. */
-static void ra_adapt_end(int small, int nc, uint32_t len)
+static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
 {
 	if (!len || !ra_adapt_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
@@ -2064,7 +2338,11 @@ static void ra_adapt_end(int small, int nc, uint32_t len)
 		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
 		int pick;
 
-		if (t != RA_THR_NONE && (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN_US)) != (int)t) {
+		RtCost cost;
+
+		cal_cost((int)(d - g_dev), &cost, NULL);   /* this storage's, if measured */
+		if (t != RA_THR_NONE &&
+		    (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN_US, &cost)) != (int)t) {
 			ST(g_ra_adj[nc], pick - (int)base);
 			ADD(g_ra_moves[nc], 1);
 		}
@@ -2106,6 +2384,7 @@ static int ra_thread(SceSize args, void *argp)
 		if (best < 0)
 			continue;                       /* dropped meanwhile */
 		pc = &d->ra[best];
+		__atomic_store_n(&pc->wait_from, 0, __ATOMIC_RELAXED);   /* calibration */
 		/* seq_cst, as the read of ra_wbusy below and a write's own steps */
 		if (!__atomic_compare_exchange_n(&pc->state, &exp, RA_READING, 0, __ATOMIC_SEQ_CST,
 		                                 __ATOMIC_RELAXED))
@@ -2114,6 +2393,12 @@ static int ra_thread(SceSize args, void *argp)
 		r = pc->io(pc->ref, pc->part, LD(pc->sector), ra_ptr(d, best), LD(pc->n));
 		pc->ok = r >= 0 && !wr;
 		pc->t_done = ksceKernelGetSystemTimeLow();
+		{                                   /* calibration: what it held up */
+			const uint32_t from = __atomic_exchange_n(&pc->wait_from, 0, __ATOMIC_RELAXED);
+			const uint32_t held = from ? pc->t_done - from : 0;
+
+			pc->held_us = held < CAL_HELD_MAX_US ? held : CAL_HELD_MAX_US;
+		}
 		__atomic_store_n(&pc->state, r >= 0 ? RA_READY : RA_FAILED, __ATOMIC_SEQ_CST);
 		if (__atomic_exchange_n(&d->ra_waiting, 0, __ATOMIC_SEQ_CST))
 			ksceKernelSignalSema(d->ra_done, 1);
@@ -2168,8 +2453,11 @@ static void ra_drop(Dev *d)
 
 		if (st != RA_FREE) {
 			any = 1;
-			if (st == RA_READY)
+			if (st == RA_READY) {
 				waste += d->ra[i].n - d->ra[i].off;
+				if (!d->ra[i].off)
+					cal_waste(d, &d->ra[i]);   /* none of it used */
+			}
 			__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
 		}
 	}
@@ -2368,7 +2656,7 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 		    (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
 			d->rs_streak += d->rs_streak < 1000;
 		} else {
-			ra_adapt_end(1, d->rs_nc, d->rs_streak);
+			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
 			d->rs_streak = 1;
 		}
 		d->rs_us = now;
@@ -2407,7 +2695,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		    (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
 			d->ra_streak += d->ra_streak < 1000;
 		} else {
-			ra_adapt_end(0, d->ra_nc, d->ra_streak);
+			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 			d->ra_streak = 1;
 		}
 		ra_adapt_read(0, nc, d->ra_streak, n);
@@ -2701,7 +2989,7 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret);
 static SceUID ncd_wanted(uint32_t nsec);
 static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                      uint8_t *p, uint32_t nsec)
+                      uint8_t *p, uint32_t nsec, uint32_t cal_t0, int cal_held)
 {
 	/* the caller found it non-cacheable at both ends */
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = -2, .mt = MEMTYPE_NC, .nc = 1 };
@@ -2752,8 +3040,10 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		__sync_lock_release(&g_shadow_busy);
 	if (got)
 		ADD(g_ra_nc_kib, got / 2);
-	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec, 1))
+	if (ret >= 0 && !bad && ra_note(d, part, sector, nsec, 1)) {
+		cal_read(d, 1, nsec, got, cal_t0, cal_held);   /* before the refill: it may start a piece */
 		ra_refill(d, io, ref, part);
+	}
 	if (COUNT_CORES() && own)                  /* graphics data the game's thread copied */
 		__atomic_fetch_add(&g_ra_nc_own_kib, own / 2, __ATOMIC_RELAXED);
 	__sync_lock_release(&d->busy);
@@ -2929,6 +3219,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	uint32_t left = nsec;
 	int verify, ret = 0, mine = on_port(part, d->port);
 	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
+	int cal_held = 0;
+	/* calibration on: when it started, and whether a piece held it up */
+	const uint32_t cal_t0 = mine && nsec && LD(g_cal_on) ? cal_start(d, &cal_held) : 0;
 
 	/* the largest read request seen, for the log (a lost update is fine) */
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
@@ -2970,7 +3263,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		 * cover goes to the system core there too, with "C + NC") */
 		if (!write && nsec >= RA_SMALL_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
 		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
-			return ra_nc_read(d, io, ref, part, sector, p, nsec);
+			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held);
 		/* "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
 		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
@@ -3031,14 +3324,15 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* read ahead: this read continues the stream from the pieces, if they
 	 * hold it; anything else drops them first (they are in the buffers) */
 	const int ra = !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+	uint32_t ra_got = 0;                  /* of it from the pieces (calibration) */
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
-		ra_adapt_end(0, d->ra_nc, d->ra_streak);
+		ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 		d->ra_streak = 0;                     /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
-			ra_adapt_end(1, d->rs_nc, d->rs_streak);
+			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
 			d->rs_streak = 0;
 			__sync_lock_release(&d->rs_lock);
 		}
@@ -3048,6 +3342,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		                                   left, &own)
 		                        : 0;
 
+		ra_got = got;
 		if (got && verify && ra_verify(d, io, ref, part, sector, p, got, clean, shadow))
 			problem = 1;                      /* fallen back: the rest stock */
 		p += (size_t)got * 512;
@@ -3168,8 +3463,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
-	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem) {
-		if (ra_note(d, part, sector0, nsec, 0) && ra)
+	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem &&
+	    ra_note(d, part, sector0, nsec, 0)) {
+		cal_read(d, 0, nsec, ra_got, cal_t0, cal_held);
+		if (ra)
 			ra_refill(d, io, ref, part);
 	}
 	if (verify)
@@ -3632,7 +3929,14 @@ void vm_stage_ratest_stop(VmRaTestPick *o)
 	__atomic_store_n(&g_rt_on, 0, __ATOMIC_RELEASE);
 	while (__sync_lock_test_and_set(&g_rt_lock, 1))
 		ksceKernelDelayThread(100);
-	ra_test_pick(&g_rt, &p);
+	{
+		VmFg fg;
+		RtCost cost;
+
+		vm_stage_fg(&fg);
+		cal_cost(fg.dev, &cost, NULL);    /* the app's storage's, if measured */
+		ra_test_pick_cost(&g_rt, &p, &cost);
+	}
 	o->mib = g_rt.total_sectors / 2048u;
 	__sync_lock_release(&g_rt_lock);
 	o->little = p.little;
@@ -3672,6 +3976,8 @@ void vm_stage_worker_tick(void)
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
 	const uint32_t now_us = ksceKernelGetSystemTimeLow();
 
+	if (!g_cal_loaded && LD(g_live))
+		cal_load();                       /* what was measured before, once */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
@@ -3756,6 +4062,28 @@ void vm_stage_worker_tick(void)
 				         (unsigned)r[4], (unsigned)r[5], (unsigned)r[6], (unsigned)r[7],
 				         (unsigned)r[8], (unsigned)r[9], (unsigned)r[10]);
 			}
+		}
+		/* calibration: the medians it has, per storage, and what is in use */
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			const CalDev *c = &g_cal[i];
+			VmCal v;
+			RtCost cost;
+
+			if (!LD(c->n_plain[0]) && !LD(c->n_plain[1]) && !LD(c->waste_n))
+				continue;
+			cal_cost(i, &cost, &v);
+			/* per 128 KiB: from the card / from the pieces (how many each) */
+			VM_KLOGI("stage: calibration dev %d%s: C %u/%u us (%u/%u), NC %u/%u (%u/%u), "
+			         "waste %d us (%u); in use C %d NC %d /16 us, waste %d",
+			         i, v.on ? "" : " (off)",
+			         (unsigned)cal_median(c->plain[0], v.n_plain[0]),
+			         (unsigned)cal_median(c->served[0], v.n_served[0]),
+			         (unsigned)v.n_plain[0], (unsigned)v.n_served[0],
+			         (unsigned)cal_median(c->plain[1], v.n_plain[1]),
+			         (unsigned)cal_median(c->served[1], v.n_served[1]),
+			         (unsigned)v.n_plain[1], (unsigned)v.n_served[1],
+			         v.n_waste ? (int)(LD(c->waste_us) / v.n_waste) : 0, (unsigned)v.n_waste,
+			         (int)v.gain16[0], (int)v.gain16[1], (int)v.waste_us);
 		}
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
@@ -3860,6 +4188,8 @@ void vm_stage_worker_tick(void)
 
 		if (fg != last_fg) {
 			last_fg = fg;
+			if (LD(g_cal_dirty))
+				cal_save();               /* calibration: kept at each change of app */
 			if (fg)
 				VM_KLOGI("stage: in front: %s (pid 0x%08x)", g_fg_title, (unsigned)fg);
 			else

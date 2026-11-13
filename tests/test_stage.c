@@ -118,6 +118,8 @@ static void reset(void)
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->ra_th = d->ra_go = d->ra_done = d->t_uid = -1;
 	g_readahead = 0;
+	memset(g_cal, 0, sizeof(g_cal));
+	g_cal_on = g_cal_dirty = g_cal_loaded = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
@@ -3214,7 +3216,7 @@ static void adapt_runs(int nc, uint32_t len, int count)
 	for (int r = 0; r < count; r++) {
 		for (uint32_t i = 1; i <= len; i++)
 			ra_adapt_read(0, nc, i, 256);
-		ra_adapt_end(0, nc, len);
+		ra_adapt_end(&g_dev[M], 0, nc, len);
 	}
 }
 
@@ -3350,6 +3352,113 @@ static void test_readahead_adaptive(void)
 	CHECK(d->st.errors == 0 && !d->fallback);
 	vm_stage_fini();
 	g_title_fn = NULL;
+}
+
+/* Calibration: off, nothing measured and the fixed figures in use; on, a
+ * stream's reads before read ahead began count as from the card, those from
+ * the pieces as from them, and a piece dropped unused as one read for
+ * nothing; with enough of each, the medians' difference and the mean are
+ * what Adaptive weighs by - a storage where the pieces save nothing leaves
+ * read ahead as late as it goes. Kept in a file, its switch too; a damaged
+ * file is not used. */
+static void test_calibration(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	VmCal c;
+	CalDev *k = &g_cal[M];
+	const char *dir;
+
+	fakes_tmpdir_remove();
+	dir = fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	vm_stage_cal(M, &c);
+	CHECK(!c.on && !c.have[0] && !c.have[1] && !c.have_waste && g_cal_loaded);
+	CHECK(c.gain16[0] == RT_GAIN_C_US * 16 && c.gain16[1] == RT_GAIN_NC_US * 16 &&
+	      c.waste_us == RT_WASTE_US);
+	for (uint32_t i = 0; i < 8; i++)                      /* off: nothing counted */
+		CHECK(rd(u, i * 256, 256) == 0);
+	CHECK(!k->n_plain[0] && !k->n_served[0] && !g_cal_dirty);
+
+	vm_stage_cal_set(1);
+	CHECK(g_cal_on);
+	/* a stream: the first read starts it, the 2nd .. 5th from the card, the
+	 * pieces read after the 5th; then a read elsewhere drops one unused */
+	for (uint32_t i = 0; i < 9; i++) {
+		CHECK(rd(u, i * 256, 256) == 0 && memcmp(u, disk + (size_t)(i * 256) * 512, 256 * 512) == 0);
+		for (int j = 0; j < RA_PIECES; j++)
+			for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&g_dev[M].ra[j].state, __ATOMIC_ACQUIRE)); t++)
+				usleep(500);
+	}
+	CHECK(k->n_plain[0] == 4 && k->n_served[0] >= 3 && !k->n_plain[1]);
+	CHECK(rd(u, 3584, 256) == 0);
+	CHECK(k->waste_n >= 1 && g_cal_dirty);
+
+	/* enough measured: what it is in use (us per 128 KiB in the middle of
+	 * their buckets: 7125 from the card, 4125 from the pieces) */
+	memset(k, 0, sizeof(*k));
+	k->plain[0][28] = VM_CAL_MIN_PLAIN;
+	k->n_plain[0] = VM_CAL_MIN_PLAIN;
+	k->served[0][16] = VM_CAL_MIN_SERVED - 1;
+	k->n_served[0] = VM_CAL_MIN_SERVED - 1;
+	k->waste_us = 1500 * VM_CAL_MIN_WASTE;
+	k->waste_n = VM_CAL_MIN_WASTE;
+	vm_stage_cal(M, &c);
+	CHECK(!c.have[0] && c.gain16[0] == RT_GAIN_C_US * 16);   /* one short */
+	CHECK(c.have_waste && c.waste_us == 1500);
+	k->served[0][16]++;
+	k->n_served[0]++;
+	vm_stage_cal(M, &c);
+	CHECK(c.have[0] && c.gain16[0] == (7125 - 4125) / 16 && !c.have[1] &&
+	      c.gain16[1] == RT_GAIN_NC_US * 16);
+	vm_stage_cal(VM_DEV_SD2VITA, &c);                    /* another storage: its own */
+	CHECK(!c.have[0] && !c.have_waste);
+
+	/* kept: the file, the switch with it */
+	vm_stage_cal_set(1);
+	memset(g_cal, 0, sizeof(g_cal));
+	g_cal_on = 0;
+	g_cal_loaded = 0;
+	cal_load();
+	CHECK(g_cal_on && k->n_plain[0] == VM_CAL_MIN_PLAIN && k->served[0][16] == VM_CAL_MIN_SERVED);
+	/* a damaged file: not used */
+	{
+		char path[256];
+		FILE *f;
+
+		snprintf(path, sizeof(path), "%s/calib.bin", dir);
+		f = fopen(path, "r+b");
+		CHECK(f != NULL);
+		if (f) {
+			fseek(f, 40, SEEK_SET);
+			fputc(0x5A, f);
+			fclose(f);
+		}
+		memset(g_cal, 0, sizeof(g_cal));
+		g_cal_on = 0;
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(!g_cal_on && !k->n_plain[0]);
+	}
+
+	/* runs of 6, the pieces measured to save nothing here: Adaptive starts
+	 * read ahead where no piece is read past a run's end (7); by the fixed
+	 * figures it would start soonest */
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	memset(k, 0, sizeof(*k));
+	k->plain[0][16] = k->served[0][16] = 200;
+	k->n_plain[0] = k->n_served[0] = 200;
+	adapt_runs(0, 6, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 7);
+	memset(k, 0, sizeof(*k));                            /* the fixed figures again */
+	adapt_runs(0, 6, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 2);
+	CHECK(g_dev[M].st.errors == 0 && !g_dev[M].fallback);
+	vm_stage_cal_set(0);
+	CHECK(!g_cal_on);
+	vm_stage_fini();
 }
 
 /* "B" in the HUD and the overlay: the app in front's buffers for the system
@@ -3766,6 +3875,7 @@ int main(void)
 	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
+	RUN(test_calibration);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);

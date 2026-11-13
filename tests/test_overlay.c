@@ -173,17 +173,24 @@ static void test_menu(void)
 	o.op = 0;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_PIPE);
-	/* advanced hidden: straight on to Save */
+	/* advanced hidden: straight on to Calibration, then Save */
 	{
 		const uint32_t all = g_mask;
 
 		g_mask = all & ~((1u << OV_ITEM_PIPE) | (1u << OV_ITEM_GPUSAFE));
 		o.cursor = OV_ITEM_ADV;
 		tap(&o, 0, OV_BTN_DOWN);
-		CHECK(o.cursor == OV_ITEM_SAVE);
+		CHECK(o.cursor == OV_ITEM_CALIB);
 		g_mask = all;
 	}
 	o.cursor = OV_ITEM_GPUSAFE;
+	tap(&o, 0, OV_BTN_DOWN);
+	CHECK(o.cursor == OV_ITEM_CALIB);
+	/* Calibration: a value (Left / Right / Cross), not the app's */
+	CHECK(!ov_item_action(OV_ITEM_CALIB));
+	tap(&o, 0, OV_BTN_RIGHT);
+	CHECK(o.op == OV_OP(OV_ITEM_CALIB, 1));
+	o.op = 0;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_SAVE);
 	/* the cursor on a line that went away (read ahead changed): the next

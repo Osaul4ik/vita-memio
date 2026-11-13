@@ -56,6 +56,7 @@ enum {
 	OV_ITEM_ADV,         /* the two below shown or not                        */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
+	OV_ITEM_CALIB,       /* calibration on / off (this console's, not the app's) */
 	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
 	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS

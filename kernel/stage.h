@@ -82,6 +82,26 @@ void vm_stage_app_now(VmAppNow *out);
 int  vm_stage_app_set(const VmApp *a);
 int  vm_stage_app_save(void);
 
+/* Calibration: what read ahead brings, measured on this console, per storage
+ * (a read from the pieces against the same read from the card; how long the
+ * game's reads waited for a piece read for nothing). Measured only while on;
+ * what was measured is kept (ur0:data/vita-memio/calib.bin) and used by
+ * Adaptive and the R/A Test once there is enough of it, else the fixed
+ * figures. */
+typedef struct VmCal {
+	int      on;            /* measuring                                      */
+	int      have[2];       /* C, NC: enough measured, in use                 */
+	int      have_waste;
+	uint32_t n_plain[2], n_served[2], n_waste;   /* measured so far (kept)    */
+	int32_t  gain16[2];     /* in use: per sector, sixteenths of a us         */
+	int32_t  waste_us;      /* in use: a piece read for nothing               */
+} VmCal;
+#define VM_CAL_MIN_PLAIN   64u
+#define VM_CAL_MIN_SERVED  128u
+#define VM_CAL_MIN_WASTE   32u
+void vm_stage_cal(int dev, VmCal *out);        /* dev -1: the fixed figures */
+void vm_stage_cal_set(int on);                 /* worker thread             */
+
 /* The overlay's read ahead test. Worker thread, but for _running and _stale. */
 typedef struct VmRaTestPick {
 	int      little;        /* too little was read to tell: nothing picked    */

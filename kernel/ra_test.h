@@ -41,6 +41,16 @@
 #define RT_TINY_WASTE_US   1400          /* half a block left when a run ends   */
 #define RT_MIN_TOTAL_SECTORS (16u * 2048u)   /* below 16 MiB: too little to tell */
 
+/* What a sector from the pieces saves (sixteenths of a us: C, NC) and a
+ * piece read for nothing costs (us): the figures above, or this console's
+ * own measured ones (stage.c: calibration). */
+typedef struct {
+	int32_t gain16[2];
+	int32_t waste_us;
+} RtCost;
+
+static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US };
+
 typedef struct {
 	const void *key;                     /* the storage                         */
 	uint32_t    end, len, us;
@@ -145,8 +155,8 @@ static inline void ra_test_note(RaTest *t, const void *key, uint32_t sector, uin
 }
 
 /* Pieces left unread by the runs that reached `m`, and sectors after it. */
-static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, int gain,
-                               uint64_t *sectors)
+static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, int32_t gain16,
+                               int32_t waste_us, uint64_t *sectors)
 {
 	uint64_t sect = 0;
 	int64_t waste = 0;
@@ -159,17 +169,18 @@ static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, 
 		waste += (int64_t)run[l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
 	}
 	*sectors += sect;
-	return (int64_t)sect * gain - waste * RT_WASTE_US;
+	return (int64_t)sect * gain16 / 16 - waste * waste_us;
 }
 
 /* What threshold t would bring for kind k, both sizes. */
-static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, uint64_t *sectors)
+static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCost *cost,
+                                    uint64_t *sectors)
 {
-	const int gain = k ? RT_GAIN_NC_US : RT_GAIN_C_US;
+	const int32_t gain16 = cost->gain16[k], waste_us = cost->waste_us;
 	/* 32 KiB reads: from 16 in a row; a threshold of its own, four times it */
 	const int sm = thr == RT_THR_FIXED || thr < RT_SMALL_MIN_BUCKET ? RT_SMALL_MIN_BUCKET : thr;
 	uint64_t ss = 0;
-	int64_t sc = rt_score(t->pos[k], t->run[k], thr, gain, sectors);
+	int64_t sc = rt_score(t->pos[k], t->run[k], thr, gain16, waste_us, sectors);
 
 	/* a 32 KiB read at bucket b is from the pieces once b >= sm */
 	{
@@ -184,14 +195,14 @@ static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, uint64_t *s
 			waste += (int64_t)t->srun[k][l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
 		}
 		ss = from;
-		sc += (int64_t)from * gain - waste * RT_WASTE_US;
+		sc += (int64_t)from * gain16 / 16 - waste * waste_us;
 	}
 	*sectors += ss;
 	return sc;
 }
 
 /* The answer; the runs still open count as ended. */
-static inline void ra_test_pick(RaTest *t, RaPick *p)
+static inline void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost *cost)
 {
 	int64_t total = 0, nc_best = 0;
 	int loss = 0;
@@ -209,12 +220,12 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 	for (int k = 0; k < 2; k++) {
 		int best_t = RT_THR_FIXED;
 		uint64_t best_s = 0;
-		const int64_t fixed = rt_kind_score(t, k, RT_THR_FIXED, &best_s);
+		const int64_t fixed = rt_kind_score(t, k, RT_THR_FIXED, cost, &best_s);
 		int64_t best = fixed;
 
 		for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
 			uint64_t s = 0;
-			const int64_t sc = rt_kind_score(t, k, i, &s);
+			const int64_t sc = rt_kind_score(t, k, i, cost, &s);
 
 			if (sc > best) {
 				best = sc;
@@ -251,10 +262,15 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 		p->thr[0] = p->thr[1] = 0;
 }
 
+static inline void ra_test_pick(RaTest *t, RaPick *p)
+{
+	ra_test_pick_cost(t, p, &rt_cost_fixed);
+}
+
 /* Read ahead Adaptive's pick for kind k: the threshold 2..8 that would have
  * brought the most over the runs so far, `cur` unless another is better by
  * more than `margin` (us). */
-static inline int ra_adapt_pick(const RaTest *t, int k, int cur, int64_t margin)
+static inline int ra_adapt_pick(const RaTest *t, int k, int cur, int64_t margin, const RtCost *cost)
 {
 	int64_t sc[RT_THR_MAX + 1];
 	int best = cur;
@@ -262,7 +278,7 @@ static inline int ra_adapt_pick(const RaTest *t, int k, int cur, int64_t margin)
 	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
 		uint64_t s = 0;
 
-		sc[i] = rt_kind_score(t, k, i, &s);
+		sc[i] = rt_kind_score(t, k, i, cost, &s);
 	}
 	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++)
 		if (sc[i] > sc[best])

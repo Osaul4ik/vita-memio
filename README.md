@@ -111,6 +111,12 @@ A game that uses SELECT + Right itself will open the overlay too. While the over
 
 The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
 
+### Calibration: measured on your console
+
+*Calibration* in the overlay is for the whole console, not one game. While it is on, the plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. Switch it on, play a few games including loading screens, then switch it off; what was measured is kept.
+
+The overlay shows what is in use: **C** and **NC**, the milliseconds a 128 KiB read from read ahead saves (ordinary reads, graphics data); **W**, what a read for nothing costs. A dash means not measured enough yet, so the standard figure is used.
+
 ### R/A test: let the plugin choose for your game
 
 The test is in the overlay while Read ahead is *On* or *Off* for the game. With *Adaptive* it is not shown: Adaptive works this out by itself while you play.

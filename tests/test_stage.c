@@ -3211,6 +3211,16 @@ static void test_tiny_reads(void)
 }
 
 /* The app in front's own settings, kept in its profile. */
+/* The same without the worker's look after each run. */
+static void adapt_runs_raw(int nc, uint32_t len, int count)
+{
+	for (int r = 0; r < count; r++) {
+		for (uint32_t i = 1; i <= len; i++)
+			ra_adapt_read(0, nc, i, 256);
+		ra_adapt_end(&g_dev[M], 0, nc, len);
+	}
+}
+
 /* `count` runs of `len` reads of 128 KiB in a row into cached (nc 0) or
  * non-cacheable memory, as read ahead's streams tell Adaptive of them. */
 static void adapt_runs(int nc, uint32_t len, int count)
@@ -3219,6 +3229,7 @@ static void adapt_runs(int nc, uint32_t len, int count)
 		for (uint32_t i = 1; i <= len; i++)
 			ra_adapt_read(0, nc, i, 256);
 		ra_adapt_end(&g_dev[M], 0, nc, len);
+		ra_adapt_tick();                                 /* the worker, at once */
 	}
 }
 
@@ -3349,8 +3360,15 @@ static void test_readahead_adaptive(void)
 		for (int k = 0; k < RA_PIECES; k++)               /* the pieces read, then ... */
 			for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE)); t++)
 				usleep(500);
+		vm_stage_worker_tick();                          /* the worker weighs a round due */
 	}
 	CHECK(ra_threshold(0) == 6 && g_ra_moves[0] > 0);
+	/* a round due is weighed by the worker, not by the request that ended it */
+	ra_adapt_reset();
+	adapt_runs_raw(0, 20, RA_ADAPT_RUNS);
+	CHECK(g_ad_due[0] && ra_threshold(0) == 5);              /* not yet */
+	vm_stage_worker_tick();
+	CHECK(!g_ad_due[0] && ra_threshold(0) == 2);
 	CHECK(d->st.errors == 0 && !d->fallback);
 	vm_stage_fini();
 	g_title_fn = NULL;
@@ -3548,6 +3566,7 @@ static void tiny_run(uint32_t at, uint32_t reads)
 
 	for (uint32_t i = 0; i < reads; i++)
 		CHECK(rd(u, at + i, 1) == 0 && memcmp(u, disk + (size_t)(at + i) * 512, 512) == 0);
+	ra_adapt_tick();                                     /* the worker, at once */
 }
 
 static void test_tiny_adaptive(void)
@@ -3568,12 +3587,18 @@ static void test_tiny_adaptive(void)
 	CHECK(g_tn_runs[rt_tiny_bucket(40)] == RA_ADAPT_RUNS);
 	CHECK(g_cal[M].tiny_hit_n > 0 && g_cal[M].tiny_blk_n > 0 &&
 	      g_cal[M].tiny_blk_sec == g_cal[M].tiny_blk_n * 64u);
-	/* afresh, runs of four */
+	/* afresh, runs of four - weighed by the worker, not the reads */
 	vm_stage_apply(&s);
 	CHECK(g_tiny_thr == RA_TINY_STREAK && g_tiny_blk == RA_TINY_SECTORS);
-	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++)
-		tiny_run(r * 100, 4);
-	CHECK(g_tiny_thr == 2 && g_tiny_blk == 16);
+	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++) {
+		static uint8_t u1[512];
+
+		for (uint32_t i = 0; i < 4; i++)
+			CHECK(rd(u1, r * 100 + i, 1) == 0);
+	}
+	CHECK(g_tn_due && g_tiny_thr == RA_TINY_STREAK);
+	vm_stage_worker_tick();
+	CHECK(!g_tn_due && g_tiny_thr == 2 && g_tiny_blk == 16);
 	tiny_run(3900, 20);                                   /* a run now read in 8 KiB blocks */
 	/* On: the fixed ones, whatever Adaptive had */
 	s.readahead = 1;

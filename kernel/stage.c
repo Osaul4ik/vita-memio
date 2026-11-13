@@ -1994,6 +1994,9 @@ static volatile uint32_t g_tiny_thr = RA_TINY_STREAK, g_tiny_blk = RA_TINY_SECTO
 static uint32_t          g_tn_cnt[RT_TB], g_tn_reads[RT_TB], g_tn_sec[RT_TB], g_tn_ended;
 static uint32_t          g_tn_runs[RT_TB];                /* not halved (log) */
 static volatile uint32_t g_tn_moves;
+/* A round due, for the worker to weigh (under g_ad_lock), and the storage
+ * whose figures it takes: the large reads' kinds, the tiny reads. */
+static int               g_ad_due[2], g_ad_dev[2], g_tn_due, g_tn_dev;
 static volatile int      g_ad_lock;
 
 /* The threshold On has for a stream of kind nc: the app in front's own, or
@@ -2516,6 +2519,9 @@ static void ra_adapt_reset(void)
 	memset(g_tn_sec, 0, sizeof(g_tn_sec));
 	memset(g_tn_runs, 0, sizeof(g_tn_runs));
 	g_tn_ended = 0;
+	ST(g_ad_due[0], 0);
+	ST(g_ad_due[1], 0);
+	ST(g_tn_due, 0);
 	ST(g_tiny_thr, RA_TINY_STREAK);
 	ST(g_tiny_blk, RA_TINY_SECTORS);
 	__sync_lock_release(&g_ad_lock);
@@ -2553,24 +2559,13 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	g_tn_reads[b] += reads * RA_ADAPT_ONE;
 	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
 	g_tn_runs[b]++;
-	if (++g_tn_ended >= RA_ADAPT_RUNS) {
-		RtTinyCost c;
-		int t = (int)LD(g_tiny_thr), blk = (int)LD(g_tiny_blk);
-
-		cal_tiny_cost((int)(d - g_dev), &c);
-		if (rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
-		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
-		                                              rt_tiny_card(&c, 1)), &c)) {
-			ST(g_tiny_thr, (uint32_t)t);
-			ST(g_tiny_blk, (uint32_t)blk);
-			ADD(g_tn_moves, 1);
-		}
-		for (int i = 0; i < RT_TB; i++) {
-			g_tn_cnt[i] >>= 1;
-			g_tn_reads[i] >>= 1;
-			g_tn_sec[i] >>= 1;
-		}
-		g_tn_ended = 0;
+	/* a round's worth: weighed by the worker (ra_adapt_tick) */
+	if (++g_tn_ended >= RA_ADAPT_RUNS && !LD(g_tn_due)) {
+		ST(g_tn_due, 1);
+		g_tn_dev = (int)(d - g_dev);
+		__sync_lock_release(&g_ad_lock);
+		ra_wake();
+		return;
 	}
 	__sync_lock_release(&g_ad_lock);
 }
@@ -2617,19 +2612,61 @@ static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
 		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1] += RA_ADAPT_ONE;
 		g_ad_runs[nc][len < RT_RUN ? len : RT_RUN - 1]++;
 	}
-	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS) {
+	/* a round's worth: weighed by the worker (ra_adapt_tick), not here */
+	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS && !LD(g_ad_due[nc])) {
+		ST(g_ad_due[nc], 1);
+		g_ad_dev[nc] = (int)(d - g_dev);
+		__sync_lock_release(&g_ad_lock);
+		ra_wake();
+		return;
+	}
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* Worker thread: the rounds that are due weighed - the threshold of each
+ * kind of the large reads, (T, B) of the tiny ones - so a request only counts. */
+static void ra_adapt_tick(void)
+{
+	if (!LD(g_ad_due[0]) && !LD(g_ad_due[1]) && !LD(g_tn_due))
+		return;                           /* (a stale look is caught next time) */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int nc = 0; nc < 2; nc++) {
 		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
+		RtCost cost;
 		int pick;
 
-		RtCost cost;
-
-		cal_cost((int)(d - g_dev), &cost, NULL);   /* this storage's, if measured */
-		if (t != RA_THR_NONE &&
+		if (!LD(g_ad_due[nc]))
+			continue;
+		ST(g_ad_due[nc], 0);
+		cal_cost(g_ad_dev[nc], &cost, NULL);   /* that storage's, if measured */
+		if (ra_adapt_on() && t != RA_THR_NONE &&
 		    (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN(&cost), &cost)) != (int)t) {
 			ST(g_ra_adj[nc], pick - (int)base);
 			ADD(g_ra_moves[nc], 1);
 		}
 		ra_adapt_age(&g_ad, nc);
+	}
+	if (LD(g_tn_due)) {
+		RtTinyCost c;
+		int t = (int)LD(g_tiny_thr), blk = (int)LD(g_tiny_blk);
+
+		ST(g_tn_due, 0);
+		cal_tiny_cost(g_tn_dev, &c);
+		if (ra_adapt_on() &&
+		    rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
+		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
+		                                              rt_tiny_card(&c, 1)), &c)) {
+			ST(g_tiny_thr, (uint32_t)t);
+			ST(g_tiny_blk, (uint32_t)blk);
+			ADD(g_tn_moves, 1);
+		}
+		for (int i = 0; i < RT_TB; i++) {
+			g_tn_cnt[i] >>= 1;
+			g_tn_reads[i] >>= 1;
+			g_tn_sec[i] >>= 1;
+		}
+		g_tn_ended = 0;
 	}
 	__sync_lock_release(&g_ad_lock);
 }
@@ -4295,6 +4332,7 @@ void vm_stage_worker_tick(void)
 
 	if (!g_cal_loaded && LD(g_live))
 		cal_load();                       /* what was measured before, once */
+	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "

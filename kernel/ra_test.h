@@ -344,31 +344,61 @@ static inline int64_t rt_tiny_card(const RtTinyCost *c, uint32_t sectors)
 	return (int64_t)c->a_us + (int64_t)c->b16_us * sectors / 16;
 }
 
-/* What (T, B) brings over the runs: cnt[i] runs in bucket i (any scale),
- * reads[i] and sec[i] their reads and sectors (the same scale). */
-static inline int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
-                                    int t, int blk, const RtTinyCost *c)
-{
-	int64_t sc = 0;
+/* The runs, ready to be weighed: each kept bucket's runs, a run's reads and
+ * a read's sectors and card time - worked out once for every (T, B). */
+typedef struct {
+	int      n;
+	uint32_t cnt[RT_TB], r[RT_TB], s[RT_TB];
+	int64_t  card_s[RT_TB];
+} RtTinyRuns;
 
+static inline void rt_tiny_prep(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+                                const RtTinyCost *c, RtTinyRuns *o)
+{
+	o->n = 0;
 	for (int i = 1; i < RT_TB; i++) {    /* bucket 0 (one read) is never kept */
-		uint32_t r, s, m, k, f;
+		uint32_t s;
 
 		if (!cnt[i] || !reads[i])
 			continue;
-		r = (reads[i] + cnt[i] / 2) / cnt[i];               /* a run's reads   */
-		s = (sec[i] + reads[i] / 2) / reads[i];             /* a read's sectors */
-		if (!s)
-			s = 1;
+		s = (sec[i] + reads[i] / 2) / reads[i];
+		o->cnt[o->n] = cnt[i];
+		o->r[o->n] = (reads[i] + cnt[i] / 2) / cnt[i];
+		o->s[o->n] = s ? s : 1;
+		o->card_s[o->n] = rt_tiny_card(c, o->s[o->n]);
+		o->n++;
+	}
+}
+
+static inline int64_t rt_tiny_score_prep(const RtTinyRuns *p, int t, int blk, const RtTinyCost *c)
+{
+	const int64_t card_b = rt_tiny_card(c, (uint32_t)blk);
+	int64_t sc = 0;
+
+	for (int i = 0; i < p->n; i++) {
+		const uint32_t r = p->r[i], s = p->s[i];
+		uint32_t m, k, f;
+
 		if (r < (uint32_t)t || s > (uint32_t)blk)
 			continue;
 		m = r - (uint32_t)t + 1;
 		k = (uint32_t)blk / s;
 		f = (m + k - 1) / k;
-		sc += (int64_t)cnt[i] * ((int64_t)(m - f) * (rt_tiny_card(c, s) - c->hit_us) -
-		                         (int64_t)f * (rt_tiny_card(c, (uint32_t)blk) - rt_tiny_card(c, s)));
+		sc += (int64_t)p->cnt[i] * ((int64_t)(m - f) * (p->card_s[i] - c->hit_us) -
+		                            (int64_t)f * (card_b - p->card_s[i]));
 	}
 	return sc;
+}
+
+/* What (T, B) brings over the runs: cnt[i] runs in bucket i (any scale),
+ * reads[i] and sec[i] their reads and sectors (the same scale). */
+static inline int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+                                    int t, int blk, const RtTinyCost *c)
+{
+	RtTinyRuns p;
+
+	rt_tiny_prep(cnt, reads, sec, c, &p);
+	return rt_tiny_score_prep(&p, t, blk, c);
 }
 
 /* Adaptive's pick: the (T, B) that would have brought the most, (*t, *blk)
@@ -376,13 +406,15 @@ static inline int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, 
 static inline int rt_tiny_pick(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
                                int *t, int *blk, int64_t margin, const RtTinyCost *c)
 {
-	const int64_t cur = rt_tiny_score(cnt, reads, sec, *t, *blk, c);
-	int64_t best = cur;
+	RtTinyRuns p;
+	int64_t cur, best;
 	int bt = *t, bb = *blk;
 
+	rt_tiny_prep(cnt, reads, sec, c, &p);
+	cur = best = rt_tiny_score_prep(&p, *t, *blk, c);
 	for (int i = 0; i < RT_TINY_T_N; i++)
 		for (int j = 0; j < RT_TINY_B_N; j++) {
-			const int64_t v = rt_tiny_score(cnt, reads, sec, rt_tiny_thr[i], rt_tiny_blk[j], c);
+			const int64_t v = rt_tiny_score_prep(&p, rt_tiny_thr[i], rt_tiny_blk[j], c);
 
 			if (v > best) {
 				best = v;

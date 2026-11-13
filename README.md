@@ -6,6 +6,8 @@
 
 It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia), whose idea and research it builds on.
 
+DO NOT use these two plugins together under any circumstances.
+
 ## What you get
 
 Faster reads and writes, with the biggest gain in anything that reads files in order. Every measured value is under [Benchmarks](#benchmarks). Results depend on your microSD, and games usually gain less than a benchmark.

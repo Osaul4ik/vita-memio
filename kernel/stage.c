@@ -2037,24 +2037,31 @@ static volatile int  g_cal_on;
 static volatile int  g_cal_dirty;            /* measured since the last save */
 static int           g_cal_loaded;           /* worker */
 
-/* A request starting (calibration on): the pieces being read now are holding
- * it up - each notes when the first such request came. Its start time
- * (never 0), and *held whether a piece was being read. */
-static uint32_t cal_start(Dev *d, int *held)
+/* A request of `nsec` starting (calibration on): the pieces being read now
+ * are holding it up - each notes when the first such request came. Its start
+ * time, if it is timed (a large read) - else 0 - and *held whether a piece was
+ * being read. The clock is read only if one of the two needs it: most small
+ * requests cost a look at three pieces. */
+static uint32_t cal_start(Dev *d, uint32_t nsec, int *held)
 {
-	const uint32_t now = ksceKernelGetSystemTimeLow() | 1u;
+	int reading = 0;
+	uint32_t now;
 
-	*held = 0;
 	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
 		for (int i = 0; i < RA_PIECES; i++)
-			if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING) {
-				uint32_t exp = 0;
+			reading |= (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING) << i;
+	*held = reading != 0;
+	if (!reading && nsec < RA_MIN_SECTORS)
+		return 0;
+	now = ksceKernelGetSystemTimeLow() | 1u;
+	for (int i = 0; i < RA_PIECES; i++)
+		if (reading & (1 << i)) {
+			uint32_t exp = 0;
 
-				*held = 1;
-				__atomic_compare_exchange_n(&d->ra[i].wait_from, &exp, now, 0,
-				                            __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-			}
-	return now;
+			__atomic_compare_exchange_n(&d->ra[i].wait_from, &exp, now, 0,
+			                            __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+		}
+	return nsec >= RA_MIN_SECTORS ? now : 0;
 }
 
 static void cal_add(uint16_t *h, uint32_t *n, uint32_t us)
@@ -2125,6 +2132,15 @@ static uint32_t cal_median(const uint16_t *h, uint32_t n)
 			return (uint32_t)i * CAL_STEP_US + CAL_STEP_US / 2;
 	}
 	return CAL_BUCKETS * CAL_STEP_US;
+}
+
+/* A series' median for the log, "-" if it has none. */
+static void cal_text(char *o, size_t n, const uint16_t *h, uint32_t count)
+{
+	if (count)
+		snprintf(o, n, "%u", (unsigned)(cal_median(h, count) % 100000u));
+	else
+		snprintf(o, n, "-");
 }
 
 /* What is in use for storage dev (-1: the fixed figures), and the counts. */
@@ -3221,7 +3237,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
 	int cal_held = 0;
 	/* calibration on: when it started, and whether a piece held it up */
-	const uint32_t cal_t0 = mine && nsec && LD(g_cal_on) ? cal_start(d, &cal_held) : 0;
+	const uint32_t cal_t0 = mine && nsec && LD(g_cal_on) ? cal_start(d, nsec, &cal_held) : 0;
 
 	/* the largest read request seen, for the log (a lost update is fine) */
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
@@ -4072,17 +4088,22 @@ void vm_stage_worker_tick(void)
 			if (!LD(c->n_plain[0]) && !LD(c->n_plain[1]) && !LD(c->waste_n))
 				continue;
 			cal_cost(i, &cost, &v);
+			char m[5][8];                 /* the medians and the mean, "-" without any */
+
+			cal_text(m[0], sizeof(m[0]), c->plain[0], v.n_plain[0]);
+			cal_text(m[1], sizeof(m[1]), c->served[0], v.n_served[0]);
+			cal_text(m[2], sizeof(m[2]), c->plain[1], v.n_plain[1]);
+			cal_text(m[3], sizeof(m[3]), c->served[1], v.n_served[1]);
+			if (v.n_waste)
+				snprintf(m[4], sizeof(m[4]), "%u", (unsigned)(LD(c->waste_us) / v.n_waste % 100000u));
+			else
+				snprintf(m[4], sizeof(m[4]), "-");
 			/* per 128 KiB: from the card / from the pieces (how many each) */
-			VM_KLOGI("stage: calibration dev %d%s: C %u/%u us (%u/%u), NC %u/%u (%u/%u), "
-			         "waste %d us (%u); in use C %d NC %d /16 us, waste %d",
-			         i, v.on ? "" : " (off)",
-			         (unsigned)cal_median(c->plain[0], v.n_plain[0]),
-			         (unsigned)cal_median(c->served[0], v.n_served[0]),
-			         (unsigned)v.n_plain[0], (unsigned)v.n_served[0],
-			         (unsigned)cal_median(c->plain[1], v.n_plain[1]),
-			         (unsigned)cal_median(c->served[1], v.n_served[1]),
-			         (unsigned)v.n_plain[1], (unsigned)v.n_served[1],
-			         v.n_waste ? (int)(LD(c->waste_us) / v.n_waste) : 0, (unsigned)v.n_waste,
+			VM_KLOGI("stage: calibration dev %d%s: C %s/%s us (%u/%u), NC %s/%s (%u/%u), "
+			         "waste %s us (%u); in use C %d NC %d /16 us, waste %d",
+			         i, v.on ? "" : " (off)", m[0], m[1],
+			         (unsigned)v.n_plain[0], (unsigned)v.n_served[0], m[2], m[3],
+			         (unsigned)v.n_plain[1], (unsigned)v.n_served[1], m[4], (unsigned)v.n_waste,
 			         (int)v.gain16[0], (int)v.gain16[1], (int)v.waste_us);
 		}
 		if (LD(g_ra_bad))

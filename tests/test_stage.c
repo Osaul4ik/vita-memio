@@ -3394,6 +3394,20 @@ static void test_calibration(void)
 	CHECK(k->n_plain[0] == 4 && k->n_served[0] >= 3 && !k->n_plain[1]);
 	CHECK(rd(u, 3584, 256) == 0);
 	CHECK(k->waste_n >= 1 && g_cal_dirty);
+	/* the clock only when needed: a small request with no piece being read
+	 * costs a look at the pieces; with one being read, that piece notes it */
+	{
+		Dev *d = &g_dev[M];
+		int held = 1, calls = fake_time_calls;
+
+		CHECK(cal_start(d, 8, &held) == 0 && !held && fake_time_calls == calls);
+		CHECK(cal_start(d, 256, &held) != 0 && !held && fake_time_calls == calls + 1);
+		__atomic_store_n(&d->ra[1].state, RA_READING, __ATOMIC_RELEASE);   /* as the thread */
+		d->ra[1].wait_from = 0;
+		CHECK(cal_start(d, 8, &held) == 0 && held && d->ra[1].wait_from != 0);
+		__atomic_store_n(&d->ra[1].state, RA_FREE, __ATOMIC_RELEASE);
+		d->ra[1].wait_from = 0;
+	}
 
 	/* enough measured: what it is in use (us per 128 KiB in the middle of
 	 * their buckets: 7125 from the card, 4125 from the pieces) */

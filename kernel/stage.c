@@ -2089,7 +2089,7 @@ typedef struct CalDev {
 #define CAL_MIN_TINY     32u             /* hits, and blocks, before they are used */
 
 static CalDev        g_cal[VM_DEV_COUNT];
-static volatile int  g_cal_on;
+static volatile int  g_cal_on = 1;     /* Tuning: Auto until the file says Off */
 static volatile int  g_cal_dirty;            /* measured since the last save */
 static int           g_cal_loaded;           /* worker */
 

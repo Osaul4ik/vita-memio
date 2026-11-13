@@ -91,7 +91,7 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned for a game is kept until the console restarts (for the last eight games), so a game you come back to goes on from there; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned for a game is kept until the console restarts (for the last eight games), so a game you come back to goes on from there; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
 
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 
@@ -113,7 +113,7 @@ The overlay sets things **for this game only**; each setting is *Global* until y
 
 ### Tuning: measured on your console
 
-*Tuning* in the overlay is for the whole console, not one game. Set to *Auto*, the plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. Set it to *Auto*, play a few games including loading screens, then set it *Off* if you like; what was measured is kept. Triangle on the line, twice, forgets what was measured.
+*Tuning* in the overlay is for the whole console, not one game, and is *Auto* by default. The plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. After a few games with loading screens you can set it *Off* if you like; what was measured is kept and still used. The figures are saved to `ur0:data/vita-memio/` only when they change noticeably, so the internal storage is written to rarely. Triangle on the line, twice, forgets what was measured.
 
 ### R/A test: let the plugin choose for your game
 
@@ -134,8 +134,8 @@ The HUD is part of the overlay and shows through its keys; with *Overlay* off th
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
 R/W: 909/1 MiB On Err: 0
-R/A: On  TitleID: PCSF00024
-Streak  C: 5  NC: 3
+R/A: Adaptive  TitleID: PCSF00024
+Streak C:5:5/16/3 NC:3:2/16/3 Auto
 Core 3 B C: 98%  NC: 0%
 ```
 

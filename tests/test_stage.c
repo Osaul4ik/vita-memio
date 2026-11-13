@@ -3783,6 +3783,24 @@ static void test_calibration(void)
 	CHECK(g_dev[M].st.errors == 0 && !g_dev[M].fallback);
 	vm_stage_cal_set(0);
 	CHECK(!g_cal_on);
+	/* Off kept in the file: Off at the next start, whatever the default */
+	g_cal_on = 1;
+	g_cal_loaded = 0;
+	cal_load();
+	CHECK(!g_cal_on);
+	/* no file (a new install): the default, Auto */
+	{
+		char path[256];
+
+		snprintf(path, sizeof(path), "%s/calib.bin", dir);
+		remove(path);
+		snprintf(path, sizeof(path), "%s/calib.bin.tmp", dir);
+		remove(path);
+	}
+	g_cal_on = 1;
+	g_cal_loaded = 0;
+	cal_load();
+	CHECK(g_cal_on);
 	vm_stage_fini();
 }
 

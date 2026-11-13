@@ -40,6 +40,7 @@
 #include "hud_link.h"
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
+#include "guard.h"
 /* The start counts as good once the home screen (SceShell) has been up for
  * this many seconds, not as soon as it appears: a setting that
  * makes the console restart shortly after the home screen (the GPU-mapping
@@ -108,38 +109,18 @@ static uint32_t uptime_s(void)
 }
 
 static char g_guard_txt[48];   /* last content read, for the log */
+static int  g_guard_len;       /* its length: more than 1 from an older version */
 
 /* First byte of the guard file, or 0 if there is none. */
 static char guard_read(void)
 {
-	memset(g_guard_txt, 0, sizeof(g_guard_txt));
-	SceUID fd = ksceIoOpen(VM_GUARD_PATH, SCE_O_RDONLY, 0);
-	if (fd >= 0) {
-		ksceIoRead(fd, g_guard_txt, sizeof(g_guard_txt) - 1);
-		ksceIoClose(fd);
-	}
-	for (int i = 0; g_guard_txt[i]; i++)
-		if (g_guard_txt[i] < ' ' || g_guard_txt[i] > '~')
-			g_guard_txt[i] = '.';
-	return g_guard_txt[0];
+	return vm_guard_read(VM_GUARD_PATH, g_guard_txt, (int)sizeof(g_guard_txt), &g_guard_len);
 }
 
 /* VM_OK, or VM_ERR_IO if the file could not be written. */
-static int guard_write(char c, const char *who)
+static int guard_write(char c)
 {
-	char buf[64];
-	int n = 0, w = -1;
-	buf[n++] = c;
-	n += snprintf(buf + n, sizeof(buf) - n, " up=%u by=%s\n",
-	              (unsigned)ksceKernelGetSystemTimeLow(), who);
-	ksceIoMkdir("ur0:data", 0777);
-	ksceIoMkdir(VM_DATA_DIR, 0777);
-	SceUID fd = ksceIoOpen(VM_GUARD_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
-	if (fd >= 0) {
-		w = ksceIoWrite(fd, buf, n);
-		ksceIoClose(fd);
-	}
-	return w == n ? VM_OK : VM_ERR_IO;
+	return vm_guard_write(VM_GUARD_PATH, VM_DATA_DIR, c, &g_guard_len) < 0 ? VM_ERR_IO : VM_OK;
 }
 
 /* ---- the home screen, for the boot guard ------------------------------------ */
@@ -189,10 +170,10 @@ static void guard_tick(void)
 		since = g_uptime;
 	}
 	if (seen && g_uptime - since >= VM_GUARD_SHELL_TICKS) {
-		guard_write('0', "shell");
+		guard_write('0');
 		g_guard_done = 1;
 	} else if (up < 0 && g_uptime >= VM_GUARD_FALLBACK_SECS) {
-		guard_write('0', "timer");
+		guard_write('0');
 		VM_KLOGW("boot guard: the home screen cannot be detected here, cleared after %us",
 		         (unsigned)VM_GUARD_FALLBACK_SECS);
 		g_guard_done = 1;
@@ -381,7 +362,7 @@ int vmGetBuild(char *out, int size)
 
 int vmResetSafeMode(void)
 {
-	return guard_write('0', "settings");
+	return guard_write('0');
 }
 
 int vmSelfTestPing(void)
@@ -441,9 +422,8 @@ int module_start(SceSize argc, const void *args)
 	/* Crash-loop guard: the file holds '1' from here until the home screen
 	 * (SceShell) has been up for VM_GUARD_SHELL_TICKS, then '0'. Finding '1'
 	 * at start means the last start never got that far, so this boot installs nothing; Settings > Advanced >
-	 * Reset safe mode (vmResetSafeMode) clears it. It is only ever overwritten,
-	 * never deleted (a delete can be lost if the console is reset before the
-	 * storage flushes). */
+	 * Reset safe mode (vmResetSafeMode) clears it. One byte written in place,
+	 * never deleted (guard.h). */
 	if (guard_read() == '1') {
 		g_disabled = VM_DIS_SAFE;
 		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (reset it in "
@@ -451,7 +431,7 @@ int module_start(SceSize argc, const void *args)
 		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
-	guard_write('1', "start");
+	guard_write('1');
 	shell_lookup_init();
 
 	if (vm_stage_init() != VM_OK) {

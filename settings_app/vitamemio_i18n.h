@@ -64,6 +64,8 @@ enum vm_i18n_id {
 	VM_I18N_TITLE_DEVELOPER,
 	VM_I18N_ROW_DMACOPY,        /* Advanced > DMA copy                            */
 	VM_I18N_HINT_DMACOPY,
+	VM_I18N_ROW_RADEEP,         /* Advanced > deeper read ahead                   */
+	VM_I18N_HINT_RADEEP,
 	VM_I18N_DMA_ON,             /* ... its help adds what it is doing now         */
 	VM_I18N_DMA_UNAVAIL,
 	VM_I18N_DMA_STOP_ERRORS,

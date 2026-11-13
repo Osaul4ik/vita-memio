@@ -47,9 +47,11 @@
 typedef struct {
 	int32_t gain16[2];
 	int32_t waste_us;
+	int32_t pieces;                      /* read ahead's depth: 3, or 4 (deeper) */
 } RtCost;
 
-static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US };
+static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US,
+                                      RT_PIECES };
 
 typedef struct {
 	const void *key;                     /* the storage                         */
@@ -156,7 +158,7 @@ static inline void ra_test_note(RaTest *t, const void *key, uint32_t sector, uin
 
 /* Pieces left unread by the runs that reached `m`, and sectors after it. */
 static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, int32_t gain16,
-                               int32_t waste_us, uint64_t *sectors)
+                               int32_t waste_us, int pieces, uint64_t *sectors)
 {
 	uint64_t sect = 0;
 	int64_t waste = 0;
@@ -166,7 +168,7 @@ static inline int64_t rt_score(const uint32_t *pos, const uint32_t *run, int m, 
 	for (int l = m; l < RT_RUN; l++) {
 		const int ahead = l - m + 1;
 
-		waste += (int64_t)run[l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
+		waste += (int64_t)run[l] * (ahead < pieces ? ahead : pieces);
 	}
 	*sectors += sect;
 	return (int64_t)sect * gain16 / 16 - waste * waste_us;
@@ -180,7 +182,7 @@ static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCos
 	/* 32 KiB reads: from 16 in a row; a threshold of its own, four times it */
 	const int sm = thr == RT_THR_FIXED || thr < RT_SMALL_MIN_BUCKET ? RT_SMALL_MIN_BUCKET : thr;
 	uint64_t ss = 0;
-	int64_t sc = rt_score(t->pos[k], t->run[k], thr, gain16, waste_us, sectors);
+	int64_t sc = rt_score(t->pos[k], t->run[k], thr, gain16, waste_us, cost->pieces, sectors);
 
 	/* a 32 KiB read at bucket b is from the pieces once b >= sm */
 	{
@@ -192,7 +194,7 @@ static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCos
 		for (int l = sm; l < RT_RUN; l++) {
 			const int ahead = l - sm + 1;
 
-			waste += (int64_t)t->srun[k][l] * (ahead < (int)RT_PIECES ? ahead : (int)RT_PIECES);
+			waste += (int64_t)t->srun[k][l] * (ahead < cost->pieces ? ahead : cost->pieces);
 		}
 		ss = from;
 		sc += (int64_t)from * gain16 / 16 - waste * waste_us;

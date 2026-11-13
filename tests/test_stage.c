@@ -117,7 +117,9 @@ static void reset(void)
 	d->uid2 = d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->ra_th = d->ra_go = d->ra_done = d->t_uid = -1;
+	d->uid3 = -1;
 	g_readahead = 0;
+	g_ra_deep = 0;
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = g_cal_dirty = g_cal_loaded = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
@@ -3535,6 +3537,85 @@ static void test_calibration(void)
 	vm_stage_fini();
 }
 
+/* "Deeper read ahead": a 4th piece, its buffer made by the worker while
+ * the setting is on (and read ahead runs), four pieces ahead of a stream and
+ * the data right; off, the buffer given back once that piece is free, three
+ * again. Adaptive and the R/A Test weigh by the depth in use. */
+static int live_pieces(const Dev *d)
+{
+	int n = 0;
+
+	for (int i = 0; i < RA_PIECES; i++)
+		n += __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE;
+	return n;
+}
+
+static void wait_pieces(Dev *d)
+{
+	for (int k = 0; k < RA_PIECES; k++)
+		for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE)); t++)
+			usleep(500);
+}
+
+static void test_readahead_deep(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	RtCost cost;
+	int most = 0;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On, from 5 reads in a row */
+	CHECK(d->ra_ready && !d->buf3 && ra_depth(d) == 3);
+	s.radeep = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->buf3 && d->uid3 >= 0 && ra_depth(d) == 4);
+	cal_cost(M, &cost, NULL);
+	CHECK(cost.pieces == 4);
+	for (uint32_t i = 0; i < 11; i++) {
+		CHECK(rd(u, i * 256, 256) == 0 && memcmp(u, disk + (size_t)(i * 256) * 512, 256 * 512) == 0);
+		wait_pieces(d);
+		if (live_pieces(d) > most)
+			most = live_pieces(d);
+	}
+	CHECK(most == 4 && g_ra_hits >= 5);
+	/* off: kept while its piece is in use, given back once it is free */
+	s.radeep = 0;
+	vm_stage_apply(&s);
+	CHECK(ra_depth(d) == 3);
+	CHECK(rd(u, 100, 256) == 0);                        /* elsewhere: the pieces dropped */
+	wait_pieces(d);
+	CHECK(live_pieces(d) == 0);
+	vm_stage_worker_tick();
+	CHECK(!d->buf3 && d->uid3 < 0);
+	cal_cost(M, &cost, NULL);
+	CHECK(cost.pieces == 3);
+	most = 0;
+	for (uint32_t i = 0; i < 10; i++) {
+		CHECK(rd(u, i * 256, 256) == 0 && memcmp(u, disk + (size_t)(i * 256) * 512, 256 * 512) == 0);
+		wait_pieces(d);
+		if (live_pieces(d) > most)
+			most = live_pieces(d);
+	}
+	CHECK(most == 3);
+	/* on again, then read ahead switched off: the buffer goes with it */
+	s.radeep = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->buf3);
+	s.readahead = 0;
+	vm_stage_apply(&s);
+	for (int t = 0; t < 5 && d->ra_made; t++)
+		vm_stage_worker_tick();
+	CHECK(!d->ra_made && !d->buf3);
+	CHECK(d->st.errors == 0 && !d->fallback);
+	vm_stage_fini();
+}
+
 /* "B" in the HUD and the overlay: the app in front's buffers for the system
  * core since it was started - none yet (or the setting off), all mapped,
  * some from their 2nd page, some refused; another app starts afresh. */
@@ -3950,6 +4031,7 @@ int main(void)
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_calibration);
+	RUN(test_readahead_deep);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);

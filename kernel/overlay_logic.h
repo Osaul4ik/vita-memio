@@ -121,6 +121,16 @@ static inline int ov_combo(int state, uint32_t arrow)
 	return state;
 }
 
+/* The menu just opened on a line not shown (the R/A Test with Adaptive):
+ * the cursor on the first line shown below it. Nothing acts by it. 0 always. */
+static inline int ov_opened(OvLogic *o, int was_state, uint32_t mask)
+{
+	if (o->state == OV_MENU && was_state != OV_MENU && (mask & OV_MASK_ALL) &&
+	    !(mask & (1u << o->cursor)))
+		o->cursor = ov_next(o->cursor, 1, mask);
+	return 0;
+}
+
 /* One look at the buttons, `now` in microseconds (wrapping). Returns 1 if
  * anything visible changed (the worker should redraw). After it, o->state ==
  * OV_MENU means: hide the buttons from the game. */
@@ -146,6 +156,7 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 			o->held = 1;
 			o->state = OV_MENU;
 		}
+		ov_opened(o, was_state, mask);
 		return o->state != was_state;
 	}
 	o->hold = 0;
@@ -190,7 +201,8 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 	}
 	if (was_state == OV_MENU && o->state != OV_MENU)
 		o->hide = b;
-	return o->state != was_state || o->cursor != was_cursor || o->op != was_op;
+	return ov_opened(o, was_state, mask) || o->state != was_state || o->cursor != was_cursor ||
+	       o->op != was_op;
 }
 
 /* The next value of a setting with these choices, in this order, one step

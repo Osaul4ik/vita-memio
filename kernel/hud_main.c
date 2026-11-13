@@ -568,17 +568,22 @@ static void overlay_feed(void)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
 		} else {
-			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) | (1u << OV_ITEM_TEST) |
+			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
 			{
 				uint32_t mib = 0;
 				const int run = vm_stage_ratest_running(&mib);
 
-				if (run)
-					snprintf(v, sizeof(v), "(X) %u MiB", (unsigned)mib);
-				ov_line(L[n++], cur, OV_ITEM_TEST, 0, run ? "Stop R/A Test" : "Start R/A Test",
-				        HUD_C_TEXT, run ? v : "(X)");
+				/* with Adaptive in effect it works this out as the game
+				 * plays: the test only while it runs (to be stopped) */
+				if (run || ra != VM_RA_ADAPTIVE) {
+					if (run)
+						snprintf(v, sizeof(v), "(X) %u MiB", (unsigned)mib);
+					ov_line(L[n++], cur, OV_ITEM_TEST, 0, run ? "Stop R/A Test" : "Start R/A Test",
+					        HUD_C_TEXT, run ? v : "(X)");
+					mask |= 1u << OV_ITEM_TEST;
+				}
 			}
 			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",

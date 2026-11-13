@@ -113,11 +113,13 @@ The overlay sets things **for this game only**; each setting is *Global* until y
 
 ### R/A test: let the plugin choose for your game
 
+The test is in the overlay while Read ahead is *On* or *Off* for the game. With *Adaptive* it is not shown: Adaptive works this out by itself while you play.
+
 1. Open the overlay and choose **Start R/A Test**, ideally before the game loads.
 2. Play for a few minutes, including a loading screen. The HUD shows how much was read.
 3. Open the overlay and choose **Stop R/A Test**.
 
-The plugin works out what read ahead brings this game and saves the result for it: on or off (*Adaptive* stays *Adaptive*), when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
+The plugin works out what read ahead brings this game and saves the result for it: on or off, when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
 
 It judges from how the game reads and cannot see the frame rate. The result depends on what you played, so test the part you care about. Test during play only and it may decide read ahead is not worth it, because it never saw the loading.
 

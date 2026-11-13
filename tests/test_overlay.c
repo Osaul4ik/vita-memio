@@ -103,6 +103,15 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
+	/* the top line not shown (the test with Adaptive): opened on the next */
+	g_mask = OV_MASK_ALL & ~(1u << OV_ITEM_TEST);
+	hold(&o, OV_BTN_RIGHT, 500);
+	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_RA && !o.op);
+	hold(&o, OV_BTN_UP, 50);                           /* closed again */
+	CHECK(o.state == OV_CLOSED);
+	o.cursor = 0;
+	g_mask = OV_MASK_ALL;
+	tap(&o, 0, 0);
 	hold(&o, OV_BTN_RIGHT, 500);
 	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_TEST);   /* the top line */
 	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_RA);

@@ -103,7 +103,7 @@ T = [
     ("VM_I18N_ROW_READAHEAD",
      "Read ahead"),
     ("VM_I18N_HINT_READAHEAD",
-     "While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. On: it starts after a set number of reads in a row (a game's own, from the R/A Test, or 5). Adaptive: from that number, it starts sooner while what it reads is used and later while much of it is not; it never switches itself off."),
+     "While a file is read in order, the system core reads the next part of it from the card before it is asked for, so the card never waits. Faster loads and copies; a read elsewhere may wait a few ms for the card. Writes are not affected. On: it starts after a set number of reads in a row (a game's own, from the R/A Test, or 5). Adaptive: from that number, it switches to the one that would have paid off best for how the game reads; it never switches itself off."),
     ("VM_I18N_ITEM_RA_ON",
      "On"),
     ("VM_I18N_ITEM_RA_ADAPTIVE",

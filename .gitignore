@@ -15,6 +15,7 @@ tests/sim_app
 tests/sim_main.o
 tests/sim_out/
 tests/test_hud
+tests/test_hud_frame
 tests/hud_*.ppm
 tests/test_stage_tsan
 tests/test_overlay

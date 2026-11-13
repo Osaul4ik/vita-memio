@@ -3207,13 +3207,29 @@ static void test_tiny_reads(void)
 }
 
 /* The app in front's own settings, kept in its profile. */
-/* Read ahead Adaptive: the threshold moves from where On has it (5), within
- * 2..8, one step per two rounds of RA_ADAPT_SECTORS in a row that say the
- * same: later while what is read is mostly not used, sooner while nearly all
- * of it is; each kind on its own.
+/* `count` runs of `len` reads of 128 KiB in a row, each run elsewhere, into
+ * cached (nc 0) or non-cacheable memory, as Adaptive sees them. */
+static void adapt_runs(int nc, uint32_t len, int count)
+{
+	static uint8_t b[16];
+	static uint32_t at = 1u << 20;
+	const int mt = fake_memtype;
+
+	fake_memtype = nc ? 0x8000 : 0xD000;
+	for (int r = 0; r < count; r++) {
+		at += 1u << 16;                                  /* a run elsewhere */
+		for (uint32_t i = 0; i < len; i++)
+			ra_adapt_note(&g_dev[M], NULL, at + i * 256, b, 256, 0);
+	}
+	fake_memtype = mt;
+}
+
+/* Read ahead Adaptive: every RA_ADAPT_RUNS runs of a kind, the threshold
+ * 2..8 that would have brought the most over them (as the R/A Test weighs
+ * it), if better than the one in effect by more than the margin; each kind
+ * on its own, at once rather than step by step, down as readily as up.
  * "never" stays never, On never moves, and what is in effect changing starts
- * afresh. Then the same from reads: a stream that always stops right after
- * read ahead began moves it up. */
+ * afresh. Then the same from reads. */
 static void test_readahead_adaptive(void)
 {
 	static uint8_t u[256 * 512];
@@ -3227,39 +3243,41 @@ static void test_readahead_adaptive(void)
 	CHECK(vm_setting_valid(VM_KEY_READAHEAD, VM_RA_ADAPTIVE) && !vm_setting_valid(VM_KEY_READAHEAD, 3));
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On */
 	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* On: nothing moves */
-	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);
 
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_readahead && ra_threshold(0) == 5);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* one round alone moves nothing */
+	/* long runs: the sooner the better - down to 2 at once */
+	adapt_runs(0, 20, RA_ADAPT_RUNS - 1);
+	CHECK(ra_threshold(0) == 5);                         /* a round not yet over */
+	adapt_runs(0, 20, 2);
+	CHECK(ra_threshold(0) == 2 && ra_threshold(1) == 5 && g_ra_moves[0] == 1);   /* NC as it was */
+	/* runs of 4: a read ahead that begins before their end only costs; from 5
+	 * on nothing either way */
+	adapt_runs(0, 4, 4 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 5);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* the second in a row does */
+	/* runs of 5: at 5 a piece read for nothing each - one later */
+	adapt_runs(0, 5, 4 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 6);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);              /* a round the other way between */
-	ra_adapt_note(0, RA_ADAPT_SECTORS, 0);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
+	/* runs of 2 or 3 alone: nothing either way from 4 on - it stays */
+	adapt_runs(0, 3, 4 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 6);
-	for (int i = 0; i < 12; i++)                        /* all read for nothing */
-		ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
-	CHECK(ra_threshold(0) == 8 && ra_threshold(1) == 5);   /* up to 8, NC as it was */
-	for (int i = 0; i < 20; i++)                        /* all used */
-		ra_adapt_note(0, RA_ADAPT_SECTORS, 0);
-	CHECK(ra_threshold(0) == 2);                        /* down to 2, never off */
-	/* in between: neither a loss nor little waste - it stays */
-	for (int i = 0; i < 4; i++)
-		ra_adapt_note(0, RA_ADAPT_SECTORS * 3 / 4, RA_ADAPT_SECTORS / 4);
-	CHECK(ra_threshold(0) == 2);
-	ra_adapt_note(1, 0, RA_ADAPT_SECTORS);
-	ra_adapt_note(1, 0, RA_ADAPT_SECTORS);
-	CHECK(ra_threshold(1) == 6);
-	/* a part of a round only counts */
-	ra_adapt_note(1, 0, RA_ADAPT_SECTORS / 4);
-	CHECK(ra_threshold(1) == 6);
+	/* a run or two of another length moves nothing (the margin) */
+	adapt_runs(0, 20, 1);
+	adapt_runs(0, 3, RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 6);
+	/* NC on its own: runs of 8 - from 2 */
+	adapt_runs(1, 8, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6);
 	vm_stage_apply(&s);                                  /* in effect again: afresh */
-	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ra_used[1] == 0 && g_ra_unused[1] == 0 &&
-	      g_ra_vote[0] == 0 && g_ra_vote[1] == 0);
+	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ad.ended[0] == 0 && g_ad.run[1][8] == 0);
+	/* On: nothing followed, nothing moves */
+	s.readahead = 1;
+	vm_stage_apply(&s);
+	CHECK(rd(u, 0, 256) == 0);
+	CHECK(g_ad.total_sectors == 0 && ra_threshold(0) == 5);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
 
 	/* an app's own thresholds are where it starts; its "never" stays */
 	g_title_fn = fake_title;
@@ -3271,42 +3289,42 @@ static void test_readahead_adaptive(void)
 	a.thr[1] = VM_RA_NEVER;
 	CHECK(vm_stage_app_set(&a) == VM_OK && g_ra_mode == VM_RA_ADAPTIVE);
 	CHECK(ra_threshold(0) == 3 && ra_threshold(1) == VM_RA_NEVER);
-	for (int i = 0; i < 2; i++) {
-		ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
-		ra_adapt_note(1, RA_ADAPT_SECTORS, 0);
-	}
-	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);
-	/* while the R/A Test runs: the standard 5 and 5, nothing adapts */
+	adapt_runs(0, 5, 2 * RA_ADAPT_RUNS);
+	adapt_runs(1, 20, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 6 && ra_threshold(1) == VM_RA_NEVER);
+	/* while the R/A Test runs: the standard 5 and 5, nothing followed */
 	CHECK(vm_stage_ratest_start() == VM_OK);
 	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
-	ra_adapt_note(0, 0, RA_ADAPT_SECTORS);
-	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 1);
+	{
+		const uint32_t before = g_ad.total_sectors;
+
+		CHECK(rd(u, 0, 256) == 0);
+		CHECK(g_ad.total_sectors == before);
+	}
 	vm_stage_ratest_cancel();
-	CHECK(ra_threshold(0) == 4 && ra_threshold(1) == VM_RA_NEVER);   /* back as it was */
+	CHECK(ra_threshold(0) == 6 && ra_threshold(1) == VM_RA_NEVER);   /* back as it was */
 	as_app(0x42);                                        /* another in front: afresh */
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);
 	vm_stage_fini();
 
-	/* from reads: runs of 6 reads in a row, each followed by one elsewhere,
-	 * leave the pieces read for the sixth unused */
+	/* from reads: runs of 5 reads in a row, each elsewhere, leave the piece
+	 * read after the fifth unused - it goes to 6 */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(d->ra_ready && ra_threshold(0) == 5);
-	for (uint32_t run = 0; run < 80 && ra_threshold(0) < 8; run++) {
-		const uint32_t at = (run % 3) * 1024;
+	for (uint32_t run = 0; run < 3 * RA_ADAPT_RUNS && ra_threshold(0) == 5; run++) {
+		const uint32_t at = (run % 2) * 2048;
 
-		for (uint32_t i = 0; i < 6; i++)
+		for (uint32_t i = 0; i < 5; i++)
 			CHECK(rd(u, at + i * 256, 256) == 0 && memcmp(u, disk + (size_t)(at + i * 256) * 512, 256 * 512) == 0);
 		for (int k = 0; k < RA_PIECES; k++)               /* the pieces read, then ... */
 			for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE)); t++)
 				usleep(500);
-		CHECK(rd(u, 4000, 64) == 0);                     /* ... elsewhere: dropped unused */
 	}
-	CHECK(ra_threshold(0) > 5 && g_ra_moves[0] > 0);
+	CHECK(ra_threshold(0) == 6 && g_ra_moves[0] > 0);
 	CHECK(d->st.errors == 0 && !d->fallback);
 	vm_stage_fini();
 	g_title_fn = NULL;

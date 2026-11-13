@@ -54,6 +54,7 @@ typedef struct {
 	uint32_t srun[2][RT_RUN];
 	uint32_t total_sectors;              /* every read                          */
 	uint32_t tiny_hits, tiny_runs;
+	uint32_t ended[2];                   /* runs ended, both sizes (Adaptive's rounds) */
 	RtStream large, small;
 	const void *tiny_key;
 	uint32_t tiny_end, tiny_len;
@@ -72,8 +73,10 @@ static inline void rt_end_large(RaTest *t)
 {
 	RtStream *s = &t->large;
 
-	if (s->len)
+	if (s->len) {
 		t->run[s->nc][s->len < RT_RUN ? s->len : RT_RUN - 1]++;
+		t->ended[s->nc]++;
+	}
 	s->len = 0;
 }
 
@@ -85,6 +88,7 @@ static inline void rt_end_small(RaTest *t)
 		const uint32_t b = s->len / 4;
 
 		t->srun[s->nc][b < RT_RUN ? b : RT_RUN - 1]++;
+		t->ended[s->nc]++;
 	}
 	s->len = 0;
 }
@@ -245,6 +249,40 @@ static inline void ra_test_pick(RaTest *t, RaPick *p)
 	p->pct = t->total_sectors ? (uint32_t)(from * 100u / t->total_sectors) : 0;
 	if (!p->ra)
 		p->thr[0] = p->thr[1] = 0;
+}
+
+/* Read ahead Adaptive's pick for kind k: the threshold 2..8 that would have
+ * brought the most over the runs so far, `cur` unless another is better by
+ * more than `margin` (us). */
+static inline int ra_adapt_pick(const RaTest *t, int k, int cur, int64_t margin)
+{
+	int64_t sc[RT_THR_MAX + 1];
+	int best = cur;
+
+	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
+		uint64_t s = 0;
+
+		sc[i] = rt_kind_score(t, k, i, &s);
+	}
+	for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++)
+		if (sc[i] > sc[best])
+			best = i;
+	return sc[best] - sc[cur] > margin ? best : cur;
+}
+
+/* Kind k's counts halved: what was read long ago weighs less (a game's
+ * loading and its play differ). */
+static inline void ra_adapt_age(RaTest *t, int k)
+{
+	for (int i = 0; i < RT_POS; i++) {
+		t->pos[k][i] >>= 1;
+		t->spos[k][i] >>= 1;
+	}
+	for (int i = 0; i < RT_RUN; i++) {
+		t->run[k][i] >>= 1;
+		t->srun[k][i] >>= 1;
+	}
+	t->ended[k] = 0;
 }
 
 #endif /* VITAMEMIO_RA_TEST_H */

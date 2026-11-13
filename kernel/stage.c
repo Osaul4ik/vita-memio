@@ -1954,25 +1954,26 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 	return ref ? TAI_CONTINUE(int, ref, pid, ev, a3, a4, a5, a6) : 0;
 }
 
-/* Adaptive (VM_RA_ADAPTIVE): the threshold of each kind (0 cached, 1 NC)
- * moved by ra_adj from where On would have it, within 2..8. What the pieces
- * of a kind brought is added up (sectors used, sectors read for nothing);
- * every RA_ADAPT_SECTORS of them it is weighed as the R/A Test weighs it (a
- * sector used saves RT_GAIN_*_US, a piece read for nothing costs RT_WASTE_US):
- * a loss starts it one read later; little read for nothing (under one in
- * RA_ADAPT_LOW) one sooner - each only after two such rounds in a row, so
- * one round that happened to go either way moves nothing. Never off: "never" (the test's) stays never. Back
- * to where On has it when what is in effect changes (eff_update: another app
- * in front, a setting). Counted from any thread, unlocked: a lost count only
- * moves a decision. */
-#define RA_ADAPT_SECTORS  (16u * RA_PIECE_SECTORS)   /* 16 pieces, 2 MiB */
-#define RA_ADAPT_LOW      5u
+/* Adaptive (VM_RA_ADAPTIVE): the threshold of each kind (0 cached, 1 NC),
+ * within 2..8. The reads are followed as the R/A Test follows them (ra_test.h,
+ * its own copy): runs of reads in a row, by length. Every RA_ADAPT_RUNS runs
+ * of a kind it works out, as the test does, what each threshold would have
+ * brought over them (a read from the pieces saves RT_GAIN_*_US a sector, a
+ * piece read for nothing costs RT_WASTE_US) and takes the best one at once -
+ * if it is better than the one in effect by more than RA_ADAPT_MARGIN_US, so
+ * a run or two either way moves nothing. Then the counts are halved: what
+ * was read long ago weighs less. Seeing every threshold, not only the one in
+ * effect, it goes down as readily as up. Never off: "never" (the test's)
+ * stays never. Back to where On has it when what is in effect changes
+ * (eff_update: another app in front, a setting). */
+#define RA_ADAPT_RUNS       32u
+#define RA_ADAPT_MARGIN_US  (3 * RT_WASTE_US)        /* three pieces read for nothing */
 #define RA_THR_LO         2u
 #define RA_THR_HI         8u
 static volatile int      g_ra_adj[2];
-static volatile int      g_ra_vote[2];                   /* last round: +1 later, -1 sooner, 0 */
-static volatile uint32_t g_ra_used[2], g_ra_unused[2];   /* sectors, this round */
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
+static RaTest            g_ad;                           /* the runs, as the test has them */
+static volatile int      g_ad_lock;
 
 /* The threshold On has for a stream of kind nc: the app in front's own, or
  * the fixed. */
@@ -2006,48 +2007,37 @@ static uint32_t ra_threshold(int nc)
 
 static void ra_adapt_reset(void)
 {
-	for (int k = 0; k < 2; k++) {
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	memset(&g_ad, 0, sizeof(g_ad));
+	for (int k = 0; k < 2; k++)
 		ST(g_ra_adj[k], 0);
-		ST(g_ra_vote[k], 0);
-		ST(g_ra_used[k], 0);
-		ST(g_ra_unused[k], 0);
-	}
+	__sync_lock_release(&g_ad_lock);
 }
 
-/* What a piece of kind nc brought: `used` sectors handed out, `unused` read
- * for nothing. */
-static void ra_adapt_note(int nc, uint32_t used, uint32_t unused)
+/* A transfer for Adaptive to follow (another thread at it: this one lost). */
+static void ra_adapt_note(const Dev *d, void *part, uint32_t sector, const void *p, uint32_t nsec,
+                          int write)
 {
-	uint32_t u, w, t;
-	int64_t gain, loss;
-	int dir;
+	const int nc = !write && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC;
 
-	if (LD(g_ra_mode) != VM_RA_ADAPTIVE || __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE))
-		return;                           /* not while the R/A Test runs */
-	nc = !!nc;
-	u = __atomic_add_fetch(&g_ra_used[nc], used, __ATOMIC_RELAXED);
-	w = __atomic_add_fetch(&g_ra_unused[nc], unused, __ATOMIC_RELAXED);
-	if (u + w < RA_ADAPT_SECTORS)
+	if (__sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
-	/* one thread decides this round: the one that takes the counts */
-	u = __atomic_exchange_n(&g_ra_used[nc], 0, __ATOMIC_RELAXED);
-	w = __atomic_exchange_n(&g_ra_unused[nc], 0, __ATOMIC_RELAXED);
-	if (u + w < RA_ADAPT_SECTORS / 2)
-		return;
-	t = ra_threshold(nc);
-	if (t == RA_THR_NONE)
-		return;
-	gain = (int64_t)u * (nc ? RT_GAIN_NC_US : RT_GAIN_C_US);
-	loss = (int64_t)w * RT_WASTE_US / RA_PIECE_SECTORS;
-	dir = loss > gain && t < RA_THR_HI ? 1
-	    : (uint64_t)w * RA_ADAPT_LOW < (uint64_t)(u + w) && t > RA_THR_LO ? -1 : 0;
-	if (!dir || LD(g_ra_vote[nc]) != dir) {
-		ST(g_ra_vote[nc], dir);            /* the first such round: wait for the next */
-		return;
+	ra_test_note(&g_ad, part ? part : (const void *)d, sector, nsec, nc, write,
+	             ksceKernelGetSystemTimeLow());
+	for (int k = 0; k < 2; k++) {
+		const uint32_t base = ra_base_threshold(k), t = ra_threshold(k);
+		int pick;
+
+		if (g_ad.ended[k] < RA_ADAPT_RUNS)
+			continue;
+		if (t != RA_THR_NONE && (pick = ra_adapt_pick(&g_ad, k, (int)t, RA_ADAPT_MARGIN_US)) != (int)t) {
+			ST(g_ra_adj[k], pick - (int)base);
+			ADD(g_ra_moves[k], 1);
+		}
+		ra_adapt_age(&g_ad, k);
 	}
-	ST(g_ra_vote[nc], 0);
-	ST(g_ra_adj[nc], LD(g_ra_adj[nc]) + dir);
-	ADD(g_ra_moves[nc], 1);
+	__sync_lock_release(&g_ad_lock);
 }
 
 static uint8_t *ra_ptr(const Dev *d, int i)
@@ -2145,10 +2135,8 @@ static void ra_drop(Dev *d)
 
 		if (st != RA_FREE) {
 			any = 1;
-			if (st == RA_READY) {
+			if (st == RA_READY)
 				waste += d->ra[i].n - d->ra[i].off;
-				ra_adapt_note(d->ra[i].nc, 0, d->ra[i].n - d->ra[i].off);
-			}
 			__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
 		}
 	}
@@ -2320,7 +2308,6 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		RaPiece *pc = &d->ra[idx[j]];
 
 		pc->off += sz[j];
-		ra_adapt_note(pc->nc, sz[j], 0);
 		if (pc->off >= pc->n)
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 	}
@@ -2923,6 +2910,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	if (mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED))
 		rt_note(d, part, sector, p, nsec, write);
+	else if (mine && nsec >= (write ? RA_MIN_SECTORS : RA_SMALL_SECTORS) &&
+	         LD(g_ra_mode) == VM_RA_ADAPTIVE && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
+		ra_adapt_note(d, part, sector, p, nsec, write);
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
 	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret))
@@ -3705,10 +3695,27 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
-		if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
+		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
 			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, moved %u / %u times",
 			         (unsigned)ra_threshold(0), (unsigned)ra_threshold(1),
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]));
+			/* the runs it weighs, by length 1..10+ (halved at each round):
+			 * what the gain and cost figures can be checked against */
+			uint32_t runs[2][RT_RUN];
+
+			while (__sync_lock_test_and_set(&g_ad_lock, 1))
+				ksceKernelDelayThread(10);
+			memcpy(runs, g_ad.run, sizeof(runs));
+			__sync_lock_release(&g_ad_lock);
+			for (int k = 0; k < 2; k++) {
+				const uint32_t *r = runs[k];
+
+				VM_KLOGI("stage: read ahead runs %s 1-10+: %u %u %u %u %u %u %u %u %u %u",
+				         k ? "NC" : "C", (unsigned)r[1], (unsigned)r[2], (unsigned)r[3],
+				         (unsigned)r[4], (unsigned)r[5], (unsigned)r[6], (unsigned)r[7],
+				         (unsigned)r[8], (unsigned)r[9], (unsigned)r[10]);
+			}
+		}
 		if (LD(g_ra_bad))
 			VM_KLOGI("stage: read ahead unusable: failed %u, during a write %u, dirty %u, "
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),

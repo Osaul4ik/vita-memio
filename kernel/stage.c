@@ -1982,7 +1982,7 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 static volatile int      g_ra_adj[2];
 /* the 32 KiB reads' threshold, its own: what Adaptive adds to On's (reads) */
 static volatile int      g_rs_adj[2];
-static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
+static volatile uint32_t g_ra_moves[2], g_rs_moves[2];  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
 static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
 /* Tiny reads (ra_tiny_read): from which read in a row a block is read, and
@@ -2524,10 +2524,30 @@ void vm_stage_cal_set(int on)
 	VM_KLOGI("stage: calibration %s", on ? "on" : "off");
 }
 
-static void ra_adapt_reset(void)
+/* What Adaptive has learned of a game (thresholds and the runs behind
+ * them), kept while another is in front - in RAM only, until the console is
+ * restarted - so the game, back in front, goes on from there rather than
+ * from the start. AD_KEEP games, the one longest away making room. Kept with
+ * what it was learned under (read ahead's mode, the game's own thresholds):
+ * taken up again only under the same. */
+#define AD_KEEP 8
+typedef struct {
+	char     title[16];                  /* "": a free slot                    */
+	uint32_t key, used;
+	RaTest   ad;
+	int      ra_adj[2], rs_adj[2];
+	uint32_t tiny_thr, tiny_blk;
+	uint32_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB], tn_ended;
+} AdKept;
+static AdKept            g_ad_kept[AD_KEEP];
+static uint32_t          g_ad_tick;
+static char              g_ad_title[16];      /* whose g_ad is (under g_ad_lock) */
+static uint32_t          g_ad_key;
+static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
+
+/* Afresh (g_ad_lock held). */
+static void ra_adapt_clear(void)
 {
-	while (__sync_lock_test_and_set(&g_ad_lock, 1))
-		ksceKernelDelayThread(10);
 	memset(&g_ad, 0, sizeof(g_ad));
 	memset(g_ad_runs, 0, sizeof(g_ad_runs));
 	for (int k = 0; k < 2; k++) {
@@ -2544,6 +2564,117 @@ static void ra_adapt_reset(void)
 	ST(g_tn_due, 0);
 	ST(g_tiny_thr, RA_TINY_STREAK);
 	ST(g_tiny_blk, RA_TINY_SECTORS);
+}
+
+static AdKept *ad_kept_find(const char *title)
+{
+	for (int i = 0; i < AD_KEEP; i++)
+		if (g_ad_kept[i].title[0] && !strncmp(g_ad_kept[i].title, title, sizeof(g_ad_kept[i].title)))
+			return &g_ad_kept[i];
+	return NULL;
+}
+
+/* g_ad_lock held: what was learned for g_ad_title, kept. */
+static void ad_keep(void)
+{
+	AdKept *k = ad_kept_find(g_ad_title);
+
+	if (!k) {
+		k = &g_ad_kept[0];
+		for (int i = 0; i < AD_KEEP; i++) {
+			if (!g_ad_kept[i].title[0]) {
+				k = &g_ad_kept[i];
+				break;
+			}
+			if (g_ad_kept[i].used < k->used)
+				k = &g_ad_kept[i];
+		}
+		memcpy(k->title, g_ad_title, sizeof(k->title));
+	}
+	k->key = g_ad_key;
+	k->used = ++g_ad_tick;
+	k->ad = g_ad;
+	k->ad.ended[0] = k->ad.ended[1] = 0;     /* a round starts afresh: due ones lost */
+	for (int i = 0; i < 2; i++) {
+		k->ra_adj[i] = LD(g_ra_adj[i]);
+		k->rs_adj[i] = LD(g_rs_adj[i]);
+	}
+	k->tiny_thr = LD(g_tiny_thr);
+	k->tiny_blk = LD(g_tiny_blk);
+	memcpy(k->tn_cnt, g_tn_cnt, sizeof(k->tn_cnt));
+	memcpy(k->tn_reads, g_tn_reads, sizeof(k->tn_reads));
+	memcpy(k->tn_sec, g_tn_sec, sizeof(k->tn_sec));
+	k->tn_ended = 0;
+}
+
+/* g_ad_lock held, after ra_adapt_clear: `title`'s, if kept under `key`. */
+static void ad_restore(const char *title, uint32_t key)
+{
+	const AdKept *k = ad_kept_find(title);
+
+	if (!k || k->key != key)
+		return;
+	g_ad = k->ad;
+	for (int i = 0; i < 2; i++) {
+		ST(g_ra_adj[i], k->ra_adj[i]);
+		ST(g_rs_adj[i], k->rs_adj[i]);
+	}
+	ST(g_tiny_thr, k->tiny_thr);
+	ST(g_tiny_blk, k->tiny_blk);
+	memcpy(g_tn_cnt, k->tn_cnt, sizeof(g_tn_cnt));
+	memcpy(g_tn_reads, k->tn_reads, sizeof(g_tn_reads));
+	memcpy(g_tn_sec, k->tn_sec, sizeof(g_tn_sec));
+	g_tn_ended = 0;
+	ADD(g_ad_restored, 1);
+}
+
+/* What is in effect is `title`'s (""; none: the home screen, the global
+ * settings) under `key`. The same as before: Adaptive goes on learning.
+ * Else what it has learned is kept for the one before, and it starts from
+ * what was kept for this one (or afresh). */
+static void ra_adapt_switch(const char *title, uint32_t key)
+{
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (key == g_ad_key && !strncmp(title, g_ad_title, sizeof(g_ad_title))) {
+		__sync_lock_release(&g_ad_lock);
+		return;
+	}
+	if (g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE)
+		ad_keep();
+	ra_adapt_clear();
+	if (title[0])
+		ad_restore(title, key);
+	{
+		size_t i = 0;
+
+		for (; i < sizeof(g_ad_title) - 1 && title[i]; i++)
+			g_ad_title[i] = title[i];
+		memset(g_ad_title + i, 0, sizeof(g_ad_title) - i);
+	}
+	g_ad_key = key;
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* Games kept (the log). */
+static uint32_t ad_kept_count(void)
+{
+	uint32_t n = 0;
+
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < AD_KEEP; i++)
+		n += g_ad_kept[i].title[0] != 0;
+	__sync_lock_release(&g_ad_lock);
+	return n;
+}
+
+/* Afresh, whatever is in effect (the tests). */
+static void __attribute__((unused)) ra_adapt_reset(void)
+{
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	ra_adapt_clear();
 	__sync_lock_release(&g_ad_lock);
 }
 
@@ -2662,11 +2793,19 @@ static void ra_adapt_tick(void)
 		cal_cost(g_ad_dev[nc], &cost, NULL);   /* that storage's, if measured */
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
-		if (ra_adapt_on() && t != RA_THR_NONE &&
-		    ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
-			ST(g_ra_adj[nc], thr - (int)base);
-			ST(g_rs_adj[nc], sm * RA_SMALL_FACTOR - (int)ra_small_on(base, nc));
-			ADD(g_ra_moves[nc], 1);
+		if (ra_adapt_on() && t != RA_THR_NONE) {
+			const int sm0 = sm;
+
+			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
+				if (thr != (int)t) {
+					ST(g_ra_adj[nc], thr - (int)base);
+					ADD(g_ra_moves[nc], 1);
+				}
+				if (sm != sm0) {
+					ST(g_rs_adj[nc], sm * RA_SMALL_FACTOR - (int)ra_small_on(base, nc));
+					ADD(g_rs_moves[nc], 1);
+				}
+			}
 		}
 		ra_adapt_age(&g_ad, nc);
 	}
@@ -4113,7 +4252,21 @@ static void eff_update(void)
 			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
 	ST(g_ra_mode, ra);
 	ST(g_readahead, ra != VM_RA_OFF ? 1 : 0);
-	ra_adapt_reset();                     /* adaptive: afresh from where On is */
+	/* adaptive: whose settings these are, and what it learns under (the
+	 * mode, the game's own thresholds - 0 none, 15 never) */
+	{
+		const int app = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
+		                __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) ==
+		                __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+		uint32_t key = (uint32_t)ra & 0xFu;
+
+		for (int k = 0; k < 2; k++) {
+			const uint32_t t = a.thr[k];
+
+			key |= (t == RA_THR_NONE ? 15u : t & 0xFu) << (4 + 4 * k);
+		}
+		ra_adapt_switch(app ? g_app_title : "", key);
+	}
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
 	if (!needed && (pipeline || offload || ra))
@@ -4404,11 +4557,13 @@ void vm_stage_worker_tick(void)
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
 			const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
 
-			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, 32 KiB reads C %u NC %u, "
-			         "moved %u / %u times",
+			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u, 32 KiB reads C %u NC %u now; "
+			         "moved %u / %u and %u / %u times; games kept %u, taken up again %u",
 			         (unsigned)t0, (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
 			         (unsigned)ra_small_threshold(1, t1),
-			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]));
+			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]),
+			         (unsigned)LD(g_rs_moves[0]), (unsigned)LD(g_rs_moves[1]),
+			         (unsigned)ad_kept_count(), (unsigned)LD(g_ad_restored));
 			/* read ahead's runs by length 1..10+ since what is in effect
 			 * changed: what the gain and cost figures can be checked against */
 			uint32_t runs[2][RT_RUN];
@@ -4771,7 +4926,9 @@ void vm_stage_ra_now(VmRaNow *o)
 		o->thr[k] = ra_threshold(k);
 		/* the R/A Test running: the standard one is set too */
 		o->set[k] = __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) ? o->thr[k] : ra_base_threshold(k);
+		o->mid[k] = ra_small_threshold(k, o->thr[k]);
 	}
+	o->tiny = tiny_thr();
 	{
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 

@@ -3,9 +3,11 @@
  * (kernel/overlay_logic.h): the states as the README describes them, the
  * cursor, the changes asked of the worker, and the helpers.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "../kernel/overlay_logic.h"
+#include "../kernel/hud_text.h"
 #include "vm_test.h"
 
 static uint32_t T = 0xFFFF0000u;            /* the clock, us (it wraps soon) */
@@ -314,8 +316,27 @@ static void test_helpers(void)
 
 int vm_failures;
 
+/* The HUD's Streak line: as set : large / 32 KiB / tiny reads now, never;
+ * the whole line fits a HUD line with its colour codes. */
+static void test_streak_text(void)
+{
+	char c[32], nc[32], line[VM_HUD_LINE_MAX];
+	int n;
+
+	hud_streak_kind(c, sizeof(c), "C", 5, 2, 16, 8);
+	CHECK(strcmp(c, HUD_C_DIM "C:" HUD_C_TEXT "5" HUD_C_DIM ":" HUD_C_GOOD "2/16/8") == 0);
+	hud_streak_kind(nc, sizeof(nc), "NC", VM_RA_NEVER, VM_RA_NEVER, VM_RA_NEVER, 2);
+	CHECK(strcmp(nc, HUD_C_DIM "NC:never") == 0);
+	/* the widest: two digits everywhere */
+	hud_streak_kind(c, sizeof(c), "C", 99, 99, 99, 99);
+	hud_streak_kind(nc, sizeof(nc), "NC", 99, 99, 99, 99);
+	n = snprintf(line, sizeof(line), HUD_C_DIM "Streak %s %s %sAuto", c, nc, HUD_C_GOOD);
+	CHECK(n > 0 && n < (int)sizeof(line));
+}
+
 int main(void)
 {
+	RUN(test_streak_text);
 	RUN(test_states);
 	RUN(test_menu);
 	RUN(test_hide_and_ports);

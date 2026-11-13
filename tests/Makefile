@@ -50,7 +50,7 @@ test_guard: test_guard.c fakes.c ../kernel/guard.h
 test_hud_frame: test_hud_frame.c fakes.c ../kernel/hud.c
 	$(CC) $(CFLAGS) -o $@ test_hud_frame.c fakes.c
 
-test_overlay: test_overlay.c vm_test.h ../kernel/overlay_logic.h
+test_overlay: test_overlay.c vm_test.h ../kernel/overlay_logic.h ../kernel/hud_text.h
 	$(CC) $(CFLAGS) -o $@ test_overlay.c
 
 test_ra_test: test_ra_test.c vm_test.h ../kernel/ra_test.h

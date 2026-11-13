@@ -57,6 +57,8 @@ typedef struct VmRaNow {
 	uint32_t thr[2];        /* in use: reads before it starts (VM_RA_NEVER)   */
 	uint32_t set[2];        /* ... as set (the app's or the fixed): Adaptive
 	                         * moves thr from there                            */
+	uint32_t mid[2];        /* in use for the 32 KiB reads' stream (reads)    */
+	uint32_t tiny;          /* in use for tiny reads: from which read a block */
 	int      bufmap;        /* the app in front's buffers for the system core
 	                         * (VM_BUFMAP_*), since it was started             */
 } VmRaNow;

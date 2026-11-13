@@ -19,6 +19,7 @@
 #include "../include/vitamemio.h"
 #include "hud.h"
 #include "hud_link.h"
+#include "hud_text.h"
 #include "klog.h"
 #include "overlay.h"
 #include "overlay_logic.h"
@@ -145,19 +146,6 @@ static void pct_text(char *o, int cap, int p)
 		         (unsigned)(p > 100 ? 100 : p));
 }
 
-/* A threshold for the HUD: the number, or "never" (never starts); with
- * Adaptive "set:now", e.g. "5:6". */
-static void hud_thr(char *o, int cap, uint32_t set, uint32_t now, int adaptive)
-{
-	if (now == VM_RA_NEVER)
-		snprintf(o, cap, HUD_C_DIM "never");
-	else if (adaptive)
-		snprintf(o, cap, HUD_C_TEXT "%u:" HUD_C_GOOD "%u", (unsigned)(set > 99 ? 99 : set),
-		         (unsigned)(now > 99 ? 99 : now));
-	else
-		snprintf(o, cap, HUD_C_GOOD "%u", (unsigned)(now > 99 ? 99 : now));
-}
-
 /* "B": the app's buffers for the system core (VmRaNow.bufmap) - green all
  * mapped, yellow some from their 2nd page (worked around), red some refused;
  * grey while none is mapped (or the setting is off): always there, so the
@@ -170,15 +158,16 @@ static const char *hud_bufmap(int b)
 
 /* Read ahead in the HUD, for the app in front:
  *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
- *   Streak  C: 5  NC: never              (reads in a row before it starts;
- *                                         Adaptive: as set:now, C: 5:6)
+ *   Streak C:5:2/16/8 NC:never Auto      (reads in a row before it starts:
+ *                                         as set : now for large / 32 KiB /
+ *                                         tiny reads; hud_streak_kind)
  *   Core 3 B C: 98%  NC: 100%            (since the HUD came up; B: hud_bufmap)
  * Off: no Streak line. Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, int on)
 {
 	static int counting;
 	static uint32_t base_core[4], base_ncs, base_nco;
-	char c[16], nc[16];
+	char c[32], nc[32];
 	const char *mode;
 	VmRaNow now;
 	int n = 0;
@@ -198,16 +187,16 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	/* in effect for the app in front (its own, or the global one) */
 	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" :
 	       now.mode == VM_RA_ADAPTIVE ? HUD_C_TEXT "Adaptive" : HUD_C_DIM "Off";
-	hud_thr(c, sizeof(c), now.set[0], now.thr[0], now.mode == VM_RA_ADAPTIVE);
-	hud_thr(nc, sizeof(nc), now.set[1], now.thr[1], now.mode == VM_RA_ADAPTIVE);
+	hud_streak_kind(c, sizeof(c), "C", now.set[0], now.thr[0], now.mid[0], now.tiny);
+	hud_streak_kind(nc, sizeof(nc), "NC", now.set[1], now.thr[1], now.mid[1], now.tiny);
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT
 	         "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room) {
 		VmCal cal;
 
 		vm_stage_cal(-1, &cal);             /* tuning: green measuring, grey off */
-		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.9s" HUD_C_DIM
-		         "  NC: %.9s  %sAuto", c, nc, cal.on ? HUD_C_GOOD : HUD_C_DIM);
+		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak %.20s %.20s %sAuto", c, nc,
+		         cal.on ? HUD_C_GOOD : HUD_C_DIM);
 	}
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;

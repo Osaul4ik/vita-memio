@@ -91,7 +91,7 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned for a game is kept until the console restarts (for the last eight games), so a game you come back to goes on from there; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
 
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 
@@ -141,7 +141,7 @@ Core 3 B C: 98%  NC: 0%
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
 - **B:** the game's buffers for copying on the spare core, since it started (also in the overlay): **green** all usable; **yellow** some had a first page the system cannot share, so that part was copied on the game's core; **red** some could not be used at all, and were copied on the game's core. The data is right either way. Grey while nothing has been copied there yet.
-- **Streak:** reads in a row before read ahead starts. With *Adaptive* as set:now, for example `C: 5:6`: set at 5, at 6 now. **Auto** at the end is green while *Tuning* measures, grey when it is off.
+- **Streak:** reads in a row before read ahead starts, for cached (C) and non-cacheable (NC) memory, as set:now for large, 32 KiB and very small reads. For example `C:5:2/8/3`: set at 5; now large reads from the 2nd, 32 KiB reads from the 8th, very small reads from the 3rd (one figure for both C and NC). **Auto** at the end is green while *Tuning* measures, grey when it is off.
 - **Core 3, C:** the share of copying of ordinary data done on the spare core since the HUD opened.
 - **Core 3, NC:** the share of graphics data handled on the spare core: read there (*C + NC All*) or copied there from read ahead (*C + NC R/A* and *All*). Graphics data read the standard way counts against it.
 

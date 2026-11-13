@@ -124,6 +124,11 @@ static void reset(void)
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_fg = 0;
+	memset(g_ad_kept, 0, sizeof(g_ad_kept));        /* Adaptive: nothing kept */
+	memset(g_ad_title, 0, sizeof(g_ad_title));
+	g_ad_key = 0;
+	g_ad_restored = 0;
+	ra_adapt_reset();
 	g_count_cores = 0;
 	g_title_fn = NULL;
 	g_ra_tiny_reads = 0;
@@ -3209,6 +3214,17 @@ static void test_tiny_reads(void)
 }
 
 /* The app in front's own settings, kept in its profile. */
+/* Adaptive afresh: what is in effect changed (On, then Adaptive again). */
+static void adapt_afresh(VmSettings *s)
+{
+	const int ra = s->readahead;
+
+	s->readahead = 1;
+	vm_stage_apply(s);
+	s->readahead = ra;
+	vm_stage_apply(s);
+}
+
 /* The same without the worker's look after each run. */
 static void adapt_runs_raw(int nc, uint32_t len, int count)
 {
@@ -3286,7 +3302,10 @@ static void test_readahead_adaptive(void)
 	/* NC on its own: runs of 8 - from 2 */
 	adapt_runs(1, 8, 2 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6);
-	vm_stage_apply(&s);                                  /* in effect again: afresh */
+	/* the settings applied again, nothing changed for read ahead: it goes on */
+	vm_stage_apply(&s);
+	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6 && g_ad.run[1][8] > 0);
+	adapt_afresh(&s);                                    /* the mode changed: afresh */
 	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ad.ended[0] == 0 && g_ad.run[1][8] == 0);
 	/* followed at no extra cost: from read ahead's own stream, no lookup of
 	 * its own (the non-cacheable check: both ends, two) */
@@ -3420,15 +3439,73 @@ static void test_readahead_adaptive_small(void)
 	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
 	vm_stage_ratest_cancel();
 	CHECK(ra_small_threshold(0, ra_threshold(0)) == 12);
-	/* in effect again: afresh */
-	vm_stage_apply(&s);
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && g_rs_adj[0] == 0);
+	/* the HUD sees all three, both kinds */
+	{
+		VmRaNow rn;
+
+		vm_stage_ra_now(&rn);
+		CHECK(rn.set[0] == 5 && rn.thr[0] == 2 && rn.mid[0] == 12 && rn.mid[1] == RA_SMALL_STREAK &&
+		      rn.tiny == RA_TINY_STREAK);
+	}
 	/* On: the rule as before, whatever Adaptive had */
-	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
 	s.readahead = 1;
 	vm_stage_apply(&s);
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	/* Adaptive again for the same game: where it was */
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12 && g_ad_restored == 1);
+	/* another game: afresh; learns its own ... */
+	as_app(0x46);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* ... the first back in front: where it was, runs and all; the second's
+	 * kept too */
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12 && g_ad_restored == 2);
+	CHECK(g_ad.srun[0][2] > 0 && ad_kept_count() == 2);
+	as_app(0x46);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* the home screen (the global settings): not kept, learned afresh */
+	ra_proc_event(0x46, 4);
+	vm_stage_worker_tick();
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && ad_kept_count() == 2);
+	vm_stage_fini();
+
+	/* kept only under what it was learned under: the game's own threshold
+	 * changed - afresh; and AD_KEEP games at most, the one longest away
+	 * making room */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	{
+		VmApp a;
+
+		ra_app_global(&a);
+		a.ra = VM_RA_ADAPTIVE;
+		a.thr[0] = 3;
+		CHECK(vm_stage_app_set(&a) == VM_OK);
+		/* afresh: 3, and 16 (3 x 4, never under 16) for the 32 KiB reads */
+		CHECK(ra_threshold(0) == 3 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK &&
+		      g_rs_adj[0] == 0);
+	}
+	for (int i = 0; i < AD_KEEP + 2; i++) {
+		char t[16];
+
+		snprintf(t, sizeof(t), "PCSB%05d", i);
+		ra_adapt_switch(t, VM_RA_ADAPTIVE);
+	}
+	CHECK(ad_kept_count() == AD_KEEP);
 	vm_stage_fini();
 
 	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
@@ -3612,12 +3689,12 @@ static void test_calibration(void)
 	/* the margin is three pieces at what one costs here: one long run among
 	 * single reads saves 8.4 ms sooner - under three fixed pieces (9 ms),
 	 * over three measured at 1 ms */
-	vm_stage_apply(&s);
+	adapt_afresh(&s);
 	memset(k, 0, sizeof(*k));
 	adapt_runs(0, 1, RA_ADAPT_RUNS - 1);
 	adapt_runs(0, 20, 1);
 	CHECK(ra_threshold(0) == 5);
-	vm_stage_apply(&s);
+	adapt_afresh(&s);
 	k->waste_us = 1000 * VM_CAL_MIN_WASTE;
 	k->waste_n = VM_CAL_MIN_WASTE;
 	adapt_runs(0, 1, RA_ADAPT_RUNS - 1);
@@ -3670,7 +3747,7 @@ static void test_tiny_adaptive(void)
 	CHECK(g_cal[M].tiny_hit_n > 0 && g_cal[M].tiny_blk_n > 0 &&
 	      g_cal[M].tiny_blk_sec == g_cal[M].tiny_blk_n * 64u);
 	/* afresh, runs of four - weighed by the worker, not the reads */
-	vm_stage_apply(&s);
+	adapt_afresh(&s);
 	CHECK(g_tiny_thr == RA_TINY_STREAK && g_tiny_blk == RA_TINY_SECTORS);
 	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++) {
 		static uint8_t u1[512];

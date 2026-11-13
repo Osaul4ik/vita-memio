@@ -121,6 +121,7 @@ static void reset(void)
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = g_cal_dirty = g_cal_loaded = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
+	g_rs_kib = g_rs_waste_kib = g_rs_drops = 0;
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_fg = 0;
@@ -3553,6 +3554,32 @@ static void test_calibration(void)
 	vm_stage_fini();
 }
 
+/* The log's split of read ahead by stream: 32 KiB reads in a row take the
+ * pieces after 16 of them; what they use and what is read for nothing when
+ * the run ends are counted apart from the large reads'. */
+static void test_readahead_by_size(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	Dev *d = &g_dev[M];
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 24; i++) {
+		CHECK(rd(u, i * 64, 64) == 0 && memcmp(u, disk + (size_t)(i * 64) * 512, 64 * 512) == 0);
+		for (int k = 0; k < RA_PIECES; k++)
+			for (int t = 0; t < 2000 && ra_pending(__atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE)); t++)
+				usleep(500);
+	}
+	CHECK(rd(u, 3500, 256) == 0);                        /* elsewhere: the pieces dropped */
+	CHECK(g_rs_kib > 0 && g_rs_kib == g_ra_kib);         /* all of it the 32 KiB reads' */
+	CHECK(g_rs_drops == 1 && g_rs_waste_kib > 0 && g_rs_waste_kib == g_ra_waste_kib);
+	CHECK(d->st.errors == 0 && !d->fallback);
+	vm_stage_fini();
+}
+
 /* Adaptive on tiny reads: runs of one-sector reads in a row move (T, B)
  * from the fixed (8, 32 KiB) to what pays most - long runs from the 2nd read
  * with the biggest block, runs of four a small one - and the data stay
@@ -4057,6 +4084,7 @@ int main(void)
 	RUN(test_readahead_adaptive);
 	RUN(test_calibration);
 	RUN(test_tiny_adaptive);
+	RUN(test_readahead_by_size);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);

@@ -1663,6 +1663,9 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 
 static volatile int g_readahead;          /* the setting                      */
 static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
+/* The same for the pieces of the 32 KiB reads' stream (d->ra_small), for the
+ * log: used, read for nothing, dropped (the rest is the large reads'). */
+static uint32_t g_rs_kib, g_rs_waste_kib, g_rs_drops;                      /* atomics */
 static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
 static uint32_t g_ra_tiny_reads;          /* atomic: tiny reads from their block */
 static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a write, dirty, switched, old */
@@ -2775,6 +2778,10 @@ static void ra_drop(Dev *d)
 	if (any) {
 		ADD(g_ra_drops, 1);
 		ADD(g_ra_waste_kib, waste / 2);
+		if (LD(d->ra_small)) {
+			ADD(g_rs_drops, 1);
+			ADD(g_rs_waste_kib, waste / 2);
+		}
 	}
 }
 
@@ -2945,6 +2952,8 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	}
 	ADD(g_ra_hits, 1);
 	ADD(g_ra_kib, cov / 2);
+	if (LD(d->ra_small))
+		ADD(g_rs_kib, cov / 2);
 	if (stats) {
 		ADD(d->tm.rd_sectors, cov);
 		ADD(d->tm.rd_io_us, wait_us);
@@ -4373,6 +4382,17 @@ void vm_stage_worker_tick(void)
 			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+		if (LD(g_ra_hits) || LD(g_ra_drops)) {
+			const uint32_t uk = LD(g_ra_kib), wk = LD(g_ra_waste_kib), dr = LD(g_ra_drops);
+			const uint32_t su = LD(g_rs_kib), sw = LD(g_rs_waste_kib), sd = LD(g_rs_drops);
+
+			/* which stream the pieces were for: large reads, or 32 KiB reads */
+			VM_KLOGI("stage: read ahead by size: large reads %u MiB used, %u MiB unused (%u "
+			         "dropped); 32 KiB reads %u MiB used, %u MiB unused (%u dropped)",
+			         (unsigned)((uk - su) / 1024), (unsigned)((wk - sw) / 1024),
+			         (unsigned)(dr - sd), (unsigned)(su / 1024), (unsigned)(sw / 1024),
+			         (unsigned)sd);
+		}
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
 			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, moved %u / %u times",
 			         (unsigned)ra_threshold(0), (unsigned)ra_threshold(1),

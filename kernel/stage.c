@@ -2015,12 +2015,11 @@ static void ra_adapt_reset(void)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* A transfer for Adaptive to follow (another thread at it: this one lost). */
-static void ra_adapt_note(const Dev *d, void *part, uint32_t sector, const void *p, uint32_t nsec,
+/* A transfer for Adaptive to follow, `nc` into non-cacheable memory
+ * (another thread at it: this one lost). */
+static void ra_adapt_note(const Dev *d, void *part, uint32_t sector, int nc, uint32_t nsec,
                           int write)
 {
-	const int nc = !write && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC;
-
 	if (__sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
 	ra_test_note(&g_ad, part ? part : (const void *)d, sector, nsec, nc, write,
@@ -2869,14 +2868,11 @@ static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 }
 
 /* The test's look at a transfer (a moment; another thread at it: this one lost). */
-static void rt_note(const Dev *d, void *part, uint32_t sector, const void *p, uint32_t nsec, int write)
+static void rt_note(const Dev *d, void *part, uint32_t sector, int nc, uint32_t nsec, int write)
 {
-	int nc;
-
 	if (d == &g_dev[VM_DEV_INTERNAL] ||
 	    __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED) != __atomic_load_n(&g_rt_pid, __ATOMIC_RELAXED))
 		return;
-	nc = !write && nsec >= RA_SMALL_SECTORS && ksceKernelGetMemBlockMemtypeByAddr(p) == MEMTYPE_NC;
 	if (__sync_lock_test_and_set(&g_rt_lock, 1))
 		return;
 	ra_test_note(&g_rt, part ? part : (const void *)d, sector, nsec, nc, write,
@@ -2908,11 +2904,24 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				__atomic_fetch_add(&g_fg_sec[d - g_dev], nsec, __ATOMIC_RELAXED);
 		}
 	}
-	if (mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED))
-		rt_note(d, part, sector, p, nsec, write);
-	else if (mine && nsec >= (write ? RA_MIN_SECTORS : RA_SMALL_SECTORS) &&
-	         LD(g_ra_mode) == VM_RA_ADAPTIVE && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
-		ra_adapt_note(d, part, sector, p, nsec, write);
+	/* the R/A Test's or Adaptive's look at it: the buffer's memory type
+	 * looked up once, kept for the non-cacheable check below */
+	{
+		const int rt = mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED);
+		const int ad = !rt && mine && nsec >= (write ? RA_MIN_SECTORS : RA_SMALL_SECTORS) &&
+		               LD(g_ra_mode) == VM_RA_ADAPTIVE &&
+		               __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+
+		if (rt || ad) {
+			const int nc = !write && nsec >= RA_SMALL_SECTORS &&
+			               (mt0 = ksceKernelGetMemBlockMemtypeByAddr(p)) == MEMTYPE_NC;
+
+			if (rt)
+				rt_note(d, part, sector, nc, nsec, write);
+			else
+				ra_adapt_note(d, part, sector, nc, nsec, write);
+		}
+	}
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
 	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret))
@@ -2921,7 +2930,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	 * (see the top). Looked at only for transfers that would be staged. */
 	if (mine && LD(d->enabled) && !LD(d->fallback) && __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) &&
 	    nsec && nsec >= LD(g_min_sectors) &&
-	    mt_uncached(mt0 = ksceKernelGetMemBlockMemtypeByAddr(p)) &&
+	    mt_uncached(mt0 = mt0 != -2 ? mt0 : ksceKernelGetMemBlockMemtypeByAddr(p)) &&
 	    mt_uncached(mt1 = ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1))) {
 		SceUID pid;
 		int r;

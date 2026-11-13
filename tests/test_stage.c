@@ -3211,17 +3211,13 @@ static void test_tiny_reads(void)
  * cached (nc 0) or non-cacheable memory, as Adaptive sees them. */
 static void adapt_runs(int nc, uint32_t len, int count)
 {
-	static uint8_t b[16];
 	static uint32_t at = 1u << 20;
-	const int mt = fake_memtype;
 
-	fake_memtype = nc ? 0x8000 : 0xD000;
 	for (int r = 0; r < count; r++) {
 		at += 1u << 16;                                  /* a run elsewhere */
 		for (uint32_t i = 0; i < len; i++)
-			ra_adapt_note(&g_dev[M], NULL, at + i * 256, b, 256, 0);
+			ra_adapt_note(&g_dev[M], NULL, at + i * 256, nc, 256, 0);
 	}
-	fake_memtype = mt;
 }
 
 /* Read ahead Adaptive: every RA_ADAPT_RUNS runs of a kind, the threshold
@@ -3271,6 +3267,13 @@ static void test_readahead_adaptive(void)
 	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6);
 	vm_stage_apply(&s);                                  /* in effect again: afresh */
 	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ad.ended[0] == 0 && g_ad.run[1][8] == 0);
+	/* followed at no extra cost: the buffer's memory type looked up once,
+	 * then used by the non-cacheable check too (both ends: two lookups) */
+	fake_memtype = 0x8000;
+	fake_memtype_calls = 0;
+	CHECK(rd(u, 0, 256) == 0 && fake_memtype_calls == 2 && g_ad.total_sectors == 256);
+	fake_memtype = 0xD000;
+	ra_adapt_reset();
 	/* On: nothing followed, nothing moves */
 	s.readahead = 1;
 	vm_stage_apply(&s);

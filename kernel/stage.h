@@ -97,7 +97,7 @@ typedef struct VmCal {
 	int32_t  waste_us;      /* in use: a piece read for nothing               */
 } VmCal;
 #define VM_CAL_MIN_PLAIN   64u
-#define VM_CAL_MIN_SERVED  128u
+#define VM_CAL_MIN_SERVED  64u
 #define VM_CAL_MIN_WASTE   32u
 void vm_stage_cal(int dev, VmCal *out);        /* dev -1: the fixed figures */
 void vm_stage_cal_set(int on);                 /* worker thread             */

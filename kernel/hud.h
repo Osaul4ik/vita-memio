@@ -29,8 +29,6 @@
 int  vm_hud_init(void);   /* install the set-framebuffer hook              */
 void vm_hud_fini(void);
 int  vm_hud_installed(void);
-/* (head, index) pairs the frame hook has seen: bit head*2+index, bit 4 others */
-uint32_t vm_hud_planes(void);
 
 /* Replace the text (n lines, n = 0 hides the HUD) and the look
  * Worker thread only. */

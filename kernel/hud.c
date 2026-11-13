@@ -86,9 +86,6 @@ static inline uint32_t hud_dacr_open(void) { return 0; }
 static inline void hud_dacr_restore(uint32_t prev) { (void)prev; }
 #endif
 
-/* Which (head, index) pairs the hook has seen, a bit each (head 0..1 x
- * index 0..1, then any other), for the log: vm_hud_planes. */
-static volatile uint32_t g_planes_seen;
 /* The width of the frames drawn on, for the cache's size (its font); until a
  * frame is seen, the largest font's. */
 static volatile int g_fb_w = 960, g_fb_h = 544;
@@ -96,11 +93,6 @@ static int g_text_width;               /* the HUD's widest line while shown */
 /* ksceAppMgrIsExclusiveProcessRunning, looked up at vm_hud_init (not every
  * SDK's stubs have it); NULL: not there - index 1 is then never drawn on. */
 static int (*g_excl_running)(const char *title_id);
-
-uint32_t vm_hud_planes(void)
-{
-	return __atomic_load_n(&g_planes_seen, __ATOMIC_RELAXED);
-}
 
 /* `t` onto the frame: copied from the cache if it holds `t` and the worker
  * did not touch it meanwhile, else composed straight from the text. */
@@ -123,11 +115,7 @@ static void draw_panel(uint32_t *fb, int pitch, int w, int h, const HudText *t, 
 static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 {
 	const HudText *t, *ov;
-	const uint32_t bit = head >= 0 && head < 2 && index >= 0 && index < 2
-	                     ? 1u << (head * 2 + index) : 1u << 4;
 
-	if (!(__atomic_load_n(&g_planes_seen, __ATOMIC_RELAXED) & bit))
-		__atomic_fetch_or(&g_planes_seen, bit, __ATOMIC_RELAXED);
 	if (!head || !pParam || !pParam->base)
 		return;
 	if (index && (!g_excl_running || g_excl_running(NULL) > 0))

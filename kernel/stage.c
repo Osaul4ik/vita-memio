@@ -429,15 +429,15 @@ static volatile uint32_t g_rd_max;           /* the largest read request, sector
 #define PIPE_WAIT_US       200u
 static uint32_t g_pipe_waits, g_pipe_wait_us;   /* atomics; us wraps after 71 min */
 
-/* ---- where the copy runs (log) ---------------------------------------------
+/* ---- where the copy runs (the HUD's Core 3) --------------------------------
  *
  * Which core ran each staged read's copy (the caller's thread, or the copier
- * on the system core), and whether the caller was a system thread (kernel
- * process) or a game (a user process). */
-static uint32_t g_cp_core_kib[4], g_cp_sys_kib, g_cp_game_kib;    /* atomics */
+ * on the system core). */
+static uint32_t g_cp_core_kib[4];                                  /* atomics */
 /* The least stack each thread has had free (bytes), for the log: how much
  * of VM_STACK_* is left. NULL: not found. */
 static int (*g_stack_free_fn)(SceUID thid);
+#define STACK_LOW_BYTES 1024
 /* Graphics data (non-cacheable) from read ahead, copied by the copier on the
  * system core / by the game's thread: they count as NC, not as copies (C). */
 static uint32_t g_ra_nc_sys_kib, g_ra_nc_own_kib;                  /* atomics */
@@ -457,16 +457,12 @@ static inline uint32_t cpu_id(void)
 #endif
 }
 
-/* A staged read finished: note who the caller was and, for the part its own
- * thread copied, on which core (the copier notes its own). */
-static void diag_note(uint32_t nsec, uint32_t own)
+/* A staged read finished: the part its own thread copied, on which core
+ * (the copier notes its own). */
+static void diag_note(uint32_t own)
 {
 	if (own)
 		__atomic_fetch_add(&g_cp_core_kib[cpu_id()], own / 2, __ATOMIC_RELAXED);
-	if (ksceKernelGetProcessId() == KERNEL_PID)
-		__atomic_fetch_add(&g_cp_sys_kib, nsec / 2, __ATOMIC_RELAXED);
-	else
-		__atomic_fetch_add(&g_cp_game_kib, nsec / 2, __ATOMIC_RELAXED);
 }
 
 /* ---- copy on the system core (VM_KEY_OFFLOAD) -------------------------------
@@ -1984,14 +1980,12 @@ static volatile int      g_ra_adj[2];
 static volatile int      g_rs_adj[2];
 static volatile uint32_t g_ra_moves[2], g_rs_moves[2];  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
-static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
 /* Tiny reads (ra_tiny_read): from which read in a row a block is read, and
  * its size, in effect with Adaptive (the fixed ones otherwise); the runs of
  * two reads or more by how many (rt_tiny_*), in sixteenths as above, and
  * weighed every RA_ADAPT_RUNS of them. */
 static volatile uint32_t g_tiny_thr = RA_TINY_STREAK, g_tiny_blk = RA_TINY_SECTORS;
 static uint32_t          g_tn_cnt[RT_TB], g_tn_reads[RT_TB], g_tn_sec[RT_TB], g_tn_ended;
-static uint32_t          g_tn_runs[RT_TB];                /* not halved (log) */
 static volatile uint32_t g_tn_moves;
 /* A round due, for the worker to weigh (under g_ad_lock), and the storage
  * whose figures it takes: the large reads' kinds, the tiny reads. */
@@ -2549,7 +2543,6 @@ static volatile uint32_t g_ad_restored;       /* taken up again (log)           
 static void ra_adapt_clear(void)
 {
 	memset(&g_ad, 0, sizeof(g_ad));
-	memset(g_ad_runs, 0, sizeof(g_ad_runs));
 	for (int k = 0; k < 2; k++) {
 		ST(g_ra_adj[k], 0);
 		ST(g_rs_adj[k], 0);
@@ -2557,7 +2550,6 @@ static void ra_adapt_clear(void)
 	memset(g_tn_cnt, 0, sizeof(g_tn_cnt));
 	memset(g_tn_reads, 0, sizeof(g_tn_reads));
 	memset(g_tn_sec, 0, sizeof(g_tn_sec));
-	memset(g_tn_runs, 0, sizeof(g_tn_runs));
 	g_tn_ended = 0;
 	ST(g_ad_due[0], 0);
 	ST(g_ad_due[1], 0);
@@ -2709,7 +2701,6 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	g_tn_cnt[b] += RA_ADAPT_ONE;
 	g_tn_reads[b] += reads * RA_ADAPT_ONE;
 	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
-	g_tn_runs[b]++;
 	/* a round's worth: weighed by the worker (ra_adapt_tick) */
 	if (++g_tn_ended >= RA_ADAPT_RUNS && !LD(g_tn_due)) {
 		ST(g_tn_due, 1);
@@ -2761,7 +2752,6 @@ static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
 		g_ad.srun[nc][b < RT_RUN ? b : RT_RUN - 1] += RA_ADAPT_ONE;
 	} else {
 		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1] += RA_ADAPT_ONE;
-		g_ad_runs[nc][len < RT_RUN ? len : RT_RUN - 1]++;
 	}
 	/* a round's worth: weighed by the worker (ra_adapt_tick), not here */
 	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS && !LD(g_ad_due[nc])) {
@@ -3978,7 +3968,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	} else {
 		ADD(d->st.reads, 1);
 		if (COUNT_CORES() && !left)
-			diag_note(nsec, own);
+			diag_note(own);
 	}
 	if (problem) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
@@ -4529,24 +4519,11 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
 			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_mid),
 			         (unsigned)(LD(g_dma_mid_us) / 1000), (unsigned)LD(g_dma_errors));
-			VM_KLOGI("stage: DMA left to the CPU: small %u (%u MiB, %u of 8 KiB or more), "
-			         "not aligned %u (%u MiB)",
-			         (unsigned)LD(g_dma_small), (unsigned)(LD(g_dma_small_kib) / 1024),
-			         (unsigned)LD(g_dma_small_half), (unsigned)LD(g_dma_unal),
-			         (unsigned)(LD(g_dma_unal_kib) / 1024));
 		}
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
 		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),
 		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
 		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000));
-		VM_KLOGI("stage: copied on core 0/1/2/3: %u/%u/%u/%u MiB; caller system %u MiB, "
-		         "game %u MiB",
-		         (unsigned)(__atomic_load_n(&g_cp_core_kib[0], __ATOMIC_RELAXED) / 1024),
-		         (unsigned)(__atomic_load_n(&g_cp_core_kib[1], __ATOMIC_RELAXED) / 1024),
-		         (unsigned)(__atomic_load_n(&g_cp_core_kib[2], __ATOMIC_RELAXED) / 1024),
-		         (unsigned)(__atomic_load_n(&g_cp_core_kib[3], __ATOMIC_RELAXED) / 1024),
-		         (unsigned)(__atomic_load_n(&g_cp_sys_kib, __ATOMIC_RELAXED) / 1024),
-		         (unsigned)(__atomic_load_n(&g_cp_game_kib, __ATOMIC_RELAXED) / 1024));
 		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
 			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable), dropped %u "
 			         "(%u MiB unused), unusable %u, NC copier refused %d (0x%08x)",
@@ -4564,22 +4541,6 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]),
 			         (unsigned)LD(g_rs_moves[0]), (unsigned)LD(g_rs_moves[1]),
 			         (unsigned)ad_kept_count(), (unsigned)LD(g_ad_restored));
-			/* read ahead's runs by length 1..10+ since what is in effect
-			 * changed: what the gain and cost figures can be checked against */
-			uint32_t runs[2][RT_RUN];
-
-			while (__sync_lock_test_and_set(&g_ad_lock, 1))
-				ksceKernelDelayThread(10);
-			memcpy(runs, g_ad_runs, sizeof(runs));
-			__sync_lock_release(&g_ad_lock);
-			for (int k = 0; k < 2; k++) {
-				const uint32_t *r = runs[k];
-
-				VM_KLOGI("stage: read ahead runs %s 1-10+: %u %u %u %u %u %u %u %u %u %u",
-				         k ? "NC" : "C", (unsigned)r[1], (unsigned)r[2], (unsigned)r[3],
-				         (unsigned)r[4], (unsigned)r[5], (unsigned)r[6], (unsigned)r[7],
-				         (unsigned)r[8], (unsigned)r[9], (unsigned)r[10]);
-			}
 		}
 		/* calibration: the medians it has, per storage, and what is in use */
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -4613,25 +4574,12 @@ void vm_stage_worker_tick(void)
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),
 			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
-		VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
-		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
-			uint32_t r[RT_TB], mid = 0, big = 0;
-
-			while (__sync_lock_test_and_set(&g_ad_lock, 1))
-				ksceKernelDelayThread(10);
-			memcpy(r, g_tn_runs, sizeof(r));
-			__sync_lock_release(&g_ad_lock);
-			for (int i = 8; i < 16; i++)
-				mid += r[i];
-			for (int i = 16; i < RT_TB; i++)
-				big += r[i];
-			/* runs of tiny reads by how many in a row, since what is in effect changed */
-			VM_KLOGI("stage: tiny reads adaptive: from read %u, block %u KiB now, moved %u; runs "
-			         "2-8: %u %u %u %u %u %u %u, 9-16: %u, 17+: %u", (unsigned)LD(g_tiny_thr),
-			         (unsigned)(LD(g_tiny_blk) / 2), (unsigned)LD(g_tn_moves), (unsigned)r[1],
-			         (unsigned)r[2], (unsigned)r[3], (unsigned)r[4], (unsigned)r[5],
-			         (unsigned)r[6], (unsigned)r[7], (unsigned)mid, (unsigned)big);
-		}
+		if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
+			VM_KLOGI("stage: tiny reads from their block %u; adaptive: from read %u, block %u KiB "
+			         "now, moved %u", (unsigned)LD(g_ra_tiny_reads), (unsigned)LD(g_tiny_thr),
+			         (unsigned)(LD(g_tiny_blk) / 2), (unsigned)LD(g_tn_moves));
+		else
+			VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			const CalDev *c = &g_cal[i];
 			const uint32_t hn = LD(c->tiny_hit_n), bn = LD(c->tiny_blk_n);
@@ -4648,20 +4596,25 @@ void vm_stage_worker_tick(void)
 			         (int)t.b16_us, (int)t.hit_us);
 		}
 		if (g_stack_free_fn) {
-			/* the least each has had free, of its stack (-1: no such thread) */
-			int fr[VM_DEV_COUNT][3];
+			/* the least each has had free, of its stack (-1: no such thread):
+			 * logged only if one has had under STACK_LOW_BYTES */
+			int fr[VM_DEV_COUNT][3], low;
+			const int wk = g_stack_free_fn(ksceKernelGetThreadId());
 
+			low = wk >= 0 && wk < STACK_LOW_BYTES;
 			for (int i = 0; i < VM_DEV_COUNT; i++) {
 				const SceUID th[3] = { g_dev[i].th, g_dev[i].th2, g_dev[i].ra_th };
 
-				for (int k = 0; k < 3; k++)
+				for (int k = 0; k < 3; k++) {
 					fr[i][k] = th[k] >= 0 ? g_stack_free_fn(th[k]) : -1;
+					low |= fr[i][k] >= 0 && fr[i][k] < STACK_LOW_BYTES;
+				}
 			}
-			VM_KLOGI("stage: stack free (bytes of %u / %u): worker %d; SD2Vita helper %d copier %d "
-			         "ahead %d; memory card %d %d %d", VM_STACK_WORKER, VM_STACK_DEV,
-			         g_stack_free_fn(ksceKernelGetThreadId()),
-			         fr[VM_DEV_SD2VITA][0], fr[VM_DEV_SD2VITA][1], fr[VM_DEV_SD2VITA][2],
-			         fr[VM_DEV_MEMCARD][0], fr[VM_DEV_MEMCARD][1], fr[VM_DEV_MEMCARD][2]);
+			if (low)
+				VM_KLOGW("stage: stack low (bytes free of %u / %u): worker %d; SD2Vita helper %d "
+				         "copier %d ahead %d; memory card %d %d %d", VM_STACK_WORKER, VM_STACK_DEV, wk,
+				         fr[VM_DEV_SD2VITA][0], fr[VM_DEV_SD2VITA][1], fr[VM_DEV_SD2VITA][2],
+				         fr[VM_DEV_MEMCARD][0], fr[VM_DEV_MEMCARD][1], fr[VM_DEV_MEMCARD][2]);
 		}
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB (%u from the 2nd page), "

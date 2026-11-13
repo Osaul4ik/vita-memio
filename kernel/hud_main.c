@@ -235,17 +235,6 @@ static void hud_feed(const VmDevState *now)
 		hud_failed = 1;
 		VM_KLOGW("hud: could not install - HUD unavailable");
 	}
-	{                                /* each new (head, index) the frames came on, once */
-		static uint32_t logged;
-		const uint32_t seen = vm_hud_planes();
-
-		if (seen & ~logged) {
-			logged = seen;
-			VM_KLOGI("hud: frames on head/index 0/0 %s, 0/1 %s, 1/0 %s, 1/1 %s, other %s",
-			         seen & 1 ? "yes" : "no", seen & 2 ? "yes" : "no", seen & 4 ? "yes" : "no",
-			         seen & 8 ? "yes" : "no", seen & 16 ? "yes" : "no");
-		}
-	}
 	shown = hud_shown(&s);
 	/* just shown: nothing was counted while it was not, so no speed yet (the
 	 * time since the last call is not the time counted) */

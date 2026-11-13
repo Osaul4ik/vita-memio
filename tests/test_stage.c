@@ -145,7 +145,6 @@ static void reset(void)
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_ra_nc_sys_kib = g_ra_nc_own_kib = 0;
-	g_cp_sys_kib = g_cp_game_kib = 0;
 	test_thread = pthread_self();
 	copies_here = copies_elsewhere = 0;
 	d->buf = staging;
@@ -1834,13 +1833,13 @@ static void test_copy_diagnostics(void)
 
 	reset();
 	CHECK(rd(u, 0, 128) == 0);
-	CHECK(g_cp_core_kib[0] == 0 && g_cp_sys_kib == 0 && g_cp_game_kib == 0);   /* log off */
+	CHECK(g_cp_core_kib[0] == 0);                              /* log off */
 	g_log_diag = 1;
-	CHECK(rd(u, 0, 128) == 0);                                 /* a system caller */
-	CHECK(g_cp_core_kib[0] == 64 && g_cp_sys_kib == 64 && g_cp_game_kib == 0);
+	CHECK(rd(u, 0, 128) == 0);
+	CHECK(g_cp_core_kib[0] == 64);
 	fake_pid = 0x42;                                           /* a game */
 	CHECK(rd(u, 0, 128) == 0 && memcmp(u, disk, 128 * 512) == 0);
-	CHECK(g_cp_game_kib == 64 && g_cp_core_kib[0] == 128);
+	CHECK(g_cp_core_kib[0] == 128);
 	CHECK(fake_usermap_calls == 0);                            /* nothing mapped */
 	free(u);
 }
@@ -2064,7 +2063,7 @@ static void test_offload(void)
 		/* every mapping checked on its own (no request relies on another's) */
 		CHECK(g_offload_state == 1 && fake_meminfo_calls == fake_usermap_calls);
 		CHECK(g_off_reads >= 6 && d->st.errors == 0);           /* the six of 64 KiB and up */
-		CHECK(g_cp_game_kib > 0 && g_cp_core_kib[0] > 0);       /* noted by the copier */
+		CHECK(g_cp_core_kib[0] > 0);                             /* noted by the copier */
 		if (pipeline)
 			CHECK(g_pipe_reads > 0);                            /* parts, overlapped */
 		vm_stage_fini();
@@ -3297,7 +3296,7 @@ static void test_readahead_adaptive(void)
 		adapt_runs(1, 2, 5);
 		adapt_runs(1, 50, 1);
 	}
-	CHECK(ra_threshold(1) == 3 && g_ad_runs[1][10] == 6);
+	CHECK(ra_threshold(1) == 3);
 	CHECK(g_ad.run[1][10] > 0);                          /* still weighed after the halving */
 	/* NC on its own: runs of 8 - from 2 */
 	adapt_runs(1, 8, 2 * RA_ADAPT_RUNS);
@@ -3366,8 +3365,7 @@ static void test_readahead_adaptive(void)
 			CHECK(rd(u, 3500, 8) == 0);
 	}
 	CHECK(rd(u, 2048, 256) == 0);
-	CHECK(g_ad.run[0][7] == RA_ADAPT_ONE && g_ad.ended[0] == 1 && g_ad.pos[0][7] == 256 * RA_ADAPT_ONE &&
-	      g_ad_runs[0][7] == 1);
+	CHECK(g_ad.run[0][7] == RA_ADAPT_ONE && g_ad.ended[0] == 1 && g_ad.pos[0][7] == 256 * RA_ADAPT_ONE);
 	ra_adapt_reset();
 	for (uint32_t run = 0; run < 3 * RA_ADAPT_RUNS && ra_threshold(0) == 5; run++) {
 		const uint32_t at = (run % 2) * 2048;
@@ -3743,7 +3741,6 @@ static void test_tiny_adaptive(void)
 	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++)
 		tiny_run(r * 100, 40);
 	CHECK(g_tiny_thr == 2 && g_tiny_blk == 64 && g_tn_moves == 1 && tiny_thr() == 2);
-	CHECK(g_tn_runs[rt_tiny_bucket(40)] == RA_ADAPT_RUNS);
 	CHECK(g_cal[M].tiny_hit_n > 0 && g_cal[M].tiny_blk_n > 0 &&
 	      g_cal[M].tiny_blk_sec == g_cal[M].tiny_blk_n * 64u);
 	/* afresh, runs of four - weighed by the worker, not the reads */

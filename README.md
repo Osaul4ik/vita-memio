@@ -59,7 +59,6 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
 | DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for: **Adaptive**, **On** or **Off**. See below | Adaptive |
-| Deeper read ahead | Read ahead keeps four parts of a file ready instead of three, for games that read long files in order. 128 KiB more memory for each storage | Off |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
 | Overlay (SELECT + arrows) | A small menu over any game, see below. Off takes effect at once; On after a restart, if it was off when the console started | On |
 

@@ -79,7 +79,6 @@ enum vm_key {
 	VM_KEY_READAHEAD,      /* VM_RA_*: read ahead while a stream is read              */
 	VM_KEY_OVERLAY,        /* 0/1: the SELECT + arrows overlay (and HUD by keys) */
 	VM_KEY_DMACOPY,        /* 0/1: copy reads out with the DMA controller    */
-	VM_KEY_RADEEP,         /* 0/1: read ahead keeps four pieces, not three   */
 	VM_KEY_COUNT
 };
 
@@ -163,7 +162,6 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_READAHEAD 2   /* VM_RA_ADAPTIVE                                 */
 #define VM_DEF_OVERLAY   1   /* on: it takes SELECT + arrows from games        */
 #define VM_DEF_DMACOPY   1   /* on; stops itself on errors or a mismatch       */
-#define VM_DEF_RADEEP    0   /* off: three pieces (one more: 128 KiB a storage) */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -182,7 +180,6 @@ typedef struct VmSettings {
 	int32_t readahead;
 	int32_t overlay;
 	int32_t dmacopy;
-	int32_t radeep;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -211,7 +208,6 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_SMALL:
 	case VM_KEY_OVERLAY:
 	case VM_KEY_DMACOPY:
-	case VM_KEY_RADEEP:
 		return v == 0 || v == 1;
 	case VM_KEY_GPUSAFE:
 		return v >= VM_GPUSAFE_OFF && v <= VM_GPUSAFE_NODMA;

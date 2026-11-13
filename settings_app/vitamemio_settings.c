@@ -58,7 +58,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
  * (NULL: a reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
 	"sd2vita", NULL, "verify", NULL, NULL, "log", "memcard", "small", "stats", "gpusafe",
-	"pipeline", "offload", "readahead", "overlay", "dmacopy", "radeep",
+	"pipeline", "offload", "readahead", "overlay", "dmacopy",
 };
 
 #define ROW_LIST(k) \
@@ -99,7 +99,6 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 		ROW_LIST("readahead") \
 			ITEM("vm_i_ra0", "0") ITEM("vm_i_ra1", "1") ITEM("vm_i_ra2", "2") \
 		"</list>" \
-		ROW_TOGGLE("radeep") \
 		ROW_TOGGLE("small") \
 		ROW_TOGGLE("overlay") \
 		"<setting_list id=\"vm_developer\" title=\"vm_t_developer\" icon=\"tex_spanner\">" \
@@ -350,7 +349,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_ROW_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_ROW_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_ROW_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_ROW_OVERLAY,
-	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY, [VM_KEY_RADEEP] = VM_I18N_ROW_RADEEP,
+	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
@@ -360,7 +359,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_HINT_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_HINT_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_HINT_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_HINT_OVERLAY,
-	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY, [VM_KEY_RADEEP] = VM_I18N_HINT_RADEEP,
+	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */

@@ -125,8 +125,7 @@ typedef int (*io_fn)(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf,
 /* Read ahead: three pieces of 128 KiB, in the staging buffer (two) and the
  * second buffer (one). */
 #define RA_PIECE_SECTORS  256
-#define RA_PIECES         4           /* at most; 3 unless "Deeper read ahead" */
-#define RA_PIECES_STD     3
+#define RA_PIECES         3
 #define RA_FREE           0
 #define RA_QUEUED         1           /* for the thread to read             */
 #define RA_READING        2
@@ -208,9 +207,6 @@ typedef struct Dev {
 	SceUID        ra_th, ra_go, ra_done;
 	int           ra_waiting;             /* a request sleeps on ra_done      */
 	RaPiece       ra[RA_PIECES];
-	void         *buf3;                   /* the 4th piece's (deeper), atomic  */
-	SceUID        uid3;
-	int           buf3_failed;
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
@@ -240,14 +236,14 @@ typedef struct Dev {
 } Dev;
 
 static Dev g_dev[VM_DEV_COUNT] = {
-	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .uid3 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
 	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
 	                      .ra_th = -1, .ra_go = -1, .ra_done = -1, .t_uid = -1 },
 	/* the internal storage: never sped up, nothing reaches it (no hooks) */
-	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .uid3 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	[VM_DEV_INTERNAL] = { .port = 0, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
 	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
 	                      .ra_th = -1, .ra_go = -1, .ra_done = -1, .t_uid = -1 },
-	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .uid3 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
+	[VM_DEV_MEMCARD]  = { .port = -1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
 	                      .th2 = -1, .sem_cgo = -1, .sem_fin = -1,
 	                      .ra_th = -1, .ra_go = -1, .ra_done = -1, .t_uid = -1 },
 };
@@ -1666,7 +1662,6 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 #define RA_RETIRE_MS    50
 
 static volatile int g_readahead;          /* the setting                      */
-static volatile int g_ra_deep;            /* "Deeper read ahead": four pieces  */
 static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
 static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
 static uint32_t g_ra_tiny_reads;          /* atomic: tiny reads from their block */
@@ -2205,8 +2200,6 @@ static void cal_text(char *o, size_t n, const uint16_t *h, uint32_t count)
 		snprintf(o, n, "-");
 }
 
-static int ra_depth(const Dev *d);
-
 /* What is in use for storage dev (-1: the fixed figures), and the counts. */
 static void cal_cost(int dev, RtCost *cost, VmCal *o)
 {
@@ -2236,8 +2229,6 @@ static void cal_cost(int dev, RtCost *cost, VmCal *o)
 			v.have_waste = 1;
 		}
 	}
-	if (dev >= 0 && dev < VM_DEV_COUNT)
-		cost->pieces = ra_depth(&g_dev[dev]);   /* as deep as read ahead reads there */
 	v.gain16[0] = cost->gain16[0];
 	v.gain16[1] = cost->gain16[1];
 	v.waste_us = cost->waste_us;
@@ -2673,15 +2664,7 @@ static void ra_adapt_tick(void)
 
 static uint8_t *ra_ptr(const Dev *d, int i)
 {
-	return i < 2 ? (uint8_t *)d->buf + (size_t)i * RA_PIECE_SECTORS * 512
-	     : i == 2 ? (uint8_t *)d->buf2 : (uint8_t *)d->buf3;
-}
-
-/* Pieces read ahead of a stream on `d`: four with "Deeper read ahead" once
- * the 4th one's buffer is there, else three. */
-static int ra_depth(const Dev *d)
-{
-	return LD(g_ra_deep) && __atomic_load_n(&d->buf3, __ATOMIC_ACQUIRE) ? RA_PIECES : RA_PIECES_STD;
+	return i < 2 ? (uint8_t *)d->buf + (size_t)i * RA_PIECE_SECTORS * 512 : (uint8_t *)d->buf2;
 }
 
 static int ra_pending(int st)
@@ -2813,7 +2796,7 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 	uint32_t at = sector, cov = 0;
 
 	*cnt = 0;
-	while (cov < n && *cnt < PIPE_MAX_PARTS) {       /* the copier takes three parts */
+	while (cov < n && *cnt < RA_PIECES) {
 		int found = -1;
 
 		for (int i = 0; i < RA_PIECES; i++) {
@@ -3045,7 +3028,6 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	const int nc = small ? d->rs_nc : d->ra_nc;
 	const uint32_t streak = small ? d->rs_streak : d->ra_streak;
 	uint32_t thr = ra_threshold(nc), next = small ? d->rs_end : d->ra_last_end;
-	const int depth = ra_depth(d);        /* once: the pieces it may use */
 	int want, live = 0;
 
 	if (small && thr != RA_THR_NONE) {
@@ -3063,7 +3045,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	{
 		const uint32_t ahead = (streak - thr) / (small ? RA_SMALL_FACTOR : 1) + 1;
 
-		want = ahead < (uint32_t)depth ? (int)ahead : depth;
+		want = ahead < RA_PIECES ? (int)ahead : RA_PIECES;
 	}
 	ST(d->ra_small, small);
 	for (int i = 0; i < RA_PIECES; i++) {
@@ -3075,7 +3057,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 				next = pc->sector + pc->n;
 		}
 	}
-	for (int i = 0; i < depth; i++) {         /* the 4th only with its buffer */
+	for (int i = 0; i < RA_PIECES; i++) {
 		RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE)
@@ -3102,11 +3084,6 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 
 static void ra_release(Dev *d)
 {
-	if (d->buf3) {                        /* no piece is left: nothing reads into it */
-		__atomic_store_n(&d->buf3, NULL, __ATOMIC_RELEASE);
-		ksceKernelFreeMemBlock(d->uid3);
-		d->uid3 = -1;
-	}
 	if (d->ra_th >= 0) {
 		__atomic_store_n(&d->ra_quit, 1, __ATOMIC_RELEASE);
 		ksceKernelSignalSema(d->ra_go, 1);
@@ -4146,7 +4123,6 @@ void vm_stage_apply(const VmSettings *s)
 		ST(g_dma_stop, VM_DMA_WHY_NONE);
 	}
 	ST(g_dma_want, s->dmacopy ? 1 : 0);
-	ST(g_ra_deep, s->radeep ? 1 : 0);      /* the 4th piece's buffer: the worker */
 	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
 	ST(g_log_diag, s->log ? 1 : 0);
@@ -4706,31 +4682,6 @@ void vm_stage_worker_tick(void)
 				VM_KLOGI("stage: dev %d read ahead ready", i);
 			}
 		}
-		/* "Deeper read ahead": the 4th piece's buffer, made while read
-		 * ahead runs and the setting is on; given back once it is off and
-		 * that piece is free, with no request in flight (busy). */
-		if (d->ra_made && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && LD(g_ra_deep) &&
-		    !d->buf3 && !d->buf3_failed) {
-			void *b = NULL;
-
-			if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_PIECE_SECTORS * 512, &d->uid3, &b) < 0) {
-				d->buf3_failed = 1;
-				VM_KLOGW("stage: dev %d deeper read ahead: no memory for its 4th piece", i);
-			} else {
-				__atomic_store_n(&d->buf3, b, __ATOMIC_RELEASE);
-				VM_KLOGI("stage: dev %d deeper read ahead ready (128 KiB)", i);
-			}
-		} else if (!LD(g_ra_deep) && d->buf3 && !__sync_lock_test_and_set(&d->busy, 1)) {
-			if (__atomic_load_n(&d->ra[RA_PIECES - 1].state, __ATOMIC_ACQUIRE) == RA_FREE) {
-				__atomic_store_n(&d->buf3, NULL, __ATOMIC_RELEASE);
-				ksceKernelFreeMemBlock(d->uid3);
-				d->uid3 = -1;
-				VM_KLOGI("stage: dev %d deeper read ahead off (128 KiB given back)", i);
-			}
-			__sync_lock_release(&d->busy);
-		}
-		if (!LD(g_ra_deep))
-			d->buf3_failed = 0;               /* a fresh try when it is on again */
 	}
 	/* The verify buffer: allocated once verify mode is turned on, given back
 	 * once it is off (not while a request has it: the next tick then). */

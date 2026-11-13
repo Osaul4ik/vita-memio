@@ -36,8 +36,63 @@ static void go(void)
 
 int vm_failures;
 
+/* Tiny reads' model (rt_tiny_*): `count` runs of `reads` reads of `sec`
+ * sectors, then Adaptive's pick from (8, 64). */
+static uint32_t tc[RT_TB], tr[RT_TB], ts[RT_TB];
+
+static void tiny_runs(uint32_t count, uint32_t reads, uint32_t sec)
+{
+	const int b = rt_tiny_bucket(reads);
+
+	tc[b] += count * 16;
+	tr[b] += count * reads * 16;
+	ts[b] += count * reads * sec * 16;
+}
+
+static int tiny_pick(int *t, int *blk)
+{
+	*t = 8;
+	*blk = 64;
+	return rt_tiny_pick(tc, tr, ts, t, blk, 0, &rt_tiny_fixed);
+}
+
+static void test_tiny_model(void)
+{
+	int t, b;
+
+	CHECK(rt_tiny_bucket(2) == 1 && rt_tiny_bucket(16) == 15 && rt_tiny_bucket(17) == 16 &&
+	      rt_tiny_bucket(200) == 21 && rt_tiny_rep[rt_tiny_bucket(40)] == 40);
+	/* long runs of one-sector reads: from the 2nd, the biggest block */
+	memset(tc, 0, sizeof(tc)); memset(tr, 0, sizeof(tr)); memset(ts, 0, sizeof(ts));
+	tiny_runs(32, 40, 1);
+	CHECK(tiny_pick(&t, &b) && t == 2 && b == 64);
+	/* runs of four: from the 2nd, a small block (a big one is read mostly
+	 * for nothing) */
+	memset(tc, 0, sizeof(tc)); memset(tr, 0, sizeof(tr)); memset(ts, 0, sizeof(ts));
+	tiny_runs(32, 4, 1);
+	CHECK(tiny_pick(&t, &b) && t == 2 && b == 16);
+	CHECK(rt_tiny_score(tc, tr, ts, 2, 16, &rt_tiny_fixed) ==
+	      (int64_t)32 * 16 * (2 * (395 - 46) - (int64_t)25 * 15));
+	/* runs of two: a block brings nothing - left as it is */
+	memset(tc, 0, sizeof(tc)); memset(tr, 0, sizeof(tr)); memset(ts, 0, sizeof(ts));
+	tiny_runs(32, 2, 1);
+	CHECK(!tiny_pick(&t, &b) && t == 8 && b == 64);
+	/* reads of 20 KiB: only the 32 KiB block holds one, one a block - it
+	 * only costs: a block too small for them, so none is read */
+	memset(tc, 0, sizeof(tc)); memset(tr, 0, sizeof(tr)); memset(ts, 0, sizeof(ts));
+	tiny_runs(32, 30, 40);
+	CHECK(tiny_pick(&t, &b) && b < 40);
+	/* reads of 4 KiB in long runs: more of them a block, the biggest */
+	memset(tc, 0, sizeof(tc)); memset(tr, 0, sizeof(tr)); memset(ts, 0, sizeof(ts));
+	tiny_runs(32, 100, 8);
+	CHECK(tiny_pick(&t, &b) && t == 2 && b == 64);
+	/* a margin: a move only if worth more than it */
+	CHECK(!rt_tiny_pick(tc, tr, ts, &(int){ 8 }, &(int){ 64 }, INT64_MAX / 2, &rt_tiny_fixed));
+}
+
 int main(void)
 {
+	test_tiny_model();
 	uint32_t at = 0;
 
 	/* too little read: no answer, not an Off */

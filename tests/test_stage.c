@@ -3537,6 +3537,87 @@ static void test_calibration(void)
 	vm_stage_fini();
 }
 
+/* Adaptive on tiny reads: runs of one-sector reads in a row move (T, B)
+ * from the fixed (8, 32 KiB) to what pays most - long runs from the 2nd read
+ * with the biggest block, runs of four a small one - and the data stay
+ * right; On keeps the fixed ones. With calibration on, reads from the block
+ * and block reads are timed. */
+static void tiny_run(uint32_t at, uint32_t reads)
+{
+	static uint8_t u[512];
+
+	for (uint32_t i = 0; i < reads; i++)
+		CHECK(rd(u, at + i, 1) == 0 && memcmp(u, disk + (size_t)(at + i) * 512, 512) == 0);
+}
+
+static void test_tiny_adaptive(void)
+{
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On */
+	CHECK(g_dev[M].t_buf && tiny_thr() == RA_TINY_STREAK && tiny_blk() == RA_TINY_SECTORS);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	vm_stage_cal_set(1);
+	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++)
+		tiny_run(r * 100, 40);
+	CHECK(g_tiny_thr == 2 && g_tiny_blk == 64 && g_tn_moves == 1 && tiny_thr() == 2);
+	CHECK(g_tn_runs[rt_tiny_bucket(40)] == RA_ADAPT_RUNS);
+	CHECK(g_cal[M].tiny_hit_n > 0 && g_cal[M].tiny_blk_n > 0 &&
+	      g_cal[M].tiny_blk_sec == g_cal[M].tiny_blk_n * 64u);
+	/* afresh, runs of four */
+	vm_stage_apply(&s);
+	CHECK(g_tiny_thr == RA_TINY_STREAK && g_tiny_blk == RA_TINY_SECTORS);
+	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++)
+		tiny_run(r * 100, 4);
+	CHECK(g_tiny_thr == 2 && g_tiny_blk == 16);
+	tiny_run(3900, 20);                                   /* a run now read in 8 KiB blocks */
+	/* On: the fixed ones, whatever Adaptive had */
+	s.readahead = 1;
+	vm_stage_apply(&s);
+	CHECK(tiny_thr() == RA_TINY_STREAK && tiny_blk() == RA_TINY_SECTORS);
+	/* a version 1 file (before the tiny reads' figures): its counts kept,
+	 * the tiny ones from 0; saved again as version 2 */
+	{
+		char path[256];
+		CalHead h = { CAL_MAGIC, 1u, 1u, VM_DEV_COUNT };
+		CalDev one[VM_DEV_COUNT];
+		uint32_t c = 0x811C9DC5u;
+		FILE *f;
+
+		memset(one, 0, sizeof(one));
+		one[M].n_plain[0] = 70;
+		one[M].plain[0][20] = 70;
+		snprintf(path, sizeof(path), "%s/calib.bin", fakes_tmpdir_new());
+		f = fopen(path, "wb");
+		fwrite(&h, sizeof(h), 1, f);
+		c = cal_fnv(c, &h, sizeof(h));
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			fwrite(&one[i], CAL_DEV_V1, 1, f);
+			c = cal_fnv(c, &one[i], CAL_DEV_V1);
+		}
+		c ^= 0xA5C3A5C3u;
+		fwrite(&c, sizeof(c), 1, f);
+		fclose(f);
+		memset(g_cal, 0xEE, sizeof(g_cal));
+		g_cal_on = 0;
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(g_cal_on && g_cal[M].n_plain[0] == 70 && g_cal[M].plain[0][20] == 70 &&
+		      !g_cal[M].tiny_hit_n && !g_cal[M].tiny_blk_us);
+		g_cal[M].tiny_hit_n = 5;
+		cal_save();
+		memset(g_cal, 0, sizeof(g_cal));
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(g_cal[M].n_plain[0] == 70 && g_cal[M].tiny_hit_n == 5);
+	}
+	vm_stage_fini();
+}
+
 /* "Deeper read ahead": a 4th piece, its buffer made by the worker while
  * the setting is on (and read ahead runs), four pieces ahead of a stream and
  * the data right; off, the buffer given back once that piece is free, three
@@ -4032,6 +4113,7 @@ int main(void)
 	RUN(test_readahead_adaptive);
 	RUN(test_calibration);
 	RUN(test_readahead_deep);
+	RUN(test_tiny_adaptive);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_profiles);

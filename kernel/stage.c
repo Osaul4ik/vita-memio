@@ -59,6 +59,7 @@
  *
  * HOT PATH: no logging here, only counters (the worker logs).
  */
+#include <stddef.h>                     /* offsetof                            */
 #include <psp2kern/kernel/sysmem.h>
 #include <psp2kern/kernel/sysclib.h>
 #include <psp2kern/kernel/threadmgr.h>
@@ -225,6 +226,7 @@ typedef struct Dev {
 	void         *t_buf;
 	SceUID        t_uid;
 	uint32_t      t_next, t_streak;
+	uint32_t      t_run_sec;              /* the run's sectors so far (Adaptive) */
 	uint32_t      t_start, t_end;         /* atomic; t_end == t_start: empty   */
 	int           t_dirty;                /* atomic: a write touched it        */
 	void         *t_part;
@@ -1984,6 +1986,14 @@ static volatile int      g_ra_adj[2];
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
 static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
+/* Tiny reads (ra_tiny_read): from which read in a row a block is read, and
+ * its size, in effect with Adaptive (the fixed ones otherwise); the runs of
+ * two reads or more by how many (rt_tiny_*), in sixteenths as above, and
+ * weighed every RA_ADAPT_RUNS of them. */
+static volatile uint32_t g_tiny_thr = RA_TINY_STREAK, g_tiny_blk = RA_TINY_SECTORS;
+static uint32_t          g_tn_cnt[RT_TB], g_tn_reads[RT_TB], g_tn_sec[RT_TB], g_tn_ended;
+static uint32_t          g_tn_runs[RT_TB];                /* not halved (log) */
+static volatile uint32_t g_tn_moves;
 static volatile int      g_ad_lock;
 
 /* The threshold On has for a stream of kind nc: the app in front's own, or
@@ -2030,13 +2040,20 @@ static uint32_t ra_threshold(int nc)
 #define CAL_HELD_MAX_US  16000u
 #define CAL_FILE         VM_DATA_DIR "/calib.bin"
 #define CAL_MAGIC        0x4C41434Du      /* "MCAL" */
-#define CAL_VERSION      1u
+#define CAL_VERSION      2u              /* 1: without the tiny reads' figures */
 
 typedef struct CalDev {
 	uint16_t plain[2][CAL_BUCKETS], served[2][CAL_BUCKETS];
 	uint32_t n_plain[2], n_served[2];
 	uint32_t waste_us, waste_n;
+	/* tiny reads: one copied from the block, and a block read (its sectors) */
+	uint32_t tiny_hit_us, tiny_hit_n;
+	uint32_t tiny_blk_us, tiny_blk_sec, tiny_blk_n;
 } CalDev;
+#define CAL_DEV_V1       ((uint32_t)offsetof(CalDev, tiny_hit_us))   /* version 1's */
+#define CAL_TINY_MAX_US  16000u
+#define CAL_TINY_KEEP    4096u
+#define CAL_MIN_TINY     32u             /* hits, and blocks, before they are used */
 
 static CalDev        g_cal[VM_DEV_COUNT];
 static volatile int  g_cal_on;
@@ -2127,6 +2144,42 @@ static void cal_waste(Dev *d, const RaPiece *pc)
 	ST(g_cal_dirty, 1);
 }
 
+/* Tiny reads: a sum and a count kept (the last CAL_TINY_KEEP or so). */
+static void cal_mean_add(uint32_t *sum, uint32_t *n, uint32_t v, uint32_t *extra, uint32_t ex)
+{
+	uint32_t c = LD(*n) + 1;
+
+	if (v > CAL_TINY_MAX_US)
+		v = CAL_TINY_MAX_US;
+	ST(*sum, LD(*sum) + v);
+	if (extra)
+		ST(*extra, LD(*extra) + ex);
+	if (c >= CAL_TINY_KEEP) {
+		ST(*sum, LD(*sum) >> 1);
+		if (extra)
+			ST(*extra, LD(*extra) >> 1);
+		c >>= 1;
+	}
+	ST(*n, c);
+	ST(g_cal_dirty, 1);
+}
+
+/* A tiny read copied from its block (us), or the block read for one (us, its
+ * sectors). Calibration on only. */
+static void cal_tiny_hit(Dev *d, uint32_t us)
+{
+	CalDev *c = &g_cal[d - g_dev];
+
+	cal_mean_add(&c->tiny_hit_us, &c->tiny_hit_n, us, NULL, 0);
+}
+
+static void cal_tiny_blk(Dev *d, uint32_t us, uint32_t sectors)
+{
+	CalDev *c = &g_cal[d - g_dev];
+
+	cal_mean_add(&c->tiny_blk_us, &c->tiny_blk_n, us, &c->tiny_blk_sec, sectors);
+}
+
 /* A series' median, us per 128 KiB (the middle of its bucket). */
 static uint32_t cal_median(const uint16_t *h, uint32_t n)
 {
@@ -2196,6 +2249,41 @@ void vm_stage_cal(int dev, VmCal *out)
 	cal_cost(dev, &c, out);
 }
 
+/* What a tiny read costs on storage dev: a card read of n sectors a + b n,
+ * from the measured block reads (mean, of their mean size) and a 128 KiB read
+ * (median, non-cacheable, else cached); a read from the block, measured. The
+ * fixed figures for what is not measured enough. */
+static void cal_tiny_cost(int dev, RtTinyCost *t)
+{
+	*t = rt_tiny_fixed;
+	if (dev < 0 || dev >= VM_DEV_COUNT)
+		return;
+	{
+		const CalDev *c = &g_cal[dev];
+		const uint32_t bn = LD(c->tiny_blk_n), hn = LD(c->tiny_hit_n);
+		int k = -1;
+
+		if (LD(c->n_plain[1]) >= VM_CAL_MIN_PLAIN)
+			k = 1;
+		else if (LD(c->n_plain[0]) >= VM_CAL_MIN_PLAIN)
+			k = 0;
+		if (bn >= CAL_MIN_TINY && k >= 0) {
+			const int64_t big = cal_median(c->plain[k], LD(c->n_plain[k]));   /* 256 sectors */
+			const int64_t fm = LD(c->tiny_blk_us) / bn, bm = LD(c->tiny_blk_sec) / bn;
+
+			if (bm < 256 && big > fm) {
+				const int64_t b16 = (big - fm) * 16 / (256 - bm);
+				const int64_t a = big - b16 * 256 / 16;
+
+				t->b16_us = (int32_t)b16;
+				t->a_us = (int32_t)(a > 0 ? a : 0);
+			}
+		}
+		if (hn >= CAL_MIN_TINY)
+			t->hit_us = (int32_t)(LD(c->tiny_hit_us) / hn);
+	}
+}
+
 /* The file: a header, each storage's counts, a check over all of it. Written
  * aside, then swapped in, as the profiles are; read straight into g_cal and
  * cleared again if anything is wrong. Worker thread. */
@@ -2216,11 +2304,14 @@ static uint32_t cal_fnv(uint32_t c, const void *p, size_t bytes)
  * and the figures in use then. A save is worth its write only if what is in
  * use would change (internal storage: written as little as can be). */
 typedef struct CalSaved {
-	uint32_t n_plain[2], n_served[2], n_waste;
+	uint32_t n_plain[2], n_served[2], n_waste, n_tiny_hit, n_tiny_blk;
 	RtCost   cost;
+	RtTinyCost tiny;
 	int      have[2], have_waste;
 } CalSaved;
 static CalSaved g_cal_saved[VM_DEV_COUNT];   /* worker */
+
+static void cal_tiny_cost(int dev, RtTinyCost *t);
 
 static void cal_snapshot(void)
 {
@@ -2229,6 +2320,9 @@ static void cal_snapshot(void)
 		VmCal v;
 
 		cal_cost(i, &o->cost, &v);
+		cal_tiny_cost(i, &o->tiny);
+		o->n_tiny_hit = LD(g_cal[i].tiny_hit_n);
+		o->n_tiny_blk = LD(g_cal[i].tiny_blk_n);
 		for (int k = 0; k < 2; k++) {
 			o->n_plain[k] = v.n_plain[k];
 			o->n_served[k] = v.n_served[k];
@@ -2277,6 +2371,16 @@ static int cal_worth_saving(void)
 		    (v.have_waste && cal_moved(c.waste_us, o->cost.waste_us)) ||
 		    (!v.have_waste && cal_grown(v.n_waste, o->n_waste, VM_CAL_MIN_WASTE)))
 			return 1;
+		{                                 /* tiny reads: the same way */
+			RtTinyCost t;
+
+			cal_tiny_cost(i, &t);
+			if (cal_moved(t.a_us, o->tiny.a_us) || cal_moved(t.b16_us, o->tiny.b16_us) ||
+			    cal_moved(t.hit_us, o->tiny.hit_us) ||
+			    cal_grown(LD(g_cal[i].tiny_hit_n), o->n_tiny_hit, CAL_MIN_TINY) ||
+			    cal_grown(LD(g_cal[i].tiny_blk_n), o->n_tiny_blk, CAL_MIN_TINY))
+				return 1;
+		}
 	}
 	return 0;
 }
@@ -2312,6 +2416,11 @@ static void cal_save(void)
 		}
 		one.waste_us = LD(g_cal[i].waste_us);
 		one.waste_n = LD(g_cal[i].waste_n);
+		one.tiny_hit_us = LD(g_cal[i].tiny_hit_us);
+		one.tiny_hit_n = LD(g_cal[i].tiny_hit_n);
+		one.tiny_blk_us = LD(g_cal[i].tiny_blk_us);
+		one.tiny_blk_sec = LD(g_cal[i].tiny_blk_sec);
+		one.tiny_blk_n = LD(g_cal[i].tiny_blk_n);
 		ok = ksceIoWrite(fd, &one, sizeof(one)) == (int)sizeof(one);
 		c = cal_fnv(c, &one, sizeof(one));
 	}
@@ -2337,13 +2446,21 @@ static int cal_read_file(const char *path)
 
 	if (fd < 0)
 		return 0;
+	memset(g_cal, 0, sizeof(g_cal));
 	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && h.magic == CAL_MAGIC &&
-	     h.version == CAL_VERSION && h.devs == VM_DEV_COUNT &&
-	     ksceIoRead(fd, g_cal, sizeof(g_cal)) == (int)sizeof(g_cal) &&
-	     ksceIoRead(fd, &check, sizeof(check)) == (int)sizeof(check);
+	     (h.version == CAL_VERSION || h.version == 1u) && h.devs == VM_DEV_COUNT;
+	c = cal_fnv(c, &h, sizeof(h));
+	/* version 1: each storage's counts without the tiny reads' (those start at 0) */
+	for (int i = 0; i < VM_DEV_COUNT && ok; i++) {
+		const uint32_t sz = h.version == 1u ? CAL_DEV_V1 : (uint32_t)sizeof(CalDev);
+
+		ok = ksceIoRead(fd, &g_cal[i], sz) == (int)sz;
+		c = cal_fnv(c, &g_cal[i], sz);
+	}
+	ok = ok && ksceIoRead(fd, &check, sizeof(check)) == (int)sizeof(check);
 	ksceIoClose(fd);
 	if (ok) {
-		c = cal_fnv(cal_fnv(c, &h, sizeof(h)), g_cal, sizeof(g_cal)) ^ 0xA5C3A5C3u;
+		c ^= 0xA5C3A5C3u;
 		ok = c == check;
 		for (int i = 0; i < VM_DEV_COUNT && ok; i++)
 			for (int k = 0; k < 2; k++)
@@ -2394,6 +2511,67 @@ static void ra_adapt_reset(void)
 	memset(g_ad_runs, 0, sizeof(g_ad_runs));
 	for (int k = 0; k < 2; k++)
 		ST(g_ra_adj[k], 0);
+	memset(g_tn_cnt, 0, sizeof(g_tn_cnt));
+	memset(g_tn_reads, 0, sizeof(g_tn_reads));
+	memset(g_tn_sec, 0, sizeof(g_tn_sec));
+	memset(g_tn_runs, 0, sizeof(g_tn_runs));
+	g_tn_ended = 0;
+	ST(g_tiny_thr, RA_TINY_STREAK);
+	ST(g_tiny_blk, RA_TINY_SECTORS);
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* What tiny reads use now: Adaptive's (T, B), else the fixed ones (On, and
+ * while the R/A Test runs). */
+static uint32_t tiny_thr(void)
+{
+	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE)
+	       ? LD(g_tiny_thr) : RA_TINY_STREAK;
+}
+
+static uint32_t tiny_blk(void)
+{
+	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE)
+	       ? LD(g_tiny_blk) : RA_TINY_SECTORS;
+}
+
+static void cal_tiny_cost(int dev, RtTinyCost *t);
+
+/* A run of tiny reads has ended: `reads` in a row, `sectors` in all; every
+ * RA_ADAPT_RUNS of them (of two reads or more), (T, B) weighed again with
+ * this storage's figures - moved if another is better by more than three
+ * blocks read for one read. Adaptive only (another thread at it: lost). */
+static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
+{
+	int b;
+
+	if (reads < 2 || LD(g_ra_mode) != VM_RA_ADAPTIVE ||
+	    __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) || __sync_lock_test_and_set(&g_ad_lock, 1))
+		return;
+	b = rt_tiny_bucket(reads);
+	g_tn_cnt[b] += RA_ADAPT_ONE;
+	g_tn_reads[b] += reads * RA_ADAPT_ONE;
+	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
+	g_tn_runs[b]++;
+	if (++g_tn_ended >= RA_ADAPT_RUNS) {
+		RtTinyCost c;
+		int t = (int)LD(g_tiny_thr), blk = (int)LD(g_tiny_blk);
+
+		cal_tiny_cost((int)(d - g_dev), &c);
+		if (rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
+		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
+		                                              rt_tiny_card(&c, 1)), &c)) {
+			ST(g_tiny_thr, (uint32_t)t);
+			ST(g_tiny_blk, (uint32_t)blk);
+			ADD(g_tn_moves, 1);
+		}
+		for (int i = 0; i < RT_TB; i++) {
+			g_tn_cnt[i] >>= 1;
+			g_tn_reads[i] >>= 1;
+			g_tn_sec[i] >>= 1;
+		}
+		g_tn_ended = 0;
+	}
 	__sync_lock_release(&g_ad_lock);
 }
 
@@ -3037,7 +3215,9 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
                         uint8_t *p, uint32_t n, int *ret)
 {
 	const int clean = LD(g_gpu_safe) && g_dcache_clean;
-	int wr;
+	const int cal = LD(g_cal_on);             /* calibration: block reads and hits timed */
+	uint32_t h0;
+	int wr, filled = 0;
 	void *shadow;
 
 	if ((LD(g_gpu_safe) && !g_dcache_clean) || __sync_lock_test_and_set(&d->busy, 1))
@@ -3048,16 +3228,26 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		__sync_lock_release(&d->busy);
 		return 0;
 	}
-	d->t_streak = sector == d->t_next && part == d->t_part ? d->t_streak + (d->t_streak < 1000) : 1;
+	if (sector == d->t_next && part == d->t_part) {
+		d->t_streak += d->t_streak < 1000;
+		d->t_run_sec += n;
+	} else {
+		ra_tiny_end(d, d->t_streak, d->t_run_sec);   /* Adaptive: the run that ended */
+		d->t_streak = 1;
+		d->t_run_sec = n;
+	}
 	d->t_next = sector + n;
 	if (!(LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) && sector + n <= LD(d->t_end) &&
 	      part == d->t_part && io == d->t_io && d->t_epoch == LD(d->ra_epoch) &&
 	      !__atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST) &&
 	      ksceKernelGetSystemTimeLow() - d->t_us < RA_MAX_AGE_US)) {   /* last: only with a block */
 		/* not in it: the block is of no use now */
+		const uint32_t blk = tiny_blk();          /* at most RA_TINY_SECTORS */
+		uint32_t b0;
+
 		ST(d->t_end, LD(d->t_start));
 		d->t_part = part;
-		if (d->t_streak < RA_TINY_STREAK || sector > 0xFFFFFFFFu - RA_TINY_SECTORS) {
+		if (d->t_streak < tiny_thr() || n > blk || sector > 0xFFFFFFFFu - blk) {
 			__sync_lock_release(&d->busy);
 			return 0;
 		}
@@ -3065,9 +3255,10 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		 * with a write's own steps */
 		__atomic_store_n(&d->t_dirty, 0, __ATOMIC_SEQ_CST);
 		ST(d->t_start, sector);
-		__atomic_store_n(&d->t_end, sector + RA_TINY_SECTORS, __ATOMIC_SEQ_CST);
+		__atomic_store_n(&d->t_end, sector + blk, __ATOMIC_SEQ_CST);
 		wr = __atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST);
-		if (wr || io(ref, part, sector, d->t_buf, RA_TINY_SECTORS) < 0) {
+		b0 = cal ? ksceKernelGetSystemTimeLow() : 0;
+		if (wr || io(ref, part, sector, d->t_buf, blk) < 0) {
 			/* a write now, or the card's end: this read the standard way */
 			ST(d->t_end, sector);
 			__sync_lock_release(&d->busy);
@@ -3076,11 +3267,17 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_io = io;
 		d->t_epoch = LD(d->ra_epoch);
 		d->t_us = ksceKernelGetSystemTimeLow();
+		if (cal)
+			cal_tiny_blk(d, d->t_us - b0, blk);   /* calibration: a block read */
+		filled = 1;
 	}
+	h0 = cal && !filled ? ksceKernelGetSystemTimeLow() : 0;   /* only a read from the block */
 	copy_out(p, (uint8_t *)d->t_buf + (size_t)(sector - LD(d->t_start)) * 512, n * 512, clean);
 	if (!clean)
 		vm_dsb();
 	ADD(g_ra_tiny_reads, 1);
+	if (cal && !filled)
+		cal_tiny_hit(d, ksceKernelGetSystemTimeLow() - h0);   /* calibration: from the block */
 	*ret = 0;
 	shadow = take_shadow();                   /* verify mode: read again, compared */
 	if (shadow) {
@@ -4216,6 +4413,39 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
 		VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
+		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
+			uint32_t r[RT_TB], mid = 0, big = 0;
+
+			while (__sync_lock_test_and_set(&g_ad_lock, 1))
+				ksceKernelDelayThread(10);
+			memcpy(r, g_tn_runs, sizeof(r));
+			__sync_lock_release(&g_ad_lock);
+			for (int i = 8; i < 16; i++)
+				mid += r[i];
+			for (int i = 16; i < RT_TB; i++)
+				big += r[i];
+			/* runs of tiny reads by how many in a row, since what is in effect changed */
+			VM_KLOGI("stage: tiny reads adaptive: from read %u, block %u KiB now, moved %u; runs "
+			         "2-8: %u %u %u %u %u %u %u, 9-16: %u, 17+: %u", (unsigned)LD(g_tiny_thr),
+			         (unsigned)(LD(g_tiny_blk) / 2), (unsigned)LD(g_tn_moves), (unsigned)r[1],
+			         (unsigned)r[2], (unsigned)r[3], (unsigned)r[4], (unsigned)r[5],
+			         (unsigned)r[6], (unsigned)r[7], (unsigned)mid, (unsigned)big);
+		}
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			const CalDev *c = &g_cal[i];
+			const uint32_t hn = LD(c->tiny_hit_n), bn = LD(c->tiny_blk_n);
+			RtTinyCost t;
+
+			if (!hn && !bn)
+				continue;
+			cal_tiny_cost(i, &t);
+			VM_KLOGI("stage: calibration dev %d tiny: from the block %u us (%u), a block %u us of "
+			         "%u sectors (%u); in use %d + %d/16 us a sector, from the block %d", i,
+			         (unsigned)(hn ? LD(c->tiny_hit_us) / hn : 0), (unsigned)hn,
+			         (unsigned)(bn ? LD(c->tiny_blk_us) / bn : 0),
+			         (unsigned)(bn ? LD(c->tiny_blk_sec) / bn : 0), (unsigned)bn, (int)t.a_us,
+			         (int)t.b16_us, (int)t.hit_us);
+		}
 		if (g_stack_free_fn) {
 			/* the least each has had free, of its stack (-1: no such thread) */
 			int fr[VM_DEV_COUNT][3];

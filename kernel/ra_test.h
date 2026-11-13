@@ -303,4 +303,98 @@ static inline void ra_adapt_age(RaTest *t, int k)
 	t->ended[k] = 0;
 }
 
+/* ---- tiny reads (under 32 KiB): Adaptive's model -----------------------
+ * A run of tiny reads in a row: from the T-th on, a read that finds nothing
+ * reads a block of B sectors at once (on its own thread), and the next ones
+ * that lie in it are copied from it. A run is kept by how many reads it had
+ * (RT_TB buckets) with their sectors, so the read size is known; runs of one
+ * read are not kept (no T starts on them). What (T, B) brings a run of R
+ * reads of s sectors, with M = R - T + 1 reads from the T-th on, k = B / s of
+ * them a block, F = ceil(M / k) blocks:
+ *   (M - F) reads copied from a block save   card(s) - hit
+ *   F blocks read in place of F reads cost   card(B) - card(s)
+ * with a card read of n sectors taking a + b n. */
+#define RT_TB            22
+#define RT_TINY_B_N      3
+static const uint16_t rt_tiny_rep[RT_TB] = {   /* a bucket's reads, as counted below */
+	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 28, 40, 56, 96, 192 };
+static const uint8_t rt_tiny_thr[] = { 2, 3, 4, 6, 8, 12, 16 };
+#define RT_TINY_T_N      ((int)sizeof(rt_tiny_thr))
+static const uint8_t rt_tiny_blk[RT_TINY_B_N] = { 16, 32, 64 };   /* sectors */
+
+typedef struct {
+	int32_t a_us, b16_us;                /* a card read: a + b/16 a sector     */
+	int32_t hit_us;                      /* a read copied from the block       */
+} RtTinyCost;
+
+/* The figures measured on the console earlier: one sector 395 us, a block of
+ * 64 about 2 ms, from the block 46 us. */
+static const RtTinyCost rt_tiny_fixed = { 370, 25 * 16, 46 };
+
+static inline int rt_tiny_bucket(uint32_t reads)
+{
+	if (reads <= 16)
+		return (int)reads - 1;
+	return reads <= 24 ? 16 : reads <= 32 ? 17 : reads <= 48 ? 18 : reads <= 64 ? 19
+	     : reads <= 128 ? 20 : 21;
+}
+
+static inline int64_t rt_tiny_card(const RtTinyCost *c, uint32_t sectors)
+{
+	return (int64_t)c->a_us + (int64_t)c->b16_us * sectors / 16;
+}
+
+/* What (T, B) brings over the runs: cnt[i] runs in bucket i (any scale),
+ * reads[i] and sec[i] their reads and sectors (the same scale). */
+static inline int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+                                    int t, int blk, const RtTinyCost *c)
+{
+	int64_t sc = 0;
+
+	for (int i = 1; i < RT_TB; i++) {    /* bucket 0 (one read) is never kept */
+		uint32_t r, s, m, k, f;
+
+		if (!cnt[i] || !reads[i])
+			continue;
+		r = (reads[i] + cnt[i] / 2) / cnt[i];               /* a run's reads   */
+		s = (sec[i] + reads[i] / 2) / reads[i];             /* a read's sectors */
+		if (!s)
+			s = 1;
+		if (r < (uint32_t)t || s > (uint32_t)blk)
+			continue;
+		m = r - (uint32_t)t + 1;
+		k = (uint32_t)blk / s;
+		f = (m + k - 1) / k;
+		sc += (int64_t)cnt[i] * ((int64_t)(m - f) * (rt_tiny_card(c, s) - c->hit_us) -
+		                         (int64_t)f * (rt_tiny_card(c, (uint32_t)blk) - rt_tiny_card(c, s)));
+	}
+	return sc;
+}
+
+/* Adaptive's pick: the (T, B) that would have brought the most, (*t, *blk)
+ * unless another is better by more than `margin`. 1 if it changed. */
+static inline int rt_tiny_pick(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+                               int *t, int *blk, int64_t margin, const RtTinyCost *c)
+{
+	const int64_t cur = rt_tiny_score(cnt, reads, sec, *t, *blk, c);
+	int64_t best = cur;
+	int bt = *t, bb = *blk;
+
+	for (int i = 0; i < RT_TINY_T_N; i++)
+		for (int j = 0; j < RT_TINY_B_N; j++) {
+			const int64_t v = rt_tiny_score(cnt, reads, sec, rt_tiny_thr[i], rt_tiny_blk[j], c);
+
+			if (v > best) {
+				best = v;
+				bt = rt_tiny_thr[i];
+				bb = rt_tiny_blk[j];
+			}
+		}
+	if (best - cur <= margin || (bt == *t && bb == *blk))
+		return 0;
+	*t = bt;
+	*blk = bb;
+	return 1;
+}
+
 #endif /* VITAMEMIO_RA_TEST_H */

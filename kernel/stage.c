@@ -1967,12 +1967,14 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * stays never. Back to where On has it when what is in effect changes
  * (eff_update: another app in front, a setting). */
 #define RA_ADAPT_RUNS       32u
-#define RA_ADAPT_MARGIN_US  (3 * RT_WASTE_US)        /* three pieces read for nothing */
+#define RA_ADAPT_ONE        16u    /* a run or a sector counts 16: halving keeps a rare one */
+#define RA_ADAPT_MARGIN_US  ((int64_t)RA_ADAPT_ONE * 3 * RT_WASTE_US)   /* three pieces for nothing */
 #define RA_THR_LO         2u
 #define RA_THR_HI         8u
 static volatile int      g_ra_adj[2];
 static volatile uint32_t g_ra_moves[2];                  /* threshold changes (log) */
 static RaTest            g_ad;                           /* the runs, as the test has them */
+static uint32_t          g_ad_runs[2][RT_RUN];           /* the same, not halved (log) */
 static volatile int      g_ad_lock;
 
 /* The threshold On has for a stream of kind nc: the app in front's own, or
@@ -2010,6 +2012,7 @@ static void ra_adapt_reset(void)
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	memset(&g_ad, 0, sizeof(g_ad));
+	memset(g_ad_runs, 0, sizeof(g_ad_runs));
 	for (int k = 0; k < 2; k++)
 		ST(g_ra_adj[k], 0);
 	__sync_lock_release(&g_ad_lock);
@@ -2032,11 +2035,11 @@ static void ra_adapt_read(int small, int nc, uint32_t at, uint32_t n)
 	if (small) {
 		const uint32_t b = (at - 1) / 4;
 
-		g_ad.spos[nc][b < RT_POS ? b : RT_POS - 1] += n;
+		g_ad.spos[nc][b < RT_POS ? b : RT_POS - 1] += n * RA_ADAPT_ONE;
 	} else {
 		const uint32_t have = RT_PIECES * RT_PIECE_SECTORS;
 
-		g_ad.pos[nc][at < RT_POS ? at : RT_POS - 1] += n < have ? n : have;
+		g_ad.pos[nc][at < RT_POS ? at : RT_POS - 1] += (n < have ? n : have) * RA_ADAPT_ONE;
 	}
 	g_ad.total_sectors += n;
 	__sync_lock_release(&g_ad_lock);
@@ -2052,9 +2055,10 @@ static void ra_adapt_end(int small, int nc, uint32_t len)
 	if (small) {
 		const uint32_t b = len / 4;
 
-		g_ad.srun[nc][b < RT_RUN ? b : RT_RUN - 1]++;
+		g_ad.srun[nc][b < RT_RUN ? b : RT_RUN - 1] += RA_ADAPT_ONE;
 	} else {
-		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1]++;
+		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1] += RA_ADAPT_ONE;
+		g_ad_runs[nc][len < RT_RUN ? len : RT_RUN - 1]++;
 	}
 	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS) {
 		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
@@ -3736,13 +3740,13 @@ void vm_stage_worker_tick(void)
 			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u now, moved %u / %u times",
 			         (unsigned)ra_threshold(0), (unsigned)ra_threshold(1),
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]));
-			/* the runs it weighs, by length 1..10+ (halved at each round):
-			 * what the gain and cost figures can be checked against */
+			/* read ahead's runs by length 1..10+ since what is in effect
+			 * changed: what the gain and cost figures can be checked against */
 			uint32_t runs[2][RT_RUN];
 
 			while (__sync_lock_test_and_set(&g_ad_lock, 1))
 				ksceKernelDelayThread(10);
-			memcpy(runs, g_ad.run, sizeof(runs));
+			memcpy(runs, g_ad_runs, sizeof(runs));
 			__sync_lock_release(&g_ad_lock);
 			for (int k = 0; k < 2; k++) {
 				const uint32_t *r = runs[k];

@@ -3260,6 +3260,16 @@ static void test_readahead_adaptive(void)
 	adapt_runs(0, 20, 1);
 	adapt_runs(0, 3, RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 6);
+	/* as Gravity Rush reads graphics data: mostly single reads, now and then
+	 * a long run - 3 pays best (the long run's tail read for nothing is
+	 * outweighed); a rare run is not lost when the counts are halved */
+	for (int r = 0; r < 6; r++) {
+		adapt_runs(1, 1, 26);
+		adapt_runs(1, 2, 5);
+		adapt_runs(1, 50, 1);
+	}
+	CHECK(ra_threshold(1) == 3 && g_ad_runs[1][10] == 6);
+	CHECK(g_ad.run[1][10] > 0);                          /* still weighed after the halving */
 	/* NC on its own: runs of 8 - from 2 */
 	adapt_runs(1, 8, 2 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6);
@@ -3324,7 +3334,8 @@ static void test_readahead_adaptive(void)
 			CHECK(rd(u, 3500, 8) == 0);
 	}
 	CHECK(rd(u, 2048, 256) == 0);
-	CHECK(g_ad.run[0][7] == 1 && g_ad.ended[0] == 1 && g_ad.pos[0][7] == 256);
+	CHECK(g_ad.run[0][7] == RA_ADAPT_ONE && g_ad.ended[0] == 1 && g_ad.pos[0][7] == 256 * RA_ADAPT_ONE &&
+	      g_ad_runs[0][7] == 1);
 	ra_adapt_reset();
 	for (uint32_t run = 0; run < 3 * RA_ADAPT_RUNS && ra_threshold(0) == 5; run++) {
 		const uint32_t at = (run % 2) * 2048;

@@ -65,6 +65,7 @@ void vm_stage_ratest_cancel(void)               { g_core->ratest_cancel(); }
 void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
 void vm_stage_cal(int dev, VmCal *out)          { g_core->cal(dev, out); }
 void vm_stage_cal_set(int on)                   { g_core->cal_set(on); }
+void vm_stage_cal_reset(void)                   { g_core->cal_reset(); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
@@ -201,9 +202,13 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	hud_thr(nc, sizeof(nc), now.set[1], now.thr[1], now.mode == VM_RA_ADAPTIVE);
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT
 	         "%.15s", mode, fg->title);
-	if (now.mode != VM_RA_OFF && n < room)
+	if (now.mode != VM_RA_OFF && n < room) {
+		VmCal cal;
+
+		vm_stage_cal(-1, &cal);             /* tuning: green measuring, grey off */
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Streak  C: %.9s" HUD_C_DIM
-		         "  NC: %.9s", c, nc);
+		         "  NC: %.9s  %sAuto", c, nc, cal.on ? HUD_C_GOOD : HUD_C_DIM);
+	}
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;
 		char a[16], b[16];
@@ -394,12 +399,26 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		return;
 	}
 	if (item == OV_ITEM_CALIB) {              /* the console's, not the app's */
+		static uint32_t asked_us;             /* Triangle once: asked; again: done */
+		const uint32_t now = ksceKernelGetSystemTimeLow();
 		VmCal c;
 
+		if (dir == OV_DIR_RESET) {
+			if (asked_us && now - asked_us < 4u * 1000u * 1000u) {
+				asked_us = 0;
+				vm_stage_cal_reset();
+				snprintf(msg, cap, HUD_C_GOOD "Tuning reset: standard figures");
+			} else {
+				asked_us = now | 1u;
+				snprintf(msg, cap, HUD_C_WARN "Triangle again to reset tuning");
+			}
+			return;
+		}
+		asked_us = 0;
 		vm_stage_cal(-1, &c);
 		vm_stage_cal_set(!c.on);
-		snprintf(msg, cap, !c.on ? HUD_C_GOOD "Calibration on: just play"
-		                                        : HUD_C_TEXT "Calibration off: kept");
+		snprintf(msg, cap, !c.on ? HUD_C_GOOD "Tuning: Auto, just play"
+		                                        : HUD_C_TEXT "Tuning off: what it has is kept");
 		return;
 	}
 	vm_stage_app_now(&an);
@@ -483,31 +502,14 @@ static void ov_line(char *o, int cur, int i, int indent, const char *name, const
 	         indent ? "  " : "", nm, color, val);
 }
 
-/* "2.9" (ms, from us), or "-" without a measured value. */
-static void ms_text(char *o, size_t n, int32_t us, int have)
-{
-	const unsigned u = !have ? 0u : us < 0 ? 0u : us > 99999 ? 99999u : (unsigned)us;
-
-	if (have)
-		snprintf(o, n, "%u.%u", (u / 1000u) % 100u, (u % 1000u) / 100u);
-	else
-		snprintf(o, n, "-");
-}
-
-/* Calibration's line: on / off, and for the storage in use what a read from
- * the pieces saves (ms per 128 KiB, C and NC) and a piece read for nothing
- * costs (W) - measured ones, "-" while too little is measured. */
-static void ov_calib(char *line, int cur, int dev)
+/* Tuning's line (calibration): Auto (measuring) or Off. */
+static void ov_calib(char *line, int cur)
 {
 	VmCal c;
-	char v[48], g[2][8], w[8];
 
-	vm_stage_cal(dev, &c);
-	for (int k = 0; k < 2; k++)                    /* per 128 KiB: x 256 / 16 */
-		ms_text(g[k], sizeof(g[k]), c.gain16[k] * 16, c.have[k]);
-	ms_text(w, sizeof(w), c.waste_us, c.have_waste);
-	snprintf(v, sizeof(v), "%s C %s NC %s W %s", c.on ? "On" : "Off", g[0], g[1], w);
-	ov_line(line, cur, OV_ITEM_CALIB, 0, "Calibration", c.on ? HUD_C_GOOD : HUD_C_TEXT, v);
+	vm_stage_cal(-1, &c);
+	ov_line(line, cur, OV_ITEM_CALIB, 0, "Tuning", c.on ? HUD_C_GOOD : HUD_C_TEXT,
+	        c.on ? "Auto" : "Off");
 }
 
 /* Characters that take room (colour codes do not). */
@@ -605,7 +607,7 @@ static void overlay_feed(void)
 			mask = (1u << OV_ITEM_CALIB) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "No app in front: its settings are");
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
-			ov_calib(L[n++], cur, fg.dev >= 0 ? fg.dev : VM_DEV_SD2VITA);
+			ov_calib(L[n++], cur);
 		} else {
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
@@ -665,7 +667,7 @@ static void overlay_feed(void)
 				ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
 				        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
 			}
-			ov_calib(L[n++], cur, fg.dev >= 0 ? fg.dev : VM_DEV_SD2VITA);
+			ov_calib(L[n++], cur);
 			mask |= 1u << OV_ITEM_CALIB;
 			save_line = n++;
 		}
@@ -674,7 +676,9 @@ static void overlay_feed(void)
 		if (msg[0] && ksceKernelGetSystemTimeLow() - msg_us < 4u * 1000u * 1000u)
 			snprintf(L[n++], VM_HUD_LINE_MAX, "%s", msg);
 		else
-			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Up/Down  Left/Right change  X do");
+			snprintf(L[n++], VM_HUD_LINE_MAX, cur == OV_ITEM_CALIB
+			         ? HUD_C_DIM "Left/Right Auto/Off  Triangle reset"
+			         : HUD_C_DIM "Up/Down  Left/Right change  X do");
 		/* Save and Close: in the middle of the panel, whatever is in it */
 		{
 			int width = 0;

@@ -111,11 +111,9 @@ A game that uses SELECT + Right itself will open the overlay too. While the over
 
 The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
 
-### Calibration: measured on your console
+### Tuning: measured on your console
 
-*Calibration* in the overlay is for the whole console, not one game. While it is on, the plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. Switch it on, play a few games including loading screens, then switch it off; what was measured is kept.
-
-The overlay shows what is in use: **C** and **NC**, the milliseconds a 128 KiB read from read ahead saves (ordinary reads, graphics data); **W**, what a read for nothing costs. A dash means not measured enough yet, so the standard figure is used.
+*Tuning* in the overlay is for the whole console, not one game. Set to *Auto*, the plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. Set it to *Auto*, play a few games including loading screens, then set it *Off* if you like; what was measured is kept. Triangle on the line, twice, forgets what was measured.
 
 ### R/A test: let the plugin choose for your game
 
@@ -143,7 +141,7 @@ Core 3 B C: 98%  NC: 0%
 
 - **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
 - **B:** the game's buffers for copying on the spare core, since it started (also in the overlay): **green** all usable; **yellow** some had a first page the system cannot share, so that part was copied on the game's core; **red** some could not be used at all, and were copied on the game's core. The data is right either way. Grey while nothing has been copied there yet.
-- **Streak:** reads in a row before read ahead starts. With *Adaptive* as set:now, for example `C: 5:6`: set at 5, at 6 now.
+- **Streak:** reads in a row before read ahead starts. With *Adaptive* as set:now, for example `C: 5:6`: set at 5, at 6 now. **Auto** at the end is green while *Tuning* measures, grey when it is off.
 - **Core 3, C:** the share of copying of ordinary data done on the spare core since the HUD opened.
 - **Core 3, NC:** the share of graphics data handled on the spare core: read there (*C + NC All*) or copied there from read ahead (*C + NC R/A* and *All*). Graphics data read the standard way counts against it.
 

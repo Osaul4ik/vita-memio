@@ -55,6 +55,7 @@ typedef struct VmCoreApi {
 	void (*ratest_stop)(VmRaTestPick *out);
 	void (*cal)(int dev, VmCal *out);
 	void (*cal_set)(int on);
+	void (*cal_reset)(void);
 } VmCoreApi;
 
 /* What the worker should wake for, from VmHudApi.busy. */

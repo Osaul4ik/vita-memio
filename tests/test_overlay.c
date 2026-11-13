@@ -186,11 +186,19 @@ static void test_menu(void)
 	o.cursor = OV_ITEM_GPUSAFE;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_CALIB);
-	/* Calibration: a value (Left / Right / Cross), not the app's */
+	/* Tuning: a value (Left / Right / Cross), not the app's; Triangle asks
+	 * for its reset - only there */
 	CHECK(!ov_item_action(OV_ITEM_CALIB));
 	tap(&o, 0, OV_BTN_RIGHT);
 	CHECK(o.op == OV_OP(OV_ITEM_CALIB, 1));
 	o.op = 0;
+	tap(&o, 0, OV_BTN_TRIANGLE);
+	CHECK(OV_OP_ITEM(o.op) == OV_ITEM_CALIB && OV_OP_DIR(o.op) == OV_DIR_RESET);
+	o.op = 0;
+	o.cursor = OV_ITEM_RA;
+	tap(&o, 0, OV_BTN_TRIANGLE);
+	CHECK(!o.op);
+	o.cursor = OV_ITEM_CALIB;
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_SAVE);
 	/* the cursor on a line that went away (read ahead changed): the next

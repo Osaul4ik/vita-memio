@@ -20,6 +20,7 @@
  *   Up / Down        the cursor (over the lines shown: see `mask`)
  *   Left / Right     the value under it, back / on (Cross: on)
  *   Cross            on Save: do it; on Close: closed
+ *   Triangle         on Tuning: reset what was measured (asked twice)
  * A change is not made here: it is left in `op` for the worker, which owns
  * the settings and the files.
  */
@@ -42,6 +43,7 @@
 #define OV_BTN_RIGHT  0x00000020u
 #define OV_BTN_DOWN   0x00000040u
 #define OV_BTN_LEFT   0x00000080u
+#define OV_BTN_TRIANGLE 0x00001000u
 #define OV_BTN_CROSS  0x00004000u
 
 /* The menu's items, top to bottom: the app in front's own settings, then
@@ -56,7 +58,8 @@ enum {
 	OV_ITEM_ADV,         /* the two below shown or not                        */
 	OV_ITEM_PIPE,        /* overlapped reads                                  */
 	OV_ITEM_GPUSAFE,     /* GPU-safe reads                                    */
-	OV_ITEM_CALIB,       /* calibration on / off (this console's, not the app's) */
+	OV_ITEM_CALIB,       /* tuning (calibration) Auto / Off, Triangle: reset - the
+	                      * console's, not the app's                          */
 	OV_ITEM_SAVE,        /* the app's settings as they are now, into its profile */
 	OV_ITEM_CLOSE,       /* the overlay closed                                */
 	OV_ITEMS
@@ -82,7 +85,9 @@ static inline int ov_next(int i, int dir, uint32_t mask)
 	return i;
 }
 
-/* An op for the worker: the item + 1 in bits 8.., the step (-1, +1) below. */
+/* An op for the worker: the item + 1 in bits 8.., the step (-1, +1) below;
+ * OV_DIR_RESET: Triangle (tuning: reset, once confirmed). */
+#define OV_DIR_RESET 2
 #define OV_OP(item, dir)   ((uint32_t)(((item) + 1) << 8) | ((uint32_t)(dir) & 0xFFu))
 #define OV_OP_ITEM(op)     ((int)((op) >> 8) - 1)
 #define OV_OP_DIR(op)      ((int)(int8_t)((op) & 0xFFu))
@@ -199,6 +204,8 @@ static inline int ov_input(OvLogic *o, uint32_t b, uint32_t now, uint32_t mask)
 			o->op = OV_OP(o->cursor, (down & OV_BTN_LEFT) ? -1 : 1);
 		else if (!o->op && ov_item_action(o->cursor) && (down & OV_BTN_CROSS))
 			o->op = OV_OP(o->cursor, 0);
+		else if (!o->op && o->cursor == OV_ITEM_CALIB && (down & OV_BTN_TRIANGLE))
+			o->op = OV_OP(o->cursor, OV_DIR_RESET);
 	}
 	if (was_state == OV_MENU && o->state != OV_MENU)
 		o->hide = b;

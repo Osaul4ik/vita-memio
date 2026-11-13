@@ -1963,7 +1963,7 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * of a kind it works out, as the test does, what each threshold would have
  * brought over them (a read from the pieces saves RT_GAIN_*_US a sector, a
  * piece read for nothing costs RT_WASTE_US) and takes the best one at once -
- * if it is better than the one in effect by more than RA_ADAPT_MARGIN_US, so
+ * if it is better than the one in effect by more than RA_ADAPT_MARGIN, so
  * a run or two either way moves nothing. Then the counts are halved: what
  * was read long ago weighs less. Seeing every threshold, not only the one in
  * effect, it goes down as readily as up. Never off: "never" (the test's)
@@ -1971,7 +1971,8 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * (eff_update: another app in front, a setting). */
 #define RA_ADAPT_RUNS       32u
 #define RA_ADAPT_ONE        16u    /* a run or a sector counts 16: halving keeps a rare one */
-#define RA_ADAPT_MARGIN_US  ((int64_t)RA_ADAPT_ONE * 3 * RT_WASTE_US)   /* three pieces for nothing */
+/* three pieces read for nothing, at what one costs here (measured, or the fixed) */
+#define RA_ADAPT_MARGIN(cost) ((int64_t)RA_ADAPT_ONE * 3 * (cost)->waste_us)
 #define RA_THR_LO         2u
 #define RA_THR_HI         8u
 static volatile int      g_ra_adj[2];
@@ -2360,6 +2361,14 @@ static void cal_load(void)
 	cal_snapshot();                       /* what the file holds (or nothing) */
 }
 
+void vm_stage_cal_reset(void)
+{
+	cal_load();
+	memset(g_cal, 0, sizeof(g_cal));      /* the figures: the fixed ones again */
+	cal_save();
+	VM_KLOGI("stage: calibration reset");
+}
+
 void vm_stage_cal_set(int on)
 {
 	cal_load();
@@ -2429,7 +2438,7 @@ static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
 
 		cal_cost((int)(d - g_dev), &cost, NULL);   /* this storage's, if measured */
 		if (t != RA_THR_NONE &&
-		    (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN_US, &cost)) != (int)t) {
+		    (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN(&cost), &cost)) != (int)t) {
 			ST(g_ra_adj[nc], pick - (int)base);
 			ADD(g_ra_moves[nc], 1);
 		}

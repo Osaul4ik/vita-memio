@@ -3507,6 +3507,28 @@ static void test_calibration(void)
 	memset(k, 0, sizeof(*k));                            /* the fixed figures again */
 	adapt_runs(0, 6, 2 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 2);
+	/* the margin is three pieces at what one costs here: one long run among
+	 * single reads saves 8.4 ms sooner - under three fixed pieces (9 ms),
+	 * over three measured at 1 ms */
+	vm_stage_apply(&s);
+	memset(k, 0, sizeof(*k));
+	adapt_runs(0, 1, RA_ADAPT_RUNS - 1);
+	adapt_runs(0, 20, 1);
+	CHECK(ra_threshold(0) == 5);
+	vm_stage_apply(&s);
+	k->waste_us = 1000 * VM_CAL_MIN_WASTE;
+	k->waste_n = VM_CAL_MIN_WASTE;
+	adapt_runs(0, 1, RA_ADAPT_RUNS - 1);
+	adapt_runs(0, 20, 1);
+	CHECK(ra_threshold(0) == 2);
+	/* reset: nothing measured any more, the fixed figures, the file too */
+	vm_stage_cal_reset();
+	vm_stage_cal(M, &c);
+	CHECK(!c.have_waste && c.waste_us == RT_WASTE_US && !k->waste_n);
+	k->waste_n = 99;
+	g_cal_loaded = 0;
+	cal_load();
+	CHECK(!k->waste_n);
 	CHECK(g_dev[M].st.errors == 0 && !g_dev[M].fallback);
 	vm_stage_cal_set(0);
 	CHECK(!g_cal_on);

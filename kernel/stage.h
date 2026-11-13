@@ -101,6 +101,7 @@ typedef struct VmCal {
 #define VM_CAL_MIN_WASTE   32u
 void vm_stage_cal(int dev, VmCal *out);        /* dev -1: the fixed figures */
 void vm_stage_cal_set(int on);                 /* worker thread             */
+void vm_stage_cal_reset(void);                 /* worker: all measured gone */
 
 /* The overlay's read ahead test. Worker thread, but for _running and _stale. */
 typedef struct VmRaTestPick {

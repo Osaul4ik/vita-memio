@@ -80,6 +80,7 @@
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
 #include "vm_memblock.h"
+#include "ra_test.h"                     /* the read ahead model (Adaptive, the test) */
 #ifndef vm_copy_from_stage
 #define vm_copy_from_stage stage_copy_out   /* the DMA controller or the CPU (below) */
 #endif
@@ -215,6 +216,12 @@ typedef struct Dev {
 	int           rs_nc;
 	void         *rs_part;
 	int           ra_noted_small;         /* the last read noted was one of those */
+	/* Adaptive: the reads of each stream (0 large, 1 32 KiB) still going, by
+	 * place in it (as RaTest.pos / spos), and their sectors - put with the
+	 * rest when it ends (ra_adapt_end), so a round never has the reads of a
+	 * run without the run: that would weigh what read ahead saves without
+	 * the pieces left unread at its end. The stream's own thread only. */
+	uint32_t      ad_pos[2][RT_POS], ad_sec[2];
 	int           ra_small;               /* atomic: the pieces are for that stream */
 	volatile int  rs_lock;                /* its fields: any thread, a moment only */
 	/* the tiny reads' stream and their block (see RA_TINY_SECTORS), the
@@ -1691,7 +1698,6 @@ static SceUID g_app_pid;
 
 /* The overlay's read ahead test (ra_test.h): while on, reads of the app it was
  * started for are followed, nothing else changes. */
-#include "ra_test.h"
 static RaTest       g_rt;
 static volatile int g_rt_on;
 static volatile int g_rt_lock;
@@ -1960,7 +1966,9 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * 4..32 reads in fours (the counts of both, every threshold, weighed in one
  * pass: rt_scores). Read ahead's own streams are counted as the R/A Test counts
  * reads (ra_test.h, a copy of its own): runs of reads in a row, by length. Every RA_ADAPT_RUNS runs
- * of a kind it works out, as the test does, what each threshold would have
+ * of a kind, or RA_ADAPT_SECTORS read in them if that comes first (long runs:
+ * a loading screen would be over before 32 of them; the first round of a game
+ * smaller still, RA_ADAPT_*_FIRST), it works out, as the test does, what each threshold would have
  * brought over them (a read from the pieces saves RT_GAIN_*_US a sector, a
  * piece read for nothing costs RT_WASTE_US) and takes the best one at once -
  * if it is better than the one in effect by more than RA_ADAPT_MARGIN, so
@@ -1970,6 +1978,9 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
  * stays never. Back to where On has it when what is in effect changes
  * (eff_update: another app in front, a setting). */
 #define RA_ADAPT_RUNS       32u
+#define RA_ADAPT_SECTORS    6144u  /* 3 MiB                                    */
+#define RA_ADAPT_RUNS_FIRST 8u     /* the first round, with nothing learned yet */
+#define RA_ADAPT_SECTORS_FIRST 2048u   /* 1 MiB                                */
 #define RA_ADAPT_ONE        16u    /* a run or a sector counts 16: halving keeps a rare one */
 /* three pieces read for nothing, at what one costs here (measured, or the fixed) */
 #define RA_ADAPT_MARGIN(cost) ((int64_t)RA_ADAPT_ONE * 3 * (cost)->waste_us)
@@ -1986,6 +1997,9 @@ static RaTest            g_ad;                           /* the runs, as the tes
  * weighed every RA_ADAPT_RUNS of them. */
 static volatile uint32_t g_tiny_thr = RA_TINY_STREAK, g_tiny_blk = RA_TINY_SECTORS;
 static uint32_t          g_tn_cnt[RT_TB], g_tn_reads[RT_TB], g_tn_sec[RT_TB], g_tn_ended;
+/* a round's sectors so far, of each kind; rounds weighed since learning
+ * started (0: the first round is the small one), each kind and the tiny reads */
+static uint32_t          g_ad_sec[2], g_ad_rounds[2], g_tn_rounds;
 static volatile uint32_t g_tn_moves;
 /* A round due, for the worker to weigh (under g_ad_lock), and the storage
  * whose figures it takes: the large reads' kinds, the tiny reads. */
@@ -2551,6 +2565,9 @@ static void ra_adapt_clear(void)
 	memset(g_tn_reads, 0, sizeof(g_tn_reads));
 	memset(g_tn_sec, 0, sizeof(g_tn_sec));
 	g_tn_ended = 0;
+	memset(g_ad_sec, 0, sizeof(g_ad_sec));
+	memset(g_ad_rounds, 0, sizeof(g_ad_rounds));
+	g_tn_rounds = 0;
 	ST(g_ad_due[0], 0);
 	ST(g_ad_due[1], 0);
 	ST(g_tn_due, 0);
@@ -2617,6 +2634,7 @@ static void ad_restore(const char *title, uint32_t key)
 	memcpy(g_tn_reads, k->tn_reads, sizeof(g_tn_reads));
 	memcpy(g_tn_sec, k->tn_sec, sizeof(g_tn_sec));
 	g_tn_ended = 0;
+	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
 	ADD(g_ad_restored, 1);
 }
 
@@ -2702,7 +2720,7 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	g_tn_reads[b] += reads * RA_ADAPT_ONE;
 	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
 	/* a round's worth: weighed by the worker (ra_adapt_tick) */
-	if (++g_tn_ended >= RA_ADAPT_RUNS && !LD(g_tn_due)) {
+	if (++g_tn_ended >= (g_tn_rounds ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) && !LD(g_tn_due)) {
 		ST(g_tn_due, 1);
 		g_tn_dev = (int)(d - g_dev);
 		__sync_lock_release(&g_ad_lock);
@@ -2720,32 +2738,46 @@ static int ra_adapt_on(void)
 	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
 }
 
-/* A read of `n` sectors, the `at`-th in its stream (`small`: 32 KiB reads). */
-static void ra_adapt_read(int small, int nc, uint32_t at, uint32_t n)
+/* A read of `n` sectors, the `at`-th in its stream (`small`: 32 KiB reads):
+ * kept with the stream until it ends. No lock: the stream's own thread. */
+static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
 {
-	if (!ra_adapt_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
+	if (!ra_adapt_on())
 		return;
-	nc = !!nc;
 	if (small) {
 		const uint32_t b = (at - 1) / 4;
 
-		g_ad.spos[nc][b < RT_POS ? b : RT_POS - 1] += n * RA_ADAPT_ONE;
+		d->ad_pos[1][b < RT_POS ? b : RT_POS - 1] += n * RA_ADAPT_ONE;
 	} else {
 		const uint32_t have = RT_PIECES * RT_PIECE_SECTORS;
 
-		g_ad.pos[nc][at < RT_POS ? at : RT_POS - 1] += (n < have ? n : have) * RA_ADAPT_ONE;
+		d->ad_pos[0][at < RT_POS ? at : RT_POS - 1] += (n < have ? n : have) * RA_ADAPT_ONE;
 	}
-	g_ad.total_sectors += n;
-	__sync_lock_release(&g_ad_lock);
+	d->ad_sec[small] += n;
 }
 
-/* A stream of `len` reads has ended; every RA_ADAPT_RUNS of a kind, its
- * threshold weighed again. */
-static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
+/* A stream of `len` reads has ended: its reads and its length counted; every
+ * RA_ADAPT_RUNS of a kind (or RA_ADAPT_SECTORS read in them), its thresholds
+ * weighed again. Not counted (and dropped) while Adaptive is not in effect or
+ * another thread is at the counts. */
+static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 {
-	if (!len || !ra_adapt_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
+	const int ok = len && ra_adapt_on() && !__sync_lock_test_and_set(&g_ad_lock, 1);
+	uint32_t *pos;
+
+	if (!ok) {
+		memset(d->ad_pos[small], 0, sizeof(d->ad_pos[small]));
+		d->ad_sec[small] = 0;
 		return;
+	}
 	nc = !!nc;
+	pos = small ? g_ad.spos[nc] : g_ad.pos[nc];
+	for (int i = 0; i < RT_POS; i++)
+		pos[i] += d->ad_pos[small][i];
+	memset(d->ad_pos[small], 0, sizeof(d->ad_pos[small]));
+	g_ad.total_sectors += d->ad_sec[small];
+	g_ad_sec[nc] += d->ad_sec[small];
+	d->ad_sec[small] = 0;
 	if (small) {
 		const uint32_t b = len / 4;
 
@@ -2754,7 +2786,9 @@ static void ra_adapt_end(const Dev *d, int small, int nc, uint32_t len)
 		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1] += RA_ADAPT_ONE;
 	}
 	/* a round's worth: weighed by the worker (ra_adapt_tick), not here */
-	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS && !LD(g_ad_due[nc])) {
+	if ((++g_ad.ended[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) ||
+	     g_ad_sec[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_SECTORS : RA_ADAPT_SECTORS_FIRST)) &&
+	    !LD(g_ad_due[nc])) {
 		ST(g_ad_due[nc], 1);
 		g_ad_dev[nc] = (int)(d - g_dev);
 		__sync_lock_release(&g_ad_lock);
@@ -2798,6 +2832,8 @@ static void ra_adapt_tick(void)
 			}
 		}
 		ra_adapt_age(&g_ad, nc);
+		g_ad_sec[nc] = 0;
+		g_ad_rounds[nc]++;
 	}
 	if (LD(g_tn_due)) {
 		RtTinyCost c;
@@ -2819,6 +2855,7 @@ static void ra_adapt_tick(void)
 			g_tn_sec[i] >>= 1;
 		}
 		g_tn_ended = 0;
+		g_tn_rounds++;
 	}
 	__sync_lock_release(&g_ad_lock);
 }
@@ -3132,7 +3169,7 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 			d->rs_streak = 1;
 		}
 		d->rs_us = now;
-		ra_adapt_read(1, nc, d->rs_streak, n);
+		ra_adapt_read(d, 1, d->rs_streak, n);
 	}
 	d->rs_nc = nc;
 	d->rs_part = part;
@@ -3170,7 +3207,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 			d->ra_streak = 1;
 		}
-		ra_adapt_read(0, nc, d->ra_streak, n);
+		ra_adapt_read(d, 0, d->ra_streak, n);
 		d->ra_us = now;
 		d->ra_nc = nc;
 		d->ra_last_part = part;

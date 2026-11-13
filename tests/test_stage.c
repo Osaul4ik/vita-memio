@@ -3229,7 +3229,7 @@ static void adapt_runs_raw(int nc, uint32_t len, int count)
 {
 	for (int r = 0; r < count; r++) {
 		for (uint32_t i = 1; i <= len; i++)
-			ra_adapt_read(0, nc, i, 256);
+			ra_adapt_read(&g_dev[M], 0, i, 256);
 		ra_adapt_end(&g_dev[M], 0, nc, len);
 	}
 }
@@ -3240,7 +3240,7 @@ static void adapt_runs(int nc, uint32_t len, int count)
 {
 	for (int r = 0; r < count; r++) {
 		for (uint32_t i = 1; i <= len; i++)
-			ra_adapt_read(0, nc, i, 256);
+			ra_adapt_read(&g_dev[M], 0, i, 256);
 		ra_adapt_end(&g_dev[M], 0, nc, len);
 		ra_adapt_tick();                                 /* the worker, at once */
 	}
@@ -3269,9 +3269,11 @@ static void test_readahead_adaptive(void)
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_readahead && ra_threshold(0) == 5);
-	/* long runs: the sooner the better - down to 2 at once */
-	adapt_runs(0, 20, RA_ADAPT_RUNS - 1);
-	CHECK(ra_threshold(0) == 5);                         /* a round not yet over */
+	/* long runs: the sooner the better - down to 2 at once. The first round
+	 * is over at 1 MiB (one run of 20, 2.5 MiB), but one run saves less than
+	 * the margin (3 pieces); the next, at 3 MiB, two more: enough */
+	adapt_runs(0, 20, 1);
+	CHECK(ra_threshold(0) == 5 && g_ad_rounds[0] == 1);
 	adapt_runs(0, 20, 2);
 	CHECK(ra_threshold(0) == 2 && ra_threshold(1) == 5 && g_ra_moves[0] == 1);   /* NC as it was */
 	/* runs of 4: a read ahead that begins before their end only costs; from 5
@@ -3310,7 +3312,7 @@ static void test_readahead_adaptive(void)
 	 * its own (the non-cacheable check: both ends, two) */
 	fake_memtype = 0x8000;
 	fake_memtype_calls = 0;
-	CHECK(rd(u, 0, 256) == 0 && fake_memtype_calls == 2 && g_ad.total_sectors == 256);
+	CHECK(rd(u, 0, 256) == 0 && fake_memtype_calls == 2 && d->ad_sec[0] == 256);   /* the stream's */
 	fake_memtype = 0xD000;
 	ra_adapt_reset();
 	/* On: nothing followed, nothing moves */
@@ -3389,16 +3391,88 @@ static void test_readahead_adaptive(void)
 	g_title_fn = NULL;
 }
 
+/* The same without the worker's look after each run. */
+static void adapt_small_runs_raw(int nc, uint32_t len, int count)
+{
+	for (int r = 0; r < count; r++) {
+		for (uint32_t i = 1; i <= len; i++)
+			ra_adapt_read(&g_dev[M], 1, i, 64);
+		ra_adapt_end(&g_dev[M], 1, nc, len);
+	}
+}
+
 /* `count` runs of `len` 32 KiB reads in a row, as their stream tells
  * Adaptive of them, the worker at once after each. */
 static void adapt_small_runs(int nc, uint32_t len, int count)
 {
 	for (int r = 0; r < count; r++) {
 		for (uint32_t i = 1; i <= len; i++)
-			ra_adapt_read(1, nc, i, 64);
+			ra_adapt_read(&g_dev[M], 1, i, 64);
 		ra_adapt_end(&g_dev[M], 1, nc, len);
 		ra_adapt_tick();
 	}
+}
+
+/* Adaptive's rounds: the first of 8 runs or 1 MiB, then of 32 runs or 3 MiB,
+ * whichever comes first, each kind on its own; what was kept for a game is
+ * taken up with full rounds. A run's reads count only once it has ended. */
+static void test_adaptive_rounds(void)
+{
+	VmSettings s;
+	Dev *d = &g_dev[M];
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	/* the first round: 8 short runs (single 32 KiB reads: 16 KiB of sectors) */
+	adapt_small_runs_raw(0, 1, RA_ADAPT_RUNS_FIRST - 1);
+	CHECK(!g_ad_due[0]);
+	adapt_small_runs_raw(0, 1, 1);
+	CHECK(g_ad_due[0] && !g_ad_due[1]);                     /* NC on its own */
+	vm_stage_worker_tick();
+	CHECK(!g_ad_due[0] && g_ad_rounds[0] == 1 && g_ad_sec[0] == 0);
+	/* then 32 of them */
+	adapt_small_runs_raw(0, 1, RA_ADAPT_RUNS - 1);
+	CHECK(!g_ad_due[0]);
+	adapt_small_runs_raw(0, 1, 1);
+	CHECK(g_ad_due[0]);
+	vm_stage_worker_tick();
+	/* or 3 MiB first: runs of 5 large reads (640 KiB) - the 5th run */
+	adapt_runs_raw(0, 5, 4);
+	CHECK(!g_ad_due[0] && g_ad_sec[0] == 4 * 5 * 256);
+	adapt_runs_raw(0, 5, 1);
+	CHECK(g_ad_due[0]);
+	vm_stage_worker_tick();
+	/* a run still going counts nothing yet; when it ends, all of it */
+	{
+		const uint32_t p3 = g_ad.pos[0][3], r6 = g_ad.run[0][6];
+
+		for (uint32_t i = 1; i <= 6; i++)
+			ra_adapt_read(d, 0, i, 256);
+		CHECK(g_ad.pos[0][3] == p3 && d->ad_sec[0] == 6 * 256 && g_ad_sec[0] == 0);
+		ra_adapt_end(d, 0, 0, 6);
+		CHECK(g_ad.pos[0][3] == p3 + 256 * RA_ADAPT_ONE && g_ad.run[0][6] == r6 + RA_ADAPT_ONE &&
+		      d->ad_sec[0] == 0 && g_ad_sec[0] == 6 * 256);
+	}
+	/* afresh: the small first round again */
+	adapt_afresh(&s);
+	CHECK(g_ad_rounds[0] == 0 && g_ad_sec[0] == 0);
+	/* tiny reads: the first round of 8 runs, then 32 */
+	g_tn_ended = 0;
+	for (int r = 0; r < (int)RA_ADAPT_RUNS_FIRST - 1; r++)
+		ra_tiny_end(d, 2, 2);
+	CHECK(!g_tn_due);
+	ra_tiny_end(d, 2, 2);
+	CHECK(g_tn_due);
+	vm_stage_worker_tick();
+	CHECK(g_tn_rounds == 1);
+	for (int r = 0; r < (int)RA_ADAPT_RUNS_FIRST; r++)
+		ra_tiny_end(d, 2, 2);
+	CHECK(!g_tn_due);
+	vm_stage_fini();
 }
 
 /* Adaptive: the 32 KiB reads' stream has a threshold of its own (4..32 reads,
@@ -3464,7 +3538,7 @@ static void test_readahead_adaptive_small(void)
 	as_app(0x44);
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12 && g_ad_restored == 2);
-	CHECK(g_ad.srun[0][2] > 0 && ad_kept_count() == 2);
+	CHECK(g_ad.run[0][10] > 0 && ad_kept_count() == 2 && g_ad_rounds[0] == 1);   /* full rounds */
 	as_app(0x46);
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == 4);
@@ -4214,6 +4288,7 @@ int main(void)
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);
+	RUN(test_adaptive_rounds);
 	RUN(test_calibration);
 	RUN(test_tiny_adaptive);
 	RUN(test_bufmap_state);

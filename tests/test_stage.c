@@ -3429,6 +3429,44 @@ static void test_calibration(void)
 	vm_stage_cal(VM_DEV_SD2VITA, &c);                    /* another storage: its own */
 	CHECK(!c.have[0] && !c.have_waste);
 
+	/* written only when worth it (internal storage): what is in use now is
+	 * what was saved - more of the same, nothing to write */
+	vm_stage_cal_set(1);                                 /* saved: the snapshot */
+	CHECK(!cal_worth_saving());
+	k->plain[0][28] += 40;                               /* the same medians */
+	k->n_plain[0] += 40;
+	k->served[0][16] += 40;
+	k->n_served[0] += 40;
+	CHECK(!cal_worth_saving());
+	k->served[0][15] += 400;                             /* served median 3875: 8.6 % more gain */
+	k->n_served[0] += 400;
+	CHECK(cal_worth_saving());
+	vm_stage_cal_set(1);
+	CHECK(!cal_worth_saving());
+	/* still learning: a count grown by half is kept, a little is not */
+	k->n_plain[1] = 20;
+	k->plain[1][20] = 20;
+	CHECK(cal_worth_saving());
+	vm_stage_cal_set(1);
+	k->n_plain[1] += 5;
+	k->plain[1][20] += 5;
+	CHECK(!cal_worth_saving());
+	/* a figure coming into use: written */
+	k->n_plain[1] = VM_CAL_MIN_PLAIN;
+	k->plain[1][20] = VM_CAL_MIN_PLAIN;
+	k->n_served[1] = VM_CAL_MIN_SERVED;
+	k->served[1][2] = VM_CAL_MIN_SERVED;
+	CHECK(cal_worth_saving());
+	memset(k->plain[1], 0, sizeof(k->plain[1]));
+	memset(k->served[1], 0, sizeof(k->served[1]));
+	k->n_plain[1] = k->n_served[1] = 0;
+	k->served[0][15] -= 400;                             /* back as the checks below want it */
+	k->n_served[0] -= 400;
+	k->plain[0][28] -= 40;
+	k->n_plain[0] -= 40;
+	k->served[0][16] -= 40;
+	k->n_served[0] -= 40;
+
 	/* kept: the file, the switch with it */
 	vm_stage_cal_set(1);
 	memset(g_cal, 0, sizeof(g_cal));

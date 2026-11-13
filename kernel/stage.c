@@ -2202,6 +2202,75 @@ static uint32_t cal_fnv(uint32_t c, const void *p, size_t bytes)
 	return c;
 }
 
+/* What the file holds, per storage (as last saved or loaded): the counts
+ * and the figures in use then. A save is worth its write only if what is in
+ * use would change (internal storage: written as little as can be). */
+typedef struct CalSaved {
+	uint32_t n_plain[2], n_served[2], n_waste;
+	RtCost   cost;
+	int      have[2], have_waste;
+} CalSaved;
+static CalSaved g_cal_saved[VM_DEV_COUNT];   /* worker */
+
+static void cal_snapshot(void)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		CalSaved *o = &g_cal_saved[i];
+		VmCal v;
+
+		cal_cost(i, &o->cost, &v);
+		for (int k = 0; k < 2; k++) {
+			o->n_plain[k] = v.n_plain[k];
+			o->n_served[k] = v.n_served[k];
+			o->have[k] = v.have[k];
+		}
+		o->n_waste = v.n_waste;
+		o->have_waste = v.have_waste;
+	}
+}
+
+/* `now` more than 5 % off `then` (and more than a sixteenth of a us apart). */
+static int cal_moved(int32_t now, int32_t then)
+{
+	const int32_t d = now > then ? now - then : then - now;
+
+	return d > 1 && d * 20 > (then > 0 ? then : 1);
+}
+
+/* A count still short of what is used, grown by half since the save (and by
+ * 8 or more): the way there kept, in few writes. */
+static int cal_grown(uint32_t now, uint32_t then, uint32_t min)
+{
+	return now < min + min / 2 && now >= then + 8 && now >= then + then / 2;
+}
+
+/* Whether what was measured since the last save is worth writing: a figure
+ * in use now (or no longer) that was not then, one in use moved by more than
+ * 5 %, or, while too little is measured, a count grown by half. Once the
+ * figures settle, nothing more is written. */
+static int cal_worth_saving(void)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const CalSaved *o = &g_cal_saved[i];
+		RtCost c;
+		VmCal v;
+
+		cal_cost(i, &c, &v);
+		for (int k = 0; k < 2; k++) {
+			if (v.have[k] != o->have[k] ||
+			    (v.have[k] && cal_moved(c.gain16[k], o->cost.gain16[k])) ||
+			    (!v.have[k] && (cal_grown(v.n_plain[k], o->n_plain[k], VM_CAL_MIN_PLAIN) ||
+			                    cal_grown(v.n_served[k], o->n_served[k], VM_CAL_MIN_SERVED))))
+				return 1;
+		}
+		if (v.have_waste != o->have_waste ||
+		    (v.have_waste && cal_moved(c.waste_us, o->cost.waste_us)) ||
+		    (!v.have_waste && cal_grown(v.n_waste, o->n_waste, VM_CAL_MIN_WASTE)))
+			return 1;
+	}
+	return 0;
+}
+
 static void cal_save(void)
 {
 	CalHead h = { CAL_MAGIC, CAL_VERSION, 0, VM_DEV_COUNT };
@@ -2242,6 +2311,7 @@ static void cal_save(void)
 	if (ok) {
 		ksceIoRemove(CAL_FILE);
 		ksceIoRename(CAL_FILE ".tmp", CAL_FILE);
+		cal_snapshot();                   /* what the file holds now */
 	} else {
 		ksceIoRemove(CAL_FILE ".tmp");
 	}
@@ -2287,6 +2357,7 @@ static void cal_load(void)
 	g_cal_loaded = 1;
 	if (!cal_read_file(CAL_FILE))
 		cal_read_file(CAL_FILE ".tmp");
+	cal_snapshot();                       /* what the file holds (or nothing) */
 }
 
 void vm_stage_cal_set(int on)
@@ -4209,8 +4280,10 @@ void vm_stage_worker_tick(void)
 
 		if (fg != last_fg) {
 			last_fg = fg;
-			if (LD(g_cal_dirty))
-				cal_save();               /* calibration: kept at each change of app */
+			/* calibration: kept at a change of app, only if what is in
+			 * use would change (internal storage: as few writes as can be) */
+			if (LD(g_cal_dirty) && cal_worth_saving())
+				cal_save();
 			if (fg)
 				VM_KLOGI("stage: in front: %s (pid 0x%08x)", g_fg_title, (unsigned)fg);
 			else

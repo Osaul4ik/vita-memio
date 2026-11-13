@@ -44,12 +44,21 @@ static volatile int g_ov_front = 0;
 /* The HUD keeps the composed panel in g_cache, at four bits a pixel
  * (ordinary cached memory, allocated by the worker while the HUD is on), so a frame only copies
  * it; built again when the text or the framebuffer size changes. Without the
- * cache it composes one row at a time in g_row. `g_row_busy` keeps the drawing
- * threads and the worker's cache swap apart. */
-static uint32_t     g_row[HUD_ROW_MAX];
-static volatile int g_row_busy;
+ * cache it composes one row at a time in g_row.
+ *
+ * A frame never waits for the worker: `g_seq` is odd while the worker
+ * changes the cache, and a frame that saw it odd, or changed while it
+ * copied, draws the panel again straight from the text (it overwrites the
+ * whole panel). `g_readers` counts the frames inside, so a block is freed
+ * only once none can still be reading it. A row for each index (0, 1): the
+ * frames of the two layers may be drawn at once. */
+static uint32_t     g_row[2][HUD_ROW_MAX];
+static volatile int g_row_busy[2];
+static volatile uint32_t g_seq;
+static volatile int g_readers;
 static HudCache     g_cache;
 static SceUID       g_cache_uid = -1;
+static SceUID       g_cache_stale = -1;   /* freed at the next swap */
 static uint32_t     g_gen;
 
 /* ---- the set-framebuffer hook ------------------------------------------- */
@@ -58,6 +67,7 @@ static uint32_t     g_gen;
  * faults under the default ARM domain permissions, so open the Domain Access
  * Control Register for the duration of the blit, then restore it - the
  * standard Vita kernel-overlay technique. */
+#ifdef __arm__
 static inline uint32_t hud_dacr_open(void)
 {
 	uint32_t prev;
@@ -71,6 +81,10 @@ static inline void hud_dacr_restore(uint32_t prev)
 	__asm__ volatile("mcr p15, 0, %0, c3, c0, 0" :: "r"(prev));
 	__asm__ volatile("isb");
 }
+#else                                  /* the host tests: nothing to open */
+static inline uint32_t hud_dacr_open(void) { return 0; }
+static inline void hud_dacr_restore(uint32_t prev) { (void)prev; }
+#endif
 
 /* Which (head, index) pairs the hook has seen, a bit each (head 0..1 x
  * index 0..1, then any other), for the log: vm_hud_planes. */
@@ -86,6 +100,19 @@ static int (*g_excl_running)(const char *title_id);
 uint32_t vm_hud_planes(void)
 {
 	return __atomic_load_n(&g_planes_seen, __ATOMIC_RELAXED);
+}
+
+/* `t` onto the frame: copied from the cache if it holds `t` and the worker
+ * did not touch it meanwhile, else composed straight from the text. */
+static void draw_panel(uint32_t *fb, int pitch, int w, int h, const HudText *t, uint32_t *row)
+{
+	const uint32_t s1 = __atomic_load_n(&g_seq, __ATOMIC_ACQUIRE);
+	HudCache c = g_cache;
+	int ok = !(s1 & 1) && hud_cache_blit(fb, pitch, w, h, t, &c, row);
+
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	if (!ok || __atomic_load_n(&g_seq, __ATOMIC_RELAXED) != s1)
+		hud_draw_panel(fb, pitch, w, h, t, row);
 }
 
 /* The HUD and the overlay drawn into the frame, as PSVshell draws (which
@@ -105,9 +132,7 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		return;
 	if (index && (!g_excl_running || g_excl_running(NULL) > 0))
 		return;
-	t = &g_text[g_front];
-	ov = &g_ov[g_ov_front];
-	if (t->n <= 0 && ov->n <= 0)
+	if (g_text[g_front].n <= 0 && g_ov[g_ov_front].n <= 0)
 		return;
 	int w = (int)pParam->width, h = (int)pParam->height,
 	    pitch = (int)pParam->pitch;
@@ -122,27 +147,34 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		g_fb_h = h;
 	}
 
-	/* the lock is held only for a few instructions elsewhere (the cache
-	 * swapped): wait for it rather than leave a frame without the panel */
+	/* the row: only another frame of the same layer at once could hold it
+	 * (the worker never does) */
 	{
+		volatile int *busy = &g_row_busy[index & 1];
 		int got = 0;
 
-		for (int i = 0; i < 4096 && !(got = !__sync_lock_test_and_set(&g_row_busy, 1)); i++)
+		for (int i = 0; i < 4096 && !(got = !__sync_lock_test_and_set(busy, 1)); i++)
 			__asm__ volatile("" ::: "memory");
 		if (!got)
-			return;                      /* not had: not drawn this once */
+			return;
+		__atomic_fetch_add(&g_readers, 1, __ATOMIC_SEQ_CST);
+		/* read once counted: the worker writes a back copy only when no
+		 * frame is inside, so the copy read here is not written under it */
+		t = &g_text[g_front];
+		ov = &g_ov[g_ov_front];
+
+		uint32_t prev_dacr = hud_dacr_open();
+		uint32_t *row = g_row[index & 1];
+
+		/* the HUD: from the cache the worker composed (vm_hud_set_text) */
+		if (t->n > 0)
+			draw_panel((uint32_t *)pParam->base, pitch, w, h, t, row);
+		if (ov->n > 0)
+			draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, row);
+		hud_dacr_restore(prev_dacr);
+		__atomic_fetch_sub(&g_readers, 1, __ATOMIC_SEQ_CST);
+		__sync_lock_release(busy);
 	}
-	uint32_t prev_dacr = hud_dacr_open();
-	/* the HUD: from the cache the worker composed (vm_hud_set_text); only if
-	 * it is not there for this text and size, composed here */
-	if (t->n > 0 &&
-	    !hud_cache_blit((uint32_t *)pParam->base, pitch, w, h, t, &g_cache, g_row))
-		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, t, g_row);
-	if (ov->n > 0 &&
-	    !hud_cache_blit((uint32_t *)pParam->base, pitch, w, h, ov, &g_cache, g_row))
-		hud_draw_panel((uint32_t *)pParam->base, pitch, w, h, ov, g_row);
-	hud_dacr_restore(prev_dacr);
-	__sync_lock_release(&g_row_busy);
 }
 
 /* ksceDisplaySetFrameBufInternal(head, index, pParam, sync) - the kernel
@@ -194,39 +226,54 @@ int vm_hud_init(void)
 	return VM_OK;
 }
 
-/* Put `uid`/`px`/`words` in as the cache (uid -1: no cache) and free the old
- * one, with the drawing threads kept out meanwhile. Worker thread only. */
-/* The drawing threads kept out (a frame being drawn: a few us); 0 if one
- * is held up for longer than 100 ms. Worker thread only. */
-static int busy_take(void)
+/* The worker changing the cache: the frames meanwhile draw from the text. */
+static void cache_begin(void)
+{
+	__atomic_add_fetch(&g_seq, 1, __ATOMIC_SEQ_CST);     /* odd */
+}
+static void cache_end(void)
+{
+	__atomic_add_fetch(&g_seq, 1, __ATOMIC_SEQ_CST);     /* even */
+}
+
+/* No frame inside the drawing (one is a few us); 0 if one is still there
+ * after 100 ms. */
+static int readers_gone(void)
 {
 	for (int i = 0; i < 1000; i++) {
-		if (!__sync_lock_test_and_set(&g_row_busy, 1))
+		if (!__atomic_load_n(&g_readers, __ATOMIC_SEQ_CST))
 			return 1;
 		ksceKernelDelayThread(100);
 	}
 	return 0;
 }
 
+/* Put `uid`/`px`/`bytes` in as the cache (uid -1: no cache) and free the old
+ * one once no frame can be reading it. Worker thread only. */
 static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 {
 	SceUID old;
 
-	/* if a drawing thread is held up, the old block stays (its memory too)
-	 * rather than being freed under it */
-	if (!busy_take()) {
-		if (uid >= 0)
-			ksceKernelFreeMemBlock(uid);   /* the new one is not needed then */
-		return;
-	}
+	cache_begin();
 	old = g_cache_uid;
 	g_cache_uid = uid;
 	g_cache.px = px;
 	g_cache.bytes = bytes;
 	g_cache.w = 0;                     /* nothing composed in it yet */
-	__sync_lock_release(&g_row_busy);
-	if (old >= 0)
-		ksceKernelFreeMemBlock(old);
+	cache_end();
+	if (readers_gone()) {
+		if (g_cache_stale >= 0)
+			ksceKernelFreeMemBlock(g_cache_stale);
+		g_cache_stale = -1;
+		if (old >= 0)
+			ksceKernelFreeMemBlock(old);
+	} else if (old >= 0) {
+		/* a frame held up: the old block kept until the next swap; one
+		 * kept from before is long unread by then */
+		if (g_cache_stale >= 0)
+			ksceKernelFreeMemBlock(g_cache_stale);
+		g_cache_stale = old;
+	}
 }
 
 /* A cache big enough for `t` (at the largest font), or none if the HUD is off
@@ -263,29 +310,17 @@ static void cache_fit(const HudText *t)
 	cache_swap(uid, base, size);
 }
 
-/* Compose `t` into the cache. Not in place under a frame being drawn: the
- * cache is marked empty first (the frames meanwhile draw the panel straight
- * from the text), composed, and only then marked as holding `t`. Composed in
- * place while a frame copied it, the panel blinked when its text changed. */
+/* Compose `t` into the cache. The frames meanwhile draw the panel straight
+ * from the text: composed in place while a frame copied it, the panel
+ * blinked when its text changed. */
 static void cache_compose(const HudText *t)
 {
-	HudCache c;
-	int ok;
-
-	if (!g_cache.px || !busy_take())
+	if (!g_cache.px)
 		return;
-	g_cache.w = 0;                     /* empty while composed */
-	c = g_cache;
-	__sync_lock_release(&g_row_busy);
-	ok = hud_cache_compose(t, g_fb_w, g_fb_h, &c);
-	if (!ok || !busy_take())
-		return;
-	if (g_cache.px == c.px) {          /* still the same block */
-		g_cache.gen = c.gen;
-		g_cache.w = c.w;
-		g_cache.h = c.h;
-	}
-	__sync_lock_release(&g_row_busy);
+	cache_begin();
+	g_cache.w = 0;
+	hud_cache_compose(t, g_fb_w, g_fb_h, &g_cache);
+	cache_end();
 }
 
 void vm_hud_fini(void)
@@ -296,7 +331,7 @@ void vm_hud_fini(void)
 		taiHookReleaseForKernel(g_hook, g_ref);
 		g_hook = -1;
 	}
-	if (g_cache_uid >= 0)
+	if (g_cache_uid >= 0 || g_cache_stale >= 0)
 		cache_swap(-1, NULL, 0);
 }
 
@@ -326,6 +361,7 @@ void vm_hud_set_text(const char lines[][VM_HUD_LINE_MAX], int n)
 			return;
 		}
 	}
+	readers_gone();                    /* the back copy: no frame reads it now */
 	t->maxlen = 0;
 	for (int i = 0; i < n; i++) {
 		int len = 0;
@@ -415,6 +451,7 @@ void vm_hud_set_overlay(const char lines[][VM_HUD_LINE_MAX], int n)
 			return;
 		}
 	}
+	readers_gone();                    /* the back copy: no frame reads it now */
 	panel_fill(t, lines, n, 1);
 	if (g_text[g_front].n <= 0) {      /* the HUD hidden: the cache is the overlay's */
 		cache_fit(t);

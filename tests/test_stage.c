@@ -3207,16 +3207,14 @@ static void test_tiny_reads(void)
 }
 
 /* The app in front's own settings, kept in its profile. */
-/* `count` runs of `len` reads of 128 KiB in a row, each run elsewhere, into
- * cached (nc 0) or non-cacheable memory, as Adaptive sees them. */
+/* `count` runs of `len` reads of 128 KiB in a row into cached (nc 0) or
+ * non-cacheable memory, as read ahead's streams tell Adaptive of them. */
 static void adapt_runs(int nc, uint32_t len, int count)
 {
-	static uint32_t at = 1u << 20;
-
 	for (int r = 0; r < count; r++) {
-		at += 1u << 16;                                  /* a run elsewhere */
-		for (uint32_t i = 0; i < len; i++)
-			ra_adapt_note(&g_dev[M], NULL, at + i * 256, nc, 256, 0);
+		for (uint32_t i = 1; i <= len; i++)
+			ra_adapt_read(0, nc, i, 256);
+		ra_adapt_end(0, nc, len);
 	}
 }
 
@@ -3267,8 +3265,8 @@ static void test_readahead_adaptive(void)
 	CHECK(ra_threshold(1) == 2 && ra_threshold(0) == 6);
 	vm_stage_apply(&s);                                  /* in effect again: afresh */
 	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5 && g_ad.ended[0] == 0 && g_ad.run[1][8] == 0);
-	/* followed at no extra cost: the buffer's memory type looked up once,
-	 * then used by the non-cacheable check too (both ends: two lookups) */
+	/* followed at no extra cost: from read ahead's own stream, no lookup of
+	 * its own (the non-cacheable check: both ends, two) */
 	fake_memtype = 0x8000;
 	fake_memtype_calls = 0;
 	CHECK(rd(u, 0, 256) == 0 && fake_memtype_calls == 2 && g_ad.total_sectors == 256);
@@ -3318,6 +3316,16 @@ static void test_readahead_adaptive(void)
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	CHECK(d->ra_ready && ra_threshold(0) == 5);
+	/* the runs are read ahead's own streams: 7 reads in a row, a small one
+	 * between (neither part of a stream nor a break), then a read elsewhere */
+	for (uint32_t i = 0; i < 7; i++) {
+		CHECK(rd(u, i * 256, 256) == 0);
+		if (i == 3)
+			CHECK(rd(u, 3500, 8) == 0);
+	}
+	CHECK(rd(u, 2048, 256) == 0);
+	CHECK(g_ad.run[0][7] == 1 && g_ad.ended[0] == 1 && g_ad.pos[0][7] == 256);
+	ra_adapt_reset();
 	for (uint32_t run = 0; run < 3 * RA_ADAPT_RUNS && ra_threshold(0) == 5; run++) {
 		const uint32_t at = (run % 2) * 2048;
 

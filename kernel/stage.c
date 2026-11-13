@@ -1955,8 +1955,8 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 }
 
 /* Adaptive (VM_RA_ADAPTIVE): the threshold of each kind (0 cached, 1 NC),
- * within 2..8. The reads are followed as the R/A Test follows them (ra_test.h,
- * its own copy): runs of reads in a row, by length. Every RA_ADAPT_RUNS runs
+ * within 2..8. Read ahead's own streams are counted as the R/A Test counts
+ * reads (ra_test.h, a copy of its own): runs of reads in a row, by length. Every RA_ADAPT_RUNS runs
  * of a kind it works out, as the test does, what each threshold would have
  * brought over them (a read from the pieces saves RT_GAIN_*_US a sector, a
  * piece read for nothing costs RT_WASTE_US) and takes the best one at once -
@@ -2015,26 +2015,56 @@ static void ra_adapt_reset(void)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* A transfer for Adaptive to follow, `nc` into non-cacheable memory
- * (another thread at it: this one lost). */
-static void ra_adapt_note(const Dev *d, void *part, uint32_t sector, int nc, uint32_t nsec,
-                          int write)
+/* What read ahead's own streams did, for Adaptive: counted where read ahead
+ * counts them (ra_note), so both see the same runs. Only while Adaptive is in
+ * effect and the R/A Test is not running (another thread at it: lost). */
+static int ra_adapt_on(void)
 {
-	if (__sync_lock_test_and_set(&g_ad_lock, 1))
+	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
+}
+
+/* A read of `n` sectors, the `at`-th in its stream (`small`: 32 KiB reads). */
+static void ra_adapt_read(int small, int nc, uint32_t at, uint32_t n)
+{
+	if (!ra_adapt_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
-	ra_test_note(&g_ad, part ? part : (const void *)d, sector, nsec, nc, write,
-	             ksceKernelGetSystemTimeLow());
-	for (int k = 0; k < 2; k++) {
-		const uint32_t base = ra_base_threshold(k), t = ra_threshold(k);
+	nc = !!nc;
+	if (small) {
+		const uint32_t b = (at - 1) / 4;
+
+		g_ad.spos[nc][b < RT_POS ? b : RT_POS - 1] += n;
+	} else {
+		const uint32_t have = RT_PIECES * RT_PIECE_SECTORS;
+
+		g_ad.pos[nc][at < RT_POS ? at : RT_POS - 1] += n < have ? n : have;
+	}
+	g_ad.total_sectors += n;
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* A stream of `len` reads has ended; every RA_ADAPT_RUNS of a kind, its
+ * threshold weighed again. */
+static void ra_adapt_end(int small, int nc, uint32_t len)
+{
+	if (!len || !ra_adapt_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
+		return;
+	nc = !!nc;
+	if (small) {
+		const uint32_t b = len / 4;
+
+		g_ad.srun[nc][b < RT_RUN ? b : RT_RUN - 1]++;
+	} else {
+		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1]++;
+	}
+	if (++g_ad.ended[nc] >= RA_ADAPT_RUNS) {
+		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
 		int pick;
 
-		if (g_ad.ended[k] < RA_ADAPT_RUNS)
-			continue;
-		if (t != RA_THR_NONE && (pick = ra_adapt_pick(&g_ad, k, (int)t, RA_ADAPT_MARGIN_US)) != (int)t) {
-			ST(g_ra_adj[k], pick - (int)base);
-			ADD(g_ra_moves[k], 1);
+		if (t != RA_THR_NONE && (pick = ra_adapt_pick(&g_ad, nc, (int)t, RA_ADAPT_MARGIN_US)) != (int)t) {
+			ST(g_ra_adj[nc], pick - (int)base);
+			ADD(g_ra_moves[nc], 1);
 		}
-		ra_adapt_age(&g_ad, k);
+		ra_adapt_age(&g_ad, nc);
 	}
 	__sync_lock_release(&g_ad_lock);
 }
@@ -2331,11 +2361,14 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
 
 		if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc &&
-		    (!ready || now - d->rs_us < RA_MAX_AGE_US))
+		    (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
 			d->rs_streak += d->rs_streak < 1000;
-		else
+		} else {
+			ra_adapt_end(1, d->rs_nc, d->rs_streak);
 			d->rs_streak = 1;
+		}
 		d->rs_us = now;
+		ra_adapt_read(1, nc, d->rs_streak, n);
 	}
 	d->rs_nc = nc;
 	d->rs_part = part;
@@ -2367,10 +2400,13 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
 
 		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc &&
-		    (!ready || now - d->ra_us < RA_MAX_AGE_US))
+		    (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
 			d->ra_streak += d->ra_streak < 1000;
-		else
+		} else {
+			ra_adapt_end(0, d->ra_nc, d->ra_streak);
 			d->ra_streak = 1;
+		}
+		ra_adapt_read(0, nc, d->ra_streak, n);
 		d->ra_us = now;
 		d->ra_nc = nc;
 		d->ra_last_part = part;
@@ -2904,23 +2940,13 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				__atomic_fetch_add(&g_fg_sec[d - g_dev], nsec, __ATOMIC_RELAXED);
 		}
 	}
-	/* the R/A Test's or Adaptive's look at it: the buffer's memory type
-	 * looked up once, kept for the non-cacheable check below */
-	{
-		const int rt = mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED);
-		const int ad = !rt && mine && nsec >= (write ? RA_MIN_SECTORS : RA_SMALL_SECTORS) &&
-		               LD(g_ra_mode) == VM_RA_ADAPTIVE &&
-		               __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+	/* the R/A Test's look at it: the buffer's memory type looked up once,
+	 * kept for the non-cacheable check below */
+	if (mine && nsec && __atomic_load_n(&g_rt_on, __ATOMIC_RELAXED)) {
+		const int nc = !write && nsec >= RA_SMALL_SECTORS &&
+		               (mt0 = ksceKernelGetMemBlockMemtypeByAddr(p)) == MEMTYPE_NC;
 
-		if (rt || ad) {
-			const int nc = !write && nsec >= RA_SMALL_SECTORS &&
-			               (mt0 = ksceKernelGetMemBlockMemtypeByAddr(p)) == MEMTYPE_NC;
-
-			if (rt)
-				rt_note(d, part, sector, nc, nsec, write);
-			else
-				ra_adapt_note(d, part, sector, nc, nsec, write);
-		}
+		rt_note(d, part, sector, nc, nsec, write);
 	}
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
@@ -3005,8 +3031,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS) {
+		ra_adapt_end(0, d->ra_nc, d->ra_streak);
 		d->ra_streak = 0;                     /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
+			ra_adapt_end(1, d->rs_nc, d->rs_streak);
 			d->rs_streak = 0;
 			__sync_lock_release(&d->rs_lock);
 		}

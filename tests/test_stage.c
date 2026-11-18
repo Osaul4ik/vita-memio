@@ -120,7 +120,6 @@ static void reset(void)
 	g_readahead = 0;
 	g_hold = 0;                                     /* the home screen is up */
 	g_sysapps = 0;                                  /* as before: games only */
-	g_sys_cand = 0;
 	g_app_pid = 0;
 	g_app_title[0] = 0;
 	memset(g_cal, 0, sizeof(g_cal));
@@ -3791,7 +3790,7 @@ static void test_calibration(void)
 		char path[256];
 		FILE *f;
 
-		snprintf(path, sizeof(path), "%s/calib.bin", dir);
+		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
 		f = fopen(path, "r+b");
 		CHECK(f != NULL);
 		if (f) {
@@ -3853,9 +3852,9 @@ static void test_calibration(void)
 	{
 		char path[256];
 
-		snprintf(path, sizeof(path), "%s/calib.bin", dir);
+		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
 		remove(path);
-		snprintf(path, sizeof(path), "%s/calib.bin.tmp", dir);
+		snprintf(path, sizeof(path), "%s/tuning.bin.tmp", dir);
 		remove(path);
 	}
 	g_cal_on = 1;
@@ -3943,11 +3942,12 @@ static void test_tiny_adaptive(void)
 		CHECK(g_cal_on && g_cal[M].n_plain[0] == 70 && g_cal[M].plain[0][20] == 70 &&
 		      !g_cal[M].tiny_hit_n && !g_cal[M].tiny_blk_us);
 		g_cal[M].tiny_hit_n = 5;
-		cal_save();
+		cal_save();                                  /* into tuning.bin; calib.bin gone */
+		CHECK(fopen(path, "rb") == NULL);
 		memset(g_cal, 0, sizeof(g_cal));
 		g_cal_loaded = 0;
 		cal_load();
-		CHECK(g_cal[M].n_plain[0] == 70 && g_cal[M].tiny_hit_n == 5);
+		CHECK(g_cal[M].n_plain[0] == 70 && g_cal[M].tiny_hit_n == 5 && !g_tune_legacy);
 	}
 	vm_stage_fini();
 }
@@ -4042,23 +4042,10 @@ static void test_app_settings(void)
 	vm_stage_fini();
 }
 
-/* Whose frame is on screen, for the system apps (stage.c, fb_owner). */
-static SceUID fake_fb_pid;
-
-static int fake_proc_fb(SceUID pid, int head, int index, SceDisplayFrameBufInfo *info)
-{
-	if (pid != -1 || head || index)
-		return -1;
-	info->pid = fake_fb_pid;
-	info->paddr = fake_fb_pid ? 0x60000000u : 0;
-	return 0;
-}
-
 /* The home screen and the system apps (VM_KEY_SYSAPPS): the home screen has
  * a profile of its own (HOME_TITLE) and Adaptive keeps what it learned there;
- * a system app is in front once its frame is on screen, one that never shows
- * one (a background one) never is and is let go; a game takes the front at
- * once as before. Off: they all use the global settings, as before. */
+ * a system app is an app like a game. Off: they all use the global settings,
+ * as before. */
 static void test_system_apps(void)
 {
 	VmSettings s;
@@ -4073,8 +4060,6 @@ static void test_system_apps(void)
 	s.sysapps = 1;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
-	g_proc_fb = fake_proc_fb;
-	fake_fb_pid = 0;
 	/* the home screen: its own settings, set and saved like a game's */
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
@@ -4085,17 +4070,12 @@ static void test_system_apps(void)
 	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
 	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_offload == VM_OFFLOAD_FULL);
 	CHECK(ra_prof_load(HOME_TITLE, &pf) && pf.app.offload == VM_OFFLOAD_FULL);
-	/* a system app started: not in front until its frame is on screen */
+	/* a system app: in front as a game is, the global ones until it has its own */
 	as_app(0x47);
-	CHECK(g_ra_fg == 0 && g_sys_cand == 0x47 && vm_stage_looking());
 	vm_stage_worker_tick();
-	CHECK(g_ra_fg == 0 && g_sys_cand == 0x47);
-	fake_fb_pid = 0x47;
-	vm_stage_worker_tick();                             /* it shows: in front */
-	vm_stage_worker_tick();                             /* ... its settings */
 	vm_stage_app_now(&an);
-	CHECK(g_ra_fg == 0x47 && !vm_stage_looking() && !strcmp(an.title, "NPXS10015"));
-	CHECK(g_ra_mode == VM_RA_ON && g_offload == VM_OFFLOAD_OFF);   /* the global ones */
+	CHECK(g_ra_fg == 0x47 && !strcmp(an.title, "NPXS10015"));
+	CHECK(g_ra_mode == VM_RA_ON && g_offload == VM_OFFLOAD_OFF);
 	ra_app_global(&a);
 	a.pipe = VM_PIPE_FIXED;
 	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
@@ -4105,35 +4085,100 @@ static void test_system_apps(void)
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(g_ra_fg == 0 && !strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_FULL);
-	/* a background one never shows: let go, the front never moves */
-	fake_fb_pid = 0;
-	as_app(0x49);
-	for (uint32_t i = 0; i < SYS_CAND_LOOKS; i++)
-		vm_stage_worker_tick();
-	CHECK(g_ra_fg == 0 && !vm_stage_looking());
-	/* a game: at once, as before; a system app starting meanwhile does not take it */
+	/* the home screen's own process ("main") never takes the front */
+	as_app(0x48);
+	vm_stage_worker_tick();
+	CHECK(g_ra_fg == 0);
+	/* a game as before */
 	as_app(0x44);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(g_ra_fg == 0x44 && !strcmp(an.title, "PCSB00777"));
-	/* Off: no settings of their own - the home screen as the global ones */
+	/* Off: no settings of their own - the home screen as the global ones, a
+	 * system app not in front */
 	ra_proc_event(0x44, 4);
 	s.sysapps = 0;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(g_ra_fg == 0 && !an.title[0] && g_offload == VM_OFFLOAD_OFF && !app_in_front());
-	fake_fb_pid = 0x47;
 	as_app(0x47);
 	vm_stage_worker_tick();
-	CHECK(g_ra_fg == 0 && !vm_stage_looking());
+	CHECK(g_ra_fg == 0);
 	/* on again: the home screen's at once */
 	s.sysapps = 1;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(!strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_FULL);
-	g_proc_fb = NULL;
+	vm_stage_fini();
+}
+
+/* What Adaptive learned survives a restart (tuning.bin): written when
+ * another app comes to the front, and only if a threshold moved; read at
+ * the next start, a game comes back where it was. The runs packed in 16
+ * bits come back as they were (to the shift). */
+static void test_learned_kept_in_file(void)
+{
+	VmSettings s;
+	const AdKept *k;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();                         /* the file read: none yet */
+	as_app(0x44);
+	vm_stage_worker_tick();
+	adapt_runs(0, 20, 3);                           /* it learns: from the 2nd read */
+	CHECK(ra_threshold(0) == 2);
+	CHECK(fake_tune_writes == 0);                   /* not while it plays */
+	ra_proc_event(0x44, 4);                         /* home: what it learned, kept */
+	vm_stage_worker_tick();
+	CHECK(fake_tune_writes == 1);
+	/* back and forth with nothing moved: no write */
+	ra_proc_event(0x44, 5);
+	vm_stage_worker_tick();
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	CHECK(fake_tune_writes == 1);
+	/* a restart: nothing in memory, the file read */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	memset(g_ad_kept, 0, sizeof(g_ad_kept));
+	ra_adapt_clear();
+	__sync_lock_release(&g_ad_lock);
+	g_ad_title[0] = 0;
+	g_ad_key = 0;
+	g_cal_loaded = 0;
+	cal_load();
+	k = ad_kept_find("PCSB00777");
+	CHECK(k && k->ra_adj[0] == -3 && k->sig_saved == ad_sig(k) && k->ad.run[0][10] > 0);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 2 && g_ad_restored >= 1);   /* where it was, at once */
+	/* packing: counts up to any size come back to the shift */
+	{
+		AdKept a, b;
+		TuneApp t;
+
+		memset(&a, 0, sizeof(a));
+		memcpy(a.title, "PCSB00777", 10);
+		a.tiny_thr = RA_TINY_STREAK;
+		a.tiny_blk = RA_TINY_SECTORS;
+		a.ad.pos[0][9] = 5000000u;
+		a.ad.pos[1][3] = 1234u;
+		a.tn_cnt[4] = 70000u;
+		tune_pack(&a, &t);
+		CHECK(tune_unpack(&t, &b) && b.ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
+		      b.ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && b.tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
+		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 340);
+		t.tiny_blk = 48;                              /* not one this build writes */
+		CHECK(!tune_unpack(&t, &b));
+	}
 	vm_stage_fini();
 }
 
@@ -4468,6 +4513,7 @@ int main(void)
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_system_apps);
+	RUN(test_learned_kept_in_file);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

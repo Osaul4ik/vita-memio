@@ -66,7 +66,6 @@
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
 #include <psp2kern/io/dirent.h>
-#include <psp2kern/display.h>               /* SceDisplayFrameBufInfo (the app in front) */
 #include <taihen.h>
 
 #include "stage.h"
@@ -1921,73 +1920,6 @@ static int ra_title_ok(const char *t)
  * (VM_KEY_SYSAPPS), as games do. */
 static volatile int g_sysapps = VM_DEF_SYSAPPS;
 
-/* A system app (NPXS*) that started or came back: unlike a game it is in
- * front only once its frame is on screen - the system starts many of its
- * own in the background, which never are. The worker looks (sys_cand_tick)
- * every SYS_CAND_LOOK_US, SYS_CAND_LOOKS times at most. */
-#define SYS_CAND_LOOK_US 250000u
-#define SYS_CAND_LOOKS   40u
-static volatile SceUID g_sys_cand;                   /* atomic; 0: none           */
-static char            g_sys_cand_title[16];        /* written before g_sys_cand */
-static uint32_t        g_sys_cand_looks;            /* worker only               */
-/* ksceDisplayGetProcFrameBufInternal (SceDisplayForDriver 0x9FED47AC,
- * 0x3BC165EF in vita-headers db/360): whose frame is on screen. */
-static int (*g_proc_fb)(SceUID pid, int head, int index, SceDisplayFrameBufInfo *info);
-
-/* The process whose frame is on screen (the built-in one, or HDMI), 0 if
- * none can be told. */
-static SceUID fb_owner(void)
-{
-	if (!g_proc_fb)
-		return 0;
-	for (int head = 0; head < 2; head++)
-		for (int index = 0; index < 2; index++) {
-			SceDisplayFrameBufInfo info;
-
-			memset(&info, 0, sizeof(info));
-			info.size = sizeof(info);
-			if (g_proc_fb(-1, head, index, &info) >= 0 && info.pid > 0 && info.paddr)
-				return info.pid;
-		}
-	return 0;
-}
-
-static void fg_take(SceUID pid, const char *title);
-
-/* Worker: a system app waiting to be in front (g_sys_cand) is, once its frame
- * is on screen - or at once where frames cannot be seen; one that never shows
- * one (a background one) is let go after SYS_CAND_LOOKS looks. */
-static void sys_cand_tick(void)
-{
-	const SceUID c = __atomic_load_n(&g_sys_cand, __ATOMIC_ACQUIRE);
-
-	if (!c) {
-		g_sys_cand_looks = 0;
-		return;
-	}
-	if (!g_proc_fb || fb_owner() == c) {
-		char t[16];
-		SceUID exp = c;
-
-		memcpy(t, g_sys_cand_title, sizeof(t));
-		if (__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL,
-		                                __ATOMIC_RELAXED))
-			fg_take(c, t);
-		g_sys_cand_looks = 0;
-	} else if (++g_sys_cand_looks >= SYS_CAND_LOOKS) {
-		SceUID exp = c;
-
-		__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
-		g_sys_cand_looks = 0;
-	}
-}
-
-/* 1 while a system app waits to be in front: the worker looks more often. */
-int vm_stage_looking(void)
-{
-	return __atomic_load_n(&g_sys_cand, __ATOMIC_ACQUIRE) != 0;
-}
-
 /* `pid` (title `t`) is the app in front from now. Any thread. */
 static void fg_take(SceUID pid, const char *t)
 {
@@ -2028,24 +1960,14 @@ static void ra_proc_event(SceUID pid, int ev)
 		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0) {
 			return;
 		}
-		if (ra_title_system(t)) {
-			/* the home screen itself ("main"): in front when no app is;
-			 * another system app: once its frame is on screen */
-			if (LD(g_sysapps) && !(t[0] == 'm' && t[1] == 'a' && t[2] == 'i' && t[3] == 'n')) {
-				memcpy(g_sys_cand_title, t, sizeof(g_sys_cand_title) - 1);
-				g_sys_cand_title[sizeof(g_sys_cand_title) - 1] = 0;
-				__atomic_store_n(&g_sys_cand, pid, __ATOMIC_RELEASE);
-				ra_wake();
-			}
+		/* the home screen itself ("main") is in front when no app is; the
+		 * other system apps are apps like games (VM_KEY_SYSAPPS) */
+		if (ra_title_system(t) &&
+		    (!LD(g_sysapps) || (t[0] == 'm' && t[1] == 'a' && t[2] == 'i' && t[3] == 'n')))
 			return;
-		}
-		__atomic_store_n(&g_sys_cand, 0, __ATOMIC_RELEASE);   /* a game takes the front */
 		fg_take(pid, t);
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
-
-		__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
-		exp = pid;
 
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
 		                                __ATOMIC_RELAXED)) {
@@ -2516,58 +2438,14 @@ static int cal_worth_saving(void)
 	return 0;
 }
 
-static void cal_save(void)
-{
-	CalHead h = { CAL_MAGIC, CAL_VERSION, 0, VM_DEV_COUNT };
-	uint32_t c = 0x811C9DC5u;
-	SceUID fd;
-	int ok;
+/* tuning.bin: the calibration and what Adaptive learned, together (below,
+ * after what Adaptive keeps). */
+static void cal_save(void);
+static void cal_load(void);
 
-	if (!g_cal_loaded)
-		return;
-	ST(g_cal_dirty, 0);
-	h.on = (uint32_t)LD(g_cal_on);
-	ksceIoMkdir("ur0:data", 0777);
-	ksceIoMkdir(VM_DATA_DIR, 0777);
-	fd = ksceIoOpen(CAL_FILE ".tmp", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
-	if (fd < 0)
-		return;
-	ok = ksceIoWrite(fd, &h, sizeof(h)) == (int)sizeof(h);
-	c = cal_fnv(c, &h, sizeof(h));
-	for (int i = 0; i < VM_DEV_COUNT && ok; i++) {
-		CalDev one;                       /* as it is now, the check over the same */
-
-		for (int k = 0; k < 2; k++) {
-			for (int b = 0; b < CAL_BUCKETS; b++) {
-				one.plain[k][b] = LD(g_cal[i].plain[k][b]);
-				one.served[k][b] = LD(g_cal[i].served[k][b]);
-			}
-			one.n_plain[k] = LD(g_cal[i].n_plain[k]);
-			one.n_served[k] = LD(g_cal[i].n_served[k]);
-		}
-		one.waste_us = LD(g_cal[i].waste_us);
-		one.waste_n = LD(g_cal[i].waste_n);
-		one.tiny_hit_us = LD(g_cal[i].tiny_hit_us);
-		one.tiny_hit_n = LD(g_cal[i].tiny_hit_n);
-		one.tiny_blk_us = LD(g_cal[i].tiny_blk_us);
-		one.tiny_blk_sec = LD(g_cal[i].tiny_blk_sec);
-		one.tiny_blk_n = LD(g_cal[i].tiny_blk_n);
-		ok = ksceIoWrite(fd, &one, sizeof(one)) == (int)sizeof(one);
-		c = cal_fnv(c, &one, sizeof(one));
-	}
-	c ^= 0xA5C3A5C3u;
-	ok = ok && ksceIoWrite(fd, &c, sizeof(c)) == (int)sizeof(c);
-	ksceIoClose(fd);
-	if (ok) {
-		ksceIoRemove(CAL_FILE);
-		ksceIoRename(CAL_FILE ".tmp", CAL_FILE);
-		cal_snapshot();                   /* what the file holds now */
-	} else {
-		ksceIoRemove(CAL_FILE ".tmp");
-	}
-}
-
-/* One file into g_cal; 1 if it was whole and right (else g_cal cleared). */
+/* An older version's calib.bin into g_cal (the calibration alone); 1 if it
+ * was whole and right (else g_cal cleared). Read once, if there is no
+ * tuning.bin yet; the first save of tuning.bin removes it. */
 static int cal_read_file(const char *path)
 {
 	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
@@ -2606,24 +2484,15 @@ static int cal_read_file(const char *path)
 	return 1;
 }
 
-/* Once, by the worker: what was measured before (the copy a save cut short,
- * if the file is not whole). */
-static void cal_load(void)
-{
-	if (g_cal_loaded)
-		return;
-	g_cal_loaded = 1;
-	if (!cal_read_file(CAL_FILE))
-		cal_read_file(CAL_FILE ".tmp");
-	cal_snapshot();                       /* what the file holds (or nothing) */
-}
+static void tune_forget_learned(void);
 
 void vm_stage_cal_reset(void)
 {
 	cal_load();
 	memset(g_cal, 0, sizeof(g_cal));      /* the figures: the fixed ones again */
+	tune_forget_learned();                /* ... and what was learned with them */
 	cal_save();
-	VM_KLOGI("stage: calibration reset");
+	VM_KLOGI("stage: calibration and what was learned reset");
 }
 
 void vm_stage_cal_set(int on)
@@ -2648,6 +2517,7 @@ typedef struct {
 	int      ra_adj[2], rs_adj[2];
 	uint32_t tiny_thr, tiny_blk;
 	uint32_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB], tn_ended;
+	uint32_t sig_saved;                  /* its thresholds as in tuning.bin (0: not there) */
 } AdKept;
 static AdKept            g_ad_kept[AD_KEEP];
 static uint32_t          g_ad_tick;
@@ -2701,6 +2571,7 @@ static void ad_keep(void)
 				k = &g_ad_kept[i];
 		}
 		memcpy(k->title, g_ad_title, sizeof(k->title));
+		k->sig_saved = 0;                 /* a new one: not in the file */
 	}
 	k->key = g_ad_key;
 	k->used = ++g_ad_tick;
@@ -2788,6 +2659,343 @@ static void __attribute__((unused)) ra_adapt_reset(void)
 		ksceKernelDelayThread(10);
 	ra_adapt_clear();
 	__sync_lock_release(&g_ad_lock);
+}
+
+/* ---- tuning.bin: the calibration and what Adaptive learned -----------------
+ *
+ * One small file, so a restart goes on from what was measured and learned
+ * rather than from the start:
+ *   TuneHead | CalDev x devs | TuneApp x apps | check (FNV-1a over it all)
+ * A TuneApp is what Adaptive keeps for an app (AdKept): its thresholds, and
+ * the runs behind them in 16 bits a count with a shift each (sh_ad, sh_tn) -
+ * ~330 bytes; the apps in the order they were last in front, the most recent
+ * last. Written aside (.tmp), then swapped in. Written only when a figure in
+ * use moves (cal_worth_saving) or an app's thresholds do (tune_learn_worth),
+ * looked at when another app comes to the front - the runs alone never make
+ * it write: once all is learned, it is hardly written again. Worker thread. */
+#define TUNE_FILE     VM_DATA_DIR "/tuning.bin"
+#define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
+#define TUNE_VERSION  1u
+
+typedef struct {
+	uint32_t magic, version, on, devs, apps;
+} TuneHead;
+
+typedef struct {
+	char     title[12];
+	uint32_t key;
+	int8_t   ra_adj[2], rs_adj[2];
+	uint8_t  tiny_thr, tiny_blk, sh_ad, sh_tn;
+	uint16_t pos[2][RT_POS], run[2][RT_RUN], spos[2][RT_POS], srun[2][RT_RUN];
+	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
+} TuneApp;
+
+static int      g_tune_legacy;                /* calib.bin was read: removed at the save */
+
+static uint32_t tune_fnv(uint32_t c, const void *p, uint32_t n)
+{
+	const uint8_t *b = (const uint8_t *)p;
+
+	for (uint32_t i = 0; i < n; i++)
+		c = (c ^ b[i]) * 0x01000193u;
+	return c;
+}
+
+/* An app's thresholds, as one word (0 never: a fresh one is not in the file). */
+static uint32_t ad_sig(const AdKept *k)
+{
+	const int32_t v[7] = { (int32_t)k->key, k->ra_adj[0], k->ra_adj[1], k->rs_adj[0],
+	                       k->rs_adj[1], (int32_t)k->tiny_thr, (int32_t)k->tiny_blk };
+
+	return tune_fnv(0x811C9DC5u, v, sizeof(v)) | 1u;
+}
+
+/* Whether it learned anything: a threshold not where it starts. */
+static int ad_learned(const AdKept *k)
+{
+	return k->ra_adj[0] || k->ra_adj[1] || k->rs_adj[0] || k->rs_adj[1] ||
+	       k->tiny_thr != RA_TINY_STREAK || k->tiny_blk != RA_TINY_SECTORS;
+}
+
+/* The shift that fits every count of `v` in 16 bits. */
+static uint8_t tune_shift(const uint32_t *v, int n, uint8_t s)
+{
+	uint32_t m = 0;
+
+	for (int i = 0; i < n; i++)
+		m |= v[i];
+	while ((m >> s) > 0xFFFFu)
+		s++;
+	return s;
+}
+
+static void tune_put(uint16_t *o, const uint32_t *v, int n, uint8_t s)
+{
+	for (int i = 0; i < n; i++)
+		o[i] = (uint16_t)(v[i] >> s);
+}
+
+static void tune_get(uint32_t *o, const uint16_t *v, int n, uint8_t s)
+{
+	for (int i = 0; i < n; i++)
+		o[i] = (uint32_t)v[i] << s;
+}
+
+#define TUNE_N(a) ((int)(sizeof(a) / sizeof(uint32_t)))
+
+static void tune_pack(const AdKept *k, TuneApp *t)
+{
+	uint8_t s = 0;
+
+	memset(t, 0, sizeof(*t));
+	memcpy(t->title, k->title, sizeof(t->title) - 1);
+	t->key = k->key;
+	for (int i = 0; i < 2; i++) {
+		t->ra_adj[i] = (int8_t)k->ra_adj[i];
+		t->rs_adj[i] = (int8_t)k->rs_adj[i];
+	}
+	t->tiny_thr = (uint8_t)k->tiny_thr;
+	t->tiny_blk = (uint8_t)k->tiny_blk;
+	s = tune_shift(&k->ad.pos[0][0], TUNE_N(k->ad.pos), s);
+	s = tune_shift(&k->ad.run[0][0], TUNE_N(k->ad.run), s);
+	s = tune_shift(&k->ad.spos[0][0], TUNE_N(k->ad.spos), s);
+	s = tune_shift(&k->ad.srun[0][0], TUNE_N(k->ad.srun), s);
+	t->sh_ad = s;
+	tune_put(&t->pos[0][0], &k->ad.pos[0][0], TUNE_N(k->ad.pos), s);
+	tune_put(&t->run[0][0], &k->ad.run[0][0], TUNE_N(k->ad.run), s);
+	tune_put(&t->spos[0][0], &k->ad.spos[0][0], TUNE_N(k->ad.spos), s);
+	tune_put(&t->srun[0][0], &k->ad.srun[0][0], TUNE_N(k->ad.srun), s);
+	s = 0;
+	s = tune_shift(k->tn_cnt, RT_TB, s);
+	s = tune_shift(k->tn_reads, RT_TB, s);
+	s = tune_shift(k->tn_sec, RT_TB, s);
+	t->sh_tn = s;
+	tune_put(t->tn_cnt, k->tn_cnt, RT_TB, s);
+	tune_put(t->tn_reads, k->tn_reads, RT_TB, s);
+	tune_put(t->tn_sec, k->tn_sec, RT_TB, s);
+}
+
+/* One read back into a slot; 0 if it is not one this build would have
+ * written (then nothing of it is used). */
+static int tune_unpack(const TuneApp *t, AdKept *k)
+{
+	char title[16];
+	int tiny_ok = 0;
+
+	memset(title, 0, sizeof(title));
+	memcpy(title, t->title, sizeof(t->title));
+	title[sizeof(t->title) - 1] = 0;
+	for (int i = 0; i < RT_TINY_T_N; i++)
+		tiny_ok |= t->tiny_thr == rt_tiny_thr[i];
+	if (!tiny_ok || (t->tiny_blk != 16 && t->tiny_blk != 32 && t->tiny_blk != 64) ||
+	    t->sh_ad > 16 || t->sh_tn > 16 || !ra_title_ok(title) ||
+	    t->ra_adj[0] < -8 || t->ra_adj[0] > 8 || t->ra_adj[1] < -8 || t->ra_adj[1] > 8 ||
+	    t->rs_adj[0] < -32 || t->rs_adj[0] > 32 || t->rs_adj[1] < -32 || t->rs_adj[1] > 32)
+		return 0;
+	memset(k, 0, sizeof(*k));
+	memcpy(k->title, title, sizeof(k->title));
+	k->key = t->key;
+	for (int i = 0; i < 2; i++) {
+		k->ra_adj[i] = t->ra_adj[i];
+		k->rs_adj[i] = t->rs_adj[i];
+	}
+	k->tiny_thr = t->tiny_thr;
+	k->tiny_blk = t->tiny_blk;
+	tune_get(&k->ad.pos[0][0], &t->pos[0][0], TUNE_N(k->ad.pos), t->sh_ad);
+	tune_get(&k->ad.run[0][0], &t->run[0][0], TUNE_N(k->ad.run), t->sh_ad);
+	tune_get(&k->ad.spos[0][0], &t->spos[0][0], TUNE_N(k->ad.spos), t->sh_ad);
+	tune_get(&k->ad.srun[0][0], &t->srun[0][0], TUNE_N(k->ad.srun), t->sh_ad);
+	tune_get(k->tn_cnt, t->tn_cnt, RT_TB, t->sh_tn);
+	tune_get(k->tn_reads, t->tn_reads, RT_TB, t->sh_tn);
+	tune_get(k->tn_sec, t->tn_sec, RT_TB, t->sh_tn);
+	k->sig_saved = ad_sig(k);
+	return 1;
+}
+
+/* Whether an app's thresholds moved since the file was written (or one that
+ * learned something is not in it yet). */
+static int tune_learn_worth(void)
+{
+	int w = 0;
+
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < AD_KEEP && !w; i++) {
+		const AdKept *k = &g_ad_kept[i];
+
+		w = k->title[0] && ad_sig(k) != k->sig_saved && (k->sig_saved || ad_learned(k));
+	}
+	__sync_lock_release(&g_ad_lock);
+	return w;
+}
+
+/* What was learned, forgotten (Tuning reset): the apps kept, and the one in
+ * front starts afresh. */
+static void tune_forget_learned(void)
+{
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < AD_KEEP; i++)
+		if (g_ad_kept[i].title[0])
+			memset(&g_ad_kept[i], 0, sizeof(g_ad_kept[i]));
+	ra_adapt_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
+static void cal_save(void)
+{
+	TuneHead h = { TUNE_MAGIC, TUNE_VERSION, 0, VM_DEV_COUNT, 0 };
+	int order[AD_KEEP], n = 0, ok;
+	uint32_t sig[AD_KEEP];
+	uint32_t c = 0x811C9DC5u;
+	SceUID fd;
+
+	if (!g_cal_loaded)
+		return;
+	ST(g_cal_dirty, 0);
+	h.on = (uint32_t)LD(g_cal_on);
+	/* the apps, the one longest away first */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < AD_KEEP; i++)
+		if (g_ad_kept[i].title[0])
+			order[n++] = i;
+	for (int i = 1; i < n; i++)
+		for (int j = i; j > 0 && g_ad_kept[order[j]].used < g_ad_kept[order[j - 1]].used; j--) {
+			const int t = order[j];
+
+			order[j] = order[j - 1];
+			order[j - 1] = t;
+		}
+	__sync_lock_release(&g_ad_lock);
+	h.apps = (uint32_t)n;
+	ksceIoMkdir("ur0:data", 0777);
+	ksceIoMkdir(VM_DATA_DIR, 0777);
+	fd = ksceIoOpen(TUNE_FILE ".tmp", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	if (fd < 0)
+		return;
+	ok = ksceIoWrite(fd, &h, sizeof(h)) == (int)sizeof(h);
+	c = tune_fnv(c, &h, sizeof(h));
+	for (int i = 0; i < VM_DEV_COUNT && ok; i++) {
+		CalDev one;                       /* as it is now, the check over the same */
+
+		for (int k = 0; k < 2; k++) {
+			for (int b = 0; b < CAL_BUCKETS; b++) {
+				one.plain[k][b] = LD(g_cal[i].plain[k][b]);
+				one.served[k][b] = LD(g_cal[i].served[k][b]);
+			}
+			one.n_plain[k] = LD(g_cal[i].n_plain[k]);
+			one.n_served[k] = LD(g_cal[i].n_served[k]);
+		}
+		one.waste_us = LD(g_cal[i].waste_us);
+		one.waste_n = LD(g_cal[i].waste_n);
+		one.tiny_hit_us = LD(g_cal[i].tiny_hit_us);
+		one.tiny_hit_n = LD(g_cal[i].tiny_hit_n);
+		one.tiny_blk_us = LD(g_cal[i].tiny_blk_us);
+		one.tiny_blk_sec = LD(g_cal[i].tiny_blk_sec);
+		one.tiny_blk_n = LD(g_cal[i].tiny_blk_n);
+		ok = ksceIoWrite(fd, &one, sizeof(one)) == (int)sizeof(one);
+		c = tune_fnv(c, &one, sizeof(one));
+	}
+	/* one app at a time: packed under the lock, written outside it */
+	for (int i = 0; i < n && ok; i++) {
+		TuneApp t;
+
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			ksceKernelDelayThread(10);
+		tune_pack(&g_ad_kept[order[i]], &t);
+		sig[i] = ad_sig(&g_ad_kept[order[i]]);
+		__sync_lock_release(&g_ad_lock);
+		ok = ksceIoWrite(fd, &t, sizeof(t)) == (int)sizeof(t);
+		c = tune_fnv(c, &t, sizeof(t));
+	}
+	ok = ok && ksceIoWrite(fd, &c, sizeof(c)) == (int)sizeof(c);
+	ksceIoClose(fd);
+	if (!ok) {
+		ksceIoRemove(TUNE_FILE ".tmp");
+		return;
+	}
+	ksceIoRemove(TUNE_FILE);
+	ksceIoRename(TUNE_FILE ".tmp", TUNE_FILE);
+	cal_snapshot();                       /* what the file holds now */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < n; i++)           /* as written (a slot changed since: again later) */
+		g_ad_kept[order[i]].sig_saved = sig[i];
+	__sync_lock_release(&g_ad_lock);
+	if (g_tune_legacy) {                  /* the older file: in this one now */
+		g_tune_legacy = 0;
+		ksceIoRemove(CAL_FILE);
+		ksceIoRemove(CAL_FILE ".tmp");
+	}
+}
+
+/* tuning.bin into g_cal and the apps kept, one at a time; 1 if it was whole
+ * and right (else nothing of it is used: g_cal and the apps cleared). */
+static int tune_read(const char *path)
+{
+	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	TuneHead h;
+	uint32_t c = 0x811C9DC5u, check = 0;
+	int ok, got = 0;
+
+	if (fd < 0)
+		return 0;
+	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && h.magic == TUNE_MAGIC &&
+	     h.version == TUNE_VERSION && h.devs == VM_DEV_COUNT && h.apps <= AD_KEEP;
+	c = tune_fnv(c, &h, sizeof(h));
+	if (ok) {
+		ok = ksceIoRead(fd, g_cal, sizeof(g_cal)) == (int)sizeof(g_cal);
+		c = tune_fnv(c, g_cal, sizeof(g_cal));
+	}
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	memset(g_ad_kept, 0, sizeof(g_ad_kept));
+	__sync_lock_release(&g_ad_lock);
+	for (uint32_t i = 0; ok && i < h.apps; i++) {
+		TuneApp t;
+
+		ok = ksceIoRead(fd, &t, sizeof(t)) == (int)sizeof(t);
+		c = tune_fnv(c, &t, sizeof(t));
+		if (!ok)
+			break;
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			ksceKernelDelayThread(10);
+		if (tune_unpack(&t, &g_ad_kept[got]))
+			g_ad_kept[got++].used = ++g_ad_tick;   /* the file's order: the most recent last */
+		__sync_lock_release(&g_ad_lock);
+	}
+	ok = ok && ksceIoRead(fd, &check, sizeof(check)) == (int)sizeof(check) && c == check;
+	ksceIoClose(fd);
+	for (int i = 0; i < VM_DEV_COUNT && ok; i++)
+		for (int k = 0; k < 2; k++)
+			if (g_cal[i].n_plain[k] >= CAL_KEEP || g_cal[i].n_served[k] >= CAL_KEEP)
+				ok = 0;
+	if (!ok) {
+		memset(g_cal, 0, sizeof(g_cal));
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			ksceKernelDelayThread(10);
+		memset(g_ad_kept, 0, sizeof(g_ad_kept));
+		__sync_lock_release(&g_ad_lock);
+		return 0;
+	}
+	ST(g_cal_on, h.on ? 1 : 0);
+	return 1;
+}
+
+/* Once, by the worker: what was measured and learned before (the copy a save
+ * cut short, if the file is not whole); with no tuning.bin, an older
+ * version's calib.bin (the calibration alone). */
+static void cal_load(void)
+{
+	if (g_cal_loaded)
+		return;
+	g_cal_loaded = 1;
+	if (!tune_read(TUNE_FILE) && !tune_read(TUNE_FILE ".tmp")) {
+		if (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp"))
+			g_tune_legacy = 1;
+	}
+	cal_snapshot();                       /* what the file holds (or nothing) */
 }
 
 /* What tiny reads use now: Adaptive's (T, B), else the fixed ones (On, and
@@ -4237,9 +4445,6 @@ int vm_stage_init(void)
 		                           NID_EXCLUSIVE_RUNNING, &f) >= 0 && f)
 			g_exclusive_fn = (int (*)(const char *))f;
 		f = 0;
-		if (module_get_export_func(KERNEL_PID, "SceDisplay", 0x9FED47AC, 0x3BC165EF, &f) >= 0 && f)
-			g_proc_fb = (int (*)(SceUID, int, int, SceDisplayFrameBufInfo *))f;
-		f = 0;
 		if (module_get_export_func(KERNEL_PID, "SceKernelDmacMgr", LIB_DMAC_DRIVER,
 		                           NID_DMAC_MEMCPY, &f) >= 0 && f)
 			g_dmac_memcpy = (int (*)(void *, const void *, SceSize))f;
@@ -4491,8 +4696,6 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_verify, s->verify ? 1 : 0);
 	if ((s->sysapps ? 1 : 0) != LD(g_sysapps)) {
 		ST(g_sysapps, s->sysapps ? 1 : 0);
-		if (!LD(g_sysapps))
-			ST(g_sys_cand, 0);
 		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the worker: whose now */
 		ra_wake();
 	}
@@ -4683,7 +4886,6 @@ void vm_stage_worker_tick(void)
 	if (!g_cal_loaded && LD(g_live))
 		cal_load();                       /* what was measured before, once */
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
-	sys_cand_tick();                      /* a system app: in front once it shows */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
@@ -4901,10 +5103,6 @@ void vm_stage_worker_tick(void)
 
 		if (fg != last_fg) {
 			last_fg = fg;
-			/* calibration: kept at a change of app, only if what is in
-			 * use would change (internal storage: as few writes as can be) */
-			if (LD(g_cal_dirty) && cal_worth_saving())
-				cal_save();
 			if (fg)
 				VM_KLOGI("stage: in front: %s (pid 0x%08x)", g_fg_title, (unsigned)fg);
 			else
@@ -4955,6 +5153,11 @@ void vm_stage_worker_tick(void)
 			app_load(0);
 		else if (fg != last_fg)
 			eff_update();
+		/* tuning.bin: at a change of app - what the one before learned is
+		 * kept by now - only if a figure or a threshold in use moved
+		 * (internal storage: as few writes as can be) */
+		if (fg != last_fg && ((LD(g_cal_dirty) && cal_worth_saving()) || tune_learn_worth()))
+			cal_save();
 		last_fg = fg;
 	}
 	{

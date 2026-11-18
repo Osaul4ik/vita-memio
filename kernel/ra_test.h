@@ -314,6 +314,85 @@ static inline int ra_adapt_pick(const RaTest *t, int k, int *thr, int *sm, int64
 	return 1;
 }
 
+/* What thresholds (thr, sm) bring kind k over the counts (both sizes):
+ * time saved less the pieces read for nothing, in the counts' scale. */
+static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, const RtCost *cost)
+{
+	RtScores l, s;
+
+	rt_kind_scores(t, k, cost, &l, &s);
+	return l.sc[thr] + s.sc[sm];
+}
+
+/* ---- on or off, as measured --------------------------------------------
+ * Adaptive's thresholds come from the model, which sees the runs but not all
+ * a piece or block costs: a write spoiling it, the card's own pauses, other
+ * reads queued behind it. So whether read ahead is on for a kind (the large
+ * and 32 KiB reads into ordinary memory, into non-cacheable memory, the tiny
+ * reads) is decided as well by the reads' own time, per MiB:
+ *   - where the model sees it bring or cost RT_OO_BAND or more of that time,
+ *     the model decides (a clear gain is never given up to try without);
+ *   - within the band, every RT_OO_PROBE-th round runs the other way (a
+ *     probe), and the time per MiB is kept for each way (a moving mean);
+ *     after a probe the faster way is kept, if faster by RT_OO_MARGIN.
+ * The counts go on either way (the model keeps seeing the runs). In a
+ * simulation over the A/B log's figures (+-80 % ... +16 % per phase) this
+ * came within 1.3 % of always picking the faster way, where the model alone
+ * was 3 % off and measuring alone (probing every kind) 4 %. */
+#define RT_OO_BAND    50              /* permille of the reads' time          */
+#define RT_OO_PROBE   8               /* rounds                               */
+#define RT_OO_MARGIN  20              /* permille                             */
+
+typedef struct {
+	uint8_t  off;                     /* read ahead off for this kind          */
+	uint8_t  probe;                   /* this round runs the other way         */
+	uint8_t  since;                   /* rounds since the last probe           */
+	uint8_t  have;                    /* bit 0: us[0] kept, bit 1: us[1]       */
+	uint32_t us[2];                   /* time per MiB on (0) and off (1), us   */
+} RtOnOff;
+
+/* A round of the kind is over: `gain` what the model says read ahead brings
+ * (the counts' scale), `time` the reads' time in the same scale, `us_mib`
+ * the round's own time per MiB (0: too little read to tell). The way for the
+ * next round in o->off ^ o->probe. 1 if o->off changed. */
+static inline int rt_onoff_round(RtOnOff *o, int64_t gain, int64_t time, uint32_t us_mib)
+{
+	const int way = o->off ^ o->probe;   /* how this round ran */
+	const int was = o->off;
+	int64_t pm;
+
+	if (us_mib) {
+		if (o->have & (1u << way))
+			o->us[way] = o->us[way] - o->us[way] * 3u / 8u + us_mib * 3u / 8u;
+		else
+			o->us[way] = us_mib;
+		o->have |= (uint8_t)(1u << way);
+	}
+	if (time <= 0)
+		time = 1;
+	/* what it brings, of the time without it (on, the time with it plus that) */
+	pm = gain * 1000 / (time + (o->off || gain < 0 ? 0 : gain));
+	if (pm >= RT_OO_BAND || pm <= -RT_OO_BAND) {
+		o->off = pm < 0;                 /* the model is clear */
+		o->probe = 0;
+		o->since = 0;
+		return o->off != was;
+	}
+	if (o->probe) {
+		/* after the probe: the faster way, by the margin */
+		o->probe = 0;
+		if ((o->have & 3u) == 3u &&
+		    (uint64_t)o->us[!o->off] * 1000u < (uint64_t)o->us[o->off] * (1000u - RT_OO_MARGIN))
+			o->off = !o->off;
+		return o->off != was;
+	}
+	if (++o->since >= RT_OO_PROBE) {
+		o->since = 0;
+		o->probe = 1;                    /* the next round the other way */
+	}
+	return 0;
+}
+
 /* Kind k's counts halved: what was read long ago weighs less (a game's
  * loading and its play differ). */
 static inline void ra_adapt_age(RaTest *t, int k)

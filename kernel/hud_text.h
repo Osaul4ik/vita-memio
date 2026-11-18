@@ -15,14 +15,20 @@
  *   NC:never     the app's "never" (its large and 32 KiB reads)
  * The tiny reads' is one for both kinds. */
 static inline void hud_streak_kind(char *o, int cap, const char *k, uint32_t set, uint32_t now,
-                                   uint32_t mid, uint32_t tiny)
+                                   uint32_t mid, uint32_t tiny, int off, int tiny_off)
 {
-	if (now == VM_RA_NEVER)
+	char t[8], n[8], m[8];
+
+	if (now == VM_RA_NEVER) {
 		snprintf(o, (size_t)cap, HUD_C_DIM "%s:never", k);
-	else
-		snprintf(o, (size_t)cap, HUD_C_DIM "%s:" HUD_C_TEXT "%u" HUD_C_DIM ":" HUD_C_GOOD "%u/%u/%u", k,
-		         (unsigned)(set > 99 ? 99 : set), (unsigned)(now > 99 ? 99 : now),
-		         (unsigned)(mid > 99 ? 99 : mid), (unsigned)(tiny > 99 ? 99 : tiny));
+		return;
+	}
+	/* off as measured (Adaptive): "-" in its place */
+	snprintf(n, sizeof(n), off ? "-" : "%u", (unsigned)(now > 99 ? 99 : now));
+	snprintf(m, sizeof(m), off ? "-" : "%u", (unsigned)(mid > 99 ? 99 : mid));
+	snprintf(t, sizeof(t), tiny_off ? "-" : "%u", (unsigned)(tiny > 99 ? 99 : tiny));
+	snprintf(o, (size_t)cap, HUD_C_DIM "%.3s:" HUD_C_TEXT "%u" HUD_C_DIM ":" HUD_C_GOOD "%.2s/%.2s/%.2s",
+	         k, (unsigned)(set > 99 ? 99 : set), n, m, t);
 }
 
 #endif /* VITAMEMIO_HUD_TEXT_H */

@@ -29,7 +29,7 @@
 #include "stage.h"
 
 #define VM_HUD_LINK_MAGIC    0x4C44554Du   /* "MUDL" */
-#define VM_HUD_LINK_VERSION  3
+#define VM_HUD_LINK_VERSION  4
 
 /* The kernel module's functions, for the HUD module. */
 typedef struct VmCoreApi {

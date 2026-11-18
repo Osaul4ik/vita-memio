@@ -64,6 +64,8 @@ typedef struct VmRaNow {
 	uint32_t tiny;          /* in use for tiny reads: from which read a block */
 	int      bufmap;        /* the app in front's buffers for the system core
 	                         * (VM_BUFMAP_*), since it was started             */
+	uint32_t off;           /* Adaptive, off as measured now: bit 0 C, 1 NC,
+	                         * 2 tiny reads                                    */
 } VmRaNow;
 
 /* VmRaNow.bufmap: copy on the system core off or nothing mapped yet; every

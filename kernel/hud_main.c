@@ -187,8 +187,10 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	/* in effect for the app in front (its own, or the global one) */
 	mode = now.mode == VM_RA_ON ? HUD_C_TEXT "On" :
 	       now.mode == VM_RA_ADAPTIVE ? HUD_C_TEXT "Adaptive" : HUD_C_DIM "Off";
-	hud_streak_kind(c, sizeof(c), "C", now.set[0], now.thr[0], now.mid[0], now.tiny);
-	hud_streak_kind(nc, sizeof(nc), "NC", now.set[1], now.thr[1], now.mid[1], now.tiny);
+	hud_streak_kind(c, sizeof(c), "C", now.set[0], now.thr[0], now.mid[0], now.tiny, now.off & 1,
+	                now.off & 4);
+	hud_streak_kind(nc, sizeof(nc), "NC", now.set[1], now.thr[1], now.mid[1], now.tiny,
+	                now.off & 2, now.off & 4);
 	snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "R/A: %s  " HUD_C_DIM "TitleID: " HUD_C_TEXT
 	         "%.15s", mode, fg->title);
 	if (now.mode != VM_RA_OFF && n < room) {

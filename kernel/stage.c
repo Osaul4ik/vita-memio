@@ -2606,7 +2606,7 @@ void vm_stage_cal_set(int on)
  * nothing. Edited in place:
  *   TuneHead | TuneCal | TuneSlot, one for every app that learned, no limit
  * each part with a check of its own. Only what changed is written, where it
- * lies - an app's slot (~330 bytes) when its thresholds moved, a new app's
+ * lies - an app's slot (~360 bytes) when its thresholds moved, a new app's
  * after the last - the calibration when a figure in use moved; never the
  * whole file again: no copy aside, no rename, no truncation. A write cut
  * short spoils only that part (its check fails: that app learns again, in
@@ -2623,7 +2623,9 @@ void vm_stage_cal_set(int on)
 #define TUNE_FILE     TUNE_DIR "/tuning.bin"
 #define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  3u                           /* 1: whole each time, 2: 12 apps */
+#define TUNE_VERSION  4u                           /* 1: whole each time, 2: 12 apps,
+                                                    * 3: no on/off as measured */
+#define TUNE_SLOT_V3  328u                         /* version 3's slot: its calibration is read */
 #define TUNE_TITLE    12u                          /* TuneApp.title, its 0 too */
 
 typedef struct {
@@ -2633,6 +2635,8 @@ typedef struct {
 	uint8_t  tiny_thr, tiny_blk, sh_ad, sh_tn;
 	uint16_t pos[2][RT_POS], run[2][RT_RUN], spos[2][RT_POS], srun[2][RT_RUN];
 	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
+	uint8_t  oo_off[3], oo_have[3], oo_pad[2];   /* on or off, as measured (RtOnOff) */
+	uint32_t oo_us[3][2];
 } TuneApp;
 
 typedef struct {
@@ -2680,6 +2684,19 @@ static AdHeld            g_ad_out;            /* the one before, until written  
 static AdHeld            g_ad_in;             /* the one coming, as read         */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
+/* On or off, as measured (below, after ra_adapt_on): its state. */
+#define OO_C     0
+#define OO_NC    1
+#define OO_TINY  2
+#define OO_MIN_SEC     256u              /* a round's reads to be timed: 128 KiB  */
+#define OO_MIN_SEC_TINY 16u              /* ... tiny ones: 16 sectors              */
+static RtOnOff      g_oo[3];
+static volatile int g_oo_off[3];
+static uint64_t     g_oo_us[3];          /* atomics */
+static uint32_t     g_oo_sec[3];         /* atomics */
+static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts */
+static void oo_clear(void);
+
 /* Afresh (g_ad_lock held). */
 static void ra_adapt_clear(void)
 {
@@ -2700,6 +2717,7 @@ static void ra_adapt_clear(void)
 	ST(g_tn_due, 0);
 	ST(g_tiny_thr, RA_TINY_STREAK);
 	ST(g_tiny_blk, RA_TINY_SECTORS);
+	oo_clear();
 }
 
 
@@ -2711,8 +2729,9 @@ static int tune_title_is(const TuneApp *t, const char *title)
 /* An app's slot as one word: who and its thresholds (0: none). */
 static uint32_t tune_sig(const TuneApp *t)
 {
-	const int32_t v[7] = { (int32_t)t->key, t->ra_adj[0], t->ra_adj[1], t->rs_adj[0],
-	                       t->rs_adj[1], (int32_t)t->tiny_thr, (int32_t)t->tiny_blk };
+	const int32_t v[8] = { (int32_t)t->key, t->ra_adj[0], t->ra_adj[1], t->rs_adj[0],
+	                       t->rs_adj[1], (int32_t)t->tiny_thr, (int32_t)t->tiny_blk,
+	                       t->oo_off[0] | t->oo_off[1] << 1 | t->oo_off[2] << 2 };
 
 	if (!t->title[0])
 		return 0;
@@ -2723,7 +2742,8 @@ static uint32_t tune_sig(const TuneApp *t)
 static int tune_learned(const TuneApp *t)
 {
 	return t->ra_adj[0] || t->ra_adj[1] || t->rs_adj[0] || t->rs_adj[1] ||
-	       t->tiny_thr != RA_TINY_STREAK || t->tiny_blk != RA_TINY_SECTORS;
+	       t->tiny_thr != RA_TINY_STREAK || t->tiny_blk != RA_TINY_SECTORS ||
+	       t->oo_off[0] || t->oo_off[1] || t->oo_off[2];
 }
 
 /* Whether h holds what tuning.bin does not (yet): to be written. */
@@ -2790,6 +2810,12 @@ static void tune_pack(TuneApp *t)
 	tune_put(t->tn_cnt, g_tn_cnt, RT_TB, s);
 	tune_put(t->tn_reads, g_tn_reads, RT_TB, s);
 	tune_put(t->tn_sec, g_tn_sec, RT_TB, s);
+	for (int u = 0; u < 3; u++) {
+		t->oo_off[u] = g_oo[u].off;
+		t->oo_have[u] = g_oo[u].have;
+		t->oo_us[u][0] = g_oo[u].us[0];
+		t->oo_us[u][1] = g_oo[u].us[1];
+	}
 }
 
 /* Whether t is one this build would have written (else nothing of it is
@@ -2803,6 +2829,9 @@ static int tune_valid(const TuneApp *t)
 	title[sizeof(title) - 1] = 0;
 	for (int i = 0; i < RT_TINY_T_N; i++)
 		tiny_ok |= t->tiny_thr == rt_tiny_thr[i];
+	for (int u = 0; u < 3; u++)
+		if (t->oo_off[u] > 1 || t->oo_have[u] > 3)
+			return 0;
 	return tiny_ok && (t->tiny_blk == 16 || t->tiny_blk == 32 || t->tiny_blk == 64) &&
 	       t->sh_ad <= 16 && t->sh_tn <= 16 && ra_title_ok(title) &&
 	       t->ra_adj[0] >= -8 && t->ra_adj[0] <= 8 && t->ra_adj[1] >= -8 && t->ra_adj[1] <= 8 &&
@@ -2827,6 +2856,13 @@ static void tune_restore(const TuneApp *t)
 	tune_get(g_tn_sec, t->tn_sec, RT_TB, t->sh_tn);
 	g_tn_ended = 0;
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
+	for (int u = 0; u < 3; u++) {
+		g_oo[u].off = t->oo_off[u];
+		g_oo[u].have = t->oo_have[u];
+		g_oo[u].us[0] = t->oo_us[u][0];
+		g_oo[u].us[1] = t->oo_us[u][1];
+		ST(g_oo_off[u], t->oo_off[u]);
+	}
 	ADD(g_ad_restored, 1);
 }
 
@@ -2945,13 +2981,17 @@ static int tune_write_cal(SceUID fd)
 }
 
 /* The header this build writes. */
-static void tune_head(TuneHead *h)
+static void tune_head_of(TuneHead *h, uint32_t version, uint32_t slot)
 {
-	const TuneHead h0 = { TUNE_MAGIC, TUNE_VERSION, VM_DEV_COUNT, TUNE_CAL_SIZE,
-	                      (uint32_t)sizeof(TuneSlot), 0 };
+	const TuneHead h0 = { TUNE_MAGIC, version, VM_DEV_COUNT, TUNE_CAL_SIZE, slot, 0 };
 
 	*h = h0;
 	h->check = tune_fnv(0x811C9DC5u, &h0, sizeof(h0)) | 1u;
+}
+
+static void tune_head(TuneHead *h)
+{
+	tune_head_of(h, TUNE_VERSION, (uint32_t)sizeof(TuneSlot));
 }
 
 
@@ -3126,16 +3166,18 @@ static void tune_fetch(const char *title)
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	TuneHead h, want;
+	TuneHead h, want, v3;
 	uint32_t on = 0, c, check = 0;
 	SceOff end;
-	int ok;
+	int ok, old;
 
 	if (fd < 0)
 		return 0;
 	tune_head(&want);
-	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && !memcmp(&h, &want, sizeof(h));
-	if (!ok) {
+	tune_head_of(&v3, 3u, TUNE_SLOT_V3);
+	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h);
+	old = ok && !memcmp(&h, &v3, sizeof(h));      /* version 3: its calibration only */
+	if (!ok || (!old && memcmp(&h, &want, sizeof(h)))) {
 		ksceIoClose(fd);
 		return 0;
 	}
@@ -3154,6 +3196,11 @@ static int tune_read(void)
 	} else {
 		memset(g_cal, 0, sizeof(g_cal));
 		g_tune_cal_due = 1;               /* spoilt: written right at the next save */
+	}
+	if (old) {                            /* its apps are not this layout: learned anew */
+		ksceIoClose(fd);
+		g_tune_n = 0;
+		return 2;
 	}
 	/* the apps: whole slots only (one cut short at the end is written over) */
 	end = ksceIoLseek(fd, 0, SCE_SEEK_END);
@@ -3175,9 +3222,13 @@ static void cal_load(void)
 		__sync_lock_release(&g_tune_lock);
 		return;
 	}
-	g_tune_ok = tune_read();
-	if (!g_tune_ok && (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp")))
-		g_tune_legacy |= 1;
+	{
+		const int r = tune_read();
+
+		g_tune_ok = r == 1;               /* 2: version 3, its calibration kept: anew */
+		if (!r && (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp")))
+			g_tune_legacy |= 1;
+	}
 	fd = ksceIoOpen(TUNE_OLD, SCE_O_RDONLY, 0);
 	if (fd >= 0) {
 		ksceIoClose(fd);
@@ -3236,6 +3287,61 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 static int ra_adapt_on(void)
 {
 	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
+}
+
+/* ---- on or off, as measured (ra_test.h: RtOnOff) ----------------------------
+ * For each kind - the large and 32 KiB reads into ordinary memory (OO_C),
+ * into non-cacheable memory (OO_NC), the tiny reads (OO_TINY) - the state
+ * (g_oo, under g_ad_lock: the worker's), the way in effect (g_oo_off: the
+ * hooks look), and the kind's reads' time since its last round (g_oo_us,
+ * g_oo_sec: the hooks add two words, the worker takes them - everything else
+ * is the worker's, on the system core). Only with Adaptive in effect. */
+/* (OO_*, g_oo ...: with ra_adapt_clear, above) */
+
+/* A read of kind u (< 0: none: device memory) done in `us`. Hot path. */
+static void oo_note(int u, uint32_t nsec, uint32_t us)
+{
+	if (u < 0)
+		return;
+	ADD(g_oo_us[u], (uint64_t)us);
+	ADD(g_oo_sec[u], nsec);
+}
+
+/* Whether read ahead runs for kind u now. Hot path. */
+static int oo_off(int u)
+{
+	return LD(g_oo_off[u]) && ra_adapt_on();
+}
+
+/* All afresh (g_ad_lock held): read ahead on for every kind, nothing timed. */
+static void oo_clear(void)
+{
+	memset(g_oo, 0, sizeof(g_oo));
+	memset(g_oo_time, 0, sizeof(g_oo_time));
+	for (int u = 0; u < 3; u++) {
+		ST(g_oo_off[u], 0);
+		ST(g_oo_us[u], 0);
+		ST(g_oo_sec[u], 0);
+	}
+}
+
+/* The worker, a round of kind u over (g_ad_lock held): what the model says
+ * read ahead brings (`gain`, the counts' scale), with the round's time. 1
+ * if it went on or off. */
+static int oo_round(int u, int64_t gain)
+{
+	const uint64_t us = __atomic_exchange_n(&g_oo_us[u], 0, __ATOMIC_RELAXED);
+	const uint32_t sec = __atomic_exchange_n(&g_oo_sec[u], 0, __ATOMIC_RELAXED);
+	const uint32_t min = u == OO_TINY ? OO_MIN_SEC_TINY : OO_MIN_SEC;
+	const uint64_t mib = sec >= min ? us * 2048u / sec : 0;
+	int moved;
+
+	g_oo_time[u] += (int64_t)us * RA_ADAPT_ONE;
+	moved = rt_onoff_round(&g_oo[u], gain, g_oo_time[u],
+	                       mib > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)mib);
+	g_oo_time[u] /= 2;                   /* aged as the counts are */
+	ST(g_oo_off[u], g_oo[u].off ^ g_oo[u].probe);
+	return moved;
 }
 
 /* A read of `n` sectors, the `at`-th in its stream (`small`: 32 KiB reads):
@@ -3303,12 +3409,13 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 static void ra_adapt_tick(void)
 {
 	/* what moved, logged once the lock is let go (log on) */
-	int mv[2][4], tmv[4], any = 0;
+	int mv[2][4], tmv[4], oo_mv[3][4], any = 0;
 
 	if (!LD(g_ad_due[0]) && !LD(g_ad_due[1]) && !LD(g_tn_due))
 		return;                           /* (a stale look is caught next time) */
 	memset(mv, 0, sizeof(mv));
 	memset(tmv, 0, sizeof(tmv));
+	memset(oo_mv, -1, sizeof(oo_mv));
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	for (int nc = 0; nc < 2; nc++) {
@@ -3323,7 +3430,7 @@ static void ra_adapt_tick(void)
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
 		if (ra_adapt_on() && t != RA_THR_NONE) {
-			const int sm0 = sm;
+			const int sm0 = sm, off0 = g_oo[nc].off;
 
 			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
 				mv[nc][0] = (int)t;
@@ -3339,6 +3446,14 @@ static void ra_adapt_tick(void)
 					ST(g_rs_adj[nc], sm * RA_SMALL_FACTOR - (int)ra_small_on(base, nc));
 					ADD(g_rs_moves[nc], 1);
 				}
+			}
+			/* then on or off, as measured, with what the model says now */
+			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost))) {
+				oo_mv[nc][0] = off0;
+				oo_mv[nc][1] = g_oo[nc].off;
+				oo_mv[nc][2] = (int)g_oo[nc].us[0];
+				oo_mv[nc][3] = (int)g_oo[nc].us[1];
+				any = 1;
 			}
 		}
 		ra_adapt_age(&g_ad, nc);
@@ -3364,6 +3479,17 @@ static void ra_adapt_tick(void)
 			tmv[3] = blk;
 			any = 1;
 		}
+		if (ra_adapt_on()) {
+			const int off0 = g_oo[OO_TINY].off;
+
+			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c))) {
+				oo_mv[OO_TINY][0] = off0;
+				oo_mv[OO_TINY][1] = g_oo[OO_TINY].off;
+				oo_mv[OO_TINY][2] = (int)g_oo[OO_TINY].us[0];
+				oo_mv[OO_TINY][3] = (int)g_oo[OO_TINY].us[1];
+				any = 1;
+			}
+		}
 		for (int i = 0; i < RT_TB; i++) {
 			g_tn_cnt[i] >>= 1;
 			g_tn_reads[i] >>= 1;
@@ -3381,6 +3507,11 @@ static void ra_adapt_tick(void)
 		if (tmv[2])
 			VM_KLOGI("adaptive: tiny from read %d -> %d, block %d -> %d KiB", tmv[0], tmv[2],
 			         tmv[1] / 2, tmv[3] / 2);
+		for (int u = 0; u < 3; u++)
+			if (oo_mv[u][0] >= 0)
+				VM_KLOGI("adaptive: %s read ahead %s (measured on %d, off %d us/MiB)",
+				         u == OO_TINY ? "tiny" : u ? "NC" : "C", oo_mv[u][1] ? "off" : "on",
+				         oo_mv[u][2], oo_mv[u][3]);
 	}
 }
 
@@ -3754,8 +3885,8 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 
 	if (small)
 		thr = ra_small_threshold(nc, thr);
-	if (streak < thr)
-		return;
+	if (streak < thr || oo_off(nc ? OO_NC : OO_C))
+		return;                           /* (off as measured: the runs still counted) */
 	/* the pieces are the large reads' stream's while it has any */
 	if (small && !LD(d->ra_small) && ra_any(d))
 		return;
@@ -3971,6 +4102,11 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_run_sec = n;
 	}
 	d->t_next = sector + n;
+	if (oo_off(OO_TINY)) {                /* off as measured: the run still counted */
+		ST(d->t_end, LD(d->t_start));
+		__sync_lock_release(&d->busy);
+		return 0;
+	}
 	if (!(LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) && sector + n <= LD(d->t_end) &&
 	      part == d->t_part && io == d->t_io && d->t_epoch == LD(d->ra_epoch) &&
 	      !__atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST) &&
@@ -4263,7 +4399,7 @@ static void rt_note(const Dev *d, void *part, uint32_t sector, int nc, uint32_t 
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
 static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                          void *part, uint32_t sector, void *buf, uint32_t nsec)
+                          void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp)
 {
 	uint8_t *p = buf;
 	uint32_t left = nsec;
@@ -4307,6 +4443,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	    mt_uncached(mt1 = ksceKernelGetMemBlockMemtypeByAddr(p + nsec * 512 - 1))) {
 		SceUID pid;
 		int r;
+
+		*ncp = mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC ? 1 : 2;   /* (2: device memory) */
 
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data (what the pieces do not
@@ -4546,7 +4684,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 /* Every write, whichever way it goes, is counted while it runs and marks the
  * pieces it touches dirty first (see "read ahead"). */
 static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                        void *part, uint32_t sector, void *buf, uint32_t nsec);
+                        void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp);
 
 /* With the log on: one transfer, timed (g_lg). */
 static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
@@ -4577,26 +4715,36 @@ static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	const int lg = LD(g_log_diag) && nsec && on_port(part, d->port);
-	const uint32_t t0 = lg ? ksceKernelGetSystemTimeLow() : 0;
-	int col = 0, r;
+	const int mine = nsec && on_port(part, d->port);
+	const int lg = mine && LD(g_log_diag);
+	/* Adaptive: the reads timed for "on or off, as measured" (oo_note; the
+	 * rest is the worker's, on the system core) */
+	const int ms = mine && !write && LD(d->enabled) && ra_adapt_on();
+	const uint32_t t0 = lg || ms ? ksceKernelGetSystemTimeLow() : 0;
+	int col = 0, nc = 0, r;
+	uint32_t us;
 
 	if (lg && !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
 		for (int i = 0; i < RA_PIECES; i++)
 			col |= __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING;
-	r = stage_xfer_w(d, write, io, ref, rd_ref, part, sector, buf, nsec);
+	r = stage_xfer_w(d, write, io, ref, rd_ref, part, sector, buf, nsec, &nc);
+	if (!lg && !ms)
+		return r;
+	us = ksceKernelGetSystemTimeLow() - t0;
 	if (lg)
-		lg_note(d, write, nsec, ksceKernelGetSystemTimeLow() - t0, col);
+		lg_note(d, write, nsec, us, col);
+	if (ms && r >= 0)
+		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : nc == 2 ? -1 : nc, nsec, us);
 	return r;
 }
 
 static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                        void *part, uint32_t sector, void *buf, uint32_t nsec)
+                        void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp)
 {
 	int r;
 
 	if (!write)
-		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec);
+		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec, ncp);
 	__atomic_fetch_add(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	for (int i = 0; i < RA_PIECES; i++) {
 		RaPiece *pc = &d->ra[i];
@@ -4619,7 +4767,7 @@ static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hoo
 		if (e != a && (uint64_t)sector < e && (uint64_t)sector + nsec > a)
 			__atomic_store_n(&d->t_dirty, 1, __ATOMIC_SEQ_CST);
 	}
-	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec);
+	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec, ncp);
 	__atomic_fetch_sub(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	return r;
 }
@@ -5227,12 +5375,13 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		if (y->n[0] + y->n[1] + y->n[2] + y->wr_n == x->n[0] + x->n[1] + x->n[2] + x->wr_n)
 			continue;
 		if (!any)
-			VM_KLOGI("session %s %u.%01us: R/A %s C%u NC%u, 32K C%u NC%u, tiny %u/%uK; "
-			         "copy %d ovl %d gpu %d dma %d", who, (unsigned)(ms / 1000u),
+			VM_KLOGI("session %s %u.%01us: R/A %s C%u NC%u, 32K C%u NC%u, tiny %u/%uK, "
+			         "off %d%d%d; copy %d ovl %d gpu %d dma %d", who, (unsigned)(ms / 1000u),
 			         (unsigned)(ms % 1000u / 100u), lg_ra_name(LD(g_ra_mode)), (unsigned)t0,
 			         (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
 			         (unsigned)ra_small_threshold(1, t1), (unsigned)tiny_thr(),
-			         (unsigned)(tiny_blk() / 2u), LD(g_offload), LD(g_pipeline), LD(g_gpu_safe),
+			         (unsigned)(tiny_blk() / 2u), oo_off(OO_C), oo_off(OO_NC), oo_off(OO_TINY),
+			         LD(g_offload), LD(g_pipeline), LD(g_gpu_safe),
 			         dma_state() == VM_DMA_ON);
 		any = 1;
 		for (int k = 0; k < 3; k++) {
@@ -5718,6 +5867,8 @@ void vm_stage_ra_now(VmRaNow *o)
 		o->mid[k] = ra_small_threshold(k, o->thr[k]);
 	}
 	o->tiny = tiny_thr();
+	for (int u = 0; u < 3; u++)
+		o->off |= (uint32_t)oo_off(u) << u;
 	{
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 

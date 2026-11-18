@@ -144,8 +144,64 @@ static void test_small_pick(void)
 	      sm == RT_SMALL_MIN_BUCKET);
 }
 
+/* On or off, as measured: the model decides when it is clear; within the
+ * band, every RT_OO_PROBE-th round the other way, kept if faster by the
+ * margin. */
+static void test_onoff(void)
+{
+	RtOnOff o;
+	int moved = 0;
+
+	/* the model clear (+10 % of the time): on, never a probe */
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < 40; i++) {
+		moved |= rt_onoff_round(&o, 100, 1000, 50000);
+		CHECK(!o.off && !o.probe);
+	}
+	CHECK(!moved);
+	/* ... clear the other way (-10 %): off at once, and back once it brings */
+	CHECK(rt_onoff_round(&o, -100, 1000, 50000) && o.off && !o.probe);
+	CHECK(rt_onoff_round(&o, 100, 1000, 50000) && !o.off);
+	/* within the band: the 8th round a probe; off measured 5 % faster: off */
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < RT_OO_PROBE - 1; i++) {
+		CHECK(!rt_onoff_round(&o, 10, 1000, 50000));
+		CHECK(!o.probe && !o.off);
+	}
+	CHECK(!rt_onoff_round(&o, 10, 1000, 50000) && o.probe && !o.off);   /* the next: off */
+	CHECK(rt_onoff_round(&o, 10, 1000, 47500) && o.off && !o.probe);    /* it was faster */
+	CHECK(o.us[0] == 50000 && o.us[1] == 47500 && o.have == 3);
+	/* ... and the probe back on, now faster on by 10 %: on again */
+	for (int i = 0; i < RT_OO_PROBE; i++)
+		CHECK(!rt_onoff_round(&o, 10, 1000, 47500) && o.off);
+	CHECK(o.probe);
+	CHECK(rt_onoff_round(&o, 10, 1000, 30000) && !o.off);                /* on: 50000 -> mean */
+	/* within the margin (1 % faster): kept as it is */
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < RT_OO_PROBE; i++)
+		rt_onoff_round(&o, 0, 1000, 50000);
+	CHECK(o.probe);
+	CHECK(!rt_onoff_round(&o, 0, 1000, 49500) && !o.off);
+	/* too little read in a round (0): nothing kept from it */
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < RT_OO_PROBE; i++)
+		rt_onoff_round(&o, 0, 1000, 50000);
+	CHECK(!rt_onoff_round(&o, 0, 1000, 0) && !o.off && !(o.have & 2));
+	/* the gain weighed against the time without it: on, 40 brought over 960
+	 * spent is 4 %: in the band; 60 over 940: 6 %: clear */
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < RT_OO_PROBE; i++)
+		rt_onoff_round(&o, 40, 960, 50000);
+	CHECK(o.probe);
+	memset(&o, 0, sizeof(o));
+	for (int i = 0; i < RT_OO_PROBE * 2; i++)
+		rt_onoff_round(&o, 60, 940, 50000);
+	CHECK(!o.probe);
+}
+
 int main(void)
 {
+	test_onoff();
 	test_scores_one_pass();
 	test_small_pick();
 	test_tiny_model();

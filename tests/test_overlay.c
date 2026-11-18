@@ -323,13 +323,18 @@ static void test_streak_text(void)
 	char c[32], nc[32], line[VM_HUD_LINE_MAX];
 	int n;
 
-	hud_streak_kind(c, sizeof(c), "C", 5, 2, 16, 8);
+	hud_streak_kind(c, sizeof(c), "C", 5, 2, 16, 8, 0, 0);
 	CHECK(strcmp(c, HUD_C_DIM "C:" HUD_C_TEXT "5" HUD_C_DIM ":" HUD_C_GOOD "2/16/8") == 0);
-	hud_streak_kind(nc, sizeof(nc), "NC", VM_RA_NEVER, VM_RA_NEVER, VM_RA_NEVER, 2);
+	hud_streak_kind(nc, sizeof(nc), "NC", VM_RA_NEVER, VM_RA_NEVER, VM_RA_NEVER, 2, 0, 0);
 	CHECK(strcmp(nc, HUD_C_DIM "NC:never") == 0);
+	/* off as measured: "-" for the large and 32 KiB reads, or the tiny ones */
+	hud_streak_kind(c, sizeof(c), "C", 5, 2, 16, 8, 1, 0);
+	CHECK(strcmp(c, HUD_C_DIM "C:" HUD_C_TEXT "5" HUD_C_DIM ":" HUD_C_GOOD "-/-/8") == 0);
+	hud_streak_kind(c, sizeof(c), "C", 5, 2, 16, 8, 0, 1);
+	CHECK(strcmp(c, HUD_C_DIM "C:" HUD_C_TEXT "5" HUD_C_DIM ":" HUD_C_GOOD "2/16/-") == 0);
 	/* the widest: two digits everywhere */
-	hud_streak_kind(c, sizeof(c), "C", 99, 99, 99, 99);
-	hud_streak_kind(nc, sizeof(nc), "NC", 99, 99, 99, 99);
+	hud_streak_kind(c, sizeof(c), "C", 99, 99, 99, 99, 0, 0);
+	hud_streak_kind(nc, sizeof(nc), "NC", 99, 99, 99, 99, 0, 0);
 	n = snprintf(line, sizeof(line), "%s %s %sAuto", c, nc, HUD_C_GOOD);
 	CHECK(n > 0 && n < (int)sizeof(line));
 }

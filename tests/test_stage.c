@@ -3646,7 +3646,7 @@ static void test_readahead_adaptive_small(void)
 		ra_adapt_switch(t, VM_RA_ADAPTIVE);
 	}
 	CHECK(tune_title_is(&g_ad_out.app, "PCSB00012") && !strcmp(g_ad_title, "PCSB00013"));
-	CHECK(sizeof(g_ad_out) + sizeof(g_ad_in) < 700);    /* what memory holds of them */
+	CHECK(sizeof(g_ad_out) + sizeof(g_ad_in) < 760);    /* what memory holds of them */
 	vm_stage_fini();
 
 	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
@@ -4070,6 +4070,157 @@ static void *ev_thread(void *arg)
 	return NULL;
 }
 
+/* Adaptive, on or off as measured: the hooks time each kind (and only with
+ * Adaptive in effect); off, a kind reads the standard way but its runs are
+ * still counted; the worker's round sets the way; kept with the app (and in
+ * tuning.bin); the HUD shows "-"; On ignores it. */
+static void test_onoff_measured(void)
+{
+	static uint8_t u[512 * 512];
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+
+	on_game(&s, 0x44);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	/* timed by kind: cached large / 32 KiB, non-cacheable, tiny */
+	for (int u2 = 0; u2 < 3; u2++) {
+		ST(g_oo_us[u2], 0);
+		ST(g_oo_sec[u2], 0);
+	}
+	fake_now_us = 1000;
+	CHECK(rd_ok(u, 0, 256) && rd_ok(u, 256, 64));
+	CHECK(g_oo_sec[OO_C] == 320 && g_oo_sec[OO_NC] == 0 && g_oo_sec[OO_TINY] == 0);
+	fake_memtype = 0x8000;
+	CHECK(rd(u, 1000, 256) == 0);
+	fake_memtype = 0;
+	CHECK(g_oo_sec[OO_NC] == 256);
+	CHECK(rd_ok(u, 3000, 1) && g_oo_sec[OO_TINY] == 1);
+	/* the large reads' kind off: a stream reads the standard way, counted */
+	ra_drop(d);
+	ST(g_oo_off[OO_C], 1);
+	for (uint32_t at = 0; at < 12 * 256; at += 256)
+		CHECK(rd_ok(u, at, 256));
+	CHECK(ra_idle(d) && d->ra_streak >= 12);
+	{
+		VmRaNow rn;
+
+		vm_stage_ra_now(&rn);
+		CHECK(rn.off == 1);
+	}
+	ST(g_oo_off[OO_C], 0);
+	CHECK(rd_ok(u, 12 * 256, 256) && !ra_idle(d));   /* on again: pieces at once */
+	ra_drop(d);
+	/* the tiny reads' kind off: no block, the run counted */
+	{
+		const uint32_t hits = g_ra_tiny_reads;
+
+		ST(g_oo_off[OO_TINY], 1);
+		for (uint32_t at = 3100; at < 3120; at++)
+			CHECK(rd_ok(u, at, 1));
+		CHECK(g_ra_tiny_reads == hits && d->t_streak >= 20);
+		ST(g_oo_off[OO_TINY], 0);
+	}
+	/* On: the rule as before, whatever was measured */
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	ST(g_oo_off[OO_C], 1);
+	CHECK(!oo_off(OO_C));
+	for (uint32_t at = 0; at < 8 * 256; at += 256)
+		CHECK(rd_ok(u, at, 256));
+	CHECK(!ra_idle(d));
+	ra_drop(d);
+	ST(g_oo_off[OO_C], 0);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	/* the worker's round: the way it sets is what the hooks look at */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	for (int i = 0; i < RT_OO_PROBE; i++) {
+		ST(g_oo_us[OO_NC], 5000);
+		ST(g_oo_sec[OO_NC], 512);
+		oo_round(OO_NC, 0);
+	}
+	CHECK(g_oo[OO_NC].probe && g_oo_off[OO_NC] == 1);   /* a probe: off this round */
+	ST(g_oo_us[OO_NC], 4000);
+	ST(g_oo_sec[OO_NC], 512);
+	CHECK(oo_round(OO_NC, 0) && g_oo[OO_NC].off && g_oo_off[OO_NC] == 1);   /* faster off */
+	__sync_lock_release(&g_ad_lock);
+	/* kept with the app: away and back */
+	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
+	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 1);
+	CHECK(tune_valid(&g_ad_out.app));
+	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
+	CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && g_oo[OO_NC].us[1] == 4000u * 2048u / 512u);
+	/* an app that learned only that is still worth its slot */
+	{
+		TuneApp t;
+
+		memset(&t, 0, sizeof(t));
+		memcpy(t.title, "PCSB00777", 10);
+		t.tiny_thr = RA_TINY_STREAK;
+		t.tiny_blk = RA_TINY_SECTORS;
+		CHECK(!tune_learned(&t));
+		t.oo_off[OO_TINY] = 1;
+		CHECK(tune_learned(&t) && tune_valid(&t));
+		t.oo_off[OO_TINY] = 2;
+		CHECK(!tune_valid(&t));
+	}
+	vm_stage_fini();
+}
+
+/* A version 3 tuning.bin: its calibration kept, its apps not this layout
+ * (learned anew), the file written as version 4 at the next save. */
+static void test_tune_v3(void)
+{
+	VmSettings s;
+	char path[256];
+	TuneHead h;
+	uint32_t on = 1, c;
+	FILE *f;
+
+	on_game(&s, 0x44);
+	memset(g_cal, 0, sizeof(g_cal));
+	g_cal[M].waste_us = 77 * 10;
+	g_cal[M].waste_n = 10;
+	snprintf(path, sizeof(path), "%s/ux0", fakes_tmpdir());
+	mkdir(path, 0777);
+	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", fakes_tmpdir());
+	f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (!f)
+		return;
+	tune_head_of(&h, 3u, TUNE_SLOT_V3);
+	fwrite(&h, sizeof(h), 1, f);
+	fwrite(&on, sizeof(on), 1, f);
+	fwrite(g_cal, sizeof(g_cal), 1, f);
+	c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
+	fwrite(&c, sizeof(c), 1, f);
+	for (int i = 0; i < 3 * (int)TUNE_SLOT_V3; i++)
+		fputc(0x5A, f);                   /* three old apps */
+	fclose(f);
+	memset(g_cal, 0, sizeof(g_cal));
+	g_cal_on = 0;
+	g_cal_loaded = 0;
+	cal_load();
+	CHECK(!g_tune_ok && g_tune_n == 0 && g_cal_on && g_cal[M].waste_n == 10 && g_cal[M].waste_us == 770);
+	g_tune_cal_due = 1;
+	cal_save_locked();
+	{
+		struct stat st;
+
+		CHECK(g_tune_ok && stat(path, &st) == 0 && st.st_size == (off_t)TUNE_SLOT_OFF(0));
+	}
+	g_cal_loaded = 0;
+	memset(g_cal, 0, sizeof(g_cal));
+	cal_load();
+	CHECK(g_tune_ok && g_cal[M].waste_n == 10);
+	vm_stage_fini();
+}
+
 /* Log on: an app's time in front ends with its session lines - its reads
  * by size and time, the writes, read ahead's hits and waste - and Adaptive's
  * moves are logged. Log off: none. */
@@ -4095,7 +4246,7 @@ static void test_session_log(void)
 	ra_proc_event(0x44, 4);
 	vm_stage_worker_tick();
 	l = fake_log_find("session PCSB00777");
-	CHECK(l && strstr(l, "R/A On C5 NC5"));
+	CHECK(l && strstr(l, "R/A On C5 NC5") && strstr(l, "off 000"));
 	l = fake_log_find("session dev 2: tiny");
 	CHECK(l && strstr(l, "tiny 1 (0 KiB)") && strstr(l, "32K 1 (0 MiB)") && strstr(l, "large 8 (1 MiB)"));
 	l = fake_log_find("session dev 2: reads");
@@ -4434,7 +4585,7 @@ static void test_learned_kept_in_file(void)
 		tune_restore(&t);
 		CHECK(g_ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
 		      g_ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && g_tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
-		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 340);
+		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 360);
 		t.tiny_blk = 48;                              /* not one this build writes */
 		CHECK(!tune_valid(&t));
 		ra_adapt_clear();
@@ -4796,6 +4947,8 @@ int main(void)
 	RUN(test_learned_kept_in_file);
 	RUN(test_fg_events_together);
 	RUN(test_session_log);
+	RUN(test_onoff_measured);
+	RUN(test_tune_v3);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

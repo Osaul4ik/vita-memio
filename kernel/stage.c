@@ -468,6 +468,28 @@ typedef struct {
 	uint32_t max_us;                       /* the longest read (taken per session) */
 } LgDev;
 static LgDev g_lg[3];                      /* VM_DEV_COUNT (atomics)          */
+/* ... and by kind (the large and 32 KiB reads into ordinary memory, into
+ * non-cacheable memory, the tiny ones: LK_*), for Adaptive's work - how the
+ * reads went: [0] the standard way, [1] all from read ahead, [2] partly
+ * (tiny: [1] from the block, [2] the block read for it); those that came
+ * while a piece was being read; the pieces read for nothing, how long they
+ * held a read up, and those a write spoilt (tiny: reads in a block a write
+ * had spoilt). */
+#define LK_C    0
+#define LK_NC   1
+#define LK_TINY 2
+typedef struct {
+	uint64_t us[3], col_us, held_us;
+	uint32_t n[3], sec[3], col_n, col_max, waste, spoilt;
+} LgKind;
+static LgKind g_lk[3];                     /* atomics                         */
+
+/* What a read did, for the log (stage_xfer_one, ra_nc_read, ra_tiny_read). */
+typedef struct {
+	int      nc;                           /* 0 ordinary, 1 non-cacheable, 2 device memory */
+	uint32_t got;                          /* sectors from read ahead's pieces */
+	int      tiny;                         /* tiny: 1 from the block, 2 the block read for it */
+} XInfo;
 static volatile int g_count_cores;         /* the overlay is open: count too  */
 #define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
 
@@ -3328,7 +3350,11 @@ static void oo_clear(void)
 /* The worker, a round of kind u over (g_ad_lock held): what the model says
  * read ahead brings (`gain`, the counts' scale), with the round's time. 1
  * if it went on or off. */
-static int oo_round(int u, int64_t gain)
+/* (lg: for the log, what the round was - the model's permille, the way it
+ * ran, its time per MiB) */
+typedef struct { int pm, way, probe, now; uint32_t mib, m0, m1; } OoLog;
+
+static int oo_round(int u, int64_t gain, OoLog *lg)
 {
 	const uint64_t us = __atomic_exchange_n(&g_oo_us[u], 0, __ATOMIC_RELAXED);
 	const uint32_t sec = __atomic_exchange_n(&g_oo_sec[u], 0, __ATOMIC_RELAXED);
@@ -3337,10 +3363,17 @@ static int oo_round(int u, int64_t gain)
 	int moved;
 
 	g_oo_time[u] += (int64_t)us * RA_ADAPT_ONE;
+	lg->pm = (int)rt_onoff_pm(&g_oo[u], gain, g_oo_time[u]);
+	lg->way = g_oo[u].off ^ g_oo[u].probe;
+	lg->probe = g_oo[u].probe;
+	lg->mib = (uint32_t)(mib > 0xFFFFFFFFu ? 0xFFFFFFFFu : mib);
 	moved = rt_onoff_round(&g_oo[u], gain, g_oo_time[u],
 	                       mib > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)mib);
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
 	ST(g_oo_off[u], g_oo[u].off ^ g_oo[u].probe);
+	lg->now = g_oo[u].off ^ g_oo[u].probe;
+	lg->m0 = g_oo[u].us[0];
+	lg->m1 = g_oo[u].us[1];
 	return moved;
 }
 
@@ -3410,6 +3443,8 @@ static void ra_adapt_tick(void)
 {
 	/* what moved, logged once the lock is let go (log on) */
 	int mv[2][4], tmv[4], oo_mv[3][4], any = 0;
+	OoLog ol[3];
+	int ol_on[3] = { 0, 0, 0 };
 
 	if (!LD(g_ad_due[0]) && !LD(g_ad_due[1]) && !LD(g_tn_due))
 		return;                           /* (a stale look is caught next time) */
@@ -3448,7 +3483,8 @@ static void ra_adapt_tick(void)
 				}
 			}
 			/* then on or off, as measured, with what the model says now */
-			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost))) {
+			ol_on[nc] = 1;
+			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost), &ol[nc])) {
 				oo_mv[nc][0] = off0;
 				oo_mv[nc][1] = g_oo[nc].off;
 				oo_mv[nc][2] = (int)g_oo[nc].us[0];
@@ -3482,7 +3518,9 @@ static void ra_adapt_tick(void)
 		if (ra_adapt_on()) {
 			const int off0 = g_oo[OO_TINY].off;
 
-			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c))) {
+			ol_on[OO_TINY] = 1;
+			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c),
+			             &ol[OO_TINY])) {
 				oo_mv[OO_TINY][0] = off0;
 				oo_mv[OO_TINY][1] = g_oo[OO_TINY].off;
 				oo_mv[OO_TINY][2] = (int)g_oo[OO_TINY].us[0];
@@ -3499,6 +3537,14 @@ static void ra_adapt_tick(void)
 		g_tn_rounds++;
 	}
 	__sync_lock_release(&g_ad_lock);
+	if (LD(g_log_diag))
+		for (int u = 0; u < 3; u++)
+			if (ol_on[u])
+				VM_KLOGI("round %s: model %d permille, ran %s%s, %u us/MiB; means on %u off %u; "
+				         "now %s", u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm,
+				         ol[u].way ? "off" : "on", ol[u].probe ? " (probe)" : "",
+				         (unsigned)ol[u].mib, (unsigned)ol[u].m0, (unsigned)ol[u].m1,
+				         ol[u].now ? "off" : "on");
 	if (any && LD(g_log_diag)) {
 		for (int nc = 0; nc < 2; nc++)
 			if (mv[nc][0] != mv[nc][1] || mv[nc][2] != mv[nc][3])
@@ -3619,8 +3665,17 @@ static void ra_drop(Dev *d)
 			any = 1;
 			if (st == RA_READY) {
 				waste += d->ra[i].n - d->ra[i].off;
-				if (!d->ra[i].off)
+				if (!d->ra[i].off) {
 					cal_waste(d, &d->ra[i]);   /* none of it used */
+					if (LD(g_log_diag)) {
+						LgKind *g = &g_lk[d->ra[i].nc ? LK_NC : LK_C];
+
+						ADD(g->waste, 1);
+						ADD(g->held_us, (uint64_t)d->ra[i].held_us);
+						if (__atomic_load_n(&d->ra[i].dirty, __ATOMIC_RELAXED))
+							ADD(g->spoilt, 1);
+					}
+				}
 			}
 			__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
 		}
@@ -4077,7 +4132,7 @@ static int ra_verify(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t 
 /* A tiny read while read ahead is on. 1 if it is done here (*ret: its result),
  * else the caller goes on as usual. */
 static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                        uint8_t *p, uint32_t n, int *ret)
+                        uint8_t *p, uint32_t n, int *ret, int *how)
 {
 	const int clean = LD(g_gpu_safe) && g_dcache_clean;
 	const int cal = LD(g_cal_on);             /* calibration: block reads and hits timed */
@@ -4102,6 +4157,9 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_run_sec = n;
 	}
 	d->t_next = sector + n;
+	if (LD(g_log_diag) && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&
+	    sector + n <= LD(d->t_end) && __atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST))
+		ADD(g_lk[LK_TINY].spoilt, 1);         /* in a block a write spoilt */
 	if (oo_off(OO_TINY)) {                /* off as measured: the run still counted */
 		ST(d->t_end, LD(d->t_start));
 		__sync_lock_release(&d->busy);
@@ -4141,6 +4199,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 			cal_tiny_blk(d, d->t_us - b0, blk);   /* calibration: a block read */
 		filled = 1;
 	}
+	*how = filled ? 2 : 1;
 	h0 = cal && !filled ? ksceKernelGetSystemTimeLow() : 0;   /* only a read from the block */
 	copy_out(p, (uint8_t *)d->t_buf + (size_t)(sector - LD(d->t_start)) * 512, n * 512, clean);
 	if (!clean)
@@ -4175,7 +4234,7 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret);
 static SceUID ncd_wanted(uint32_t nsec);
 static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                      uint8_t *p, uint32_t nsec, uint32_t cal_t0, int cal_held)
+                      uint8_t *p, uint32_t nsec, uint32_t cal_t0, int cal_held, uint32_t *gotp)
 {
 	/* the caller found it non-cacheable at both ends */
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = -2, .mt = MEMTYPE_NC, .nc = 1 };
@@ -4204,6 +4263,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	 * into its own buffer, they are not in its way */
 	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small))) {
 		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
+		*gotp = got;
 		if (got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
 	}
@@ -4399,7 +4459,7 @@ static void rt_note(const Dev *d, void *part, uint32_t sector, int nc, uint32_t 
 /* One request, either way. `rd_ref` is the read function, used by a write's
  * verify re-read (a read verifies with `ref` itself). */
 static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                          void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp)
+                          void *part, uint32_t sector, void *buf, uint32_t nsec, XInfo *xi)
 {
 	uint8_t *p = buf;
 	uint32_t left = nsec;
@@ -4433,7 +4493,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
-	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret))
+	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret, &xi->tiny))
 		return ret;
 	/* A non-cacheable caller buffer: the standard path is the faster one
 	 * (see the top). Looked at only for transfers that would be staged. */
@@ -4444,14 +4504,14 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		SceUID pid;
 		int r;
 
-		*ncp = mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC ? 1 : 2;   /* (2: device memory) */
+		xi->nc = mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC ? 1 : 2;   /* (2: device memory) */
 
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data (what the pieces do not
 		 * cover goes to the system core there too, with "C + NC") */
 		if (!write && nsec >= RA_SMALL_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
 		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
-			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held);
+			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held, &xi->got);
 		/* "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
 		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
@@ -4531,6 +4591,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		                        : 0;
 
 		ra_got = got;
+		xi->got = got;
 		if (got && verify && ra_verify(d, io, ref, part, sector, p, got, clean, shadow))
 			problem = 1;                      /* fallen back: the rest stock */
 		p += (size_t)got * 512;
@@ -4684,7 +4745,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 /* Every write, whichever way it goes, is counted while it runs and marks the
  * pieces it touches dirty first (see "read ahead"). */
 static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                        void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp);
+                        void *part, uint32_t sector, void *buf, uint32_t nsec, XInfo *xi);
 
 /* With the log on: one transfer, timed (g_lg). */
 static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
@@ -4712,6 +4773,27 @@ static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
 		ST(g->max_us, us);                /* a lost update is fine */
 }
 
+/* With the log on: a read of kind k (< 0: device memory) and how it went
+ * (g_lk: 0 standard, 1 all from read ahead, 2 partly / tiny: 1 from the
+ * block, 2 the block read for it). */
+static void lk_note(int k, uint32_t nsec, uint32_t us, int col, int how)
+{
+	LgKind *g;
+
+	if (k < 0)
+		return;
+	g = &g_lk[k];
+	ADD(g->n[how], 1);
+	ADD(g->sec[how], nsec);
+	ADD(g->us[how], (uint64_t)us);
+	if (col) {
+		ADD(g->col_n, 1);
+		ADD(g->col_us, (uint64_t)us);
+		if (us > LD(g->col_max))
+			ST(g->col_max, us);           /* a lost update is fine */
+	}
+}
+
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
@@ -4721,30 +4803,35 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	 * rest is the worker's, on the system core) */
 	const int ms = mine && !write && LD(d->enabled) && ra_adapt_on();
 	const uint32_t t0 = lg || ms ? ksceKernelGetSystemTimeLow() : 0;
-	int col = 0, nc = 0, r;
+	XInfo xi = { 0, 0, 0 };
+	int col = 0, r;
 	uint32_t us;
 
 	if (lg && !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
 		for (int i = 0; i < RA_PIECES; i++)
 			col |= __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING;
-	r = stage_xfer_w(d, write, io, ref, rd_ref, part, sector, buf, nsec, &nc);
+	r = stage_xfer_w(d, write, io, ref, rd_ref, part, sector, buf, nsec, &xi);
 	if (!lg && !ms)
 		return r;
 	us = ksceKernelGetSystemTimeLow() - t0;
-	if (lg)
+	if (lg) {
 		lg_note(d, write, nsec, us, col);
+		if (!write && r >= 0)
+			lk_note(nsec < RA_SMALL_SECTORS ? LK_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us, col,
+			        nsec < RA_SMALL_SECTORS ? xi.tiny : !xi.got ? 0 : xi.got >= nsec ? 1 : 2);
+	}
 	if (ms && r >= 0)
-		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : nc == 2 ? -1 : nc, nsec, us);
+		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us);
 	return r;
 }
 
 static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
-                        void *part, uint32_t sector, void *buf, uint32_t nsec, int *ncp)
+                        void *part, uint32_t sector, void *buf, uint32_t nsec, XInfo *xi)
 {
 	int r;
 
 	if (!write)
-		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec, ncp);
+		return stage_xfer_one(d, 0, io, ref, rd_ref, part, sector, buf, nsec, xi);
 	__atomic_fetch_add(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	for (int i = 0; i < RA_PIECES; i++) {
 		RaPiece *pc = &d->ra[i];
@@ -4767,7 +4854,7 @@ static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hoo
 		if (e != a && (uint64_t)sector < e && (uint64_t)sector + nsec > a)
 			__atomic_store_n(&d->t_dirty, 1, __ATOMIC_SEQ_CST);
 	}
-	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec, ncp);
+	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec, xi);
 	__atomic_fetch_sub(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	return r;
 }
@@ -5314,6 +5401,7 @@ void vm_stage_on_problem(void (*fn)(void))
 
 typedef struct {
 	LgDev    dev[VM_DEV_COUNT];
+	LgKind   k[3];
 	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock;
 } LgSnap;
 
@@ -5334,6 +5422,22 @@ static void lg_snap(LgSnap *o)
 		t->wr_n = LD(g->wr_n);
 		t->wr_sec = LD(g->wr_sec);
 		t->max_us = 0;
+	}
+	for (int i = 0; i < 3; i++) {
+		const LgKind *g = &g_lk[i];
+		LgKind *t = &o->k[i];
+
+		for (int j = 0; j < 3; j++) {
+			t->us[j] = LD(g->us[j]);
+			t->n[j] = LD(g->n[j]);
+			t->sec[j] = LD(g->sec[j]);
+		}
+		t->col_us = LD(g->col_us);
+		t->held_us = LD(g->held_us);
+		t->col_n = LD(g->col_n);
+		t->waste = LD(g->waste);
+		t->spoilt = LD(g->spoilt);
+		t->col_max = 0;
 	}
 	o->hits = LD(g_ra_hits);
 	o->kib = LD(g_ra_kib);
@@ -5406,6 +5510,39 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 	}
 	if (!any)
 		return;
+	/* by kind: the standard way against read ahead's, what it cost */
+	for (int k = 0; k < 3; k++) {
+		const LgKind *x = &a->k[k], *y = &b->k[k];
+		uint32_t n[3], sec[3];
+		uint64_t us[3];
+		const uint32_t cmax = __atomic_exchange_n(&g_lk[k].col_max, 0, __ATOMIC_RELAXED);
+
+		for (int j = 0; j < 3; j++) {
+			n[j] = y->n[j] - x->n[j];
+			sec[j] = y->sec[j] - x->sec[j];
+			us[j] = y->us[j] - x->us[j];
+		}
+		if (!n[0] && !n[1] && !n[2])
+			continue;
+		if (k == LK_TINY)
+			VM_KLOGI("session tiny: standard %u (%u KiB) %u us each; from the block %u, %u us "
+			         "each; blocks read %u, %u us each; spoilt by writes %u", (unsigned)n[0],
+			         (unsigned)(sec[0] / 2u), (unsigned)(n[0] ? us[0] / n[0] : 0), (unsigned)n[1],
+			         (unsigned)(n[1] ? us[1] / n[1] : 0), (unsigned)n[2],
+			         (unsigned)(n[2] ? us[2] / n[2] : 0), (unsigned)(y->spoilt - x->spoilt));
+		else
+			VM_KLOGI("session %s: standard %u (%u MiB) %u us/MiB; from R/A %u (%u MiB) %u us/MiB; "
+			         "partly %u (%u MiB) %u us/MiB", k ? "NC" : "C", (unsigned)n[0],
+			         (unsigned)(sec[0] / 2048u), (unsigned)lg_per_mib(us[0], sec[0]), (unsigned)n[1],
+			         (unsigned)(sec[1] / 2048u), (unsigned)lg_per_mib(us[1], sec[1]), (unsigned)n[2],
+			         (unsigned)(sec[2] / 2048u), (unsigned)lg_per_mib(us[2], sec[2]));
+		VM_KLOGI("session %s: during a piece %u, %u ms, longest %u us; pieces for nothing %u, "
+		         "held reads %u ms, spoilt by writes %u", k == LK_TINY ? "tiny" : k ? "NC" : "C",
+		         (unsigned)(y->col_n - x->col_n), (unsigned)((y->col_us - x->col_us) / 1000u),
+		         (unsigned)cmax, (unsigned)(y->waste - x->waste),
+		         (unsigned)((y->held_us - x->held_us) / 1000u),
+		         k == LK_TINY ? 0u : (unsigned)(y->spoilt - x->spoilt));
+	}
 	VM_KLOGI("session R/A: hits %u (%u MiB, NC %u), dropped %u (%u MiB unused), unusable %u, "
 	         "tiny hits %u", (unsigned)(b->hits - a->hits), (unsigned)((b->kib - a->kib) / 1024u),
 	         (unsigned)((b->nc_kib - a->nc_kib) / 1024u), (unsigned)(b->drops - a->drops),

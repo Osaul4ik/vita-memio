@@ -355,6 +355,15 @@ typedef struct {
  * (the counts' scale), `time` the reads' time in the same scale, `us_mib`
  * the round's own time per MiB (0: too little read to tell). The way for the
  * next round in o->off ^ o->probe. 1 if o->off changed. */
+/* What the model says read ahead brings, permille of the time without it
+ * (on: the time with it plus that). */
+static inline int64_t rt_onoff_pm(const RtOnOff *o, int64_t gain, int64_t time)
+{
+	if (time <= 0)
+		time = 1;
+	return gain * 1000 / (time + (o->off || gain < 0 ? 0 : gain));
+}
+
 static inline int rt_onoff_round(RtOnOff *o, int64_t gain, int64_t time, uint32_t us_mib)
 {
 	const int way = o->off ^ o->probe;   /* how this round ran */
@@ -368,10 +377,7 @@ static inline int rt_onoff_round(RtOnOff *o, int64_t gain, int64_t time, uint32_
 			o->us[way] = us_mib;
 		o->have |= (uint8_t)(1u << way);
 	}
-	if (time <= 0)
-		time = 1;
-	/* what it brings, of the time without it (on, the time with it plus that) */
-	pm = gain * 1000 / (time + (o->off || gain < 0 ? 0 : gain));
+	pm = rt_onoff_pm(o, gain, time);
 	if (pm >= RT_OO_BAND || pm <= -RT_OO_BAND) {
 		o->off = pm < 0;                 /* the model is clear */
 		o->probe = 0;

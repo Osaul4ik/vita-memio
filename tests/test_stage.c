@@ -4136,18 +4136,20 @@ static void test_onoff_measured(void)
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	/* the worker's round: the way it sets is what the hooks look at */
+	OoLog ol;
+
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		;
 	oo_clear();
 	for (int i = 0; i < RT_OO_PROBE; i++) {
 		ST(g_oo_us[OO_NC], 5000);
 		ST(g_oo_sec[OO_NC], 512);
-		oo_round(OO_NC, 0);
+		oo_round(OO_NC, 0, &ol);
 	}
 	CHECK(g_oo[OO_NC].probe && g_oo_off[OO_NC] == 1);   /* a probe: off this round */
 	ST(g_oo_us[OO_NC], 4000);
 	ST(g_oo_sec[OO_NC], 512);
-	CHECK(oo_round(OO_NC, 0) && g_oo[OO_NC].off && g_oo_off[OO_NC] == 1);   /* faster off */
+	CHECK(oo_round(OO_NC, 0, &ol) && g_oo[OO_NC].off && g_oo_off[OO_NC] == 1);   /* faster off */
 	__sync_lock_release(&g_ad_lock);
 	/* kept with the app: away and back */
 	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
@@ -4253,6 +4255,14 @@ static void test_session_log(void)
 	CHECK(l && strstr(l, "writes 1 (4 KiB)"));
 	l = fake_log_find("session R/A: hits");
 	CHECK(l && !strstr(l, "hits 0 "));        /* the stream was read ahead */
+	/* by kind: 8 large reads, the first few the standard way, the rest from
+	 * the pieces; the 32 KiB one standard; the tiny one standard */
+	l = fake_log_find("session C: standard");
+	CHECK(l && !strstr(l, "from R/A 0 ") && strstr(l, "standard 6 "));
+	l = fake_log_find("session tiny: standard 1 ");
+	CHECK(l && strstr(l, "from the block 0,"));
+	CHECK(fake_log_find("session C: during a piece"));
+	CHECK(!fake_log_find("session NC:"));      /* none read */
 	/* the home screen's (nothing read): no lines */
 	fake_log_clear();
 	as_app(0x44);
@@ -4274,6 +4284,7 @@ static void test_session_log(void)
 	fake_log_clear();
 	adapt_runs(0, 20, 3);
 	CHECK(fake_log_find("adaptive: C from read 5 -> 2"));
+	CHECK(fake_log_find("round C: model "));   /* each round, how it ran */
 	vm_stage_fini();
 }
 

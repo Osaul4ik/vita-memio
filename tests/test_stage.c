@@ -3948,7 +3948,7 @@ static void test_tiny_adaptive(void)
 		CHECK(g_cal_on && g_cal[M].n_plain[0] == 70 && g_cal[M].plain[0][20] == 70 &&
 		      !g_cal[M].tiny_hit_n && !g_cal[M].tiny_blk_us);
 		g_cal[M].tiny_hit_n = 5;
-		cal_save();                                  /* into tuning.bin; calib.bin gone */
+		cal_save_locked();                                  /* into tuning.bin; calib.bin gone */
 		CHECK(fopen(path, "rb") == NULL);
 		memset(g_cal, 0, sizeof(g_cal));
 		g_cal_loaded = 0;
@@ -4201,6 +4201,31 @@ static void test_learned_kept_in_file(void)
 		ra_proc_event(0x100, 4);
 		vm_stage_worker_tick();
 		CHECK(fake_tune_writes == w0 + AD_KEEP + 8);    /* nothing moved: no write */
+		/* it learns anew - written where it lies, not added at the end - also
+		 * when it has dropped out of hand while in front */
+		as_app(0x100);
+		vm_stage_worker_tick();
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			;
+		memset(g_ad_kept, 0, sizeof(g_ad_kept));     /* out of hand */
+		__sync_lock_release(&g_ad_lock);
+		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);
+		CHECK(ra_threshold(0) > 2);
+		ra_proc_event(0x100, 4);
+		vm_stage_worker_tick();
+		CHECK(g_tune_n == 1u + AD_KEEP + 8u);
+		CHECK(stat(path, &st0) == 0 && st0.st_size == st1.st_size);
+		k = ad_kept_find("PCSG00000");
+		CHECK(k && k->fslot == 2 && k->ra_adj[0] != -3 && k->fsig == ad_sig(k));
+		{
+			FILE *f = fopen(path, "rb");
+			TuneSlot t;
+
+			CHECK(f && !fseek(f, (long)TUNE_SLOT_OFF(1), SEEK_SET) && fread(&t, sizeof(t), 1, f) == 1 &&
+			      t.check == tune_slot_check(&t) && t.app.ra_adj[0] == k->ra_adj[0]);
+			if (f)
+				fclose(f);
+		}
 	}
 	/* edited in place: an app learns more - only its slot is written, where
 	 * it lies (no copy aside, no rename); the file keeps its size */
@@ -4269,7 +4294,7 @@ static void test_learned_kept_in_file(void)
 		cal_load();
 		CHECK(g_tune_legacy & 2);
 		g_tune_cal_due = 1;
-		cal_save();
+		cal_save_locked();
 		CHECK(stat(path, &st1) != 0 && !g_tune_legacy);
 	}
 	/* packing: counts up to any size come back to the shift */

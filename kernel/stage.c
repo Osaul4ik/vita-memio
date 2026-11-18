@@ -2115,7 +2115,7 @@ typedef struct CalDev {
 static CalDev        g_cal[VM_DEV_COUNT];
 static volatile int  g_cal_on = 1;     /* Tuning: Auto until the file says Off */
 static volatile int  g_cal_dirty;            /* measured since the last save */
-static int           g_cal_loaded;           /* worker */
+static volatile int  g_cal_loaded;           /* set under g_tune_lock */
 
 /* A request of `nsec` starting (calibration on): the pieces being read now
  * are holding it up - each notes when the first such request came. Its start
@@ -2440,9 +2440,18 @@ static int cal_worth_saving(void)
 
 /* tuning.bin: the calibration and what Adaptive learned, together (below,
  * after what Adaptive keeps). */
-static void cal_save(void);
+static void cal_save_locked(void);
 static void cal_load(void);
-static int  g_tune_cal_due;                    /* the calibration to be written (worker) */
+static int  g_tune_cal_due;                    /* the calibration to be written (g_tune_lock) */
+/* tuning.bin, one at a time: the worker, and the overlay's Tuning switch
+ * and reset (its own thread). */
+static volatile int g_tune_lock;
+
+static void tune_lock(void)
+{
+	while (__sync_lock_test_and_set(&g_tune_lock, 1))
+		ksceKernelDelayThread(100);
+}
 
 /* An older version's calib.bin into g_cal (the calibration alone); 1 if it
  * was whole and right (else g_cal cleared). Read once, if there is no
@@ -2491,9 +2500,11 @@ void vm_stage_cal_reset(void)
 {
 	cal_load();
 	memset(g_cal, 0, sizeof(g_cal));      /* the figures: the fixed ones again */
+	tune_lock();
 	tune_forget_learned();                /* ... and what was learned with them */
 	g_tune_cal_due = 1;
-	cal_save();
+	cal_save_locked();
+	__sync_lock_release(&g_tune_lock);
 	VM_KLOGI("stage: calibration and what was learned reset");
 }
 
@@ -2501,8 +2512,10 @@ void vm_stage_cal_set(int on)
 {
 	cal_load();
 	ST(g_cal_on, on ? 1 : 0);
+	tune_lock();
 	g_tune_cal_due = 1;
-	cal_save();                           /* the switch kept, and what was measured */
+	cal_save_locked();                    /* the switch kept, and what was measured */
+	__sync_lock_release(&g_tune_lock);
 	VM_KLOGI("stage: calibration %s", on ? "on" : "off");
 }
 
@@ -3009,13 +3022,14 @@ static int tune_write_all(void)
 	return 1;
 }
 
-/* What changed since the file was written, written where it lies. Worker. */
-static void cal_save(void)
+/* What changed since the file was written, written where it lies
+ * (g_tune_lock held). */
+static void cal_save_locked(void)
 {
 	SceUID fd;
 	int any = 0;
 
-	if (!g_cal_loaded)
+	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE))
 		return;
 	ST(g_cal_dirty, 0);
 	if (!g_tune_ok) {                     /* none yet (or not this layout) */
@@ -3059,7 +3073,7 @@ static void cal_save(void)
  * one, among the apps at hand (unless it is there already). Each slot's
  * title alone is read, then the slot found. One whose check fails keeps its
  * place: the app learns again, written there. */
-static void tune_fetch(const char *title)
+static void tune_fetch_locked(const char *title)
 {
 	const uint32_t n = sizeof(((TuneApp *)0)->title);
 	TuneSlot t;
@@ -3108,6 +3122,13 @@ static void tune_fetch(const char *title)
 		k->used = ++g_ad_tick;
 	}
 	__sync_lock_release(&g_ad_lock);
+}
+
+static void tune_fetch(const char *title)
+{
+	tune_lock();
+	tune_fetch_locked(title);
+	__sync_lock_release(&g_tune_lock);
 }
 
 /* tuning.bin's header and calibration; how many slots it has. Its layout
@@ -3159,9 +3180,11 @@ static void cal_load(void)
 {
 	SceUID fd;
 
-	if (g_cal_loaded)
+	tune_lock();
+	if (g_cal_loaded) {
+		__sync_lock_release(&g_tune_lock);
 		return;
-	g_cal_loaded = 1;
+	}
 	g_tune_ok = tune_read();
 	if (!g_tune_ok && (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp")))
 		g_tune_legacy |= 1;
@@ -3171,6 +3194,8 @@ static void cal_load(void)
 		g_tune_legacy |= 2;
 	}
 	cal_snapshot();                       /* what the file holds (or nothing) */
+	__atomic_store_n(&g_cal_loaded, 1, __ATOMIC_RELEASE);
+	__sync_lock_release(&g_tune_lock);
 }
 
 /* What tiny reads use now: Adaptive's (T, B), else the fixed ones (On, and
@@ -4915,8 +4940,8 @@ static void app_load(SceUID fg)
 			         (unsigned)pf.app.thr[0], (unsigned)pf.app.thr[1]);
 	}
 	g_app_saved = g_app_cur;
+	tune_fetch(g_app_title);              /* what it learned before, at hand - before it is in front */
 	__atomic_store_n(&g_app_pid, fg, __ATOMIC_RELEASE);
-	tune_fetch(g_app_title);              /* what it learned before, at hand */
 	eff_update();
 }
 
@@ -5072,7 +5097,7 @@ void vm_stage_worker_tick(void)
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
 	const uint32_t now_us = ksceKernelGetSystemTimeLow();
 
-	if (!g_cal_loaded && LD(g_live))
+	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
@@ -5350,10 +5375,12 @@ void vm_stage_worker_tick(void)
 		 * kept by now - only if a figure or a threshold in use moved
 		 * (internal storage: as few writes as can be) */
 		if (fg != last_fg) {
+			tune_lock();
 			if (LD(g_cal_dirty) && cal_worth_saving())
 				g_tune_cal_due = 1;
 			if (g_tune_cal_due || tune_learn_worth())
-				cal_save();
+				cal_save_locked();
+			__sync_lock_release(&g_tune_lock);
 		}
 		last_fg = fg;
 	}

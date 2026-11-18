@@ -2506,16 +2506,18 @@ void vm_stage_cal_set(int on)
 	VM_KLOGI("stage: calibration %s", on ? "on" : "off");
 }
 
-/* What Adaptive has learned of a game (thresholds and the runs behind
- * them), kept while another is in front - in RAM only, until the console is
- * restarted - so the game, back in front, goes on from there rather than
- * from the start. AD_KEEP games, the one longest away making room. Kept with
- * what it was learned under (read ahead's mode, the game's own thresholds):
- * taken up again only under the same. */
+/* What Adaptive has learned of an app (thresholds and the runs behind
+ * them), kept while another is in front, so the app, back in front, goes on
+ * from there rather than from the start. Every app's is kept in tuning.bin
+ * (below), with no limit; these AD_KEEP are the ones at hand - the latest -
+ * the one longest away making room (one already in the file first). Kept
+ * with what it was learned under (read ahead's mode, the app's own
+ * thresholds): taken up again only under the same. */
 #define AD_KEEP 12
 typedef struct {
 	char     title[16];                  /* "": a free slot                    */
 	uint32_t key, used;
+	uint32_t fslot, fsig;                /* 1 + its slot in tuning.bin (0 none), what that holds */
 	RaTest   ad;
 	int      ra_adj[2], rs_adj[2];
 	uint32_t tiny_thr, tiny_blk;
@@ -2525,7 +2527,10 @@ static AdKept            g_ad_kept[AD_KEEP];
 static uint32_t          g_ad_tick;
 static char              g_ad_title[16];      /* whose g_ad is (under g_ad_lock) */
 static uint32_t          g_ad_key;
+static uint32_t          g_ad_fslot, g_ad_fsig;   /* g_ad_title's in tuning.bin  */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
+static uint32_t ad_sig(const AdKept *k);
+static int      ad_learned(const AdKept *k);
 
 /* Afresh (g_ad_lock held). */
 static void ra_adapt_clear(void)
@@ -2557,22 +2562,42 @@ static AdKept *ad_kept_find(const char *title)
 	return NULL;
 }
 
+/* Whether k holds what tuning.bin does not (yet): to be written. */
+static int ad_unsaved(const AdKept *k)
+{
+	return k->title[0] && ad_sig(k) != k->fsig && (k->fslot || ad_learned(k));
+}
+
+/* g_ad_lock held: the place for another app - a free one, else the one
+ * longest away whose all is in the file, else the one longest away. */
+static AdKept *ad_room(void)
+{
+	AdKept *k = NULL, *any = &g_ad_kept[0];
+
+	for (int i = 0; i < AD_KEEP; i++) {
+		AdKept *c = &g_ad_kept[i];
+
+		if (!c->title[0])
+			return c;
+		if (c->used < any->used)
+			any = c;
+		if (!ad_unsaved(c) && (!k || c->used < k->used))
+			k = c;
+	}
+	return k ? k : any;
+}
+
 /* g_ad_lock held: what was learned for g_ad_title, kept. */
 static void ad_keep(void)
 {
 	AdKept *k = ad_kept_find(g_ad_title);
 
 	if (!k) {
-		k = &g_ad_kept[0];
-		for (int i = 0; i < AD_KEEP; i++) {
-			if (!g_ad_kept[i].title[0]) {
-				k = &g_ad_kept[i];
-				break;
-			}
-			if (g_ad_kept[i].used < k->used)
-				k = &g_ad_kept[i];
-		}
+		k = ad_room();
+		memset(k, 0, sizeof(*k));
 		memcpy(k->title, g_ad_title, sizeof(k->title));
+		k->fslot = g_ad_fslot;            /* its place in the file, if it has one */
+		k->fsig = g_ad_fsig;
 	}
 	k->key = g_ad_key;
 	k->used = ++g_ad_tick;
@@ -2595,7 +2620,11 @@ static void ad_restore(const char *title, uint32_t key)
 {
 	const AdKept *k = ad_kept_find(title);
 
-	if (!k || k->key != key)
+	if (!k)
+		return;
+	g_ad_fslot = k->fslot;                /* the same app, the same place */
+	g_ad_fsig = k->fsig;
+	if (k->key != key)
 		return;
 	g_ad = k->ad;
 	for (int i = 0; i < 2; i++) {
@@ -2627,6 +2656,7 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 	if (g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE)
 		ad_keep();
 	ra_adapt_clear();
+	g_ad_fslot = g_ad_fsig = 0;
 	if (title[0])
 		ad_restore(title, key);
 	{
@@ -2640,7 +2670,7 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* Games kept (the log). */
+/* Apps at hand (the log). */
 static uint32_t ad_kept_count(void)
 {
 	uint32_t n = 0;
@@ -2664,22 +2694,27 @@ static void __attribute__((unused)) ra_adapt_reset(void)
 
 /* ---- tuning.bin: the calibration and what Adaptive learned -----------------
  *
- * One small file, so a start goes on from what was measured and learned
- * rather than from nothing. Its layout is fixed, so it is edited in place:
- *   TuneHead | TuneCal | TuneSlot x AD_KEEP
+ * One file on ux0 (the memory card or SD2Vita, not the internal flash), so
+ * a start goes on from what was measured and learned rather than from
+ * nothing. Edited in place:
+ *   TuneHead | TuneCal | TuneSlot, one for every app that learned, no limit
  * each part with a check of its own. Only what changed is written, where it
- * lies - an app's slot (~340 bytes) when its thresholds moved, the
- * calibration when a figure in use moved - never the whole file again: no
- * copy aside, no rename, no truncation. A write cut short spoils only that
- * part (its check fails: that app learns again); the rest stays good. The
- * whole file is written once, when there is none (or not this layout).
- * Slot i of the file is g_ad_kept[i]. A TuneApp is what Adaptive keeps for
- * an app: its thresholds, and the runs behind them in 16 bits a count with a
- * shift a group. Looked at when another app comes to the front - the runs
- * alone never make it write: once all is learned, it is hardly written. */
-#define TUNE_FILE     VM_DATA_DIR "/tuning.bin"
+ * lies - an app's slot (~330 bytes) when its thresholds moved, a new app's
+ * after the last - the calibration when a figure in use moved; never the
+ * whole file again: no copy aside, no rename, no truncation. A write cut
+ * short spoils only that part (its check fails: that app learns again, in
+ * the same slot); the rest stays good. The whole file is written once, when
+ * there is none (or not this layout). An app's slot is read when it comes to
+ * the front (its title, then the slot found); the apps at hand
+ * (g_ad_kept) know theirs. A TuneApp is what Adaptive keeps for an app: its
+ * thresholds, and the runs behind them in 16 bits a count with a shift a
+ * group. Looked at when another app comes to the front - the runs alone
+ * never make it write: once all is learned, it is hardly written. */
+#define TUNE_DIR      "ux0:data/vita-memio"
+#define TUNE_FILE     TUNE_DIR "/tuning.bin"
+#define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  2u                           /* 1: written whole each time */
+#define TUNE_VERSION  3u                           /* 1: whole each time, 2: 12 apps */
 
 typedef struct {
 	char     title[12];
@@ -2691,12 +2726,11 @@ typedef struct {
 } TuneApp;
 
 typedef struct {
-	uint32_t magic, version, devs, slots, cal_size, slot_size, check;
+	uint32_t magic, version, devs, cal_size, slot_size, check;
 } TuneHead;
 
 typedef struct {
 	TuneApp  app;
-	uint32_t seq;                 /* when it was last in front (the order kept) */
 	uint32_t check;               /* 0 over all zeros: an empty slot never passes */
 } TuneSlot;
 
@@ -2705,8 +2739,8 @@ typedef struct {
 #define TUNE_SLOT_OFF(i) (TUNE_CAL_OFF + (SceOff)TUNE_CAL_SIZE + (SceOff)(i) * (SceOff)sizeof(TuneSlot))
 
 static int      g_tune_ok;                     /* the file is there, in this layout */
-static uint32_t g_tune_file_sig[AD_KEEP];      /* what each slot of the file holds (0 empty) */
-static int      g_tune_legacy;                 /* calib.bin was read: removed once moved */
+static uint32_t g_tune_n;                      /* its slots (whole ones)            */
+static int      g_tune_legacy;                 /* 1 calib.bin was read, 2 a v2 on ur0: removed */
 
 static uint32_t tune_fnv(uint32_t c, const void *p, uint32_t n)
 {
@@ -2834,17 +2868,6 @@ static int tune_unpack(const TuneApp *t, AdKept *k)
 	return 1;
 }
 
-/* Whether slot i is to be written: what it holds now is not what the file
- * holds (an app that learned nothing, never in the file, is not worth one).
- * g_ad_lock held. */
-static int tune_slot_due(int i)
-{
-	const AdKept *k = &g_ad_kept[i];
-	const uint32_t now = ad_sig(k);
-
-	return now != g_tune_file_sig[i] && (g_tune_file_sig[i] || ad_learned(k));
-}
-
 /* Whether an app's thresholds moved since the file was written. */
 static int tune_learn_worth(void)
 {
@@ -2853,20 +2876,22 @@ static int tune_learn_worth(void)
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	for (int i = 0; i < AD_KEEP && !w; i++)
-		w = tune_slot_due(i);
+		w = ad_unsaved(&g_ad_kept[i]);
 	__sync_lock_release(&g_ad_lock);
 	return w;
 }
 
-/* What was learned, forgotten (Tuning reset): the apps kept, and the one in
- * front starts afresh. */
+/* What was learned, forgotten (Tuning reset): the apps at hand, the one in
+ * front starts afresh, and the file is written anew (none of it kept). */
 static void tune_forget_learned(void)
 {
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	memset(g_ad_kept, 0, sizeof(g_ad_kept));
 	ra_adapt_clear();
+	g_ad_fslot = g_ad_fsig = 0;
 	__sync_lock_release(&g_ad_lock);
+	g_tune_ok = 0;
 }
 
 /* The calibration part, at the file's position (sequentially): 1 if written. */
@@ -2901,83 +2926,123 @@ static int tune_write_cal(SceUID fd)
 	return ok && ksceIoWrite(fd, &c, sizeof(c)) == (int)sizeof(c);
 }
 
-/* Slot i, at the file's position: 1 if written (its signature then kept as
- * what the file holds). */
+/* The header this build writes. */
+static void tune_head(TuneHead *h)
+{
+	const TuneHead h0 = { TUNE_MAGIC, TUNE_VERSION, VM_DEV_COUNT, TUNE_CAL_SIZE,
+	                      (uint32_t)sizeof(TuneSlot), 0 };
+
+	*h = h0;
+	h->check = tune_fnv(0x811C9DC5u, &h0, sizeof(h0)) | 1u;
+}
+
+/* App k's slot, where it lies (a new app's: after the last), if it holds
+ * what the file does not: 1 if written or nothing to write. Worker. */
 static int tune_write_slot(SceUID fd, int i)
 {
+	AdKept *k = &g_ad_kept[i];
+	char title[sizeof(k->title)];
 	TuneSlot t;
-	uint32_t sig;
+	uint32_t sig, slot;
+	SceOff off;
+	int ok;
 
 	memset(&t, 0, sizeof(t));
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
-	sig = ad_sig(&g_ad_kept[i]);
-	if (sig) {
-		tune_pack(&g_ad_kept[i], &t.app);
-		t.seq = g_ad_kept[i].used;
-		t.check = tune_slot_check(&t);
-	}                                     /* empty: zeros, which never pass the check */
+	if (!ad_unsaved(k)) {
+		__sync_lock_release(&g_ad_lock);
+		return 1;
+	}
+	sig = ad_sig(k);
+	tune_pack(k, &t.app);
+	t.check = tune_slot_check(&t);
+	if (!k->fslot) {
+		k->fslot = ++g_tune_n;            /* a new app: after the last */
+		if (!strncmp(k->title, g_ad_title, sizeof(k->title)))
+			g_ad_fslot = k->fslot;        /* the one in front is this one */
+	}
+	slot = k->fslot;
+	memcpy(title, k->title, sizeof(title));
 	__sync_lock_release(&g_ad_lock);
-	if (ksceIoWrite(fd, &t, sizeof(t)) != (int)sizeof(t))
+	off = TUNE_SLOT_OFF(slot - 1u);
+	ok = ksceIoLseek(fd, off, SCE_SEEK_SET) == off &&
+	     ksceIoWrite(fd, &t, sizeof(t)) == (int)sizeof(t);
+	if (!ok)
 		return 0;
-	g_tune_file_sig[i] = sig;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (k->fslot == slot && !strncmp(k->title, title, sizeof(title)))
+		k->fsig = sig;                    /* what the file holds now */
+	if (g_ad_fslot == slot && !strncmp(g_ad_title, title, sizeof(title)))
+		g_ad_fsig = sig;
+	__sync_lock_release(&g_ad_lock);
 	return 1;
 }
 
-/* The whole file, when there is none in this layout: once. */
+/* A new file - the header and the calibration, no app yet - when there is
+ * none in this layout: once. */
 static int tune_write_all(void)
 {
-	const TuneHead h0 = { TUNE_MAGIC, TUNE_VERSION, VM_DEV_COUNT, AD_KEEP, TUNE_CAL_SIZE,
-	                      (uint32_t)sizeof(TuneSlot), 0 };
-	TuneHead h = h0;
+	TuneHead h;
 	SceUID fd;
 	int ok;
 
-	h.check = tune_fnv(0x811C9DC5u, &h0, sizeof(h0)) | 1u;
-	ksceIoMkdir("ur0:data", 0777);
-	ksceIoMkdir(VM_DATA_DIR, 0777);
+	tune_head(&h);
+	ksceIoMkdir("ux0:data", 0777);
+	ksceIoMkdir(TUNE_DIR, 0777);
 	fd = ksceIoOpen(TUNE_FILE, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
 	if (fd < 0)
 		return 0;
 	ok = ksceIoWrite(fd, &h, sizeof(h)) == (int)sizeof(h) && tune_write_cal(fd);
-	for (int i = 0; i < AD_KEEP && ok; i++)
-		ok = tune_write_slot(fd, i);
 	ksceIoClose(fd);
-	g_tune_ok = ok;
-	return ok;
+	if (!ok)
+		return 0;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	for (int i = 0; i < AD_KEEP; i++)
+		g_ad_kept[i].fslot = g_ad_kept[i].fsig = 0;   /* none in it: each its slot anew */
+	g_ad_fslot = g_ad_fsig = 0;
+	g_tune_n = 0;
+	__sync_lock_release(&g_ad_lock);
+	g_tune_ok = 1;
+	return 1;
 }
 
 /* What changed since the file was written, written where it lies. Worker. */
 static void cal_save(void)
 {
 	SceUID fd;
-	int due[AD_KEEP], any = 0;
+	int any = 0;
 
 	if (!g_cal_loaded)
 		return;
 	ST(g_cal_dirty, 0);
-	if (!g_tune_ok) {                     /* none yet (or not this layout): whole */
-		if (tune_write_all()) {
-			cal_snapshot();
-			g_tune_cal_due = 0;
-			if (g_tune_legacy) {          /* the older file: in this one now */
-				g_tune_legacy = 0;
-				ksceIoRemove(CAL_FILE);
-				ksceIoRemove(CAL_FILE ".tmp");
-			}
+	if (!g_tune_ok) {                     /* none yet (or not this layout) */
+		if (!tune_write_all())
+			return;
+		cal_snapshot();
+		g_tune_cal_due = 0;
+	}
+	if (g_tune_legacy) {                  /* the older files: in this one now */
+		if (g_tune_legacy & 1) {
+			ksceIoRemove(CAL_FILE);
+			ksceIoRemove(CAL_FILE ".tmp");
 		}
-		return;
+		if (g_tune_legacy & 2)
+			ksceIoRemove(TUNE_OLD);
+		g_tune_legacy = 0;
 	}
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	for (int i = 0; i < AD_KEEP; i++)
-		any |= due[i] = tune_slot_due(i);
+		any |= ad_unsaved(&g_ad_kept[i]);
 	__sync_lock_release(&g_ad_lock);
 	if (!any && !g_tune_cal_due)
 		return;
 	fd = ksceIoOpen(TUNE_FILE, SCE_O_WRONLY, 0666);   /* in place: no truncation */
 	if (fd < 0) {
-		g_tune_ok = 0;                    /* gone: whole again, next time */
+		g_tune_ok = 0;                    /* gone: anew, next time */
 		return;
 	}
 	if (g_tune_cal_due && ksceIoLseek(fd, TUNE_CAL_OFF, SCE_SEEK_SET) == TUNE_CAL_OFF &&
@@ -2986,28 +3051,79 @@ static void cal_save(void)
 		cal_snapshot();                   /* what the file holds now */
 	}
 	for (int i = 0; i < AD_KEEP; i++)
-		if (due[i] && ksceIoLseek(fd, TUNE_SLOT_OFF(i), SCE_SEEK_SET) == TUNE_SLOT_OFF(i))
-			tune_write_slot(fd, i);
+		tune_write_slot(fd, i);
 	ksceIoClose(fd);
 }
 
-/* tuning.bin into g_cal and the apps kept. Its layout right: 1 (each part
- * used if its own check passes; one that does not is as if empty). */
+/* Worker, as `title` comes to the front: its slot in tuning.bin, if it has
+ * one, among the apps at hand (unless it is there already). Each slot's
+ * title alone is read, then the slot found. One whose check fails keeps its
+ * place: the app learns again, written there. */
+static void tune_fetch(const char *title)
+{
+	const uint32_t n = sizeof(((TuneApp *)0)->title);
+	TuneSlot t;
+	uint32_t found = 0;
+	int have, good = 0;
+	SceUID fd;
+
+	if (!title[0] || !g_tune_ok || !g_tune_n)
+		return;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	have = ad_kept_find(title) != NULL;
+	__sync_lock_release(&g_ad_lock);
+	if (have)
+		return;
+	fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
+	if (fd < 0)
+		return;
+	for (uint32_t i = 0; i < g_tune_n && !found; i++) {
+		char name[sizeof(((TuneApp *)0)->title)];
+		const SceOff off = TUNE_SLOT_OFF(i);
+
+		if (ksceIoLseek(fd, off, SCE_SEEK_SET) != off || ksceIoRead(fd, name, n) != (int)n)
+			break;
+		if (name[n - 1] || strncmp(name, title, n - 1))
+			continue;
+		found = i + 1u;
+		good = ksceIoLseek(fd, off, SCE_SEEK_SET) == off &&
+		       ksceIoRead(fd, &t, sizeof(t)) == (int)sizeof(t) && t.check == tune_slot_check(&t);
+	}
+	ksceIoClose(fd);
+	if (!found)
+		return;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (!ad_kept_find(title)) {
+		AdKept *k = ad_room();
+
+		good = good && tune_unpack(&t.app, k);
+		if (!good) {                      /* spoilt: nothing of it, its place kept */
+			memset(k, 0, sizeof(*k));
+			memcpy(k->title, title, n - 1);
+		}
+		k->fslot = found;
+		k->fsig = good ? ad_sig(k) : 0;
+		k->used = ++g_ad_tick;
+	}
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* tuning.bin's header and calibration; how many slots it has. Its layout
+ * right: 1 (the calibration used if its own check passes). */
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	const TuneHead want = { TUNE_MAGIC, TUNE_VERSION, VM_DEV_COUNT, AD_KEEP, TUNE_CAL_SIZE,
-	                        (uint32_t)sizeof(TuneSlot), 0 };
-	TuneHead h;
+	TuneHead h, want;
 	uint32_t on = 0, c, check = 0;
+	SceOff end;
 	int ok;
 
 	if (fd < 0)
 		return 0;
-	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && h.check ==
-	     (tune_fnv(0x811C9DC5u, &want, sizeof(want)) | 1u);
-	h.check = 0;
-	ok = ok && !memcmp(&h, &want, sizeof(h));
+	tune_head(&want);
+	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && !memcmp(&h, &want, sizeof(h));
 	if (!ok) {
 		ksceIoClose(fd);
 		return 0;
@@ -3022,49 +3138,38 @@ static int tune_read(void)
 		for (int k = 0; k < 2; k++)
 			if (g_cal[i].n_plain[k] >= CAL_KEEP || g_cal[i].n_served[k] >= CAL_KEEP)
 				ok = 0;
-	if (ok)
+	if (ok) {
 		ST(g_cal_on, on ? 1 : 0);
-	else
+	} else {
 		memset(g_cal, 0, sizeof(g_cal));
-	/* the apps, each slot on its own */
-	while (__sync_lock_test_and_set(&g_ad_lock, 1))
-		ksceKernelDelayThread(10);
-	memset(g_ad_kept, 0, sizeof(g_ad_kept));
-	__sync_lock_release(&g_ad_lock);
-	if (ksceIoLseek(fd, TUNE_SLOT_OFF(0), SCE_SEEK_SET) == TUNE_SLOT_OFF(0))
-		for (int i = 0; i < AD_KEEP; i++) {
-			TuneSlot t;
-
-			if (ksceIoRead(fd, &t, sizeof(t)) != (int)sizeof(t))
-				break;
-			g_tune_file_sig[i] = 0;
-			if (t.check != tune_slot_check(&t))
-				continue;                 /* empty, or a write cut short */
-			while (__sync_lock_test_and_set(&g_ad_lock, 1))
-				ksceKernelDelayThread(10);
-			if (tune_unpack(&t.app, &g_ad_kept[i])) {
-				g_ad_kept[i].used = t.seq;
-				if (t.seq > g_ad_tick)
-					g_ad_tick = t.seq;
-				g_tune_file_sig[i] = ad_sig(&g_ad_kept[i]);
-			}
-			__sync_lock_release(&g_ad_lock);
-		}
+		g_tune_cal_due = 1;               /* spoilt: written right at the next save */
+	}
+	/* the apps: whole slots only (one cut short at the end is written over) */
+	end = ksceIoLseek(fd, 0, SCE_SEEK_END);
+	g_tune_n = end > TUNE_SLOT_OFF(0) ? (uint32_t)((end - TUNE_SLOT_OFF(0)) / (SceOff)sizeof(TuneSlot))
+	                                  : 0u;
 	ksceIoClose(fd);
 	return 1;
 }
 
-/* Once, by the worker: what was measured and learned before; with no
- * tuning.bin in this layout, an older version's calib.bin (the calibration
- * alone), moved into a new tuning.bin at the first save. */
+/* Once, by the worker: what was measured before; with no tuning.bin in this
+ * layout, an older version's calib.bin (the calibration alone), moved into a
+ * new tuning.bin at the first save (and the branch's v2 on ur0 removed). */
 static void cal_load(void)
 {
+	SceUID fd;
+
 	if (g_cal_loaded)
 		return;
 	g_cal_loaded = 1;
 	g_tune_ok = tune_read();
 	if (!g_tune_ok && (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp")))
-		g_tune_legacy = 1;
+		g_tune_legacy |= 1;
+	fd = ksceIoOpen(TUNE_OLD, SCE_O_RDONLY, 0);
+	if (fd >= 0) {
+		ksceIoClose(fd);
+		g_tune_legacy |= 2;
+	}
 	cal_snapshot();                       /* what the file holds (or nothing) */
 }
 
@@ -4811,6 +4916,7 @@ static void app_load(SceUID fg)
 	}
 	g_app_saved = g_app_cur;
 	__atomic_store_n(&g_app_pid, fg, __ATOMIC_RELEASE);
+	tune_fetch(g_app_title);              /* what it learned before, at hand */
 	eff_update();
 }
 
@@ -4926,20 +5032,33 @@ void vm_stage_ratest_stop(VmRaTestPick *o)
 int vm_stage_app_save(void)
 {
 	RaProf pf;
+	char title[sizeof(g_app_title)];
+	VmApp snap;
+	int ok;
 
-	if (!app_in_front())
+	/* whose and what, taken together: the worker may load another app's */
+	eff_lock();
+	ok = app_in_front();
+	if (ok) {
+		memcpy(title, g_app_title, sizeof(title));
+		pf.app = snap = g_app_cur;
+	}
+	__sync_lock_release(&g_eff_lock);
+	if (!ok)
 		return VM_ERR_NOT_READY;
-	pf.app = g_app_cur;
 	if (!ra_app_set_any(&pf.app)) {
 		/* all global: no profile at all */
-		ra_prof_remove(g_app_title);
+		ra_prof_remove(title);
 	} else {
-		ra_prof_save(g_app_title, &pf);
-		if (!ra_prof_load(g_app_title, &pf))
+		ra_prof_save(title, &pf);
+		if (!ra_prof_load(title, &pf))
 			return VM_ERR_IO;
 	}
-	g_app_saved = g_app_cur;
-	VM_KLOGI("stage: %s - its settings saved", g_app_title);
+	eff_lock();
+	if (app_in_front() && !strcmp(title, g_app_title))
+		g_app_saved = snap;
+	__sync_lock_release(&g_eff_lock);
+	VM_KLOGI("stage: %s - its settings saved", title);
 	return VM_OK;
 }
 
@@ -5011,12 +5130,13 @@ void vm_stage_worker_tick(void)
 			const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
 
 			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u, 32 KiB reads C %u NC %u now; "
-			         "moved %u / %u and %u / %u times; games kept %u, taken up again %u",
+			         "moved %u / %u and %u / %u times; apps at hand %u, in tuning.bin %u, taken up "
+			         "again %u",
 			         (unsigned)t0, (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
 			         (unsigned)ra_small_threshold(1, t1),
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]),
 			         (unsigned)LD(g_rs_moves[0]), (unsigned)LD(g_rs_moves[1]),
-			         (unsigned)ad_kept_count(), (unsigned)LD(g_ad_restored));
+			         (unsigned)ad_kept_count(), (unsigned)g_tune_n, (unsigned)LD(g_ad_restored));
 		}
 		/* calibration: the medians it has, per storage, and what is in use */
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -5221,8 +5341,11 @@ void vm_stage_worker_tick(void)
 			app_load(fg);
 		else if (home && !app_in_front())
 			app_load(0);
-		else if (fg != last_fg)
+		else if (fg != last_fg) {
+			if (app_in_front())
+				tune_fetch(g_app_title);  /* back in front: at hand again */
 			eff_update();
+		}
 		/* tuning.bin: at a change of app - what the one before learned is
 		 * kept by now - only if a figure or a threshold in use moved
 		 * (internal storage: as few writes as can be) */

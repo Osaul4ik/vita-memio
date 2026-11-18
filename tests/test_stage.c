@@ -2957,6 +2957,12 @@ static void test_readahead(void)
 /* The app in front. */
 static const char *fake_title_of(SceUID pid)
 {
+	static __thread char many[16];
+
+	if (pid >= 0x100 && pid < 0x200) {             /* many apps: PCSG00000 + n */
+		snprintf(many, sizeof(many), "PCSG%05d", (int)(pid - 0x100));
+		return many;
+	}
 	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001"
 	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : pid == 0x46 ? "VITASHELL"
 	     : pid == 0x47 ? "NPXS10015" : pid == 0x48 ? "main" : pid == 0x49 ? "NPXS10079"
@@ -3790,7 +3796,7 @@ static void test_calibration(void)
 		char path[256];
 		FILE *f;
 
-		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
 		f = fopen(path, "r+b");
 		CHECK(f != NULL);
 		if (f) {
@@ -3852,9 +3858,9 @@ static void test_calibration(void)
 	{
 		char path[256];
 
-		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
 		remove(path);
-		snprintf(path, sizeof(path), "%s/tuning.bin.tmp", dir);
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin.tmp", dir);
 		remove(path);
 	}
 	g_cal_on = 1;
@@ -4123,6 +4129,8 @@ static void test_learned_kept_in_file(void)
 	VmSettings s;
 	const AdKept *k;
 	const char *dir;
+	char path[256];
+	struct stat st0, st1;
 
 	fakes_tmpdir_remove();
 	dir = fakes_tmpdir_new();
@@ -4139,14 +4147,20 @@ static void test_learned_kept_in_file(void)
 	CHECK(fake_tune_writes == 0);                   /* not while it plays */
 	ra_proc_event(0x44, 4);                         /* home: what it learned, kept */
 	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 1);
+	CHECK(fake_tune_writes == 2);                   /* the new file, then its slot */
+	/* on ux0, not the internal flash */
+	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
+	CHECK(stat(path, &st0) == 0 && st0.st_size == (off_t)TUNE_SLOT_OFF(1));
+	snprintf(path, sizeof(path), "%s/tuning.bin", dir);
+	CHECK(stat(path, &st1) != 0);
 	/* back and forth with nothing moved: no write */
 	ra_proc_event(0x44, 5);
 	vm_stage_worker_tick();
 	ra_proc_event(0x44, 4);
 	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 1);
-	/* a restart: nothing in memory, the file read */
+	CHECK(fake_tune_writes == 2);
+	/* a restart: nothing in memory, the file read; the app's slot when it
+	 * comes to the front */
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		;
 	memset(g_ad_kept, 0, sizeof(g_ad_kept));
@@ -4156,49 +4170,107 @@ static void test_learned_kept_in_file(void)
 	g_ad_key = 0;
 	g_cal_loaded = 0;
 	cal_load();
-	k = ad_kept_find("PCSB00777");
-	CHECK(k && k->ra_adj[0] == -3 && g_tune_file_sig[k - g_ad_kept] == ad_sig(k) &&
-	      k->ad.run[0][10] > 0);
+	CHECK(g_tune_ok && g_tune_n == 1 && !ad_kept_find("PCSB00777"));
 	as_app(0x44);
 	vm_stage_worker_tick();
+	k = ad_kept_find("PCSB00777");
+	CHECK(k && k->ra_adj[0] == -3 && k->fslot == 1 && k->fsig == ad_sig(k) && k->ad.run[0][10] > 0);
 	CHECK(ra_threshold(0) == 2 && g_ad_restored >= 1);   /* where it was, at once */
-	/* edited in place: another app learns - only its slot is written, where
+	/* every app kept, no limit: more than are at hand */
+	{
+		const int w0 = fake_tune_writes;
+
+		for (int i = 0; i < AD_KEEP + 8; i++) {
+			as_app(0x100 + i);
+			vm_stage_worker_tick();
+			adapt_runs(0, 20, 3);
+			ra_proc_event(0x100 + i, 4);
+			vm_stage_worker_tick();
+		}
+		CHECK(g_tune_n == 1u + AD_KEEP + 8u);
+		CHECK(fake_tune_writes == w0 + AD_KEEP + 8);   /* one slot an app */
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
+		CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(g_tune_n));
+		/* the first of them, long out of hand, comes back from the file */
+		CHECK(!ad_kept_find("PCSG00000"));
+		as_app(0x100);
+		vm_stage_worker_tick();
+		k = ad_kept_find("PCSG00000");
+		CHECK(k && k->fslot == 2 && k->ra_adj[0] == -3 && ra_threshold(0) == 2);
+		/* home again: nothing moved, no write */
+		ra_proc_event(0x100, 4);
+		vm_stage_worker_tick();
+		CHECK(fake_tune_writes == w0 + AD_KEEP + 8);    /* nothing moved: no write */
+	}
+	/* edited in place: an app learns more - only its slot is written, where
 	 * it lies (no copy aside, no rename); the file keeps its size */
 	{
-		char path[256];
-		struct stat st0, st1;
 		const int w0 = fake_tune_writes, b0 = fake_tune_bytes;
-		const AdKept *k2;
 
-		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
-		CHECK(stat(path, &st0) == 0 && st0.st_size == (off_t)TUNE_SLOT_OFF(AD_KEEP));
-		as_app(0x46);
-		vm_stage_worker_tick();
-		adapt_runs(0, 20, 3);
-		ra_proc_event(0x46, 4);
-		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == w0 + 1 && fake_tune_bytes - b0 == (int)sizeof(TuneSlot));
-		CHECK(stat(path, &st1) == 0 && st1.st_size == st0.st_size);
-		snprintf(path, sizeof(path), "%s/tuning.bin.tmp", dir);
-		CHECK(stat(path, &st1) != 0);
-		/* a write cut short: that slot is lost, the other kept */
-		as_app(0x46);
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
+		CHECK(stat(path, &st0) == 0);
+		as_app(0x44);
 		vm_stage_worker_tick();
 		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);          /* it moves again: up */
 		CHECK(ra_threshold(0) > 2);
+		ra_proc_event(0x44, 4);
+		vm_stage_worker_tick();
+		CHECK(fake_tune_writes == w0 + 1 && fake_tune_bytes - b0 == (int)sizeof(TuneSlot));
+		CHECK(stat(path, &st1) == 0 && st1.st_size == st0.st_size);
+		snprintf(path, sizeof(path), "%s/ux0/tuning.bin.tmp", dir);
+		CHECK(stat(path, &st1) != 0);
+	}
+	/* a write cut short: that slot is lost, the others kept; the app learns
+	 * again in the same slot */
+	{
+		as_app(0x46);
+		vm_stage_worker_tick();
+		adapt_runs(0, 20, 3);
 		fake_write_short = 1;
 		ra_proc_event(0x46, 4);
 		vm_stage_worker_tick();
 		fake_write_short = 0;
+		CHECK(g_tune_n == 1u + AD_KEEP + 8u + 1u);
 		while (__sync_lock_test_and_set(&g_ad_lock, 1))
 			;
 		memset(g_ad_kept, 0, sizeof(g_ad_kept));
 		__sync_lock_release(&g_ad_lock);
+		g_ad_title[0] = 0;
 		g_cal_loaded = 0;
 		cal_load();
-		k2 = ad_kept_find("VITASHELL");
+		CHECK(g_tune_n == 1u + AD_KEEP + 8u);         /* the half slot at the end: not one */
+		as_app(0x44);
+		vm_stage_worker_tick();
 		k = ad_kept_find("PCSB00777");
-		CHECK(!k2 && k && k->ra_adj[0] == -3);
+		CHECK(k && k->ra_adj[0] != -3 && k->ra_adj[0] != 0);   /* the later one */
+		as_app(0x101);
+		vm_stage_worker_tick();
+		k = ad_kept_find("PCSG00001");
+		CHECK(k && k->fslot == 3 && k->ra_adj[0] == -3);
+		ra_proc_event(0x101, 4);
+		vm_stage_worker_tick();
+	}
+	/* Triangle (reset): the file anew, no app in it */
+	vm_stage_cal_reset();
+	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
+	CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(0) && g_tune_n == 0);
+	/* the branch's v2 file on ur0: removed at the next save */
+	{
+		FILE *f;
+
+		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
+		f = fopen(path, "wb");
+		CHECK(f != NULL);
+		if (f) {
+			fputs("old", f);
+			fclose(f);
+		}
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(g_tune_legacy & 2);
+		g_tune_cal_due = 1;
+		cal_save();
+		CHECK(stat(path, &st1) != 0 && !g_tune_legacy);
 	}
 	/* packing: counts up to any size come back to the shift */
 	{

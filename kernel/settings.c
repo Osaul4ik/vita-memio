@@ -139,6 +139,20 @@ int vm_settings_set(int key, int value)
 	return VM_OK;
 }
 
+/* The settings applied again (the plugin came on, vm_stage_go): under the
+ * same lock as vm_settings_set, so one that applies at the same time, still
+ * with the devices held, cannot leave them off. */
+void vm_settings_reapply(void)
+{
+	VmSettings now;
+
+	while (__sync_lock_test_and_set(&g_set_lock, 1))
+		ksceKernelDelayThread(100);
+	vm_settings_copy(&now);
+	vm_stage_apply(&now);
+	__sync_lock_release(&g_set_lock);
+}
+
 void vm_settings_copy(VmSettings *out)
 {
 	/* word by word, each read whole (a key may be set meanwhile) */

@@ -41,7 +41,7 @@ That is all: the other defaults are the recommended ones. Back up your cards fir
 1. In **Settings > Devices > vita-memio**, switch off every storage (or switch *Driver* off).
 2. Remove the plugin's lines from `config.txt`.
 3. Restart the console.
-4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio_hud.skprx`, `ur0:tai/vitamemio.suprx` and the folder `ur0:data/vita-memio/`.
+4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio_hud.skprx`, `ur0:tai/vitamemio.suprx` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
 
 ## Settings
 
@@ -95,7 +95,7 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned is kept for the last twelve games and apps (the home screen too), also across restarts, so a game you come back to goes on from there rather than learning again; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned is kept for every game and app (the home screen too), also across restarts, so a game you come back to goes on from there rather than learning again; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
 
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 
@@ -117,7 +117,7 @@ The overlay sets things **for this game only** (or for the home screen or a syst
 
 ### Tuning: measured on your console
 
-*Tuning* in the overlay is for the whole console, not one game, and is *Auto* by default. The plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. After a few games with loading screens you can set it *Off* if you like; what was measured is kept and still used. The figures, and what *Adaptive* learned for each game, are kept together in one small file, `ur0:data/vita-memio/tuning.bin` (about 4 KiB). It is edited in place: only the part that changed (one game's entry, about 340 bytes, or the measured figures) is written, only when you switch to another app, and only if something there actually moved, so once everything is learned it is hardly written at all. Triangle on the line, twice, forgets what was measured and learned.
+*Tuning* in the overlay is for the whole console, not one game, and is *Auto* by default. The plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. After a few games with loading screens you can set it *Off* if you like; what was measured is kept and still used. The figures, and what *Adaptive* learned for each game, are kept together in one file on the memory card or SD2Vita, `ux0:data/vita-memio/tuning.bin` (under 2 KiB, plus about 330 bytes for each game that learned something), not on the internal storage. It is edited in place: only the part that changed (one game's entry, or the measured figures; a new game's entry is added at the end) is written, only when you switch to another app, and only if something there actually moved, so once everything is learned it is hardly written at all. Triangle on the line, twice, forgets what was measured and learned.
 
 ### R/A test: let the plugin choose for your game
 

@@ -240,12 +240,8 @@ static void guard_tick(void)
 			g_guard_done = 1;
 			break;
 		}
-		if (g_disabled == VM_DIS_NONE && vm_stage_go()) {
-			VmSettings cur;
-
-			vm_settings_copy(&cur);
-			vm_stage_apply(&cur);             /* the devices as set, now */
-		}
+		if (g_disabled == VM_DIS_NONE && vm_stage_go())
+			vm_settings_reapply();            /* the devices as set, now */
 		g_on = 1;
 		VM_KLOGI("on at %u.%01us: %s", (unsigned)(ms / 1000u), (unsigned)(ms % 1000u / 100u),
 		         k_guard_why[g_guard.why]);

@@ -225,6 +225,26 @@ static void test_driver_key(void)
 	CHECK(s.driver == 0 && s.sd2vita == 1);
 }
 
+/* The plugin comes on (main.c): the settings in effect applied again, as
+ * they are, nothing saved for it. */
+static void test_reapply(void)
+{
+	VmSettings s;
+	int calls;
+
+	clean();
+	vm_settings_init();
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK);
+	vm_settings_flush();
+	calls = apply_calls;
+	memset(&last_applied, 0, sizeof(last_applied));
+	vm_settings_reapply();
+	vm_settings_copy(&s);
+	CHECK(apply_calls == calls + 1);
+	CHECK(!memcmp(&last_applied, &s, sizeof(s)) && s.sd2vita == 1);
+	CHECK(!vm_settings_pending());
+}
+
 static void test_older_file_with_fewer_keys(void)
 {
 	uint8_t buf[128];
@@ -508,6 +528,7 @@ int main(void)
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
 	RUN(test_driver_key);
+	RUN(test_reapply);
 	RUN(test_stored_hud_off_takes_default);
 	RUN(test_gpusafe_default_and_stored_value);
 	RUN(test_pending);

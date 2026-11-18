@@ -464,12 +464,19 @@ int ksceKernelGetMemBlockMemtypeByAddr(const void *addr)
 
 static const char *map(const char *path, char *out, size_t n)
 {
-	static const char pre[] = "ur0:data/vita-memio/";
+	/* ur0:data/vita-memio/<x> -> <tmpdir>/<x>, ux0:data/vita-memio/<x> ->
+	 * <tmpdir>/ux0/<x> (the folders themselves too) */
+	static const char ur[] = "ur0:data/vita-memio", ux[] = "ux0:data/vita-memio";
+	const size_t l = sizeof(ur) - 1;
 
 	if (!g_tmp[0])
 		return NULL;
-	if (!strncmp(path, pre, sizeof(pre) - 1)) {
-		snprintf(out, n, "%s/%s", g_tmp, path + sizeof(pre) - 1);
+	if (!strncmp(path, ur, l) && (path[l] == '/' || !path[l])) {
+		snprintf(out, n, "%s%s", g_tmp, path + l);
+		return out;
+	}
+	if (!strncmp(path, ux, l) && (path[l] == '/' || !path[l])) {
+		snprintf(out, n, "%s/ux0%s", g_tmp, path + l);
 		return out;
 	}
 	return NULL;

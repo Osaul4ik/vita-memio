@@ -4070,8 +4070,9 @@ static void *ev_thread(void *arg)
 	return NULL;
 }
 
-/* Adaptive, on or off as measured: the hooks time each kind (and only with
- * Adaptive in effect); off, a kind reads the standard way but its runs are
+/* Adaptive, on or off from what read ahead did: the hooks note each read
+ * of a kind as standard or served (only with Adaptive in effect), the pieces
+ * for nothing as waste; off, a kind reads the standard way but its runs are
  * still counted; the worker's round sets the way; kept with the app (and in
  * tuning.bin); the HUD shows "-"; On ignores it. */
 static void test_onoff_measured(void)
@@ -4079,25 +4080,30 @@ static void test_onoff_measured(void)
 	static uint8_t u[512 * 512];
 	VmSettings s;
 	Dev *const d = &g_dev[M];
+	OoLog ol;
 
 	on_game(&s, 0x44);
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	as_app(0x44);
 	vm_stage_worker_tick();
-	/* timed by kind: cached large / 32 KiB, non-cacheable, tiny */
-	for (int u2 = 0; u2 < 3; u2++) {
-		ST(g_oo_us[u2], 0);
-		ST(g_oo_sec[u2], 0);
-	}
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+	/* noted by kind and way: cached, a stream from its 6th read served */
 	fake_now_us = 1000;
-	CHECK(rd_ok(u, 0, 256) && rd_ok(u, 256, 64));
-	CHECK(g_oo_sec[OO_C] == 320 && g_oo_sec[OO_NC] == 0 && g_oo_sec[OO_TINY] == 0);
+	for (uint32_t at = 0; at < 10 * 256; at += 256)
+		CHECK(rd_ok(u, at, 256));
+	CHECK(g_oo_acc[OO_C].std_q >= 5 * 256 && g_oo_acc[OO_C].srv_q >= 256 &&
+	      g_oo_acc[OO_C].std_q + g_oo_acc[OO_C].srv_q == 10 * 256 && !g_oo_acc[OO_NC].std_q);
+	ra_drop(d);
+	CHECK(g_oo_acc[OO_C].waste >= 1);         /* what was left read for nothing */
 	fake_memtype = 0x8000;
 	CHECK(rd(u, 1000, 256) == 0);
 	fake_memtype = 0;
-	CHECK(g_oo_sec[OO_NC] == 256);
-	CHECK(rd_ok(u, 3000, 1) && g_oo_sec[OO_TINY] == 1);
+	CHECK(g_oo_acc[OO_NC].std_q == 256);
+	CHECK(rd_ok(u, 3000, 1) && g_oo_acc[OO_TINY].std_q == 1);   /* tiny: reads */
 	/* the large reads' kind off: a stream reads the standard way, counted */
 	ra_drop(d);
 	ST(g_oo_off[OO_C], 1);
@@ -4123,7 +4129,7 @@ static void test_onoff_measured(void)
 		CHECK(g_ra_tiny_reads == hits && d->t_streak >= 20);
 		ST(g_oo_off[OO_TINY], 0);
 	}
-	/* On: the rule as before, whatever was measured */
+	/* On: the rule as before, whatever was decided */
 	s.readahead = VM_RA_ON;
 	vm_stage_apply(&s);
 	ST(g_oo_off[OO_C], 1);
@@ -4135,28 +4141,34 @@ static void test_onoff_measured(void)
 	ST(g_oo_off[OO_C], 0);
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
-	/* the worker's round: the way it sets is what the hooks look at */
-	OoLog ol;
-
+	/* the worker's round: pieces for nothing holding up more than the served
+	 * ones bring - off, and that is what the hooks look at */
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		;
 	oo_clear();
-	for (int i = 0; i < RT_OO_PROBE; i++) {
-		ST(g_oo_us[OO_NC], 5000);
-		ST(g_oo_sec[OO_NC], 512);
-		oo_round(OO_NC, 0, &ol);
+	{
+		int moved = 0;
+
+		for (int i = 0; i < 20 && !moved; i++) {
+			ST(g_oo_acc[OO_NC].std_us, 50000);
+			ST(g_oo_acc[OO_NC].std_q, 2048);
+			ST(g_oo_acc[OO_NC].srv_us, 10000);
+			ST(g_oo_acc[OO_NC].srv_q, 2048);
+			ST(g_oo_acc[OO_NC].held_us, 50000);
+			ST(g_oo_acc[OO_NC].waste, 10);
+			moved = oo_round(OO_NC, 0, &ol);
+		}
+		CHECK(moved && g_oo[OO_NC].off && g_oo_off[OO_NC] == 1 && ol.now && ol.net < 0);
+		CHECK(!g_oo_acc[OO_NC].std_q);            /* taken */
 	}
-	CHECK(g_oo[OO_NC].probe && g_oo_off[OO_NC] == 1);   /* a probe: off this round */
-	ST(g_oo_us[OO_NC], 4000);
-	ST(g_oo_sec[OO_NC], 512);
-	CHECK(oo_round(OO_NC, 0, &ol) && g_oo[OO_NC].off && g_oo_off[OO_NC] == 1);   /* faster off */
 	__sync_lock_release(&g_ad_lock);
 	/* kept with the app: away and back */
 	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
 	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 1);
-	CHECK(tune_valid(&g_ad_out.app));
+	CHECK(tune_valid(&g_ad_out.app) && g_ad_out.app.oo_held[OO_NC] == 5000);
 	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
-	CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && g_oo[OO_NC].us[1] == 4000u * 2048u / 512u);
+	CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && g_oo[OO_NC].held_each == 5000 &&
+	      g_oo[OO_NC].std_rate > 49000);
 	/* an app that learned only that is still worth its slot */
 	{
 		TuneApp t;
@@ -4220,6 +4232,23 @@ static void test_tune_v3(void)
 	memset(g_cal, 0, sizeof(g_cal));
 	cal_load();
 	CHECK(g_tune_ok && g_cal[M].waste_n == 10);
+	/* version 4 the same */
+	f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (f) {
+		g_cal[M].waste_n = 11;
+		tune_head_of(&h, 4u, TUNE_SLOT_V4);
+		fwrite(&h, sizeof(h), 1, f);
+		fwrite(&on, sizeof(on), 1, f);
+		fwrite(g_cal, sizeof(g_cal), 1, f);
+		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
+		fwrite(&c, sizeof(c), 1, f);
+		fclose(f);
+		memset(g_cal, 0, sizeof(g_cal));
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(!g_tune_ok && g_cal[M].waste_n == 11);
+	}
 	vm_stage_fini();
 }
 
@@ -4596,7 +4625,7 @@ static void test_learned_kept_in_file(void)
 		tune_restore(&t);
 		CHECK(g_ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
 		      g_ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && g_tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
-		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 360);
+		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 368);
 		t.tiny_blk = 48;                              /* not one this build writes */
 		CHECK(!tune_valid(&t));
 		ra_adapt_clear();

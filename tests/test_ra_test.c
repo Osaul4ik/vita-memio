@@ -144,64 +144,68 @@ static void test_small_pick(void)
 	      sm == RT_SMALL_MIN_BUCKET);
 }
 
-/* On or off, as measured: the model decides when it is clear; within the
- * band, every RT_OO_PROBE-th round the other way, kept if faster by the
- * margin. */
-static void test_onoff(void)
+/* On or off, from what read ahead did: off once served reads, against the
+ * standard ones of the same stretch, less what pieces for nothing held up,
+ * cost more than the margin; on again when the model (with this game's
+ * costs) says it brings more than it; a change stays a while. */
+static void test_ev(void)
 {
-	RtOnOff o;
-	int moved = 0;
+	RtEv e;
+	RtCost c;
 
-	/* the model clear (+10 % of the time): on, never a probe */
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < 40; i++) {
-		moved |= rt_onoff_round(&o, 100, 1000, 50000);
-		CHECK(!o.off && !o.probe);
+	/* served 1 MiB in 10 ms, the standard way 50 ms a MiB: on, it brings */
+	memset(&e, 0, sizeof(e));
+	for (int i = 0; i < 20; i++)
+		CHECK(!rt_ev_round(&e, 0, 50000, 2048, 10000, 2048, 0, 0, 0, NULL, NULL) && !e.off);
+	CHECK(e.std_rate > 49900 && e.std_rate < 50100 && e.srv_rate > 9900 && e.srv_rate < 10100 &&
+	      rt_ev_net(&e, 0) > 0);
+	/* ... the pieces for nothing hold up more than it brings: off */
+	memset(&e, 0, sizeof(e));
+	{
+		int moved = 0, r = 0;
+
+		for (; r < 20 && !moved; r++)
+			moved = rt_ev_round(&e, 0, 50000, 2048, 10000, 2048, 50000, 10, 0, NULL, NULL);
+		CHECK(moved && e.off && e.hold == RT_EV_HOLD && e.held_each == 5000);
 	}
-	CHECK(!moved);
-	/* ... clear the other way (-10 %): off at once, and back once it brings */
-	CHECK(rt_onoff_round(&o, -100, 1000, 50000) && o.off && !o.probe);
-	CHECK(rt_onoff_round(&o, 100, 1000, 50000) && !o.off);
-	/* within the band: the 8th round a probe; off measured 5 % faster: off */
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < RT_OO_PROBE - 1; i++) {
-		CHECK(!rt_onoff_round(&o, 10, 1000, 50000));
-		CHECK(!o.probe && !o.off);
+	/* off: the model's say alone; it stays off a while whatever it says */
+	for (int i = 0; i < (int)RT_EV_HOLD; i++)
+		CHECK(!rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && e.off);
+	CHECK(rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && !e.off);   /* now on */
+	/* too little read either way: never off from it */
+	memset(&e, 0, sizeof(e));
+	for (int i = 0; i < 40; i++)
+		CHECK(!rt_ev_round(&e, 0, 50000, 100, 90000, 100, 9000, 1, 0, NULL, NULL) && !e.off);
+	/* tiny: reads, not sectors - 600 us the standard way, 14 from the block,
+	 * blocks of 1100 us: many hits pay, few lose */
+	memset(&e, 0, sizeof(e));
+	for (int i = 0; i < 20; i++)
+		CHECK(!rt_ev_round(&e, 1, 600 * 100, 100, 14 * 90 + 1100 * 10, 100, 0, 0, 0, NULL, NULL) && !e.off);
+	memset(&e, 0, sizeof(e));
+	{
+		int moved = 0;
+
+		for (int i = 0; i < 20 && !moved; i++)
+			moved = rt_ev_round(&e, 1, 600 * 100, 100, 14 * 5 + 1100 * 45, 50, 0, 0, 0, NULL, NULL);
+		CHECK(moved && e.off);
 	}
-	CHECK(!rt_onoff_round(&o, 10, 1000, 50000) && o.probe && !o.off);   /* the next: off */
-	CHECK(rt_onoff_round(&o, 10, 1000, 47500) && o.off && !o.probe);    /* it was faster */
-	CHECK(o.us[0] == 50000 && o.us[1] == 47500 && o.have == 3);
-	/* ... and the probe back on, now faster on by 10 %: on again */
-	for (int i = 0; i < RT_OO_PROBE; i++)
-		CHECK(!rt_onoff_round(&o, 10, 1000, 47500) && o.off);
-	CHECK(o.probe);
-	CHECK(rt_onoff_round(&o, 10, 1000, 30000) && !o.off);                /* on: 50000 -> mean */
-	/* within the margin (1 % faster): kept as it is */
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < RT_OO_PROBE; i++)
-		rt_onoff_round(&o, 0, 1000, 50000);
-	CHECK(o.probe);
-	CHECK(!rt_onoff_round(&o, 0, 1000, 49500) && !o.off);
-	/* too little read in a round (0): nothing kept from it */
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < RT_OO_PROBE; i++)
-		rt_onoff_round(&o, 0, 1000, 50000);
-	CHECK(!rt_onoff_round(&o, 0, 1000, 0) && !o.off && !(o.have & 2));
-	/* the gain weighed against the time without it: on, 40 brought over 960
-	 * spent is 4 %: in the band; 60 over 940: 6 %: clear */
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < RT_OO_PROBE; i++)
-		rt_onoff_round(&o, 40, 960, 50000);
-	CHECK(o.probe);
-	memset(&o, 0, sizeof(o));
-	for (int i = 0; i < RT_OO_PROBE * 2; i++)
-		rt_onoff_round(&o, 60, 940, 50000);
-	CHECK(!o.probe);
+	/* the model's cost, from this game's: 40 ms a MiB saved is 312/16 us a
+	 * sector; a piece for nothing what it held up here */
+	memset(&e, 0, sizeof(e));
+	e.std_rate = 50000;
+	e.srv_rate = 10000;
+	e.held_each = 2500;
+	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
+	CHECK(c.gain16[1] == 312 && c.gain16[0] == rt_cost_fixed.gain16[0] && c.waste_us == 2500);
+	e.srv_rate = 0;
+	e.held_each = 0;
+	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
+	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1] && c.waste_us == rt_cost_fixed.waste_us);
 }
 
 int main(void)
 {
-	test_onoff();
+	test_ev();
 	test_scores_one_pass();
 	test_small_pick();
 	test_tiny_model();

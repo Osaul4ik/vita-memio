@@ -2628,7 +2628,7 @@ void vm_stage_cal_set(int on)
  * nothing. Edited in place:
  *   TuneHead | TuneCal | TuneSlot, one for every app that learned, no limit
  * each part with a check of its own. Only what changed is written, where it
- * lies - an app's slot (~360 bytes) when its thresholds moved, a new app's
+ * lies - an app's slot (~370 bytes) when its thresholds moved, a new app's
  * after the last - the calibration when a figure in use moved; never the
  * whole file again: no copy aside, no rename, no truncation. A write cut
  * short spoils only that part (its check fails: that app learns again, in
@@ -2645,9 +2645,10 @@ void vm_stage_cal_set(int on)
 #define TUNE_FILE     TUNE_DIR "/tuning.bin"
 #define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  4u                           /* 1: whole each time, 2: 12 apps,
-                                                    * 3: no on/off as measured */
-#define TUNE_SLOT_V3  328u                         /* version 3's slot: its calibration is read */
+#define TUNE_VERSION  5u                           /* 1: whole each time, 2: 12 apps,
+                                                    * 3: no on/off, 4: on/off by rounds */
+#define TUNE_SLOT_V3  328u                         /* versions 3 and 4's slots: their */
+#define TUNE_SLOT_V4  360u                         /* calibration is read             */
 #define TUNE_TITLE    12u                          /* TuneApp.title, its 0 too */
 
 typedef struct {
@@ -2657,8 +2658,8 @@ typedef struct {
 	uint8_t  tiny_thr, tiny_blk, sh_ad, sh_tn;
 	uint16_t pos[2][RT_POS], run[2][RT_RUN], spos[2][RT_POS], srun[2][RT_RUN];
 	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
-	uint8_t  oo_off[3], oo_have[3], oo_pad[2];   /* on or off, as measured (RtOnOff) */
-	uint32_t oo_us[3][2];
+	uint8_t  oo_off[3], oo_pad;          /* on or off, from what it did (RtEv) */
+	uint32_t oo_std[3], oo_srv[3], oo_held[3];   /* this game's costs */
 } TuneApp;
 
 typedef struct {
@@ -2712,10 +2713,14 @@ static volatile uint32_t g_ad_restored;       /* taken up again (log)           
 #define OO_TINY  2
 #define OO_MIN_SEC     256u              /* a round's reads to be timed: 128 KiB  */
 #define OO_MIN_SEC_TINY 16u              /* ... tiny ones: 16 sectors              */
-static RtOnOff      g_oo[3];
+static RtEv         g_oo[3];
 static volatile int g_oo_off[3];
-static uint64_t     g_oo_us[3];          /* atomics */
-static uint32_t     g_oo_sec[3];         /* atomics */
+/* the kind's reads since its last round (the hooks add, the worker takes):
+ * the standard way and served (as RtEv), its pieces for nothing */
+typedef struct {
+	uint32_t std_us, std_q, srv_us, srv_q, held_us, waste;
+} OoAcc;
+static OoAcc        g_oo_acc[3];         /* atomics */
 static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts */
 static void oo_clear(void);
 
@@ -2834,9 +2839,9 @@ static void tune_pack(TuneApp *t)
 	tune_put(t->tn_sec, g_tn_sec, RT_TB, s);
 	for (int u = 0; u < 3; u++) {
 		t->oo_off[u] = g_oo[u].off;
-		t->oo_have[u] = g_oo[u].have;
-		t->oo_us[u][0] = g_oo[u].us[0];
-		t->oo_us[u][1] = g_oo[u].us[1];
+		t->oo_std[u] = g_oo[u].std_rate;
+		t->oo_srv[u] = g_oo[u].srv_rate;
+		t->oo_held[u] = g_oo[u].held_each;
 	}
 }
 
@@ -2852,7 +2857,7 @@ static int tune_valid(const TuneApp *t)
 	for (int i = 0; i < RT_TINY_T_N; i++)
 		tiny_ok |= t->tiny_thr == rt_tiny_thr[i];
 	for (int u = 0; u < 3; u++)
-		if (t->oo_off[u] > 1 || t->oo_have[u] > 3)
+		if (t->oo_off[u] > 1)
 			return 0;
 	return tiny_ok && (t->tiny_blk == 16 || t->tiny_blk == 32 || t->tiny_blk == 64) &&
 	       t->sh_ad <= 16 && t->sh_tn <= 16 && ra_title_ok(title) &&
@@ -2880,9 +2885,9 @@ static void tune_restore(const TuneApp *t)
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
 	for (int u = 0; u < 3; u++) {
 		g_oo[u].off = t->oo_off[u];
-		g_oo[u].have = t->oo_have[u];
-		g_oo[u].us[0] = t->oo_us[u][0];
-		g_oo[u].us[1] = t->oo_us[u][1];
+		g_oo[u].std_rate = t->oo_std[u];
+		g_oo[u].srv_rate = t->oo_srv[u];
+		g_oo[u].held_each = t->oo_held[u];
 		ST(g_oo_off[u], t->oo_off[u]);
 	}
 	ADD(g_ad_restored, 1);
@@ -3188,7 +3193,7 @@ static void tune_fetch(const char *title)
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	TuneHead h, want, v3;
+	TuneHead h, want, v3, v4;
 	uint32_t on = 0, c, check = 0;
 	SceOff end;
 	int ok, old;
@@ -3197,8 +3202,10 @@ static int tune_read(void)
 		return 0;
 	tune_head(&want);
 	tune_head_of(&v3, 3u, TUNE_SLOT_V3);
+	tune_head_of(&v4, 4u, TUNE_SLOT_V4);
 	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h);
-	old = ok && !memcmp(&h, &v3, sizeof(h));      /* version 3: its calibration only */
+	/* versions 3 and 4: their calibration only */
+	old = ok && (!memcmp(&h, &v3, sizeof(h)) || !memcmp(&h, &v4, sizeof(h)));
 	if (!ok || (!old && memcmp(&h, &want, sizeof(h)))) {
 		ksceIoClose(fd);
 		return 0;
@@ -3311,22 +3318,39 @@ static int ra_adapt_on(void)
 	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
 }
 
-/* ---- on or off, as measured (ra_test.h: RtOnOff) ----------------------------
+/* ---- on or off, from what read ahead did (ra_test.h: RtEv) ----------------
  * For each kind - the large and 32 KiB reads into ordinary memory (OO_C),
  * into non-cacheable memory (OO_NC), the tiny reads (OO_TINY) - the state
  * (g_oo, under g_ad_lock: the worker's), the way in effect (g_oo_off: the
- * hooks look), and the kind's reads' time since its last round (g_oo_us,
- * g_oo_sec: the hooks add two words, the worker takes them - everything else
- * is the worker's, on the system core). Only with Adaptive in effect. */
+ * hooks look), and the kind's reads since its last round (g_oo_acc: the hooks
+ * add a few words, the worker takes them - all else is the worker's, on the
+ * system core). Only with Adaptive in effect. */
 /* (OO_*, g_oo ...: with ra_adapt_clear, above) */
 
-/* A read of kind u (< 0: none: device memory) done in `us`. Hot path. */
-static void oo_note(int u, uint32_t nsec, uint32_t us)
+/* A read of kind u (< 0: none: device memory) done in `us`; `how`: 0 the
+ * standard way, else served (all or partly; tiny: from the block, or the
+ * block read for it). Hot path. */
+static void oo_note(int u, int how, uint32_t nsec, uint32_t us)
 {
+	OoAcc *a;
+
 	if (u < 0)
 		return;
-	ADD(g_oo_us[u], (uint64_t)us);
-	ADD(g_oo_sec[u], nsec);
+	a = &g_oo_acc[u];
+	if (how) {
+		ADD(a->srv_us, us);
+		ADD(a->srv_q, u == OO_TINY ? 1u : nsec);
+	} else {
+		ADD(a->std_us, us);
+		ADD(a->std_q, u == OO_TINY ? 1u : nsec);
+	}
+}
+
+/* A piece read for nothing (kind u): what it held up. */
+static void oo_waste(int u, uint32_t held_us)
+{
+	ADD(g_oo_acc[u].waste, 1);
+	ADD(g_oo_acc[u].held_us, held_us);
 }
 
 /* Whether read ahead runs for kind u now. Hot path. */
@@ -3335,45 +3359,53 @@ static int oo_off(int u)
 	return LD(g_oo_off[u]) && ra_adapt_on();
 }
 
-/* All afresh (g_ad_lock held): read ahead on for every kind, nothing timed. */
+/* All afresh (g_ad_lock held): read ahead on for every kind, nothing kept. */
 static void oo_clear(void)
 {
 	memset(g_oo, 0, sizeof(g_oo));
 	memset(g_oo_time, 0, sizeof(g_oo_time));
 	for (int u = 0; u < 3; u++) {
 		ST(g_oo_off[u], 0);
-		ST(g_oo_us[u], 0);
-		ST(g_oo_sec[u], 0);
+		ST(g_oo_acc[u].std_us, 0);
+		ST(g_oo_acc[u].std_q, 0);
+		ST(g_oo_acc[u].srv_us, 0);
+		ST(g_oo_acc[u].srv_q, 0);
+		ST(g_oo_acc[u].held_us, 0);
+		ST(g_oo_acc[u].waste, 0);
 	}
 }
 
-/* The worker, a round of kind u over (g_ad_lock held): what the model says
- * read ahead brings (`gain`, the counts' scale), with the round's time. 1
- * if it went on or off. */
-/* (lg: for the log, what the round was - the model's permille, the way it
- * ran, its time per MiB) */
-typedef struct { int pm, way, probe, now; uint32_t mib, m0, m1; } OoLog;
+/* For the log: a round's look - the model's permille, what the reads said
+ * (net, us, over the kind's time), the game's costs, the way now. */
+typedef struct { int pm, now; int64_t net, time; uint32_t std, srv, held; } OoLog;
 
+/* The worker, a round of kind u over (g_ad_lock held): `gain` what the model
+ * (with this game's costs) says read ahead brings, the counts' scale. 1 if
+ * it went on or off. */
 static int oo_round(int u, int64_t gain, OoLog *lg)
 {
-	const uint64_t us = __atomic_exchange_n(&g_oo_us[u], 0, __ATOMIC_RELAXED);
-	const uint32_t sec = __atomic_exchange_n(&g_oo_sec[u], 0, __ATOMIC_RELAXED);
-	const uint32_t min = u == OO_TINY ? OO_MIN_SEC_TINY : OO_MIN_SEC;
-	const uint64_t mib = sec >= min ? us * 2048u / sec : 0;
+	OoAcc a;
 	int moved;
+	int64_t pm, t;
 
-	g_oo_time[u] += (int64_t)us * RA_ADAPT_ONE;
-	lg->pm = (int)rt_onoff_pm(&g_oo[u], gain, g_oo_time[u]);
-	lg->way = g_oo[u].off ^ g_oo[u].probe;
-	lg->probe = g_oo[u].probe;
-	lg->mib = (uint32_t)(mib > 0xFFFFFFFFu ? 0xFFFFFFFFu : mib);
-	moved = rt_onoff_round(&g_oo[u], gain, g_oo_time[u],
-	                       mib > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)mib);
+	a.std_us = __atomic_exchange_n(&g_oo_acc[u].std_us, 0, __ATOMIC_RELAXED);
+	a.std_q = __atomic_exchange_n(&g_oo_acc[u].std_q, 0, __ATOMIC_RELAXED);
+	a.srv_us = __atomic_exchange_n(&g_oo_acc[u].srv_us, 0, __ATOMIC_RELAXED);
+	a.srv_q = __atomic_exchange_n(&g_oo_acc[u].srv_q, 0, __ATOMIC_RELAXED);
+	a.held_us = __atomic_exchange_n(&g_oo_acc[u].held_us, 0, __ATOMIC_RELAXED);
+	a.waste = __atomic_exchange_n(&g_oo_acc[u].waste, 0, __ATOMIC_RELAXED);
+	g_oo_time[u] += ((int64_t)a.std_us + a.srv_us) * RA_ADAPT_ONE;
+	t = g_oo_time[u] > 0 ? g_oo_time[u] : 1;
+	pm = gain * 1000 / (t + (g_oo[u].off || gain < 0 ? 0 : gain));
+	moved = rt_ev_round(&g_oo[u], u == OO_TINY, a.std_us, a.std_q, a.srv_us, a.srv_q, a.held_us,
+	                    a.waste, pm, &lg->net, &lg->time);
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
-	ST(g_oo_off[u], g_oo[u].off ^ g_oo[u].probe);
-	lg->now = g_oo[u].off ^ g_oo[u].probe;
-	lg->m0 = g_oo[u].us[0];
-	lg->m1 = g_oo[u].us[1];
+	ST(g_oo_off[u], g_oo[u].off);
+	lg->pm = (int)pm;
+	lg->now = g_oo[u].off;
+	lg->std = g_oo[u].std_rate;
+	lg->srv = g_oo[u].srv_rate;
+	lg->held = g_oo[u].held_each;
 	return moved;
 }
 
@@ -3442,7 +3474,7 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 static void ra_adapt_tick(void)
 {
 	/* what moved, logged once the lock is let go (log on) */
-	int mv[2][4], tmv[4], oo_mv[3][4], any = 0;
+	int mv[2][4], tmv[4], oo_mv[3] = { 0, 0, 0 }, any = 0;
 	OoLog ol[3];
 	int ol_on[3] = { 0, 0, 0 };
 
@@ -3450,7 +3482,6 @@ static void ra_adapt_tick(void)
 		return;                           /* (a stale look is caught next time) */
 	memset(mv, 0, sizeof(mv));
 	memset(tmv, 0, sizeof(tmv));
-	memset(oo_mv, -1, sizeof(oo_mv));
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	for (int nc = 0; nc < 2; nc++) {
@@ -3462,10 +3493,15 @@ static void ra_adapt_tick(void)
 			continue;
 		ST(g_ad_due[nc], 0);
 		cal_cost(g_ad_dev[nc], &cost, NULL);   /* that storage's, if measured */
+		{
+			RtCost con = cost;
+
+			rt_ev_cost(&g_oo[nc], nc, &con, &cost);   /* ... and this game's, where measured */
+		}
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
 		if (ra_adapt_on() && t != RA_THR_NONE) {
-			const int sm0 = sm, off0 = g_oo[nc].off;
+			const int sm0 = sm;
 
 			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
 				mv[nc][0] = (int)t;
@@ -3482,13 +3518,10 @@ static void ra_adapt_tick(void)
 					ADD(g_rs_moves[nc], 1);
 				}
 			}
-			/* then on or off, as measured, with what the model says now */
+			/* then on or off, from what it did (the model's say for off) */
 			ol_on[nc] = 1;
 			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost), &ol[nc])) {
-				oo_mv[nc][0] = off0;
-				oo_mv[nc][1] = g_oo[nc].off;
-				oo_mv[nc][2] = (int)g_oo[nc].us[0];
-				oo_mv[nc][3] = (int)g_oo[nc].us[1];
+				oo_mv[nc] = 1;
 				any = 1;
 			}
 		}
@@ -3516,15 +3549,10 @@ static void ra_adapt_tick(void)
 			any = 1;
 		}
 		if (ra_adapt_on()) {
-			const int off0 = g_oo[OO_TINY].off;
-
 			ol_on[OO_TINY] = 1;
 			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c),
 			             &ol[OO_TINY])) {
-				oo_mv[OO_TINY][0] = off0;
-				oo_mv[OO_TINY][1] = g_oo[OO_TINY].off;
-				oo_mv[OO_TINY][2] = (int)g_oo[OO_TINY].us[0];
-				oo_mv[OO_TINY][3] = (int)g_oo[OO_TINY].us[1];
+				oo_mv[OO_TINY] = 1;
 				any = 1;
 			}
 		}
@@ -3540,10 +3568,12 @@ static void ra_adapt_tick(void)
 	if (LD(g_log_diag))
 		for (int u = 0; u < 3; u++)
 			if (ol_on[u])
-				VM_KLOGI("round %s: model %d permille, ran %s%s, %u us/MiB; means on %u off %u; "
-				         "now %s", u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm,
-				         ol[u].way ? "off" : "on", ol[u].probe ? " (probe)" : "",
-				         (unsigned)ol[u].mib, (unsigned)ol[u].m0, (unsigned)ol[u].m1,
+				VM_KLOGI("round %s: model %d permille; reads net %d ms of %u ms (standard %u, "
+				         "R/A %u %s, piece for nothing %u us); %s",
+				         u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm,
+				         (int)(ol[u].net / 1000), (unsigned)(ol[u].time / 1000),
+				         (unsigned)ol[u].std, (unsigned)ol[u].srv,
+				         u == OO_TINY ? "us a read" : "us/MiB", (unsigned)ol[u].held,
 				         ol[u].now ? "off" : "on");
 	if (any && LD(g_log_diag)) {
 		for (int nc = 0; nc < 2; nc++)
@@ -3554,10 +3584,10 @@ static void ra_adapt_tick(void)
 			VM_KLOGI("adaptive: tiny from read %d -> %d, block %d -> %d KiB", tmv[0], tmv[2],
 			         tmv[1] / 2, tmv[3] / 2);
 		for (int u = 0; u < 3; u++)
-			if (oo_mv[u][0] >= 0)
-				VM_KLOGI("adaptive: %s read ahead %s (measured on %d, off %d us/MiB)",
-				         u == OO_TINY ? "tiny" : u ? "NC" : "C", oo_mv[u][1] ? "off" : "on",
-				         oo_mv[u][2], oo_mv[u][3]);
+			if (oo_mv[u])
+				VM_KLOGI("adaptive: %s read ahead %s (reads net %d ms of %u ms, model %d permille)",
+				         u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].now ? "off" : "on",
+				         (int)(ol[u].net / 1000), (unsigned)(ol[u].time / 1000), ol[u].pm);
 	}
 }
 
@@ -3667,6 +3697,8 @@ static void ra_drop(Dev *d)
 				waste += d->ra[i].n - d->ra[i].off;
 				if (!d->ra[i].off) {
 					cal_waste(d, &d->ra[i]);   /* none of it used */
+					if (ra_adapt_on())
+						oo_waste(d->ra[i].nc ? OO_NC : OO_C, d->ra[i].held_us);
 					if (LD(g_log_diag)) {
 						LgKind *g = &g_lk[d->ra[i].nc ? LK_NC : LK_C];
 
@@ -4467,7 +4499,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
 	int cal_held = 0;
 	/* calibration on: when it started, and whether a piece held it up */
-	const uint32_t cal_t0 = mine && nsec && LD(g_cal_on) ? cal_start(d, nsec, &cal_held) : 0;
+	/* (also with Adaptive: who a piece held up, for its on or off) */
+	const uint32_t cal_m = mine && nsec && (LD(g_cal_on) || ra_adapt_on()) ? cal_start(d, nsec, &cal_held)
+	                                                                     : 0;
+	const uint32_t cal_t0 = LD(g_cal_on) ? cal_m : 0;
 
 	/* the largest read request seen, for the log (a lost update is fine) */
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
@@ -4821,7 +4856,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 			        nsec < RA_SMALL_SECTORS ? xi.tiny : !xi.got ? 0 : xi.got >= nsec ? 1 : 2);
 	}
 	if (ms && r >= 0)
-		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us);
+		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : xi.nc == 2 ? -1 : xi.nc,
+		        nsec < RA_SMALL_SECTORS ? xi.tiny : xi.got != 0, nsec, us);
 	return r;
 }
 

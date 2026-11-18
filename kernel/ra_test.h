@@ -324,79 +324,116 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
 	return l.sc[thr] + s.sc[sm];
 }
 
-/* ---- on or off, as measured --------------------------------------------
- * Adaptive's thresholds come from the model, which sees the runs but not all
- * a piece or block costs: a write spoiling it, the card's own pauses, other
- * reads queued behind it. So whether read ahead is on for a kind (the large
- * and 32 KiB reads into ordinary memory, into non-cacheable memory, the tiny
- * reads) is decided as well by the reads' own time, per MiB:
- *   - where the model sees it bring or cost RT_OO_BAND or more of that time,
- *     the model decides (a clear gain is never given up to try without);
- *   - within the band, every RT_OO_PROBE-th round runs the other way (a
- *     probe), and the time per MiB is kept for each way (a moving mean);
- *     after a probe the faster way is kept, if faster by RT_OO_MARGIN.
- * The counts go on either way (the model keeps seeing the runs). In a
- * simulation over the A/B log's figures (+-80 % ... +16 % per phase) this
- * came within 1.3 % of always picking the faster way, where the model alone
- * was 3 % off and measuring alone (probing every kind) 4 %. */
-#define RT_OO_BAND    50              /* permille of the reads' time          */
-#define RT_OO_PROBE   8               /* rounds                               */
-#define RT_OO_MARGIN  20              /* permille                             */
+/* ---- on or off, from what read ahead did ---------------------------------
+ * Adaptive's thresholds come from the model; whether read ahead is on for a
+ * kind at all (the large and 32 KiB reads into ordinary memory, into
+ * non-cacheable memory, the tiny reads) is decided from what it did in this
+ * game, read by read: each read it served (all or partly) against what the
+ * reads of the kind that went the standard way took in the same stretch of
+ * play, less what the pieces read for nothing held other reads up. Both
+ * sides from the same moments, so what the game is doing (loading, playing)
+ * weighs alike on both - comparing one stretch on with another off did not
+ * work: the game's own swings (10-20 % a round) were larger than what read
+ * ahead changes (2-6 %).
+ *   on:  off once that net is below -RT_EV_MARGIN of the kind's time, over
+ *        enough reads of both ways;
+ *   off: the model, with this game's own costs (what a sector from the
+ *        pieces saved here, what a piece for nothing held up here), says
+ *        on brings more than RT_EV_MARGIN: on again.
+ * The sums are kept over the last rounds (RT_EV_KEEP of each round left);
+ * the game's costs stay with it (tuning.bin) for the model while off. */
+#define RT_EV_MARGIN     20u            /* permille of the kind's time             */
+#define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
+#define RT_EV_MIN_STD_T  64u
+#define RT_EV_MIN_SRV    1024u          /* from read ahead: 512 KiB (tiny: reads) */
+#define RT_EV_MIN_SRV_T  32u
+
+#define RT_EV_HOLD       8u             /* rounds a change stays before another    */
 
 typedef struct {
-	uint8_t  off;                     /* read ahead off for this kind          */
-	uint8_t  probe;                   /* this round runs the other way         */
-	uint8_t  since;                   /* rounds since the last probe           */
-	uint8_t  have;                    /* bit 0: us[0] kept, bit 1: us[1]       */
-	uint32_t us[2];                   /* time per MiB on (0) and off (1), us   */
-} RtOnOff;
+	uint8_t  off, hold, pad[2];
+	/* this stretch (kept RT_EV_KEEP a round) */
+	uint32_t std_us, std_q;             /* the standard way: time, sectors (tiny: reads) */
+	uint32_t srv_us, srv_q;             /* served all or partly (tiny: and the reads
+	                                     * that read the block): time, sectors / reads */
+	uint32_t held_us, waste;            /* pieces for nothing: what they held up, how many */
+	/* this game's costs, as last measured (0: none yet) */
+	uint32_t std_rate, srv_rate;        /* us a MiB (tiny: a read)                  */
+	uint32_t held_each;                 /* us a piece for nothing                   */
+} RtEv;
 
-/* A round of the kind is over: `gain` what the model says read ahead brings
- * (the counts' scale), `time` the reads' time in the same scale, `us_mib`
- * the round's own time per MiB (0: too little read to tell). The way for the
- * next round in o->off ^ o->probe. 1 if o->off changed. */
-/* What the model says read ahead brings, permille of the time without it
- * (on: the time with it plus that). */
-static inline int64_t rt_onoff_pm(const RtOnOff *o, int64_t gain, int64_t time)
+/* What read ahead brought over the stretch, us (0: too little to tell). */
+static inline int64_t rt_ev_net(const RtEv *e, int tiny)
 {
-	if (time <= 0)
-		time = 1;
-	return gain * 1000 / (time + (o->off || gain < 0 ? 0 : gain));
+	if (e->std_q < (tiny ? RT_EV_MIN_STD_T : RT_EV_MIN_STD) ||
+	    e->srv_q < (tiny ? RT_EV_MIN_SRV_T : RT_EV_MIN_SRV))
+		return 0;
+	return (int64_t)e->srv_q * e->std_us / e->std_q - e->srv_us - e->held_us;
 }
 
-static inline int rt_onoff_round(RtOnOff *o, int64_t gain, int64_t time, uint32_t us_mib)
+/* A round of the kind is over: its reads added (std_*, srv_*: as above;
+ * held, waste: its pieces for nothing), `pm` what the model with this
+ * game's costs says read ahead brings, permille. 1 if it went on or off. */
+static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q,
+                              uint32_t srv_us, uint32_t srv_q, uint32_t held, uint32_t waste,
+                              int64_t pm, int64_t *net_out, int64_t *time_out)
 {
-	const int way = o->off ^ o->probe;   /* how this round ran */
-	const int was = o->off;
-	int64_t pm;
+	const int was = e->off;
+	const uint32_t unit = tiny ? 1u : 2048u;
+	int64_t net, time;
 
-	if (us_mib) {
-		if (o->have & (1u << way))
-			o->us[way] = o->us[way] - o->us[way] * 3u / 8u + us_mib * 3u / 8u;
-		else
-			o->us[way] = us_mib;
-		o->have |= (uint8_t)(1u << way);
+	e->std_us += std_us;
+	e->std_q += std_q;
+	e->srv_us += srv_us;
+	e->srv_q += srv_q;
+	e->held_us += held;
+	e->waste += waste;
+	/* the game's costs, from enough of each */
+	if (e->std_q >= (tiny ? RT_EV_MIN_STD_T : RT_EV_MIN_STD))
+		e->std_rate = (uint32_t)((uint64_t)e->std_us * unit / e->std_q);
+	if (e->srv_q >= (tiny ? RT_EV_MIN_SRV_T : RT_EV_MIN_SRV))
+		e->srv_rate = (uint32_t)((uint64_t)e->srv_us * unit / e->srv_q);
+	if (e->waste >= 8)
+		e->held_each = e->held_us / e->waste;
+	net = rt_ev_net(e, tiny);
+	time = (int64_t)e->std_us + e->srv_us;
+	if (net_out)
+		*net_out = net;
+	if (time_out)
+		*time_out = time;
+	if (e->hold) {
+		e->hold--;                       /* a change stays a while */
+	} else if (!e->off) {
+		if (net && net * 1000 < -(int64_t)RT_EV_MARGIN * time)
+			e->off = 1;
+	} else if (pm > (int64_t)RT_EV_MARGIN) {
+		e->off = 0;
 	}
-	pm = rt_onoff_pm(o, gain, time);
-	if (pm >= RT_OO_BAND || pm <= -RT_OO_BAND) {
-		o->off = pm < 0;                 /* the model is clear */
-		o->probe = 0;
-		o->since = 0;
-		return o->off != was;
+	if (e->off != was)
+		e->hold = RT_EV_HOLD;
+	/* the stretch: 7/8 of it kept a round */
+	e->std_us -= e->std_us / 8;
+	e->std_q -= e->std_q / 8;
+	e->srv_us -= e->srv_us / 8;
+	e->srv_q -= e->srv_q / 8;
+	e->held_us -= e->held_us / 8;
+	e->waste -= e->waste / 8;
+	return e->off != was;
+}
+
+/* The model's cost with this game's measures where there are (`base`: the
+ * console's): a sector from the pieces saves what the standard way takes
+ * less what a served one did, a piece for nothing what it held up here. */
+static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *o)
+{
+	*o = *base;
+	if (e->std_rate && e->srv_rate) {
+		const int64_t d16 = ((int64_t)e->std_rate - e->srv_rate) * 16 / 2048;   /* a sector */
+
+		o->gain16[k] = d16 > 0 ? (int32_t)d16 : 0;
 	}
-	if (o->probe) {
-		/* after the probe: the faster way, by the margin */
-		o->probe = 0;
-		if ((o->have & 3u) == 3u &&
-		    (uint64_t)o->us[!o->off] * 1000u < (uint64_t)o->us[o->off] * (1000u - RT_OO_MARGIN))
-			o->off = !o->off;
-		return o->off != was;
-	}
-	if (++o->since >= RT_OO_PROBE) {
-		o->since = 0;
-		o->probe = 1;                    /* the next round the other way */
-	}
-	return 0;
+	if (e->held_each)
+		o->waste_us = (int32_t)e->held_each;
 }
 
 /* Kind k's counts halved: what was read long ago weighs less (a game's

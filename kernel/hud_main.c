@@ -456,6 +456,10 @@ static const char *ov_color(int cur, int saved, int standard)
 	return cur == VM_APP_GLOBAL || cur == standard ? HUD_C_TEXT : HUD_C_GOOD;
 }
 
+/* A setting Settings has off: the app's own cannot switch it on (stage.c,
+ * eff_pick), so it is shown as such and the cursor passes it by. */
+#define OV_OFF_IN_SETTINGS "Off in Settings"
+
 /* "Global (Auto)" for a value that is the global one, else the value. */
 static void ov_val(char *o, int cap, int cur, int global, const char *const *names, int n)
 {
@@ -563,7 +567,9 @@ static void overlay_feed(void)
 		vm_stage_app_now(&an);
 		vm_stage_fg(&fg);
 		vm_stage_core_stats(core, &ncs, &nco);
-		ra = an.cur.ra == VM_APP_GLOBAL ? an.global.ra : an.cur.ra;   /* in effect */
+		/* in effect: Off in Settings stays off (stage.c, eff_pick) */
+		ra = an.global.ra == VM_RA_OFF ? VM_RA_OFF
+		   : an.cur.ra == VM_APP_GLOBAL ? an.global.ra : an.cur.ra;
 		for (int i = 0; i < 3; i++)
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
@@ -587,7 +593,8 @@ static void overlay_feed(void)
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "set while it runs.");
 			ov_calib(L[n++], cur);
 		} else {
-			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) |
+			mask = (an.global.ra != VM_RA_OFF ? 1u << OV_ITEM_RA : 0u) |
+			       (an.global.offload != VM_OFFLOAD_OFF ? 1u << OV_ITEM_OFFLOAD : 0u) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
 			{
@@ -604,9 +611,13 @@ static void overlay_feed(void)
 					mask |= 1u << OV_ITEM_TEST;
 				}
 			}
-			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
-			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
-			        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);
+			if (an.global.ra == VM_RA_OFF)
+				ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead", HUD_C_DIM, OV_OFF_IN_SETTINGS);
+			else {
+				ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
+				ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
+				        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);
+			}
 			if (ra != VM_RA_OFF) {                /* its thresholds: On and Adaptive */
 				VmRaNow rn;
 
@@ -630,20 +641,36 @@ static void overlay_feed(void)
 				}
 				mask |= (1u << OV_ITEM_C) | (1u << OV_ITEM_NC);
 			}
-			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
-			ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
-			        ov_color(an.cur.offload, an.saved.offload, an.global.offload), v);
+			if (an.global.offload == VM_OFFLOAD_OFF)
+				ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3", HUD_C_DIM,
+				        OV_OFF_IN_SETTINGS);
+			else {
+				ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
+				ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
+				        ov_color(an.cur.offload, an.saved.offload, an.global.offload), v);
+			}
 			ov_line(L[n++], cur, OV_ITEM_ADV, 0, g_ov_adv ? "Hide advanced" : "Show advanced",
 			        HUD_C_TEXT, "(X)");
 			mask |= 1u << OV_ITEM_ADV;
 			if (g_ov_adv) {
-				mask |= (1u << OV_ITEM_PIPE) | (1u << OV_ITEM_GPUSAFE);
-				ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
-				ov_line(L[n++], cur, OV_ITEM_PIPE, 1, "Overlapped reads",
-				        ov_color(an.cur.pipe, an.saved.pipe, an.global.pipe), v);
-				ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_gs, 3);
-				ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
-				        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
+				if (an.global.pipe == VM_PIPE_OFF) {
+					ov_line(L[n++], cur, OV_ITEM_PIPE, 1, "Overlapped reads", HUD_C_DIM,
+					        OV_OFF_IN_SETTINGS);
+				} else {
+					mask |= 1u << OV_ITEM_PIPE;
+					ov_val(v, sizeof(v), an.cur.pipe, an.global.pipe, k_ov_pipe, 3);
+					ov_line(L[n++], cur, OV_ITEM_PIPE, 1, "Overlapped reads",
+					        ov_color(an.cur.pipe, an.saved.pipe, an.global.pipe), v);
+				}
+				if (an.global.gpusafe == VM_GPUSAFE_OFF) {
+					ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads", HUD_C_DIM,
+					        OV_OFF_IN_SETTINGS);
+				} else {
+					mask |= 1u << OV_ITEM_GPUSAFE;
+					ov_val(v, sizeof(v), an.cur.gpusafe, an.global.gpusafe, k_ov_gs, 3);
+					ov_line(L[n++], cur, OV_ITEM_GPUSAFE, 1, "GPU-safe reads",
+					        ov_color(an.cur.gpusafe, an.saved.gpusafe, an.global.gpusafe), v);
+				}
 			}
 			ov_calib(L[n++], cur);
 			mask |= 1u << OV_ITEM_CALIB;

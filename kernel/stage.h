@@ -11,6 +11,9 @@
  * or none: on failure everything is released and storage stays stock. */
 int  vm_stage_init(void);
 void vm_stage_fini(void);
+/* The home screen is up: devices come on as set from now (apply the settings
+ * after it). 1 the first time. Until then every transfer goes the standard way. */
+int  vm_stage_go(void);
 
 /* Apply settings (per-device on/off, verify mode). Safe from any context. */
 void vm_stage_apply(const VmSettings *s);

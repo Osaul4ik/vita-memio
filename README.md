@@ -198,7 +198,8 @@ This error means the system is out of kernel memory. It can also appear as a cra
 
 - Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
 - Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The overlay and the HUD take about 40 KiB more; with *Overlay* off, nothing.
-- If the console does not stay on the home screen for 30 seconds after starting, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
+- While the console starts, the plugin does nothing: every transfer goes the standard way. It comes on as soon as the home screen (LiveArea) is up.
+- If the plugin has not then run for 30 seconds, the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
 - Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 - The Settings page and the HUD are in English.
 

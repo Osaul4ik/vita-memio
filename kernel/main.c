@@ -5,17 +5,18 @@
  *   - bring up the logger (klog.c);
  *   - check the storage driver is one this build knows (3.60-3.74); on any
  *     other firmware install nothing at all;
- *   - the crash-loop boot guard: if the last start never finished, install
- *     nothing (safe mode);
- *   - allocate the staging buffers and install the I/O hooks (stage.c), then
- *     load and apply the saved settings (settings.c);
+ *   - the crash-loop boot guard (guard.h): if the last start never finished,
+ *     install nothing (safe mode);
+ *   - install the I/O hooks (stage.c) and load the saved settings
+ *     (settings.c) - but while the console starts nothing more: every
+ *     transfer goes the standard way. The worker brings the plugin on as soon
+ *     as the home screen is up (vm_stage_go), and settles the guard after;
  *   - run the worker (every second while the HUD is on or the boot guard
  *     waits, otherwise only when there is something to do, see g_wake):
  *     saves settings, allocates the verify buffer on demand, loads the HUD
  *     module and lets it draw (hud_link.c: vitamemio_hud.skprx, loaded only
  *     once the HUD or the overlay is first switched on), logs problems,
- *     follows the logging switch, and clears the boot guard once the home
- *     screen (SceShell) has been up for 30 s;
+ *     follows the logging switch;
  *   - publish the user-callable "SceVitaMemio" syscall library (see
  *     include/vitamemio_kernel_api.h and vitamemio_kernel.yml).
  *
@@ -30,6 +31,7 @@
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>          /* ksceIoMkdir                          */
 #include <psp2kern/kernel/threadmgr.h>
+#include <psp2kern/display.h>          /* SceDisplayFrameBufInfo               */
 #include <taihen.h>
 
 #include "../include/vitamemio.h"
@@ -41,15 +43,6 @@
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
 #include "guard.h"
-/* The start counts as good once the home screen (SceShell) has been up for
- * this many seconds, not as soon as it appears: a setting that
- * makes the console restart shortly after the home screen (the GPU-mapping
- * watch once did, about 10 s in) must also end in safe mode, not in a loop.
- * The price: restarting by hand within this time after the home screen also
- * leads to safe mode once (Reset safe mode ends it). */
-#define VM_GUARD_SHELL_TICKS  30
-/* Only if SceShell cannot be looked up at all: clear the guard after this long. */
-#define VM_GUARD_FALLBACK_SECS  120
 
 /* Storage driver (SceSdif) module fingerprints of the firmwares this build
  * supports. Its code is identical across all of them; anything else stays
@@ -80,8 +73,9 @@ static volatile uint32_t g_uptime;   /* seconds since the module started */
 static uint64_t g_t0_us;             /* ... from this system time          */
 
 /* The worker sleeps on g_wake until it has something to do:
- *   - every second while the HUD is on (live speeds) or the boot guard waits
- *     for the home screen;
+ *   - every 100 ms while the console starts (to come on as soon as the home
+ *     screen is up), then every second until the boot guard is settled;
+ *   - every second while the HUD is on (live speeds);
  *   - every 5 s while a failed settings save is to be retried;
  *   - every 250 ms while the overlay is open (its live values);
  *   - once a minute while the log is on (the stage's statistics line);
@@ -90,10 +84,14 @@ static uint64_t g_t0_us;             /* ... from this system time          */
  *     and applied at once: buffers, helper threads) or by a device error or
  *     verify mismatch (logged at once). */
 #define VM_WORKER_FAST_US   (1000u * 1000u)
+#define VM_WORKER_BOOT_US   (100u * 1000u)
 #define VM_WORKER_RETRY_US  (5u * 1000u * 1000u)
 #define VM_WORKER_LOG_US    (60u * 1000u * 1000u)
 static SceUID g_wake = -1;
 static volatile int g_guard_done;    /* the boot guard is settled            */
+static volatile int g_on;            /* came on: the home screen was up      */
+static int          g_guard_armed;   /* the start's '1' is written           */
+static VmGuard      g_guard;         /* worker only                          */
 
 #define VM_WORKER_OVERLAY_US (250u * 1000u)
 
@@ -106,6 +104,11 @@ static void worker_wake(void)
 static uint32_t uptime_s(void)
 {
 	return (uint32_t)(((uint64_t)ksceKernelGetSystemTimeWide() - g_t0_us) / 1000000u);
+}
+
+static uint32_t uptime_ms(void)
+{
+	return (uint32_t)(((uint64_t)ksceKernelGetSystemTimeWide() - g_t0_us) / 1000u);
 }
 
 static char g_guard_txt[48];   /* last content read, for the log */
@@ -153,30 +156,89 @@ static int shell_up(void)
 	return taiGetModuleInfoForKernel(pid, "SceShell", &info) >= 0;
 }
 
-/* Called by the worker (every second) until the guard is cleared. */
+/* ksceDisplayGetProcFrameBufInternal (SceDisplayForDriver 0x9FED47AC,
+ * 0x3BC165EF in vita-headers db/360), looked up at run time: whether SceShell
+ * shows frames yet - the home screen (LiveArea) is up. */
+static int (*g_proc_fb)(SceUID pid, int head, int index, SceDisplayFrameBufInfo *info);
+
+static void frames_lookup_init(void)
+{
+	uintptr_t f = 0;
+
+	if (module_get_export_func(KERNEL_PID, "SceDisplay", 0x9FED47AC, 0x3BC165EF, &f) >= 0 && f)
+		g_proc_fb = (int (*)(SceUID, int, int, SceDisplayFrameBufInfo *))f;
+}
+
+/* 1: SceShell has a frame on a screen (the built-in one, or HDMI on a PS TV),
+ * 0: not yet, -1: cannot tell on this system. */
+static int shell_frames(void)
+{
+	SceUID pid;
+	int known = 0;
+
+	if (!g_proc_fb || !g_shell_pid)
+		return -1;
+	pid = g_shell_pid();
+	if (pid <= 0)
+		return 0;
+	for (int head = 0; head < 2; head++)
+		for (int index = 0; index < 2; index++) {
+			SceDisplayFrameBufInfo info;
+
+			memset(&info, 0, sizeof(info));
+			info.size = sizeof(info);
+			if (g_proc_fb(pid, head, index, &info) < 0)
+				continue;
+			known = 1;
+			if (info.paddr && info.framebuf.base && info.framebuf.width)
+				return 1;
+		}
+	return known ? 0 : -1;
+}
+
+static const char *const k_guard_why[] = { "", "the home screen shows frames",
+                                           "the home screen is loaded",
+                                           "the home screen cannot be seen here" };
+
+/* The worker, every look until the guard is settled: comes on once the home
+ * screen is up, then writes '0' once it has run a while (guard.h). Safe mode
+ * and an unknown firmware never get here. */
 static void guard_tick(void)
 {
-	static int seen;                 /* the home screen is up ...              */
-	static uint32_t since;           /* ... since this uptime                  */
-	int up;
+	const uint32_t ms = uptime_ms();
+	int shell, frames;
 
 	if (g_guard_done)
 		return;
-	up = shell_up();
-	if (up <= 0) {
-		seen = 0;
-	} else if (!seen) {
-		seen = 1;
-		since = g_uptime;
+	if (g_guard.phase == VM_GP_BOOT) {
+		shell = shell_up();
+		frames = shell > 0 ? shell_frames() : 0;
+	} else {
+		shell = frames = 1;                   /* only the time counts now */
 	}
-	if (seen && g_uptime - since >= VM_GUARD_SHELL_TICKS) {
-		guard_write('0');
+	switch (vm_guard_step(&g_guard, shell, frames, ms / 1000u)) {
+	case VM_GA_GO:
+		if (!g_guard_armed) {                 /* the '1' is not there: stay off */
+			g_guard_done = 1;
+			break;
+		}
+		if (g_disabled == VM_DIS_NONE && vm_stage_go()) {
+			VmSettings cur;
+
+			vm_settings_copy(&cur);
+			vm_stage_apply(&cur);             /* the devices as set, now */
+		}
+		g_on = 1;
+		VM_KLOGI("on at %u.%01us: %s", (unsigned)(ms / 1000u), (unsigned)(ms % 1000u / 100u),
+		         k_guard_why[g_guard.why]);
+		break;
+	case VM_GA_CLEAR:
+		if (guard_write('0') != VM_OK)
+			VM_KLOGW("boot guard: '0' not written - the next start will be safe mode");
 		g_guard_done = 1;
-	} else if (up < 0 && g_uptime >= VM_GUARD_FALLBACK_SECS) {
-		guard_write('0');
-		VM_KLOGW("boot guard: the home screen cannot be detected here, cleared after %us",
-		         (unsigned)VM_GUARD_FALLBACK_SECS);
-		g_guard_done = 1;
+		break;
+	default:
+		break;
 	}
 }
 
@@ -223,7 +285,9 @@ static int worker(SceSize args, void *argp)
 		const int hud = running ? vm_hud_link_busy() : VM_HUD_IDLE;   /* hud_link.h */
 		SceUInt wait = 0;
 
-		if (hud == VM_HUD_MENU)
+		if (running && !g_guard_done && g_guard.phase == VM_GP_BOOT)
+			wait = VM_WORKER_BOOT_US;       /* waiting for the home screen */
+		else if (hud == VM_HUD_MENU)
 			wait = VM_WORKER_OVERLAY_US;
 		else if (running && (!g_guard_done || hud == VM_HUD_SHOWN))
 			wait = VM_WORKER_FAST_US;
@@ -248,6 +312,8 @@ static int worker(SceSize args, void *argp)
 		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE)
 			continue;
 		guard_tick();
+		if (!g_on)
+			continue;                       /* the console still starts: nothing yet */
 		vm_stage_worker_tick();
 		vm_stage_get(now, 1);
 		vm_hud_link_tick(now, worker_wake);
@@ -419,11 +485,11 @@ int module_start(SceSize argc, const void *args)
 	/* The one line every start writes: which build, on which storage driver. */
 	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_BUILD_STR, (unsigned)g_fingerprint);
 
-	/* Crash-loop guard: the file holds '1' from here until the home screen
-	 * (SceShell) has been up for VM_GUARD_SHELL_TICKS, then '0'. Finding '1'
-	 * at start means the last start never got that far, so this boot installs nothing; Settings > Advanced >
-	 * Reset safe mode (vmResetSafeMode) clears it. One byte written in place,
-	 * never deleted (guard.h). */
+	/* Crash-loop guard (guard.h): the file holds '1' from here until the
+	 * plugin has run VM_GUARD_SETTLE_S after the home screen came up, then
+	 * '0'. Finding '1' means the last start never got that far: this one
+	 * installs nothing; Settings > Advanced > Reset safe mode
+	 * (vmResetSafeMode) clears it. */
 	if (guard_read() == '1') {
 		g_disabled = VM_DIS_SAFE;
 		VM_KLOGW("boot_guard is 1 [%s] - safe mode, nothing installed (reset it in "
@@ -431,8 +497,12 @@ int module_start(SceSize argc, const void *args)
 		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
-	guard_write('1');
+	g_guard_armed = vm_guard_arm(VM_GUARD_PATH, VM_DATA_DIR, &g_guard_len) == 0;
+	if (!g_guard_armed)
+		VM_KLOGW("boot guard: '1' could not be written and read back - the plugin stays "
+		         "off this start");
 	shell_lookup_init();
+	frames_lookup_init();
 
 	if (vm_stage_init() != VM_OK) {
 		g_disabled = VM_DIS_HOOKS;

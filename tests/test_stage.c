@@ -118,6 +118,7 @@ static void reset(void)
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->ra_th = d->ra_go = d->ra_done = d->t_uid = -1;
 	g_readahead = 0;
+	g_hold = 0;                                     /* the home screen is up */
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = g_cal_dirty = g_cal_loaded = 0;
 	g_ra_hits = g_ra_kib = g_ra_drops = g_ra_waste_kib = g_ra_bad = 0;
@@ -994,6 +995,8 @@ static void boot_state(void)
 		g_ref[i] = 0;
 	}
 	g_live = 0;
+	g_hold = 1;                                 /* the console starts */
+	g_proc_hook = -1;
 }
 
 static VmSettings devices_on(int sd2vita, int internal, int memcard)
@@ -1016,10 +1019,23 @@ static void test_init_all_hooks(void)
 	vm_stage_apply(&s);                       /* at boot, before the hooks: */
 	CHECK(fake_alloc_calls == 0);             /* nothing yet (could be safe mode) */
 	CHECK(vm_stage_init() == VM_OK);
+	/* while the console starts: the storage hooks only, passing everything
+	 * on; no buffer, no device on, no app events */
+	count_free_bufs(&n);
+	CHECK(n == 0 && fake_alloc_calls == 0 && fake_hook_calls == 4 && g_proc_hook < 0);
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		CHECK(!g_dev[i].enabled);
+	vm_stage_apply(&s);                       /* a setting changed meanwhile: still nothing */
+	CHECK(fake_alloc_calls == 0 && !g_dev[VM_DEV_SD2VITA].enabled);
+	/* the home screen is up: on as set, the app events followed */
+	CHECK(vm_stage_go() == 1 && fake_hook_calls == 5 && g_proc_hook >= 0);
+	vm_stage_apply(&s);
+	CHECK(vm_stage_go() == 0 && fake_hook_calls == 5);   /* once */
 	count_free_bufs(&n);
 	/* the internal storage asked for too: no buffer, no hook of its own (the
 	 * SceSdif MMC functions are never hooked) */
-	CHECK(n == 2 && fake_alloc_calls == 2 && fake_hook_calls == 5);   /* 4 + the app events */
+	CHECK(n == 2 && fake_alloc_calls == 2 && g_dev[VM_DEV_SD2VITA].enabled &&
+	      g_dev[VM_DEV_MEMCARD].enabled);
 	CHECK(g_dev[VM_DEV_INTERNAL].buf == NULL && !g_dev[VM_DEV_INTERNAL].enabled);
 	vm_stage_fini();
 	CHECK(fake_hook_releases == 5 && fake_free_calls == 2);
@@ -1040,8 +1056,12 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 	fake_hook_fail_at = 2;                    /* the second SDIF hook fails */
 	CHECK(vm_stage_init() == VM_ERR_RESOLVE);
 	count_free_bufs(&n);
-	CHECK(n == 0 && fake_free_calls == 2);    /* all buffers given back */
-	CHECK(fake_hook_releases == 1);           /* and the one hook that was live */
+	CHECK(n == 0 && fake_free_calls == 0);    /* none allocated while the console starts */
+	CHECK(fake_hook_releases == 1);           /* the one hook that was live */
+	CHECK(vm_stage_go() == 0 && g_proc_hook < 0);   /* later: nothing comes on */
+	vm_stage_apply(&s);
+	count_free_bufs(&n);
+	CHECK(n == 0 && !g_dev[VM_DEV_SD2VITA].enabled);
 }
 
 static void test_init_memcard_hook_fails_only_memcard_stock(void)
@@ -1053,14 +1073,16 @@ static void test_init_memcard_hook_fails_only_memcard_stock(void)
 	vm_stage_apply(&s);
 	fake_hook_fail_at = 4;                    /* the memory card's write hook fails */
 	CHECK(vm_stage_init() == VM_OK);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 1);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 0);
 	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf == NULL);
 	CHECK(fake_hook_releases == 1);           /* the memory card's read hook */
 	s.memcard = 0;                            /* switching it again allocates nothing */
 	vm_stage_apply(&s);
 	s.memcard = 1;
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 2);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 1);   /* the SD2Vita's */
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_fini();
@@ -1079,6 +1101,8 @@ static void test_buffers_on_demand(void)
 	boot_state();
 	vm_stage_apply(&s);
 	CHECK(vm_stage_init() == VM_OK);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_apply(&s);
 	count_free_bufs(&n);
 	CHECK(n == 1 && g_dev[VM_DEV_SD2VITA].buf && fake_alloc_calls == 1);
 

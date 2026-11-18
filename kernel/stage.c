@@ -259,6 +259,11 @@ static Dev g_dev[VM_DEV_COUNT] = {
  * Before it (settings applied at boot, safe mode, unknown firmware) nothing is
  * allocated. */
 static int g_live;
+/* While the console starts (until vm_stage_go: the home screen is up, see
+ * guard.h) every device stays off whatever its setting: the hooks pass every
+ * transfer on the standard way, and no buffer, helper thread or app event is
+ * set up. The settings applied meanwhile take effect at vm_stage_go. */
+static volatile int g_hold = 1;
 
 /* Smallest transfer the faster path takes (sectors): MIN_SECTORS, or 1 with
  * small transfers switched on. */
@@ -4124,9 +4129,9 @@ int vm_stage_init(void)
 			g_stack_free_fn = (int (*)(SceUID))f;
 
 	}
-	/* Buffers for the devices already switched on, now at boot while
-	 * contiguous memory is easy to find; the others get theirs when they are
-	 * switched on (vm_stage_apply). */
+	/* Buffers for the devices already switched on (none while the console
+	 * starts: g_hold); the others get theirs when they are switched on
+	 * (vm_stage_apply, vm_stage_go). */
 	ST(g_live, 1);
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (LD(g_dev[i].enabled))
@@ -4166,9 +4171,19 @@ int vm_stage_init(void)
 			break;
 		}
 	}
-	/* the app in front: the process events, hooked as PSVshell hooks them -
-	 * SceProcessmgr's import of ksceKernelInvokeProcEventHandler (an import,
-	 * not an export: there is none to hook) */
+	return VM_OK;
+}
+
+/* The home screen is up (main.c, guard.h): from now on devices come on as
+ * set (the caller applies the settings next), and the app in front is
+ * followed - the process events, hooked as PSVshell hooks them: SceProcessmgr's
+ * import of ksceKernelInvokeProcEventHandler (an import, not an export: there
+ * is none to hook; an import is one word to change, safe while it runs).
+ * 1 the first time, 0 after. */
+int vm_stage_go(void)
+{
+	if (!LD(g_hold) || !LD(g_live))
+		return 0;
 	g_proc_ref = 0;
 	g_proc_hook = taiHookFunctionImportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_proc_ref, "SceProcessmgr",
 	                                             LIB_PROCMGR_KERNEL, NID_PROC_EVENT,
@@ -4178,11 +4193,13 @@ int vm_stage_init(void)
 	else
 		VM_KLOGW("stage: app events not hooked (0x%08x) - the per-app settings and read "
 		         "ahead Auto follow no app", (unsigned)g_proc_hook);
-	return VM_OK;
+	ST(g_hold, 0);
+	return 1;
 }
 
 void vm_stage_fini(void)
 {
+	ST(g_live, 0);                      /* nothing allocated, nothing comes on, again */
 	/* Stop taking the faster path, then wait for any transfer in flight. */
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		ST(g_dev[i].enabled, 0);
@@ -4305,7 +4322,8 @@ static void eff_update(void)
 void vm_stage_apply(const VmSettings *s)
 {
 	/* the internal storage never: its setting is reserved (VM_KEY_INTERNAL) */
-	const int32_t want[VM_DEV_COUNT] = { s->sd2vita, 0, s->memcard };
+	const int hold = LD(g_hold);
+	const int32_t want[VM_DEV_COUNT] = { hold ? 0 : s->sd2vita, 0, hold ? 0 : s->memcard };
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *d = &g_dev[i];

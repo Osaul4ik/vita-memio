@@ -55,9 +55,67 @@ static void test_guard(void)
 	fakes_tmpdir_remove();
 }
 
+/* The start's '1', written and read back; refused when it cannot be written
+ * (the folder cannot be made): then the plugin stays off. */
+static void test_arm(void)
+{
+	char txt[48];
+	int len = 0;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	CHECK(vm_guard_arm(PATH, DIR, &len) == 0 && vm_guard_read(PATH, txt, sizeof(txt), &len) == '1');
+	CHECK(vm_guard_arm("ux9:nowhere/x/boot_guard", "ux9:nowhere/x", &len) < 0);
+	fakes_tmpdir_remove();
+}
+
+/* When it comes on, and when the start counts as good. */
+static void test_steps(void)
+{
+	VmGuard g;
+
+	/* the console starts: nothing until SceShell shows frames - then at once */
+	memset(&g, 0, sizeof(g));
+	CHECK(vm_guard_step(&g, 0, 0, 0) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 0, 0, 8) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, 0, 9) == VM_GA_NONE);        /* loaded, no frame yet */
+	CHECK(vm_guard_step(&g, 1, 0, 10) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, 1, 10) == VM_GA_GO && g.why == VM_GW_FRAMES && g.on_at == 10);
+	/* then the start is good after VM_GUARD_SETTLE_S, once */
+	CHECK(vm_guard_step(&g, 1, 1, 10 + VM_GUARD_SETTLE_S - 1) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, 1, 10 + VM_GUARD_SETTLE_S) == VM_GA_CLEAR && g.phase == VM_GP_DONE);
+	CHECK(vm_guard_step(&g, 1, 1, 10 + VM_GUARD_SETTLE_S + 5) == VM_GA_NONE);
+
+	/* frames cannot be seen here: on VM_GUARD_SHELL_WAIT_S after SceShell */
+	memset(&g, 0, sizeof(g));
+	CHECK(vm_guard_step(&g, 1, -1, 7) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, -1, 7 + VM_GUARD_SHELL_WAIT_S - 1) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, -1, 7 + VM_GUARD_SHELL_WAIT_S) == VM_GA_GO && g.why == VM_GW_SHELL);
+
+	/* frames can be seen but none come: on anyway after VM_GUARD_FRAMES_MAX_S */
+	memset(&g, 0, sizeof(g));
+	CHECK(vm_guard_step(&g, 1, 0, 6) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, 0, 6 + VM_GUARD_FRAMES_MAX_S - 1) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 1, 0, 6 + VM_GUARD_FRAMES_MAX_S) == VM_GA_GO && g.why == VM_GW_SHELL);
+
+	/* SceShell gone again before frames: counted afresh */
+	memset(&g, 0, sizeof(g));
+	CHECK(vm_guard_step(&g, 1, -1, 5) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, 0, -1, 6) == VM_GA_NONE && !g.shell_seen);
+	CHECK(vm_guard_step(&g, 1, -1, 9) == VM_GA_NONE && g.shell_at == 9);
+	CHECK(vm_guard_step(&g, 1, -1, 9 + VM_GUARD_SHELL_WAIT_S) == VM_GA_GO);
+
+	/* SceShell cannot be looked up: on after VM_GUARD_BLIND_S */
+	memset(&g, 0, sizeof(g));
+	CHECK(vm_guard_step(&g, -1, -1, VM_GUARD_BLIND_S - 1) == VM_GA_NONE);
+	CHECK(vm_guard_step(&g, -1, -1, VM_GUARD_BLIND_S) == VM_GA_GO && g.why == VM_GW_BLIND);
+}
+
 int main(void)
 {
 	RUN(test_guard);
+	RUN(test_arm);
+	RUN(test_steps);
 	if (vm_failures) {
 		printf("test_guard: %d FAILED\n", vm_failures);
 		return 1;

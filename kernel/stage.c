@@ -1920,25 +1920,13 @@ static int ra_prof_load(const char *title, RaProf *out)
 	return ok;
 }
 
-/* The app's profile gone, its copy with it. The result: its file's removal. */
-static int ra_prof_remove(const char *title)
-{
-	char path[96];
-
-	snprintf(path, sizeof(path), "%s/%s.bin", RA_PROFILE_OLD, title);
-	if (ksceIoRemove(path) >= 0) {        /* an older one not moved (ux0 refused it) */
-		snprintf(path, sizeof(path), "%s/%s.tmp", RA_PROFILE_OLD, title);
-		ksceIoRemove(path);
-	}
-	ra_profile_tmp(path, sizeof(path), title);
-	ksceIoRemove(path);
-	ra_profile_path(path, sizeof(path), title);
-	return ksceIoRemove(path);
-}
-
+/* An app's profile written: in place if it is there (one small write: no
+ * copy aside, no rename, no removal - the file stays, all global or not),
+ * else a new file. A write cut short leaves a file whose check fails: the
+ * app then has the global settings until it is saved again. */
 static void ra_prof_save(const char *title, const RaProf *in)
 {
-	char path[96], tmp[96];
+	char path[96];
 	RaProfileFile p;
 	SceUID fd;
 	int w;
@@ -1947,7 +1935,6 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	if (!ra_app_ok(&in->app))
 		return;
 	ra_profile_path(path, sizeof(path), title);
-	ra_profile_tmp(tmp, sizeof(tmp), title);
 	memset(&p, 0, sizeof(p));
 	p.magic = RA_PROFILE_MAGIC;
 	p.version = RA_PROFILE_VERSION;
@@ -1958,27 +1945,21 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	p.thr[0] = in->app.thr[0];
 	p.thr[1] = in->app.thr[1];
 	p.check = ra_profile_check(&p);
-	ksceIoMkdir("ux0:data", 0777);
-	ksceIoMkdir(RA_PROFILE_ROOT, 0777);
-	ksceIoMkdir(RA_PROFILE_DIR, 0777);
-	/* written aside, then swapped in: the old file stays until the new one is
-	 * whole (as the settings) */
-	fd = ksceIoOpen(tmp, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	fd = ksceIoOpen(path, SCE_O_WRONLY, 0666);   /* there: in place, its size the same */
+	if (fd < 0) {
+		ksceIoMkdir("ux0:data", 0777);
+		ksceIoMkdir(RA_PROFILE_ROOT, 0777);
+		ksceIoMkdir(RA_PROFILE_DIR, 0777);
+		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+	}
 	if (fd < 0) {
 		VM_KLOGW("stage: profile for %s not saved (0x%08x)", title, (unsigned)fd);
 		return;
 	}
 	w = ksceIoWrite(fd, &p, sizeof(p));
 	ksceIoClose(fd);
-	if (w != (int)sizeof(p)) {
+	if (w != (int)sizeof(p))
 		VM_KLOGW("stage: profile for %s not saved (short write)", title);
-		ksceIoRemove(tmp);
-		return;
-	}
-	ksceIoRemove(path);
-	if ((w = ksceIoRename(tmp, path)) < 0)
-		VM_KLOGW("stage: profile for %s: rename failed (0x%08x), the copy stays", title,
-		         (unsigned)w);
 }
 
 /* System apps (the home screen, Settings, ...: NPXS*, and "main") are never
@@ -5412,13 +5393,16 @@ int vm_stage_app_save(void)
 	__sync_lock_release(&g_eff_lock);
 	if (!ok)
 		return VM_ERR_NOT_READY;
-	if (!ra_app_set_any(&pf.app)) {
-		/* all global: no profile at all */
-		ra_prof_remove(title);
-	} else {
-		ra_prof_save(title, &pf);
-		if (!ra_prof_load(title, &pf))
-			return VM_ERR_IO;
+	{
+		RaProf old;
+
+		/* written only if it changes what the file holds (all global too:
+		 * the file stays, no removing and making it again) */
+		if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app))) {
+			ra_prof_save(title, &pf);
+			if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app)))
+				return VM_ERR_IO;
+		}
 	}
 	eff_lock();
 	if (app_in_front() && !strcmp(title, g_app_title))

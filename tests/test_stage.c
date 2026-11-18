@@ -4039,10 +4039,19 @@ static void test_app_settings(void)
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(!strcmp(an.title, "PCSB00777") && app_in_front() && ra_threshold(0) == 3);
-	/* all global again: no profile */
+	/* all global again: the profile stays (all global), no removing and
+	 * making it again; saved again unchanged: nothing written */
 	ra_app_global(&a);
 	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
-	CHECK(!ra_prof_load("PCSB00777", &pf));
+	CHECK(ra_prof_load("PCSB00777", &pf) && !ra_app_set_any(&pf.app));
+	{
+		const int w0 = fake_prof_writes;
+
+		CHECK(vm_stage_app_save() == VM_OK && fake_prof_writes == w0);
+		a.pipe = VM_PIPE_FIXED;
+		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK &&
+		      fake_prof_writes == w0 + 1);
+	}
 	/* system apps have none */
 	as_app(0x47);
 	vm_stage_worker_tick();
@@ -4647,17 +4656,29 @@ static void test_profiles(void)
 	ra_app_global(&pf.app);
 	pf.app.pipe = VM_PIPE_FIXED;
 	ra_prof_save("PCSB00777", &pf);
+	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_FIXED);
+	/* written in place: one write, the file's size the same, no copy aside */
+	{
+		char bin[256], tmp[256];
+		struct stat st;
+		const int w0 = fake_prof_writes;
+
+		snprintf(bin, sizeof(bin), "%s/ux0/ra/PCSB00777.bin", fakes_tmpdir());
+		snprintf(tmp, sizeof(tmp), "%s/ux0/ra/PCSB00777.tmp", fakes_tmpdir());
+		pf.app.pipe = VM_PIPE_OFF;
+		ra_prof_save("PCSB00777", &pf);
+		CHECK(fake_prof_writes == w0 + 1 && stat(bin, &st) == 0 &&
+		      st.st_size == (off_t)sizeof(RaProfileFile) && stat(tmp, &st) != 0);
+		CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_OFF);
+	}
+	/* a write cut short: its check fails, the global settings until saved again */
 	fake_write_short = 1;
-	pf.app.pipe = VM_PIPE_OFF;
+	pf.app.pipe = VM_PIPE_FIXED;
 	ra_prof_save("PCSB00777", &pf);
 	fake_write_short = 0;
-	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_FIXED);
-	pf.app.pipe = VM_PIPE_OFF;
-	fake_rename_fail = 1;
+	CHECK(!ra_prof_load("PCSB00777", &pf));
 	ra_prof_save("PCSB00777", &pf);
-	fake_rename_fail = 0;
-	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_OFF);
-	CHECK(ra_prof_remove("PCSB00777") < 0 && !ra_prof_load("PCSB00777", &pf));
+	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_FIXED);
 	/* on ux0; an older version's on ur0 moves there when it is first read */
 	{
 		char ux[256], ur[256];
@@ -4674,7 +4695,6 @@ static void test_profiles(void)
 		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
 		CHECK(stat(ux, &st) == 0 && stat(ur, &st) != 0);
 		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
-		CHECK(ra_prof_remove("PCSB00554") == 0 && !ra_prof_load("PCSB00554", &pf));
 	}
 	/* one that is not right: not used */
 	{

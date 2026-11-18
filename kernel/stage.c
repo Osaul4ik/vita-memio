@@ -1889,9 +1889,16 @@ static int ra_prof_read(const char *path, RaProf *out)
 	return 1;
 }
 
-/* 1 and the profile if the app has a usable one: its file, or the finished
- * copy a save cut short between removing it and the rename left. */
-static int ra_prof_load(const char *title, RaProf *out)
+/* Profiles, one at a time: the worker loads, the overlay saves (its own
+ * thread) - a load meanwhile could read one half written. */
+static volatile int g_prof_lock;
+
+static void ra_prof_save_locked(const char *title, const RaProf *in);
+
+/* 1 and the profile if the app has a usable one: its file (or the copy an
+ * older version's save cut short left), else an older version's on ur0,
+ * moved here. g_prof_lock held. */
+static int ra_prof_load_locked(const char *title, RaProf *out)
 {
 	char path[96];
 	int ok;
@@ -1908,7 +1915,7 @@ static int ra_prof_load(const char *title, RaProf *out)
 		if (ok) {
 			RaProf back;
 
-			ra_prof_save(title, out);
+			ra_prof_save_locked(title, out);
 			ra_profile_path(path, sizeof(path), title);
 			if (ra_prof_read(path, &back)) {   /* there now: the old one goes */
 				snprintf(path, sizeof(path), "%s/%s.bin", RA_PROFILE_OLD, title);
@@ -1921,11 +1928,23 @@ static int ra_prof_load(const char *title, RaProf *out)
 	return ok;
 }
 
+static int ra_prof_load(const char *title, RaProf *out)
+{
+	int ok;
+
+	while (__sync_lock_test_and_set(&g_prof_lock, 1))
+		ksceKernelDelayThread(100);
+	ok = ra_prof_load_locked(title, out);
+	__sync_lock_release(&g_prof_lock);
+	return ok;
+}
+
 /* An app's profile written: in place if it is there (one small write: no
  * copy aside, no rename, no removal - the file stays, all global or not),
  * else a new file. A write cut short leaves a file whose check fails: the
- * app then has the global settings until it is saved again. */
-static void ra_prof_save(const char *title, const RaProf *in)
+ * app then has the global settings until it is saved again. g_prof_lock
+ * held. */
+static void ra_prof_save_locked(const char *title, const RaProf *in)
 {
 	char path[96];
 	RaProfileFile p;
@@ -1961,6 +1980,14 @@ static void ra_prof_save(const char *title, const RaProf *in)
 	ksceIoClose(fd);
 	if (w != (int)sizeof(p))
 		VM_KLOGW("stage: profile for %s not saved (short write)", title);
+}
+
+static void ra_prof_save(const char *title, const RaProf *in)
+{
+	while (__sync_lock_test_and_set(&g_prof_lock, 1))
+		ksceKernelDelayThread(100);
+	ra_prof_save_locked(title, in);
+	__sync_lock_release(&g_prof_lock);
 }
 
 /* System apps (the home screen, Settings, ...: NPXS*, and "main") are never
@@ -2700,7 +2727,8 @@ static volatile int g_oo_off[3];
 /* the kind's reads since its last round (the hooks add, the worker takes):
  * the standard way and served (as RtEv), its pieces for nothing */
 typedef struct {
-	uint32_t std_us, std_q, srv_us, srv_q, held_us, waste;
+	uint64_t std_us, srv_us, held_us;    /* a round can last long (no stream ends) */
+	uint32_t std_q, srv_q, waste;
 } OoAcc;
 static OoAcc        g_oo_acc[3];         /* atomics */
 static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts */
@@ -3369,6 +3397,7 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 	OoAcc a;
 	int moved;
 	int64_t pm, t;
+	uint32_t su, vu, hu;
 
 	a.std_us = __atomic_exchange_n(&g_oo_acc[u].std_us, 0, __ATOMIC_RELAXED);
 	a.std_q = __atomic_exchange_n(&g_oo_acc[u].std_q, 0, __ATOMIC_RELAXED);
@@ -3376,11 +3405,24 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 	a.srv_q = __atomic_exchange_n(&g_oo_acc[u].srv_q, 0, __ATOMIC_RELAXED);
 	a.held_us = __atomic_exchange_n(&g_oo_acc[u].held_us, 0, __ATOMIC_RELAXED);
 	a.waste = __atomic_exchange_n(&g_oo_acc[u].waste, 0, __ATOMIC_RELAXED);
-	g_oo_time[u] += ((int64_t)a.std_us + a.srv_us) * RA_ADAPT_ONE;
+	/* a round's times into 32 bits (a round of over an hour: as much
+	 * kept of it as fits, the rates its own) */
+	while (a.std_us > 0x3FFFFFFFu || a.srv_us > 0x3FFFFFFFu || a.held_us > 0x3FFFFFFFu) {
+		a.std_us >>= 1;
+		a.srv_us >>= 1;
+		a.held_us >>= 1;
+		a.std_q >>= 1;
+		a.srv_q >>= 1;
+		a.waste >>= 1;
+	}
+	su = (uint32_t)a.std_us;
+	vu = (uint32_t)a.srv_us;
+	hu = (uint32_t)a.held_us;
+	g_oo_time[u] += ((int64_t)su + vu) * RA_ADAPT_ONE;
 	t = g_oo_time[u] > 0 ? g_oo_time[u] : 1;
 	pm = gain * 1000 / (t + (g_oo[u].off || gain < 0 ? 0 : gain));
-	moved = rt_ev_round(&g_oo[u], u == OO_TINY, a.std_us, a.std_q, a.srv_us, a.srv_q, a.held_us,
-	                    a.waste, pm, &lg->net, &lg->time);
+	moved = rt_ev_round(&g_oo[u], u == OO_TINY, su, a.std_q, vu, a.srv_q, hu, a.waste, pm, &lg->net,
+	                    &lg->time);
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
 	ST(g_oo_off[u], g_oo[u].off);
 	lg->pm = (int)pm;

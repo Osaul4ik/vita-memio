@@ -189,6 +189,17 @@ static void test_ev(void)
 			moved = rt_ev_round(&e, 1, 600 * 100, 100, 14 * 5 + 1100 * 45, 50, 0, 0, 0, NULL, NULL);
 		CHECK(moved && e.off);
 	}
+	/* very long rounds: the sums never wrap, the rates stay */
+	memset(&e, 0, sizeof(e));
+	for (int i = 0; i < 50; i++)
+		CHECK(!rt_ev_round(&e, 0, 0xF0000000u, 0x00F00000u, 0x30000000u, 0x00F00000u, 0, 0, 0,
+		                   NULL, NULL) && !e.off);
+	{
+		const uint32_t want = (uint32_t)((uint64_t)0xF0000000u * 2048u / 0x00F00000u);
+
+		CHECK(e.std_us <= 0x7FFFFFFFu && e.std_rate > want - want / 100 &&
+		      e.std_rate < want + want / 100 && e.srv_rate < e.std_rate);
+	}
 	/* the model's cost, from this game's: 40 ms a MiB saved is 312/16 us a
 	 * sector; a piece for nothing what it held up here */
 	memset(&e, 0, sizeof(e));

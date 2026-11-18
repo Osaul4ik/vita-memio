@@ -382,6 +382,25 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 	const uint32_t unit = tiny ? 1u : 2048u;
 	int64_t net, time;
 
+	/* the sums kept under 2^31: the round's, then the kept ones, halved
+	 * together (their ratios kept) */
+	while ((std_us | srv_us | held) > 0x3FFFFFFFu) {
+		std_us >>= 1;
+		std_q >>= 1;
+		srv_us >>= 1;
+		srv_q >>= 1;
+		held >>= 1;
+		waste >>= 1;
+	}
+	while ((uint64_t)e->std_us + std_us > 0x7FFFFFFFu || (uint64_t)e->srv_us + srv_us > 0x7FFFFFFFu ||
+	       (uint64_t)e->held_us + held > 0x7FFFFFFFu) {
+		e->std_us >>= 1;
+		e->std_q >>= 1;
+		e->srv_us >>= 1;
+		e->srv_q >>= 1;
+		e->held_us >>= 1;
+		e->waste >>= 1;
+	}
 	e->std_us += std_us;
 	e->std_q += std_q;
 	e->srv_us += srv_us;

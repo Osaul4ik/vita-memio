@@ -1738,6 +1738,7 @@ static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* 
 static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
 static uint32_t g_ra_tiny_reads;          /* atomic: tiny reads from their block */
 static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a write, dirty, switched, old */
+static uint32_t g_ra_wskip;               /* atomic: pieces not read, a write running */
 /* The app in front and how much it reads where (the per-app settings; the HUD). */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_THR_NONE       0xFFFFu         /* an app's threshold: never start   */
@@ -3611,6 +3612,19 @@ static int ra_thread(SceSize args, void *argp)
 		                                 __ATOMIC_RELAXED))
 			continue;
 		wr = __atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST);   /* after READING */
+		if (wr) {
+			/* a write running: whatever it read now could not be used - so
+			 * nothing is read, the card is left to the write and to the reads
+			 * that wait for it (a game saving) */
+			pc->ok = 0;
+			pc->held_us = 0;
+			__atomic_store_n(&pc->wait_from, 0, __ATOMIC_RELAXED);
+			ADD(g_ra_wskip, 1);
+			__atomic_store_n(&pc->state, RA_FAILED, __ATOMIC_SEQ_CST);
+			if (__atomic_exchange_n(&d->ra_waiting, 0, __ATOMIC_SEQ_CST))
+				ksceKernelSignalSema(d->ra_done, 1);
+			continue;
+		}
 		r = pc->io(pc->ref, pc->part, LD(pc->sector), ra_ptr(d, best), LD(pc->n));
 		pc->ok = r >= 0 && !wr;
 		pc->t_done = ksceKernelGetSystemTimeLow();
@@ -5422,7 +5436,7 @@ void vm_stage_on_problem(void (*fn)(void))
 typedef struct {
 	LgDev    dev[VM_DEV_COUNT];
 	LgKind   k[3];
-	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock;
+	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock, wskip;
 } LgSnap;
 
 static void lg_snap(LgSnap *o)
@@ -5464,6 +5478,7 @@ static void lg_snap(LgSnap *o)
 	o->drops = LD(g_ra_drops);
 	o->waste_kib = LD(g_ra_waste_kib);
 	o->bad = LD(g_ra_bad);
+	o->wskip = LD(g_ra_wskip);
 	o->nc_kib = LD(g_ra_nc_kib);
 	o->tiny = LD(g_ra_tiny_reads);
 	o->pipe = LD(g_pipe_reads);
@@ -5564,9 +5579,10 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         k == LK_TINY ? 0u : (unsigned)(y->spoilt - x->spoilt));
 	}
 	VM_KLOGI("session R/A: hits %u (%u MiB, NC %u), dropped %u (%u MiB unused), unusable %u, "
-	         "tiny hits %u", (unsigned)(b->hits - a->hits), (unsigned)((b->kib - a->kib) / 1024u),
-	         (unsigned)((b->nc_kib - a->nc_kib) / 1024u), (unsigned)(b->drops - a->drops),
-	         (unsigned)((b->waste_kib - a->waste_kib) / 1024u), (unsigned)(b->bad - a->bad),
+	         "not read (a write) %u, tiny hits %u", (unsigned)(b->hits - a->hits),
+	         (unsigned)((b->kib - a->kib) / 1024u), (unsigned)((b->nc_kib - a->nc_kib) / 1024u),
+	         (unsigned)(b->drops - a->drops), (unsigned)((b->waste_kib - a->waste_kib) / 1024u),
+	         (unsigned)(b->bad - a->bad), (unsigned)(b->wskip - a->wskip),
 	         (unsigned)(b->tiny - a->tiny));
 	VM_KLOGI("session: overlapped %u, core 3 %u, NC helper %u, NC standard %u MiB, DMA %u",
 	         (unsigned)(b->pipe - a->pipe), (unsigned)(b->off - a->off),

@@ -2718,6 +2718,31 @@ static void test_readahead(void)
 	CHECK(rd_ok(u, 6 * 256, 256) && u[0] == 0x5A);
 	vm_stage_fini();
 
+	/* a write running when a piece's turn comes: it is not read at all (the
+	 * card left to the write), the stream's next read from the card */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	for (uint32_t i = 0; i < 4; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(ra_idle(d));                              /* not yet: from the 5th */
+	__atomic_store_n(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);   /* a write on its way */
+	{
+		const uint32_t sk = g_ra_wskip;
+		int calls;
+
+		CHECK(rd_ok(u, 4 * 256, 256));                /* the 5th: pieces queued */
+		calls = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+		for (int i = 0; i < RA_PIECES; i++)
+			CHECK(ra_wait(d, i) != RA_READY);
+		CHECK(g_ra_wskip > sk && __atomic_load_n(&io_calls, __ATOMIC_RELAXED) == calls);
+	}
+	__atomic_store_n(&d->ra_wbusy, 0, __ATOMIC_SEQ_CST);
+	CHECK(rd_ok(u, 5 * 256, 256));                    /* the card's, not a piece */
+	for (uint32_t i = 6; i < 12; i++)
+		CHECK(rd_ok(u, i * 256, 256));
+	CHECK(g_ra_hits >= 2);                            /* and read ahead again after */
+	vm_stage_fini();
+
 	/* a write that goes stock (small) into a piece: the piece is not used */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);

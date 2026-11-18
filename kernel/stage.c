@@ -156,6 +156,7 @@ typedef struct Dev {
 	void         *buf;           /* NC staging buffer, NULL until allocated    */
 	volatile int  busy;
 	volatile int  enabled;       /* from settings                              */
+	volatile int  want;          /* ... as set, also while the console starts  */
 	volatile int  fallback;      /* error/mismatch seen: stock for the session */
 	int           unusable;      /* its hooks are not installed: no buffer     */
 	int           alloc_err;     /* last failed allocation (0: none); not
@@ -1182,12 +1183,12 @@ static int pipe_setup(Dev *d)
 	Dev *arg = d;
 	int r;
 
-	d->th = d->sem_go = d->sem_done = d->sem_free = d->uid2 = -1;
+	d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
-	d->buf2 = NULL;
 	d->pipe_quit = 0;
-	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2);
-	if (r < 0) {
+	/* its buffer: already there if made at the start (prealloc) */
+	if (!d->buf2 &&
+	    (r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2)) < 0) {
 		d->uid2 = -1;
 		d->buf2 = NULL;
 		return r;
@@ -3326,8 +3327,10 @@ static int ra_setup(Dev *d)
 		ra_release(d);
 		return r;
 	}
-	/* the tiny reads' block: without it they read as before */
-	if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
+	/* the tiny reads' block (already there if made at the start): without
+	 * it they read as before */
+	if (!d->t_buf &&
+	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
 		d->t_uid = -1;
 		d->t_buf = NULL;
 	}
@@ -4089,6 +4092,27 @@ static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 	         : VM_IO_ERROR;
 }
 
+/* At the start: device `d`'s staging buffer, and the overlapped reads' and
+ * the tiny reads' buffers if what is set will use them (their threads come
+ * later, from the worker, once the home screen is up). One that fails is
+ * tried again when it is needed. */
+static void prealloc(Dev *d)
+{
+	ensure_buf(d);
+	if (!__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE))
+		return;
+	if ((LD(g_pipeline) || LD(g_offload) || LD(g_readahead)) && !d->buf2 &&
+	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2) < 0) {
+		d->uid2 = -1;
+		d->buf2 = NULL;
+	}
+	if (LD(g_readahead) && !d->t_buf &&
+	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
+		d->t_uid = -1;
+		d->t_buf = NULL;
+	}
+}
+
 int vm_stage_init(void)
 {
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
@@ -4129,13 +4153,14 @@ int vm_stage_init(void)
 			g_stack_free_fn = (int (*)(SceUID))f;
 
 	}
-	/* Buffers for the devices already switched on (none while the console
-	 * starts: g_hold); the others get theirs when they are switched on
-	 * (vm_stage_apply, vm_stage_go). */
+	/* Every buffer the devices set on will use, now while contiguous memory
+	 * is easy to find - though none comes on before the home screen
+	 * (g_hold, vm_stage_go); the others get theirs when they are switched on
+	 * (vm_stage_apply). */
 	ST(g_live, 1);
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (LD(g_dev[i].enabled))
-			ensure_buf(&g_dev[i]);
+		if (LD(g_dev[i].want))
+			prealloc(&g_dev[i]);
 	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceSdif", LIB_SDIF, k_hooks[i].nid,
@@ -4222,12 +4247,26 @@ void vm_stage_fini(void)
 			taiHookReleaseForKernel(g_hook[i], g_ref[i]);
 			g_hook[i] = -1;
 		}
-	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (g_dev[i].uid >= 0) {
-			__atomic_store_n(&g_dev[i].buf, NULL, __ATOMIC_RELEASE);
-			ksceKernelFreeMemBlock(g_dev[i].uid);
-			g_dev[i].uid = -1;
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		Dev *d = &g_dev[i];
+
+		if (d->uid >= 0) {
+			__atomic_store_n(&d->buf, NULL, __ATOMIC_RELEASE);
+			ksceKernelFreeMemBlock(d->uid);
+			d->uid = -1;
 		}
+		/* made at the start, never put to use (prealloc) */
+		if (!d->pipe_made && d->uid2 >= 0) {
+			ksceKernelFreeMemBlock(d->uid2);
+			d->uid2 = -1;
+			d->buf2 = NULL;
+		}
+		if (!d->ra_made && d->t_uid >= 0) {
+			ksceKernelFreeMemBlock(d->t_uid);
+			d->t_uid = -1;
+			d->t_buf = NULL;
+		}
+	}
 	if (g_shadow_uid >= 0) {
 		__atomic_store_n(&g_shadow, NULL, __ATOMIC_RELEASE);
 		ksceKernelFreeMemBlock(g_shadow_uid);
@@ -4334,6 +4373,7 @@ void vm_stage_apply(const VmSettings *s)
 			ST(d->fallback, 0);   /* switching it back on is a fresh start */
 			ST(d->alloc_err, 0);  /* ... and a fresh try for its buffer    */
 		}
+		ST(d->want, (i == VM_DEV_SD2VITA ? s->sd2vita : i == VM_DEV_MEMCARD ? s->memcard : 0) ? 1 : 0);
 		if (want[i])
 			ensure_buf(d);
 		ST(d->enabled, want[i] ? 1 : 0);

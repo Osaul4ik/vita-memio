@@ -74,7 +74,8 @@ static uint64_t g_t0_us;             /* ... from this system time          */
 
 /* The worker sleeps on g_wake until it has something to do:
  *   - every 100 ms while the console starts (to come on as soon as the home
- *     screen is up), then every second until the boot guard is settled;
+ *     screen is up), then every second until the boot guard is settled (the
+ *     plugin has shown it works, guard.h);
  *   - every second while the HUD is on (live speeds);
  *   - every 5 s while a failed settings save is to be retried;
  *   - every 250 ms while the overlay is open (its live values);
@@ -197,16 +198,33 @@ static int shell_frames(void)
 }
 
 static const char *const k_guard_why[] = { "", "the home screen shows frames",
-                                           "the home screen is loaded",
-                                           "the home screen cannot be seen here" };
+                                           "the home screen is loaded (its frames cannot be seen here)",
+                                           "the home screen cannot be told here" };
+
+/* Whether the start counts as good (guard.h): VM_GUARD_PROVEN transfers took
+ * the faster path, or no storage is on (none set, or back to the standard
+ * path after an error). */
+static int guard_proven(void)
+{
+	VmDevState st[VM_DEV_COUNT];
+	uint32_t done = 0;
+	int on = 0;
+
+	vm_stage_get(st, 1);
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		on |= st[i].status == VM_ST_ACTIVE;
+		done += st[i].reads + st[i].writes;
+	}
+	return !on || done >= VM_GUARD_PROVEN;
+}
 
 /* The worker, every look until the guard is settled: comes on once the home
- * screen is up, then writes '0' once it has run a while (guard.h). Safe mode
- * and an unknown firmware never get here. */
+ * screen is up, then writes '0' once the plugin has shown it works
+ * (guard.h). Safe mode and an unknown firmware never get here. */
 static void guard_tick(void)
 {
 	const uint32_t ms = uptime_ms();
-	int shell, frames;
+	int shell = 1, frames = 1, proven = 0;
 
 	if (g_guard_done)
 		return;
@@ -214,9 +232,9 @@ static void guard_tick(void)
 		shell = shell_up();
 		frames = shell > 0 ? shell_frames() : 0;
 	} else {
-		shell = frames = 1;                   /* only the time counts now */
+		proven = guard_proven();
 	}
-	switch (vm_guard_step(&g_guard, shell, frames, ms / 1000u)) {
+	switch (vm_guard_step(&g_guard, shell, frames, proven)) {
 	case VM_GA_GO:
 		if (!g_guard_armed) {                 /* the '1' is not there: stay off */
 			g_guard_done = 1;
@@ -233,6 +251,8 @@ static void guard_tick(void)
 		         k_guard_why[g_guard.why]);
 		break;
 	case VM_GA_CLEAR:
+		VM_KLOGI("boot guard: the start is good at %u.%01us", (unsigned)(ms / 1000u),
+		         (unsigned)(ms % 1000u / 100u));
 		if (guard_write('0') != VM_OK)
 			VM_KLOGW("boot guard: '0' not written - the next start will be safe mode");
 		g_guard_done = 1;
@@ -486,7 +506,7 @@ int module_start(SceSize argc, const void *args)
 	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_BUILD_STR, (unsigned)g_fingerprint);
 
 	/* Crash-loop guard (guard.h): the file holds '1' from here until the
-	 * plugin has run VM_GUARD_SETTLE_S after the home screen came up, then
+	 * plugin, on after the home screen came up, has shown it works, then
 	 * '0'. Finding '1' means the last start never got that far: this one
 	 * installs nothing; Settings > Advanced > Reset safe mode
 	 * (vmResetSafeMode) clears it. */

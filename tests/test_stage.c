@@ -988,7 +988,10 @@ static void boot_state(void)
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		memset(&g_dev[i], 0, sizeof(g_dev[i]));
 		g_dev[i].port = port[i];
-		g_dev[i].uid = -1;
+		g_dev[i].uid = g_dev[i].uid2 = g_dev[i].t_uid = -1;
+		g_dev[i].th = g_dev[i].th2 = g_dev[i].ra_th = -1;
+		g_dev[i].sem_go = g_dev[i].sem_done = g_dev[i].sem_free = -1;
+		g_dev[i].sem_cgo = g_dev[i].sem_fin = g_dev[i].ra_go = g_dev[i].ra_done = -1;
 	}
 	for (int i = 0; i < H_COUNT; i++) {
 		g_hook[i] = -1;
@@ -1019,14 +1022,15 @@ static void test_init_all_hooks(void)
 	vm_stage_apply(&s);                       /* at boot, before the hooks: */
 	CHECK(fake_alloc_calls == 0);             /* nothing yet (could be safe mode) */
 	CHECK(vm_stage_init() == VM_OK);
-	/* while the console starts: the storage hooks only, passing everything
-	 * on; no buffer, no device on, no app events */
+	/* while the console starts: the storage hooks and the buffers (now, while
+	 * contiguous memory is easy to find), but no device on - every transfer
+	 * passes on - and no app events */
 	count_free_bufs(&n);
-	CHECK(n == 0 && fake_alloc_calls == 0 && fake_hook_calls == 4 && g_proc_hook < 0);
+	CHECK(n == 2 && fake_alloc_calls == 2 && fake_hook_calls == 4 && g_proc_hook < 0);
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		CHECK(!g_dev[i].enabled);
-	vm_stage_apply(&s);                       /* a setting changed meanwhile: still nothing */
-	CHECK(fake_alloc_calls == 0 && !g_dev[VM_DEV_SD2VITA].enabled);
+	vm_stage_apply(&s);                       /* a setting changed meanwhile: still off */
+	CHECK(fake_alloc_calls == 2 && !g_dev[VM_DEV_SD2VITA].enabled);
 	/* the home screen is up: on as set, the app events followed */
 	CHECK(vm_stage_go() == 1 && fake_hook_calls == 5 && g_proc_hook >= 0);
 	vm_stage_apply(&s);
@@ -1056,7 +1060,7 @@ static void test_init_sdif_hook_fails_releases_everything(void)
 	fake_hook_fail_at = 2;                    /* the second SDIF hook fails */
 	CHECK(vm_stage_init() == VM_ERR_RESOLVE);
 	count_free_bufs(&n);
-	CHECK(n == 0 && fake_free_calls == 0);    /* none allocated while the console starts */
+	CHECK(n == 0 && fake_free_calls == 2);    /* all buffers given back */
 	CHECK(fake_hook_releases == 1);           /* the one hook that was live */
 	CHECK(vm_stage_go() == 0 && g_proc_hook < 0);   /* later: nothing comes on */
 	vm_stage_apply(&s);
@@ -1075,18 +1079,47 @@ static void test_init_memcard_hook_fails_only_memcard_stock(void)
 	CHECK(vm_stage_init() == VM_OK);
 	CHECK(vm_stage_go() == 1);
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 0);
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_free_calls == 1);
 	CHECK(g_dev[VM_DEV_SD2VITA].buf != NULL && g_dev[VM_DEV_INTERNAL].buf == NULL);
 	CHECK(fake_hook_releases == 1);           /* the memory card's read hook */
 	s.memcard = 0;                            /* switching it again allocates nothing */
 	vm_stage_apply(&s);
 	s.memcard = 1;
 	vm_stage_apply(&s);
-	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 1);   /* the SD2Vita's */
+	CHECK(g_dev[VM_DEV_MEMCARD].buf == NULL && fake_alloc_calls == 2);
 	vm_stage_get(out, 1);
 	CHECK(out[VM_DEV_MEMCARD].status == VM_ST_NO_BUFFER);
 	vm_stage_fini();
 	CHECK(fake_hook_releases == 4);   /* 1 + the two SDIF hooks + the app events */
+}
+
+/* At the start every buffer the settings will use: the staging buffer, the
+ * overlapped reads' and the tiny reads' - their threads only once the home
+ * screen is up; and those never put to use are given back at the end. */
+static void test_init_prealloc(void)
+{
+	VmSettings s = devices_on(1, 0, 0);
+	Dev *d = &g_dev[VM_DEV_SD2VITA];
+
+	boot_state();
+	s.readahead = 1;                           /* overlapped reads' and tiny reads' too */
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(d->buf && d->buf2 && d->t_buf && fake_alloc_calls == 3 && !d->enabled);
+	vm_stage_worker_tick();                    /* still starting: no threads */
+	CHECK(!d->pipe_made && fake_threads_live == 0);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();                    /* now: the threads, with those buffers */
+	CHECK(d->enabled && d->pipe_made && d->ra_made && fake_alloc_calls == 3);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 3);
+	/* never put to use (the plugin stopped before the home screen) */
+	boot_state();
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK && fake_alloc_calls == 3);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 3 && d->uid2 < 0 && d->t_uid < 0);
 }
 
 /* A buffer only for the devices that are on; one switched on later gets its
@@ -4357,6 +4390,7 @@ int main(void)
 	RUN(test_get_reports_state);
 	RUN(test_timing_split);
 	RUN(test_init_all_hooks);
+	RUN(test_init_prealloc);
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);

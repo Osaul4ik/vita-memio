@@ -4122,9 +4122,10 @@ static void test_learned_kept_in_file(void)
 {
 	VmSettings s;
 	const AdKept *k;
+	const char *dir;
 
 	fakes_tmpdir_remove();
-	fakes_tmpdir_new();
+	dir = fakes_tmpdir_new();
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
@@ -4156,10 +4157,49 @@ static void test_learned_kept_in_file(void)
 	g_cal_loaded = 0;
 	cal_load();
 	k = ad_kept_find("PCSB00777");
-	CHECK(k && k->ra_adj[0] == -3 && k->sig_saved == ad_sig(k) && k->ad.run[0][10] > 0);
+	CHECK(k && k->ra_adj[0] == -3 && g_tune_file_sig[k - g_ad_kept] == ad_sig(k) &&
+	      k->ad.run[0][10] > 0);
 	as_app(0x44);
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 2 && g_ad_restored >= 1);   /* where it was, at once */
+	/* edited in place: another app learns - only its slot is written, where
+	 * it lies (no copy aside, no rename); the file keeps its size */
+	{
+		char path[256];
+		struct stat st0, st1;
+		const int w0 = fake_tune_writes, b0 = fake_tune_bytes;
+		const AdKept *k2;
+
+		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
+		CHECK(stat(path, &st0) == 0 && st0.st_size == (off_t)TUNE_SLOT_OFF(AD_KEEP));
+		as_app(0x46);
+		vm_stage_worker_tick();
+		adapt_runs(0, 20, 3);
+		ra_proc_event(0x46, 4);
+		vm_stage_worker_tick();
+		CHECK(fake_tune_writes == w0 + 1 && fake_tune_bytes - b0 == (int)sizeof(TuneSlot));
+		CHECK(stat(path, &st1) == 0 && st1.st_size == st0.st_size);
+		snprintf(path, sizeof(path), "%s/tuning.bin.tmp", dir);
+		CHECK(stat(path, &st1) != 0);
+		/* a write cut short: that slot is lost, the other kept */
+		as_app(0x46);
+		vm_stage_worker_tick();
+		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);          /* it moves again: up */
+		CHECK(ra_threshold(0) > 2);
+		fake_write_short = 1;
+		ra_proc_event(0x46, 4);
+		vm_stage_worker_tick();
+		fake_write_short = 0;
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			;
+		memset(g_ad_kept, 0, sizeof(g_ad_kept));
+		__sync_lock_release(&g_ad_lock);
+		g_cal_loaded = 0;
+		cal_load();
+		k2 = ad_kept_find("VITASHELL");
+		k = ad_kept_find("PCSB00777");
+		CHECK(!k2 && k && k->ra_adj[0] == -3);
+	}
 	/* packing: counts up to any size come back to the shift */
 	{
 		AdKept a, b;

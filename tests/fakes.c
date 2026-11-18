@@ -29,7 +29,8 @@ int vm_failures;
 uint32_t fake_now_us;
 int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
-int fake_rename_fail, fake_write_short, fake_prof_writes, fake_tune_writes;
+int fake_rename_fail, fake_write_short, fake_prof_writes, fake_tune_writes, fake_tune_bytes;
+static int fake_tune_fd = -1;
 
 /* ---- logging: swallowed ---------------------------------------------------- */
 void vm_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
@@ -438,6 +439,7 @@ void fakes_reset(void)
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
 	fake_rename_fail = fake_write_short = fake_prof_writes = fake_tune_writes = 0;
+	fake_tune_bytes = 0;
 	fake_memtype = 0xD000;          /* ordinary cached memory */
 	fake_memtype_calls = 0;
 	fake_memtype_from = fake_memtype_to = NULL;
@@ -494,6 +496,8 @@ SceUID ksceIoOpen(const char *path, int flags, int mode)
 	if (flags & SCE_O_TRUNC)  f |= O_TRUNC;
 	if (flags & SCE_O_APPEND) f |= O_APPEND;
 	int fd = open(p, f, mode ? mode : 0666);
+	if (fd >= 0 && (flags & SCE_O_WRONLY) && strstr(path, "tuning.bin"))
+		fake_tune_fd = fd;
 	return fd < 0 ? -1 : fd;
 }
 
@@ -503,10 +507,23 @@ int ksceIoWrite(SceUID fd, const void *buf, SceSize n)
 {
 	if (fake_write_short && n > 4)
 		n = n / 2;                 /* a write cut short (card full, power cut) */
+	if (fd == fake_tune_fd)
+		fake_tune_bytes += (int)n;
 	return (int)write(fd, buf, n);
 }
 
-int ksceIoClose(SceUID fd) { return close(fd); }
+int ksceIoClose(SceUID fd)
+{
+	if (fd == fake_tune_fd)
+		fake_tune_fd = -1;
+	return close(fd);
+}
+
+SceOff ksceIoLseek(SceUID fd, SceOff off, int whence)
+{
+	return (SceOff)lseek(fd, (off_t)off, whence == SCE_SEEK_END ? SEEK_END
+	                                   : whence == SCE_SEEK_CUR ? SEEK_CUR : SEEK_SET);
+}
 
 int ksceIoMkdir(const char *path, int mode)
 {

@@ -327,6 +327,11 @@ const char *fakes_tmpdir_new(void)
 	return g_tmp;
 }
 
+const char *fakes_tmpdir(void)
+{
+	return g_tmp;
+}
+
 void fakes_tmpdir_remove(void)
 {
 	char cmd[300];

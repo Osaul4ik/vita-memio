@@ -128,7 +128,9 @@ static void reset(void)
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_fg = 0;
-	memset(g_ad_kept, 0, sizeof(g_ad_kept));        /* Adaptive: nothing kept */
+	memset(&g_ad_out, 0, sizeof(g_ad_out));         /* Adaptive: nothing held */
+	memset(&g_ad_in, 0, sizeof(g_ad_in));
+	g_ad_fslot = g_ad_fsig = 0;
 	memset(g_ad_title, 0, sizeof(g_ad_title));
 	g_ad_key = 0;
 	g_ad_restored = 0;
@@ -3604,19 +3606,19 @@ static void test_readahead_adaptive_small(void)
 	as_app(0x44);
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12 && g_ad_restored == 2);
-	CHECK(g_ad.run[0][10] > 0 && ad_kept_count() == 2 && g_ad_rounds[0] == 1);   /* full rounds */
+	CHECK(g_ad.run[0][10] > 0 && g_ad_rounds[0] == 1);   /* full rounds */
 	as_app(0x46);
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == 4);
 	/* the home screen (the global settings): not kept, learned afresh */
 	ra_proc_event(0x46, 4);
 	vm_stage_worker_tick();
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && ad_kept_count() == 2);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && g_tune_n == 2);
 	vm_stage_fini();
 
 	/* kept only under what it was learned under: the game's own threshold
-	 * changed - afresh; and AD_KEEP games at most, the one longest away
-	 * making room */
+	 * changed - afresh; and one app at a time in memory: the one in front,
+	 * the one before (until written) and the one coming */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
@@ -3637,13 +3639,14 @@ static void test_readahead_adaptive_small(void)
 		CHECK(ra_threshold(0) == 3 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK &&
 		      g_rs_adj[0] == 0);
 	}
-	for (int i = 0; i < AD_KEEP + 2; i++) {
+	for (int i = 0; i < 14; i++) {
 		char t[16];
 
 		snprintf(t, sizeof(t), "PCSB%05d", i);
 		ra_adapt_switch(t, VM_RA_ADAPTIVE);
 	}
-	CHECK(ad_kept_count() == AD_KEEP);
+	CHECK(tune_title_is(&g_ad_out.app, "PCSB00012") && !strcmp(g_ad_title, "PCSB00013"));
+	CHECK(sizeof(g_ad_out) + sizeof(g_ad_in) < 700);    /* what memory holds of them */
 	vm_stage_fini();
 
 	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
@@ -4127,7 +4130,6 @@ static void test_system_apps(void)
 static void test_learned_kept_in_file(void)
 {
 	VmSettings s;
-	const AdKept *k;
 	const char *dir;
 	char path[256];
 	struct stat st0, st1;
@@ -4163,115 +4165,137 @@ static void test_learned_kept_in_file(void)
 	 * comes to the front */
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		;
-	memset(g_ad_kept, 0, sizeof(g_ad_kept));
+	memset(&g_ad_out, 0, sizeof(g_ad_out));
+	memset(&g_ad_in, 0, sizeof(g_ad_in));
 	ra_adapt_clear();
 	__sync_lock_release(&g_ad_lock);
 	g_ad_title[0] = 0;
 	g_ad_key = 0;
+	g_app_pid = 0;
 	g_cal_loaded = 0;
 	cal_load();
-	CHECK(g_tune_ok && g_tune_n == 1 && !ad_kept_find("PCSB00777"));
+	CHECK(g_tune_ok && g_tune_n == 1 && !g_ad_in.app.title[0]);
 	as_app(0x44);
 	vm_stage_worker_tick();
-	k = ad_kept_find("PCSB00777");
-	CHECK(k && k->ra_adj[0] == -3 && k->fslot == 1 && k->fsig == ad_sig(k) && k->ad.run[0][10] > 0);
-	CHECK(ra_threshold(0) == 2 && g_ad_restored >= 1);   /* where it was, at once */
-	/* every app kept, no limit: more than are at hand */
+	CHECK(tune_title_is(&g_ad_in.app, "PCSB00777") && g_ad_in.fslot == 1 &&
+	      g_ad_in.app.ra_adj[0] == -3 && g_ad_in.fsig == tune_sig(&g_ad_in.app));
+	CHECK(ra_threshold(0) == 2 && g_ad_restored >= 1 && g_ad.run[0][10] > 0);   /* where it was */
+	CHECK(g_ad_fslot == 1);
+	/* every app kept, no limit; one at a time in memory */
 	{
 		const int w0 = fake_tune_writes;
 
-		for (int i = 0; i < AD_KEEP + 8; i++) {
+		for (int i = 0; i < 20; i++) {
 			as_app(0x100 + i);
 			vm_stage_worker_tick();
 			adapt_runs(0, 20, 3);
 			ra_proc_event(0x100 + i, 4);
 			vm_stage_worker_tick();
 		}
-		CHECK(g_tune_n == 1u + AD_KEEP + 8u);
-		CHECK(fake_tune_writes == w0 + AD_KEEP + 8);   /* one slot an app */
+		CHECK(g_tune_n == 21u);
+		CHECK(fake_tune_writes == w0 + 20);           /* one slot an app */
 		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
 		CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(g_tune_n));
-		/* the first of them, long out of hand, comes back from the file */
-		CHECK(!ad_kept_find("PCSG00000"));
+		/* the first of them comes back from the file */
+		CHECK(!tune_title_is(&g_ad_out.app, "PCSG00000") && !tune_title_is(&g_ad_in.app, "PCSG00000"));
 		as_app(0x100);
 		vm_stage_worker_tick();
-		k = ad_kept_find("PCSG00000");
-		CHECK(k && k->fslot == 2 && k->ra_adj[0] == -3 && ra_threshold(0) == 2);
+		CHECK(tune_title_is(&g_ad_in.app, "PCSG00000") && g_ad_in.fslot == 2 && g_ad_fslot == 2 &&
+		      ra_threshold(0) == 2);
 		/* home again: nothing moved, no write */
 		ra_proc_event(0x100, 4);
 		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == w0 + AD_KEEP + 8);    /* nothing moved: no write */
-		/* it learns anew - written where it lies, not added at the end - also
-		 * when it has dropped out of hand while in front */
+		CHECK(fake_tune_writes == w0 + 20);
+		/* it learns anew: written where it lies, not added at the end */
 		as_app(0x100);
 		vm_stage_worker_tick();
-		while (__sync_lock_test_and_set(&g_ad_lock, 1))
-			;
-		memset(g_ad_kept, 0, sizeof(g_ad_kept));     /* out of hand */
-		__sync_lock_release(&g_ad_lock);
 		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);
 		CHECK(ra_threshold(0) > 2);
 		ra_proc_event(0x100, 4);
 		vm_stage_worker_tick();
-		CHECK(g_tune_n == 1u + AD_KEEP + 8u);
+		CHECK(g_tune_n == 21u);
 		CHECK(stat(path, &st0) == 0 && st0.st_size == st1.st_size);
-		k = ad_kept_find("PCSG00000");
-		CHECK(k && k->fslot == 2 && k->ra_adj[0] != -3 && k->fsig == ad_sig(k));
+		CHECK(tune_title_is(&g_ad_out.app, "PCSG00000") && g_ad_out.fslot == 2 &&
+		      g_ad_out.app.ra_adj[0] != -3 && g_ad_out.fsig == tune_sig(&g_ad_out.app));
 		{
 			FILE *f = fopen(path, "rb");
 			TuneSlot t;
 
 			CHECK(f && !fseek(f, (long)TUNE_SLOT_OFF(1), SEEK_SET) && fread(&t, sizeof(t), 1, f) == 1 &&
-			      t.check == tune_slot_check(&t) && t.app.ra_adj[0] == k->ra_adj[0]);
+			      t.check == tune_slot_check(&t) && t.app.ra_adj[0] == g_ad_out.app.ra_adj[0]);
 			if (f)
 				fclose(f);
 		}
+		/* back at once, before anything else: from what is held, not the
+		 * file (which holds the same) */
+		as_app(0x100);
+		vm_stage_worker_tick();
+		CHECK(ra_threshold(0) > 2 && g_ad_fslot == 2);
+		ra_proc_event(0x100, 4);
+		vm_stage_worker_tick();
 	}
-	/* edited in place: an app learns more - only its slot is written, where
-	 * it lies (no copy aside, no rename); the file keeps its size */
+	/* held for the one before, then that one comes back with another in
+	 * between that was held: never an older copy */
+	{
+		as_app(0x44);                             /* from the file: -3 */
+		vm_stage_worker_tick();
+		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);          /* moves: up */
+		as_app(0x100);                            /* the one held before comes */
+		vm_stage_worker_tick();
+		as_app(0x44);
+		vm_stage_worker_tick();
+		CHECK(ra_threshold(0) > 2);                  /* the newer, not -3 from before */
+		ra_proc_event(0x44, 4);
+		vm_stage_worker_tick();
+	}
+	/* edited in place: only the slot written, no copy aside */
 	{
 		const int w0 = fake_tune_writes, b0 = fake_tune_bytes;
 
 		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
 		CHECK(stat(path, &st0) == 0);
-		as_app(0x44);
+		as_app(0x46);
 		vm_stage_worker_tick();
-		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);          /* it moves again: up */
-		CHECK(ra_threshold(0) > 2);
-		ra_proc_event(0x44, 4);
+		adapt_runs(0, 20, 3);
+		ra_proc_event(0x46, 4);
 		vm_stage_worker_tick();
 		CHECK(fake_tune_writes == w0 + 1 && fake_tune_bytes - b0 == (int)sizeof(TuneSlot));
-		CHECK(stat(path, &st1) == 0 && st1.st_size == st0.st_size);
+		CHECK(stat(path, &st1) == 0 && st1.st_size == st0.st_size + (off_t)sizeof(TuneSlot));
 		snprintf(path, sizeof(path), "%s/ux0/tuning.bin.tmp", dir);
 		CHECK(stat(path, &st1) != 0);
 	}
 	/* a write cut short: that slot is lost, the others kept; the app learns
 	 * again in the same slot */
 	{
+		const uint32_t n0 = g_tune_n;
+
 		as_app(0x46);
 		vm_stage_worker_tick();
-		adapt_runs(0, 20, 3);
+		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);
 		fake_write_short = 1;
 		ra_proc_event(0x46, 4);
 		vm_stage_worker_tick();
 		fake_write_short = 0;
-		CHECK(g_tune_n == 1u + AD_KEEP + 8u + 1u);
 		while (__sync_lock_test_and_set(&g_ad_lock, 1))
 			;
-		memset(g_ad_kept, 0, sizeof(g_ad_kept));
+		memset(&g_ad_out, 0, sizeof(g_ad_out));
+		memset(&g_ad_in, 0, sizeof(g_ad_in));
 		__sync_lock_release(&g_ad_lock);
 		g_ad_title[0] = 0;
+		g_app_pid = 0;
 		g_cal_loaded = 0;
 		cal_load();
-		CHECK(g_tune_n == 1u + AD_KEEP + 8u);         /* the half slot at the end: not one */
-		as_app(0x44);
+		CHECK(g_tune_n == n0);
+		as_app(0x46);
 		vm_stage_worker_tick();
-		k = ad_kept_find("PCSB00777");
-		CHECK(k && k->ra_adj[0] != -3 && k->ra_adj[0] != 0);   /* the later one */
+		CHECK(g_ad_in.fslot == n0 && !g_ad_in.fsig && ra_threshold(0) == 5);   /* spoilt: afresh, its place */
+		adapt_runs(0, 20, 3);
+		ra_proc_event(0x46, 4);
+		vm_stage_worker_tick();
+		CHECK(g_tune_n == n0 && g_ad_out.fslot == n0 && g_ad_out.fsig == tune_sig(&g_ad_out.app));
 		as_app(0x101);
 		vm_stage_worker_tick();
-		k = ad_kept_find("PCSG00001");
-		CHECK(k && k->fslot == 3 && k->ra_adj[0] == -3);
+		CHECK(g_ad_in.fslot == 3 && g_ad_in.app.ra_adj[0] == -3);
 		ra_proc_event(0x101, 4);
 		vm_stage_worker_tick();
 	}
@@ -4299,22 +4323,27 @@ static void test_learned_kept_in_file(void)
 	}
 	/* packing: counts up to any size come back to the shift */
 	{
-		AdKept a, b;
 		TuneApp t;
 
-		memset(&a, 0, sizeof(a));
-		memcpy(a.title, "PCSB00777", 10);
-		a.tiny_thr = RA_TINY_STREAK;
-		a.tiny_blk = RA_TINY_SECTORS;
-		a.ad.pos[0][9] = 5000000u;
-		a.ad.pos[1][3] = 1234u;
-		a.tn_cnt[4] = 70000u;
-		tune_pack(&a, &t);
-		CHECK(tune_unpack(&t, &b) && b.ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
-		      b.ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && b.tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			;
+		ra_adapt_clear();
+		memcpy(g_ad_title, "PCSB00777", 10);
+		g_ad.pos[0][9] = 5000000u;
+		g_ad.pos[1][3] = 1234u;
+		g_tn_cnt[4] = 70000u;
+		tune_pack(&t);
+		ra_adapt_clear();
+		CHECK(tune_valid(&t));
+		tune_restore(&t);
+		CHECK(g_ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
+		      g_ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && g_tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
 		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 340);
 		t.tiny_blk = 48;                              /* not one this build writes */
-		CHECK(!tune_unpack(&t, &b));
+		CHECK(!tune_valid(&t));
+		ra_adapt_clear();
+		g_ad_title[0] = 0;
+		__sync_lock_release(&g_ad_lock);
 	}
 	vm_stage_fini();
 }
@@ -4342,6 +4371,24 @@ static void test_profiles(void)
 	fake_rename_fail = 0;
 	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_OFF);
 	CHECK(ra_prof_remove("PCSB00777") < 0 && !ra_prof_load("PCSB00777", &pf));
+	/* on ux0; an older version's on ur0 moves there when it is first read */
+	{
+		char ux[256], ur[256];
+		struct stat st;
+
+		pf.app.pipe = VM_PIPE_FIXED;
+		ra_prof_save("PCSB00554", &pf);
+		snprintf(ux, sizeof(ux), "%s/ux0/ra/PCSB00554.bin", fakes_tmpdir());
+		snprintf(ur, sizeof(ur), "%s/ra", fakes_tmpdir());
+		mkdir(ur, 0777);
+		snprintf(ur, sizeof(ur), "%s/ra/PCSB00554.bin", fakes_tmpdir());
+		CHECK(stat(ux, &st) == 0 && rename(ux, ur) == 0);
+		memset(&pf, 0, sizeof(pf));
+		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
+		CHECK(stat(ux, &st) == 0 && stat(ur, &st) != 0);
+		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
+		CHECK(ra_prof_remove("PCSB00554") == 0 && !ra_prof_load("PCSB00554", &pf));
+	}
 	/* one that is not right: not used */
 	{
 		RaProfileFile v;

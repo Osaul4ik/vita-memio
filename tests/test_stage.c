@@ -4055,6 +4055,46 @@ static void test_app_settings(void)
  * a profile of its own (HOME_TITLE) and Adaptive keeps what it learned there;
  * a system app is an app like a game. Off: they all use the global settings,
  * as before. */
+/* Two processes' events at once (any thread): the app in front and its
+ * title always go together. */
+static volatile int g_ev_stop;
+
+static void *ev_thread(void *arg)
+{
+	const SceUID pid = (SceUID)(intptr_t)arg;
+
+	for (int i = 0; i < 20000 && !__atomic_load_n(&g_ev_stop, __ATOMIC_RELAXED); i++) {
+		ra_proc_event(pid, 1);
+		ra_proc_event(pid, (i & 1) ? 4 : 3);
+	}
+	return NULL;
+}
+
+static void test_fg_events_together(void)
+{
+	VmSettings s;
+	pthread_t a, b;
+	int bad = 0;
+
+	on_game(&s, 0x44);
+	__atomic_store_n(&g_ev_stop, 0, __ATOMIC_RELAXED);
+	CHECK(pthread_create(&a, NULL, ev_thread, (void *)(intptr_t)0x44) == 0);
+	CHECK(pthread_create(&b, NULL, ev_thread, (void *)(intptr_t)0x46) == 0);
+	for (int i = 0; i < 20000; i++) {
+		char t[16];
+		const SceUID pid = fg_get(t);
+
+		if ((pid == 0x44 && strcmp(t, "PCSB00777")) || (pid == 0x46 && strcmp(t, "VITASHELL")) ||
+		    (!pid && t[0]))
+			bad++;
+	}
+	__atomic_store_n(&g_ev_stop, 1, __ATOMIC_RELAXED);
+	pthread_join(a, NULL);
+	pthread_join(b, NULL);
+	CHECK(!bad);
+	vm_stage_fini();
+}
+
 static void test_system_apps(void)
 {
 	VmSettings s;
@@ -4698,6 +4738,7 @@ int main(void)
 	RUN(test_app_settings);
 	RUN(test_system_apps);
 	RUN(test_learned_kept_in_file);
+	RUN(test_fg_events_together);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

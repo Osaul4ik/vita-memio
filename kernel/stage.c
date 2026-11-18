@@ -1369,6 +1369,29 @@ static void off_refuse(int state, int err, uint32_t type)
  *   - the same memory type as the caller's buffer at both ends of both
  *     (cached: one coherent copy of the data for every core). */
 static char g_fg_title[16];               /* (with the app events, below) */
+static SceUID g_ra_fg;                    /* atomic (with the app events, below) */
+/* The app in front and its title, changed together: process events come on
+ * any thread, two at once too. Held for a copy of a few words at most. */
+static volatile int g_fg_lock;
+
+static void fg_lock(void)
+{
+	while (__sync_lock_test_and_set(&g_fg_lock, 1))
+		ksceKernelDelayThread(10);
+}
+
+/* The app in front (0: none) and its title, as one. */
+static SceUID fg_get(char title[16])
+{
+	SceUID pid;
+
+	fg_lock();
+	pid = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+	memcpy(title, g_fg_title, 16);
+	__sync_lock_release(&g_fg_lock);
+	title[15] = 0;
+	return pid;
+}
 
 /* A stretch of the buffer mapped on its own, and unmapped: 0 or the error. */
 static int mapfail_probe(SceUID pid, uintptr_t user, uint32_t len)
@@ -1446,8 +1469,13 @@ static void mapfail_note(int which, const OffMap *m, int err)
 		f->blk[f->nblk].size = info.mapped_size;
 		f->nblk++;
 	}
-	memcpy(f->title, g_fg_title, sizeof(f->title) - 1);
-	f->title[sizeof(f->title) - 1] = 0;
+	{
+		char t[16];
+
+		fg_get(t);
+		memcpy(f->title, t, sizeof(f->title) - 1);
+		f->title[sizeof(f->title) - 1] = 0;
+	}
 	__atomic_store_n(&f->ready, 1, __ATOMIC_RELEASE);
 	{
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
@@ -1699,7 +1727,6 @@ static int (*g_title_fn)(SceUID pid, char *titleid, SceSize len);
 static int (*g_exclusive_fn)(const char *title_id);
 static SceUID         g_proc_hook = -1;
 static volatile tai_hook_ref_t g_proc_ref;
-static SceUID         g_ra_fg;              /* atomic */
 static char           g_fg_title[16];       /* its title id ("" none / not known) */
 static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
 static uint32_t       g_fg_noid;            /* atomic: processes with no title id (log) */
@@ -1950,8 +1977,10 @@ static volatile int g_sysapps = VM_DEF_SYSAPPS;
 /* `pid` (title `t`) is the app in front from now. Any thread. */
 static void fg_take(SceUID pid, const char *t)
 {
-	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+	SceUID fg;
 
+	fg_lock();
+	fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 	if (pid != fg) {                      /* another app: its storage afresh */
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
@@ -1959,6 +1988,7 @@ static void fg_take(SceUID pid, const char *t)
 		g_fg_title[sizeof(g_fg_title) - 1] = 0;
 	}
 	__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
+	__sync_lock_release(&g_fg_lock);
 	if (pid != fg)
 		ra_wake();                        /* the worker puts its settings in effect */
 }
@@ -1994,13 +2024,17 @@ static void ra_proc_event(SceUID pid, int ev)
 			return;
 		fg_take(pid, t);
 	} else if (ev == 3 || ev == 4) {
-		SceUID exp = pid;
+		int left;
 
-		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
-		                                __ATOMIC_RELAXED)) {
+		fg_lock();
+		left = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) == pid;
+		if (left) {
+			__atomic_store_n(&g_ra_fg, 0, __ATOMIC_RELEASE);
 			g_fg_title[0] = 0;
-			ra_wake();                        /* the worker: the global settings again */
 		}
+		__sync_lock_release(&g_fg_lock);
+		if (left)
+			ra_wake();                        /* the worker: the global settings again */
 	}
 }
 
@@ -4866,13 +4900,15 @@ static void app_load(SceUID fg)
 {
 	RaProf pf;
 
+	char ft[16];
+	const SceUID now = fg_get(ft);        /* in front now, with its title */
+
 	eff_lock();
 	ra_app_global(&g_app_cur);
 	if (!fg && LD(g_sysapps)) {
 		memcpy(g_app_title, HOME_TITLE, sizeof(HOME_TITLE));   /* the home screen's */
-	} else if (fg && fg == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
-		memcpy(g_app_title, g_fg_title, sizeof(g_app_title) - 1);
-		g_app_title[sizeof(g_app_title) - 1] = 0;
+	} else if (fg && fg == now) {
+		memcpy(g_app_title, ft, sizeof(g_app_title));
 	} else if (!fg || fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE)) {
 		g_app_title[0] = 0;
 	}                                     /* else suspended, reloaded: its title kept */
@@ -4887,7 +4923,9 @@ static void app_load(SceUID fg)
 			         (int)pf.app.offload, (int)pf.app.pipe, (int)pf.app.gpusafe,
 			         (unsigned)pf.app.thr[0], (unsigned)pf.app.thr[1]);
 	}
+	eff_lock();
 	g_app_saved = g_app_cur;
+	__sync_lock_release(&g_eff_lock);
 	tune_fetch(g_app_title);              /* what it learned before, at hand - before it is in front */
 	__atomic_store_n(&g_app_pid, fg, __ATOMIC_RELEASE);
 	eff_update();
@@ -4929,13 +4967,15 @@ int vm_stage_app_set(const VmApp *a)
 
 	if (!a || !ra_app_ok(a))
 		return VM_ERR_ARG;
-	if (!app_in_front())
-		return VM_ERR_NOT_READY;
 	v = *a;
 	/* its thresholds only mean something with read ahead on for it */
 	if ((v.ra == VM_APP_GLOBAL ? LD(g_glob_ra) : v.ra) == VM_RA_OFF)
 		v.thr[0] = v.thr[1] = 0;
 	eff_lock();
+	if (!app_in_front()) {                /* checked with the app: the worker loads under it */
+		__sync_lock_release(&g_eff_lock);
+		return VM_ERR_NOT_READY;
+	}
 	g_app_cur = v;
 	__sync_lock_release(&g_eff_lock);
 	eff_update();
@@ -5260,13 +5300,14 @@ void vm_stage_worker_tick(void)
 	{
 		static SceUID last_fg;
 		static uint32_t last_noid;
-		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+		char ft[16];
+		const SceUID fg = fg_get(ft);
 		const uint32_t noid = __atomic_load_n(&g_fg_noid, __ATOMIC_RELAXED);
 
 		if (fg != last_fg) {
 			last_fg = fg;
 			if (fg)
-				VM_KLOGI("stage: in front: %s (pid 0x%08x)", g_fg_title, (unsigned)fg);
+				VM_KLOGI("stage: in front: %s (pid 0x%08x)", ft, (unsigned)fg);
 			else
 				VM_KLOGI("stage: in front: the home screen");
 		}
@@ -5281,11 +5322,12 @@ void vm_stage_worker_tick(void)
 		const int on = LD(g_log_diag);
 
 		if (on && !was_on) {
-			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+			char ft[16];
+			const SceUID fg = fg_get(ft);
 
 			VM_KLOGI("stage: v%s, app events %s, title ids %s, in front: %s", VM_BUILD_STR,
 			         g_proc_hook >= 0 ? "followed" : "NOT hooked",
-			         g_title_fn ? "there" : "MISSING", fg ? g_fg_title : "the home screen");
+			         g_title_fn ? "there" : "MISSING", fg ? ft : "the home screen");
 		}
 		was_on = on;
 	}
@@ -5488,9 +5530,13 @@ void vm_stage_fg(VmFg *o)
 
 	memset(o, 0, sizeof(*o));
 	o->dev = -1;
-	if (!__atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE))
-		return;
-	memcpy(o->title, g_fg_title, sizeof(o->title) - 1);
+	{
+		char ft[16];
+
+		if (!fg_get(ft))
+			return;
+		memcpy(o->title, ft, sizeof(o->title) - 1);
+	}
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const uint32_t v = __atomic_load_n(&g_fg_sec[i], __ATOMIC_RELAXED);
 

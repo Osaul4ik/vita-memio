@@ -100,7 +100,14 @@ static void draw_panel(uint32_t *fb, int pitch, int w, int h, const HudText *t, 
 {
 	const uint32_t s1 = __atomic_load_n(&g_seq, __ATOMIC_ACQUIRE);
 	HudCache c = g_cache;
-	int ok = !(s1 & 1) && hud_cache_blit(fb, pitch, w, h, t, &c, row);
+	int ok;
+
+	/* the copy used only if the worker did not change it while it was taken:
+	 * a copy half from before a swap (the old block with the new size)
+	 * would read past the old block */
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	ok = !(s1 & 1) && __atomic_load_n(&g_seq, __ATOMIC_RELAXED) == s1 &&
+	     hud_cache_blit(fb, pitch, w, h, t, &c, row);
 
 	__atomic_thread_fence(__ATOMIC_ACQUIRE);
 	if (!ok || __atomic_load_n(&g_seq, __ATOMIC_RELAXED) != s1)

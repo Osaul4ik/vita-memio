@@ -91,8 +91,18 @@ static int load_thread(SceSize args, void *argp)
 
 		id = ksceKernelLoadStartModule(k_paths[i], sizeof(g_link_ptr), (void *)&g_link_ptr,
 		                               0, NULL, &status);
-		if (id >= 0 && status == SCE_KERNEL_START_SUCCESS)
-			return id;
+		if (id >= 0 && status == SCE_KERNEL_START_SUCCESS) {
+			if (g_link.hud.size == sizeof(VmHudApi) && g_link.hud.tick && g_link.hud.busy &&
+			    g_link.hud.fini)
+				return id;
+			/* started, but not this build's API: taken out again, here (an
+			 * unload too wants more stack than the worker has) - else its
+			 * hooks stayed in with nothing to stop them */
+			if (g_link.hud.size == sizeof(VmHudApi) && g_link.hud.fini)
+				g_link.hud.fini();
+			ksceKernelStopUnloadModule(id, 0, NULL, 0, NULL, &status);
+			return (int)0x80010016;       /* SCE_ERROR_ERRNO_EINVAL           */
+		}
 		if (id >= 0)                      /* it did not stay (another build) */
 			return (int)0x80010016;       /* SCE_ERROR_ERRNO_EINVAL           */
 	}

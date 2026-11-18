@@ -41,6 +41,7 @@ typedef struct VmState {
 #define VM_DIS_FIRMWARE  1   /* unknown firmware: nothing installed, all stock  */
 #define VM_DIS_HOOKS     2   /* hooks could not be installed: all stock         */
 #define VM_DIS_SAFE      3   /* last start never finished: safe mode, all stock */
+#define VM_DIS_OFF       4   /* switched off in Settings (Driver): all stock    */
 
 #define VM_STATE_MAGIC  0x54535354u   /* 'TSST' */
 

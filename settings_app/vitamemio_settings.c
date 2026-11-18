@@ -18,7 +18,8 @@
  *     "Reset safe mode" button reaches the kernel module.
  *
  * The page: the driver's status (a button: its title says whether the kernel
- * module runs, its help and its dialog say more), the two storage switches,
+ * module runs, its help and its dialog say more), the Driver switch (whether
+ * it starts with the console, from the next start), the two storage switches,
  * then an "Advanced" sub-page with verify, logging, the overlay and the
  * safe-mode reset.
  *
@@ -58,7 +59,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
  * (NULL: a reserved slot, never on the page). */
 static const char *const g_keys[VM_KEY_COUNT] = {
 	"sd2vita", NULL, "verify", NULL, NULL, "log", "memcard", "small", "stats", "gpusafe",
-	"pipeline", "offload", "readahead", "overlay", "dmacopy",
+	"pipeline", "offload", "readahead", "overlay", "dmacopy", "driver",
 };
 
 #define ROW_LIST(k) \
@@ -73,11 +74,13 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 #define SAFE_BUTTON_ID   "vm_safe_reset"
 #define STATUS_BUTTON_ID "vm_status"
 
-/* The group, with the safe-mode row under the driver's only in safe mode. */
+/* The group: the driver's status, the Driver switch right under it, then the
+ * safe-mode row only in safe mode. */
 #define X_OPEN \
 	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">" \
 	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" " \
-	"hint=\"vm_h_status\" success_dialog_message=\"vm_h_status\"/>"
+	"hint=\"vm_h_status\" success_dialog_message=\"vm_h_status\"/>" \
+	ROW_TOGGLE("driver")
 #define X_SAFE \
 	"<button id=\"" SAFE_BUTTON_ID "\" title=\"vm_t_safe\" icon=\"tex_spanner\" " \
 	"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" " \
@@ -238,6 +241,8 @@ static const vm_u16 *status_text(int hint)
 		title = VM_I18N_STATUS_FIRMWARE;   help = VM_I18N_ST_FIRMWARE;
 	} else if (st.disabled == VM_DIS_HOOKS) {
 		title = VM_I18N_STATUS_HOOKS;      help = VM_I18N_ST_HOOKS;
+	} else if (st.disabled == VM_DIS_OFF) {
+		title = VM_I18N_STATUS_OFF;        help = VM_I18N_HINT_STATUS_OFF;
 	} else {
 		title = VM_I18N_STATUS_ACTIVE;     help = VM_I18N_HINT_STATUS_ACTIVE;
 	}
@@ -271,6 +276,8 @@ static const vm_u16 *device_hint(int dev, int help_id)
 		id = VM_I18N_ST_HOOKS;
 	else if (st.disabled == VM_DIS_SAFE)
 		id = VM_I18N_ST_SAFE;
+	else if (st.disabled == VM_DIS_OFF)
+		id = VM_I18N_ST_OFF;
 	else if (st.dev[dev].status == VM_ST_FALLBACK)
 		id = VM_I18N_ST_FALLBACK;
 	else if (st.dev[dev].status == VM_ST_NO_BUFFER)
@@ -340,6 +347,25 @@ static const vm_u16 *dma_hint(void)
 	return o;
 }
 
+/* The Driver switch's help, and "restart to apply" while what is set is not
+ * what this start did (a kernel module that does not answer: on, as set). */
+static const vm_u16 *driver_hint(void)
+{
+	VmState st;
+	Line l = { {0}, 0 };
+	const int set = vmGetSetting(VM_KEY_DRIVER);
+	const int up = get_state(&st);
+
+	l_put(&l, vm_i18n(VM_I18N_HINT_DRIVER));
+	if (up && (set == 1 || set == 0) && (set == 0) != (st.disabled == VM_DIS_OFF)) {
+		l_put(&l, " ");
+		l_put(&l, vm_i18n(VM_I18N_DRIVER_RESTART));
+	}
+	vm_u16 *o = next_buf();
+	vm_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
+	return o;
+}
+
 /* Row title / help ids per setting key. */
 static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_ROW_SD2VITA,
@@ -349,7 +375,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_ROW_STATS, [VM_KEY_GPUSAFE] = VM_I18N_ROW_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_ROW_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_ROW_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_ROW_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_ROW_OVERLAY,
-	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY,
+	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY, [VM_KEY_DRIVER] = VM_I18N_ROW_DRIVER,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
@@ -359,7 +385,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_STATS] = VM_I18N_HINT_STATS, [VM_KEY_GPUSAFE] = VM_I18N_HINT_GPUSAFE,
 	[VM_KEY_PIPELINE] = VM_I18N_HINT_PIPELINE, [VM_KEY_OFFLOAD] = VM_I18N_HINT_OFFLOAD,
 	[VM_KEY_READAHEAD] = VM_I18N_HINT_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_HINT_OVERLAY,
-	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY,
+	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY, [VM_KEY_DRIVER] = VM_I18N_HINT_DRIVER,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */
@@ -412,6 +438,8 @@ static const vm_u16 *vm_text(const char *id)
 			return device_hint(VM_DEV_MEMCARD, k_hint[k]);
 		if (k == VM_KEY_DMACOPY)
 			return dma_hint();
+		if (k == VM_KEY_DRIVER)
+			return driver_hint();
 		return fixed_text(k_hint[k]);
 	}
 	if (s_pfx(id, "vm_i_gs") && id[7] >= '0' && id[7] <= '2' && !id[8])

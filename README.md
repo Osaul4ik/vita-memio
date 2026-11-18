@@ -38,18 +38,19 @@ That is all: the other defaults are the recommended ones. Back up your cards fir
 
 ## Uninstall
 
-1. In **Settings > Devices > vita-memio**, switch off every storage.
+1. In **Settings > Devices > vita-memio**, switch off every storage (or switch *Driver* off).
 2. Remove the plugin's lines from `config.txt`.
 3. Restart the console.
 4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio_hud.skprx`, `ur0:tai/vitamemio.suprx` and the folder `ur0:data/vita-memio/`.
 
 ## Settings
 
-Everything is in **Settings > Devices > vita-memio** and takes effect at once, no restart needed.
+Everything is in **Settings > Devices > vita-memio** and takes effect at once, no restart needed, except *Driver*.
 
 | Setting | What it does | Default |
 |---|---|---|
-| Driver | Shows whether the plugin is running. Select it for details | |
+| Driver: active / off / … | Shows whether the plugin is running. Select it for details | |
+| Driver | Whether the plugin starts with the console. **Off**: from the next start it loads nothing and every storage works the standard way; this page stays, so you can switch it on again. Takes effect after a restart | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
 
 **Advanced**
@@ -72,7 +73,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
 | Statistics | Collects timings for the tester app; switch it on before testing | Off |
 
-If the plugin ever could not start properly, a **Reset safe mode** row appears under *Driver*.
+If the plugin ever could not start properly, a **Reset safe mode** row appears under the status.
 
 ### Copy on the system core
 

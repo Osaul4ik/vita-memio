@@ -70,6 +70,12 @@ enum vm_i18n_id {
 	VM_I18N_DMA_STOP_MISMATCH,
 	VM_I18N_ITEM_GS_NODMA,      /* GPU-safe reads' choices (Off: ITEM_OFF_OFF)    */
 	VM_I18N_ITEM_GS_ALL,
+	VM_I18N_ROW_DRIVER,         /* the Driver switch, right under the status      */
+	VM_I18N_HINT_DRIVER,
+	VM_I18N_DRIVER_RESTART,     /* ... its help adds this until a restart applies it */
+	VM_I18N_STATUS_OFF,         /* the status row with Driver off                 */
+	VM_I18N_HINT_STATUS_OFF,
+	VM_I18N_ST_OFF,             /* a storage's help with Driver off               */
 	VM_I18N_COUNT
 };
 

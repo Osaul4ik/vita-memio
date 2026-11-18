@@ -197,6 +197,33 @@ static void test_corrupt_file_gives_defaults(void)
 	CHECK(all_defaults(&s));
 }
 
+/* Driver: on by default, 0/1 only; a file from before it (15 keys) leaves
+ * it on; off is kept across a save. */
+static void test_driver_key(void)
+{
+	uint8_t buf[128];
+	int32_t v[15] = { 1, 0, 0, VM_HUD_EXTENDED, 1, 0, 0, 1, 0, 2, 1, 3, 2, 1, 1 };
+	VmSettings s;
+	size_t n;
+
+	clean();
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.driver == 1 && VM_DEF_DRIVER == 1);
+	CHECK(vm_settings_set(VM_KEY_DRIVER, 2) == VM_ERR_ARG);
+	clean();
+	n = make_file(buf, 15, v);                /* 1.4.0's file */
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && s.driver == 1);
+	CHECK(vm_settings_set(VM_KEY_DRIVER, 0) == VM_OK);
+	vm_settings_flush();
+	vm_settings_init();                       /* the next start */
+	vm_settings_copy(&s);
+	CHECK(s.driver == 0 && s.sd2vita == 1);
+}
+
 static void test_older_file_with_fewer_keys(void)
 {
 	uint8_t buf[128];
@@ -479,6 +506,7 @@ int main(void)
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);
 	RUN(test_older_file_with_fewer_keys);
+	RUN(test_driver_key);
 	RUN(test_stored_hud_off_takes_default);
 	RUN(test_gpusafe_default_and_stored_value);
 	RUN(test_pending);

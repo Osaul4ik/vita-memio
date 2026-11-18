@@ -327,9 +327,10 @@ static int worker(SceSize args, void *argp)
 		 * so they are saved, and the log follows its switch. */
 		vm_settings_flush();
 		vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));   /* follows the switch */
-		/* Safe mode stays until it is reset, and an unknown firmware never
-		 * set the guard: nothing else runs in those two. */
-		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE)
+		/* Safe mode stays until it is reset, an unknown firmware and a
+		 * driver switched off never set the guard: nothing else runs in
+		 * those three. */
+		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE || g_disabled == VM_DIS_OFF)
 			continue;
 		guard_tick();
 		if (!g_on)
@@ -505,6 +506,15 @@ int module_start(SceSize argc, const void *args)
 	/* The one line every start writes: which build, on which storage driver. */
 	VM_KLOGI("kernel v%s start, storage driver 0x%08x", VM_BUILD_STR, (unsigned)g_fingerprint);
 
+	/* Switched off in Settings (Driver): this start installs nothing and
+	 * writes nothing - not even the boot guard; the settings can still be
+	 * changed, to switch it on for the next start. */
+	if (!__atomic_load_n(&g_vm_settings.driver, __ATOMIC_RELAXED)) {
+		g_disabled = VM_DIS_OFF;
+		VM_KLOGI("switched off in Settings (Driver) - nothing installed");
+		start_worker();
+		return SCE_KERNEL_START_SUCCESS;
+	}
 	/* Crash-loop guard (guard.h): the file holds '1' from here until the
 	 * plugin, on after the home screen came up, has shown it works, then
 	 * '0'. Finding '1' means the last start never got that far: this one

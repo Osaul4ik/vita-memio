@@ -3917,7 +3917,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		/* as a piece: the range before the look at ra_wbusy, both in one order
 		 * with a write's own steps */
 		__atomic_store_n(&d->t_dirty, 0, __ATOMIC_SEQ_CST);
-		ST(d->t_start, sector);
+		__atomic_store_n(&d->t_start, sector, __ATOMIC_SEQ_CST);   /* before the end (stage_xfer) */
 		__atomic_store_n(&d->t_end, sector + blk, __ATOMIC_SEQ_CST);
 		wr = __atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST);
 		b0 = cal ? ksceKernelGetSystemTimeLow() : 0;
@@ -4493,7 +4493,12 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 		}
 	}
 	{
-		const uint64_t a = LD(d->t_start), e = __atomic_load_n(&d->t_end, __ATOMIC_SEQ_CST);
+		/* t_end first: the block's start is stored before its end
+		 * (ra_tiny_read), so the start seen is that block's - read the other
+		 * way round, an older start could hide part of the block from this
+		 * write, and the block's old data be served after it */
+		const uint64_t e = __atomic_load_n(&d->t_end, __ATOMIC_SEQ_CST);
+		const uint64_t a = __atomic_load_n(&d->t_start, __ATOMIC_SEQ_CST);
 
 		if (e != a && (uint64_t)sector < e && (uint64_t)sector + nsec > a)
 			__atomic_store_n(&d->t_dirty, 1, __ATOMIC_SEQ_CST);

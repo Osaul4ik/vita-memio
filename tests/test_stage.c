@@ -4038,52 +4038,6 @@ static void test_app_settings(void)
 	vm_stage_fini();
 }
 
-/* What Settings has off stays off: an app's own settings change how a thing
- * is used, never switch it back on; what Settings has on, the app may still
- * switch off or use otherwise. */
-static void test_app_cannot_switch_on(void)
-{
-	VmSettings s;
-	VmApp a;
-
-	fakes_tmpdir_remove();
-	fakes_tmpdir_new();
-	reset();
-	ra_settings(&s, VM_GPUSAFE_OFF, VM_OFFLOAD_OFF, VM_PIPE_OFF);   /* copy, overlapped: off */
-	s.readahead = VM_RA_OFF;                                       /* read ahead too */
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
-	as_app(0x44);
-	vm_stage_worker_tick();
-	ra_app_global(&a);
-	a.ra = VM_RA_ADAPTIVE;
-	a.offload = VM_OFFLOAD_FULL;
-	a.pipe = VM_PIPE_FIXED;
-	a.gpusafe = VM_GPUSAFE_ALL;
-	a.thr[0] = 3;
-	CHECK(vm_stage_app_set(&a) == VM_OK);
-	CHECK(g_ra_mode == VM_RA_OFF && !g_readahead && g_offload == VM_OFFLOAD_OFF &&
-	      g_pipeline == VM_PIPE_OFF && g_gpu_safe == VM_GPUSAFE_OFF);
-	CHECK(g_app_cur.thr[0] == 3);                 /* kept for when it is on again */
-	/* on in Settings: the app's own now */
-	s.readahead = VM_RA_ON;
-	s.offload = VM_OFFLOAD_ALWAYS;
-	s.pipeline = VM_PIPE_AUTO;
-	s.gpusafe = VM_GPUSAFE_NODMA;
-	vm_stage_apply(&s);
-	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_offload == VM_OFFLOAD_FULL &&
-	      g_pipeline == VM_PIPE_FIXED && g_gpu_safe == VM_GPUSAFE_ALL);
-	/* and the app may switch off what Settings has on */
-	a.ra = VM_RA_OFF;
-	a.offload = VM_OFFLOAD_OFF;
-	a.pipe = VM_PIPE_OFF;
-	a.gpusafe = VM_GPUSAFE_OFF;
-	CHECK(vm_stage_app_set(&a) == VM_OK);
-	CHECK(g_ra_mode == VM_RA_OFF && g_offload == VM_OFFLOAD_OFF && g_pipeline == VM_PIPE_OFF &&
-	      g_gpu_safe == VM_GPUSAFE_OFF);
-	vm_stage_fini();
-}
-
 /* Profiles: versions, checks, and never half written. */
 static void test_profiles(void)
 {
@@ -4414,7 +4368,6 @@ int main(void)
 	RUN(test_tiny_adaptive);
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
-	RUN(test_app_cannot_switch_on);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

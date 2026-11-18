@@ -4296,13 +4296,6 @@ static void eff_lock(void)
 		ksceKernelDelayThread(100);
 }
 
-/* One setting in effect: the app's own (`app`, VM_APP_GLOBAL: none) or the
- * global one; Off in Settings (`off`) stays off whatever the app has. */
-static int eff_pick(int app, int global, int off)
-{
-	return global == off || app < 0 ? global : app;
-}
-
 /* Put the settings in effect. Any thread. */
 static void eff_update(void)
 {
@@ -4316,12 +4309,10 @@ static void eff_update(void)
 	else
 		ra_app_global(&a);
 	needed = LD(g_pipeline) || LD(g_offload) || LD(g_readahead);   /* the helper */
-	/* the app's own where it has one - but what Settings has off stays off:
-	 * a profile changes how a thing is used, never switches it back on */
-	pipeline = eff_pick(a.pipe, LD(g_glob_pipe), VM_PIPE_OFF);
-	offload = eff_pick(a.offload, LD(g_glob_offload), VM_OFFLOAD_OFF);
-	gpusafe = eff_pick(a.gpusafe, LD(g_glob_gpu), VM_GPUSAFE_OFF);
-	ra = eff_pick(a.ra, LD(g_glob_ra), VM_RA_OFF);
+	pipeline = a.pipe >= 0 ? a.pipe : LD(g_glob_pipe);
+	offload = a.offload >= 0 ? a.offload : LD(g_glob_offload);
+	gpusafe = a.gpusafe >= 0 ? a.gpusafe : LD(g_glob_gpu);
+	ra = a.ra >= 0 ? a.ra : LD(g_glob_ra);
 	ST(g_gpu_safe, gpusafe >= VM_GPUSAFE_OFF && gpusafe <= VM_GPUSAFE_NODMA ? gpusafe
 	                                                                        : VM_GPUSAFE_ALL);
 	if (pipeline != LD(g_pipeline))

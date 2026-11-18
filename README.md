@@ -112,7 +112,7 @@ All benchmark values are under [Benchmarks](#benchmarks). The gain in real use i
 
 A game that uses SELECT + Right itself will open the overlay too. While the overlay is open, the game gets no buttons.
 
-The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game. Something switched off in Settings stays off in every game: the overlay shows it as *Off in Settings*, and a game's own settings cannot switch it back on.
+The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
 
 ### Tuning: measured on your console
 

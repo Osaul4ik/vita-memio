@@ -3114,6 +3114,184 @@ static void *stress_stats(void *argp)
 	return NULL;
 }
 
+/* ---- the data, always the right data -------------------------------------
+ * One thread writes (any place, any size, each sector a new version: its
+ * number and version in its first words, the rest from both), another reads
+ * meanwhile - streams of large and 32 KiB reads, runs of tiny ones, reads
+ * anywhere - with read ahead Adaptive / On / Off switched under it, each
+ * kind's on/off flipped, the worker's looks between, into ordinary or
+ * non-cacheable memory. Every sector read must be a version that was there
+ * at some moment of the read: not older than the one done before the read
+ * began, not newer than the one done after it, and whole. */
+#define FZ_SECTORS 2048u
+static uint32_t fz_ver[FZ_SECTORS];        /* atomics: the version written last */
+static volatile int fz_stop;
+static uint32_t fz_bad, fz_checked;
+
+static uint8_t fz_byte(uint32_t s, uint32_t v, uint32_t i)
+{
+	uint32_t h = s * 2654435761u ^ v * 40503u ^ i * 2246822519u;
+
+	return (uint8_t)(h ^ h >> 13);
+}
+
+static void fz_fill(uint8_t *b, uint32_t s, uint32_t v)
+{
+	memcpy(b, &s, 4);
+	memcpy(b + 4, &v, 4);
+	for (uint32_t i = 8; i < 512; i++)
+		b[i] = fz_byte(s, v, i);
+}
+
+/* the sector at b is sector s, a whole version within [lo, hi] */
+static int fz_ok(const uint8_t *b, uint32_t s, uint32_t lo, uint32_t hi)
+{
+	uint32_t s2, v;
+
+	memcpy(&s2, b, 4);
+	memcpy(&v, b + 4, 4);
+	if (s2 != s || v < lo || v > hi)
+		return 0;
+	for (uint32_t i = 8; i < 512; i++)
+		if (b[i] != fz_byte(s, v, i))
+			return 0;
+	return 1;
+}
+
+static void *fz_writer(void *arg)
+{
+	static uint8_t b[256 * 512];
+	uint32_t seed = (uint32_t)(uintptr_t)arg;
+
+	while (!__atomic_load_n(&fz_stop, __ATOMIC_ACQUIRE)) {
+		uint32_t at, n;
+
+		seed = seed * 1103515245u + 12345u;
+		n = (seed >> 8) % 4 == 0 ? 64 + (seed >> 12) % 192 : 1 + (seed >> 12) % 24;
+		at = (seed >> 20) % (FZ_SECTORS - n);
+		for (uint32_t i = 0; i < n; i++)
+			fz_fill(b + (size_t)i * 512, at + i, __atomic_load_n(&fz_ver[at + i], __ATOMIC_RELAXED) + 1);
+		if (wr(b, at, n, REF_RD) != 0)
+			__atomic_fetch_add(&fz_bad, 1000000, __ATOMIC_RELAXED);
+		for (uint32_t i = 0; i < n; i++)              /* done: the new version is there */
+			__atomic_fetch_add(&fz_ver[at + i], 1, __ATOMIC_RELEASE);
+		for (volatile int k = 0; k < (int)(seed >> 26); k++)
+			;
+	}
+	return NULL;
+}
+
+/* One read, checked sector by sector. */
+static void fz_read(uint8_t *u, uint32_t at, uint32_t n)
+{
+	static uint32_t lo[512];
+
+	for (uint32_t i = 0; i < n; i++)
+		lo[i] = __atomic_load_n(&fz_ver[at + i], __ATOMIC_ACQUIRE);
+	if (rd(u, at, n) != 0) {
+		__atomic_fetch_add(&fz_bad, 1000000, __ATOMIC_RELAXED);
+		return;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		const uint32_t hi = __atomic_load_n(&fz_ver[at + i], __ATOMIC_ACQUIRE) + 1;   /* one on its way */
+
+		fz_checked++;
+		if (!fz_ok(u + (size_t)i * 512, at + i, lo[i], hi))
+			fz_bad++;
+	}
+}
+
+static void test_data_always_right(void)
+{
+	uint8_t *u = user_buf(512);
+	VmSettings s;
+	uint32_t seed = 12345;
+
+	for (int phase = 0; phase < 4; phase++) {
+		pthread_t w;
+
+		fakes_tmpdir_remove();
+		fakes_tmpdir_new();
+		reset();
+		ra_settings(&s, 0, phase & 1 ? VM_OFFLOAD_OFF : VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+		g_title_fn = fake_title;
+		s.readahead = VM_RA_ADAPTIVE;
+		vm_stage_apply(&s);
+		as_app(0x44);
+		vm_stage_worker_tick();
+		fake_memtype = phase >= 2 ? 0x8000 : 0xD000;   /* non-cacheable, then ordinary */
+		pthread_mutex_lock(&disk_lock);
+		for (uint32_t i = 0; i < FZ_SECTORS; i++) {
+			fz_ver[i] = 0;
+			fz_fill(disk + (size_t)i * 512, i, 0);
+		}
+		pthread_mutex_unlock(&disk_lock);
+		fz_bad = fz_checked = 0;
+		__atomic_store_n(&fz_stop, 0, __ATOMIC_RELEASE);
+		CHECK(pthread_create(&w, NULL, fz_writer, (void *)(uintptr_t)(phase + 7)) == 0);
+		for (int op = 0; op < 1500; op++) {
+			uint32_t kind, at, n, len;
+
+			seed = seed * 1103515245u + 12345u;
+			kind = (seed >> 8) % 10;
+			if (kind == 0) {                          /* switches under it */
+				const int m = (seed >> 12) % 3;
+
+				s.readahead = m == 0 ? VM_RA_ADAPTIVE : m == 1 ? VM_RA_ON : VM_RA_OFF;
+				vm_stage_apply(&s);
+				for (int k = 0; k < 3; k++)
+					ST(g_oo_off[k], (seed >> (16 + k)) & 1);
+				vm_stage_worker_tick();
+				continue;
+			}
+			if (kind <= 4) {                           /* a stream */
+				n = (seed >> 12) % 3 == 0 ? 64 : (seed >> 12) % 3 == 1 ? 128 : 256;
+				len = 2 + (seed >> 16) % 10;
+				if (n * len > FZ_SECTORS / 2)
+					len = FZ_SECTORS / 2 / n;
+				at = (seed >> 20) % (FZ_SECTORS - n * len);
+				for (uint32_t r = 0; r < len; r++, at += n)
+					fz_read(u, at, n);
+			} else if (kind <= 7) {                    /* tiny reads in a row */
+				len = 2 + (seed >> 12) % 40;
+				n = 1 + (seed >> 18) % 4;
+				at = (seed >> 20) % (FZ_SECTORS - n * len);
+				for (uint32_t r = 0; r < len; r++, at += n)
+					fz_read(u, at, n);
+			} else {                                   /* anywhere, any size */
+				n = 1 + (seed >> 12) % 512;
+				at = (seed >> 22) % (FZ_SECTORS - n);
+				fz_read(u, at, n);
+			}
+			if (op % 50 == 0)
+				vm_stage_worker_tick();
+		}
+		__atomic_store_n(&fz_stop, 1, __ATOMIC_RELEASE);
+		pthread_join(w, NULL);
+		/* and once still: all of it the last version */
+		for (uint32_t at = 0; at < FZ_SECTORS; at += 256)
+			fz_read(u, at, 256);
+		for (uint32_t i = 0; i < FZ_SECTORS; i++) {
+			uint8_t b[512];
+
+			pthread_mutex_lock(&disk_lock);
+			memcpy(b, disk + (size_t)i * 512, 512);
+			pthread_mutex_unlock(&disk_lock);
+			if (!fz_ok(b, i, fz_ver[i], fz_ver[i]))
+				fz_bad++;                          /* the card itself: every write whole */
+		}
+		printf("  data: phase %d, %u of %u sectors wrong\n", phase, fz_bad, fz_checked);
+		CHECK(fz_bad == 0 && fz_checked > 100000);
+		fake_memtype = 0xD000;
+		vm_stage_fini();
+	}
+	free(u);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ra_adapt_clear();                         /* nothing of it for what follows */
+	__sync_lock_release(&g_ad_lock);
+}
+
 static void test_stress_concurrency(void)
 {
 	VmSettings s;
@@ -3977,7 +4155,7 @@ static void test_tiny_adaptive(void)
 		      !g_cal[M].tiny_hit_n && !g_cal[M].tiny_blk_us);
 		g_cal[M].tiny_hit_n = 5;
 		cal_save_locked();                                  /* into tuning.bin; calib.bin gone */
-		CHECK(fopen(path, "rb") == NULL);
+		{ FILE *gone = fopen(path, "rb"); CHECK(gone == NULL); if (gone) fclose(gone); }
 		memset(g_cal, 0, sizeof(g_cal));
 		g_cal_loaded = 0;
 		cal_load();
@@ -5060,6 +5238,7 @@ int main(void)
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
+	RUN(test_data_always_right);
 
 	free(staging);
 	printf(vm_failures ? "test_stage: %d FAILED\n" : "test_stage: ok\n", vm_failures);

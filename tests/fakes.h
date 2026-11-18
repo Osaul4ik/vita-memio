@@ -29,7 +29,9 @@ extern int fake_memtype_above;        /* ... the memory type is this one        
 
 /* Fresh temp directory, exported as the "ur0:data/vita-memio" root. */
 const char *fakes_tmpdir_new(void);
-const char *fakes_tmpdir(void);              /* the one made last */
+const char *fakes_tmpdir(void);
+const char *fake_log_find(const char *part);   /* the latest log line holding it */
+void fake_log_clear(void);              /* the one made last */
 void fakes_tmpdir_remove(void);
 void fakes_reset(void);
 

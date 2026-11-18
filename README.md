@@ -71,7 +71,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Setting | What it does | Default |
 |---|---|---|
 | Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
-| Enable log | Writes logs to `ur0:data/vita-memio/` | Off |
+| Enable log | Writes logs to `ur0:data/vita-memio/`. Each time an app leaves the front, a few `session` lines show how long its reads took (by size), how many came while read ahead was busy, and what read ahead brought and wasted; *Adaptive*'s changes are logged too | Off |
 | Statistics | Collects timings for the tester app; switch it on before testing | Off |
 
 If the plugin ever could not start properly, a **Reset safe mode** row appears under the status.

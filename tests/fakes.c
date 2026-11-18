@@ -33,7 +33,43 @@ int fake_rename_fail, fake_write_short, fake_prof_writes, fake_tune_writes, fake
 static int fake_tune_fd = -1;
 
 /* ---- logging: swallowed ---------------------------------------------------- */
-void vm_klog(int level, const char *fmt, ...) { (void)level; (void)fmt; }
+/* The log: the last lines kept, for the tests that look at it. */
+#define FAKE_LOG_LINES 64
+static char g_log[FAKE_LOG_LINES][256];
+static int g_log_n;
+static pthread_mutex_t g_log_mx = PTHREAD_MUTEX_INITIALIZER;
+
+void vm_klog(int level, const char *fmt, ...)
+{
+	va_list ap;
+
+	(void)level;
+	pthread_mutex_lock(&g_log_mx);
+	va_start(ap, fmt);
+	vsnprintf(g_log[g_log_n % FAKE_LOG_LINES], sizeof(g_log[0]), fmt, ap);
+	va_end(ap);
+	g_log_n++;
+	pthread_mutex_unlock(&g_log_mx);
+}
+
+const char *fake_log_find(const char *part)
+{
+	const char *r = NULL;
+
+	pthread_mutex_lock(&g_log_mx);
+	for (int i = g_log_n - 1; i >= 0 && i >= g_log_n - FAKE_LOG_LINES && !r; i--)
+		if (strstr(g_log[i % FAKE_LOG_LINES], part))
+			r = g_log[i % FAKE_LOG_LINES];
+	pthread_mutex_unlock(&g_log_mx);
+	return r;
+}
+
+void fake_log_clear(void)
+{
+	pthread_mutex_lock(&g_log_mx);
+	g_log_n = 0;
+	pthread_mutex_unlock(&g_log_mx);
+}
 void vm_log(const char *fmt, ...) { (void)fmt; }
 
 /* ---- time / threads -------------------------------------------------------- */

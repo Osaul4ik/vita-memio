@@ -4070,6 +4070,62 @@ static void *ev_thread(void *arg)
 	return NULL;
 }
 
+/* Log on: an app's time in front ends with its session lines - its reads
+ * by size and time, the writes, read ahead's hits and waste - and Adaptive's
+ * moves are logged. Log off: none. */
+static void test_session_log(void)
+{
+	static uint8_t u[512 * 512];
+	VmSettings s;
+	const char *l;
+
+	on_game(&s, 0x44);
+	s.log = 1;
+	vm_stage_apply(&s);
+	ra_proc_event(0x44, 4);                   /* the session starts at a change */
+	vm_stage_worker_tick();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	fake_log_clear();
+	for (uint32_t at = 0; at < 8 * 256; at += 256)
+		CHECK(rd_ok(u, at, 256));             /* 8 large reads in a row: 4 MiB... */
+	CHECK(rd_ok(u, 3000, 1));                 /* ... a tiny one */
+	CHECK(rd_ok(u, 3100, 64));                /* ... a 32 KiB one */
+	CHECK(wr(u, 3500, 8, REF_RD) == 0);       /* ... a write */
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	l = fake_log_find("session PCSB00777");
+	CHECK(l && strstr(l, "R/A On C5 NC5"));
+	l = fake_log_find("session dev 2: tiny");
+	CHECK(l && strstr(l, "tiny 1 (0 KiB)") && strstr(l, "32K 1 (0 MiB)") && strstr(l, "large 8 (1 MiB)"));
+	l = fake_log_find("session dev 2: reads");
+	CHECK(l && strstr(l, "writes 1 (4 KiB)"));
+	l = fake_log_find("session R/A: hits");
+	CHECK(l && !strstr(l, "hits 0 "));        /* the stream was read ahead */
+	/* the home screen's (nothing read): no lines */
+	fake_log_clear();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(!fake_log_find("session"));
+	/* log off: none */
+	s.log = 0;
+	vm_stage_apply(&s);
+	CHECK(rd_ok(u, 0, 256));
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	CHECK(!fake_log_find("session"));
+	/* Adaptive's moves */
+	s.log = 1;
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	fake_log_clear();
+	adapt_runs(0, 20, 3);
+	CHECK(fake_log_find("adaptive: C from read 5 -> 2"));
+	vm_stage_fini();
+}
+
 static void test_fg_events_together(void)
 {
 	VmSettings s;
@@ -4739,6 +4795,7 @@ int main(void)
 	RUN(test_system_apps);
 	RUN(test_learned_kept_in_file);
 	RUN(test_fg_events_together);
+	RUN(test_session_log);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

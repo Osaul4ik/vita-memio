@@ -455,6 +455,19 @@ static int (*g_stack_free_fn)(SceUID thid);
  * system core / by the game's thread: they count as NC, not as copies (C). */
 static uint32_t g_ra_nc_sys_kib, g_ra_nc_own_kib;                  /* atomics */
 static volatile int g_log_diag;            /* the log is on: count            */
+/* With the log on: every transfer of each storage timed, whichever way it
+ * went, for the session lines (an app's time in front, the worker): reads by
+ * size - tiny (< 32 KiB), 32 KiB, large - the reads that came while read
+ * ahead was reading a piece (the card busy with it), and the writes. */
+#define LG_TINY  0
+#define LG_SMALL 1
+#define LG_LARGE 2
+typedef struct {
+	uint64_t us[3], col_us, wr_us;
+	uint32_t n[3], sec[3], col_n, wr_n, wr_sec;
+	uint32_t max_us;                       /* the longest read (taken per session) */
+} LgDev;
+static LgDev g_lg[3];                      /* VM_DEV_COUNT (atomics)          */
 static volatile int g_count_cores;         /* the overlay is open: count too  */
 #define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
 
@@ -3289,8 +3302,13 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
  * kind of the large reads, (T, B) of the tiny ones - so a request only counts. */
 static void ra_adapt_tick(void)
 {
+	/* what moved, logged once the lock is let go (log on) */
+	int mv[2][4], tmv[4], any = 0;
+
 	if (!LD(g_ad_due[0]) && !LD(g_ad_due[1]) && !LD(g_tn_due))
 		return;                           /* (a stale look is caught next time) */
+	memset(mv, 0, sizeof(mv));
+	memset(tmv, 0, sizeof(tmv));
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	for (int nc = 0; nc < 2; nc++) {
@@ -3308,6 +3326,11 @@ static void ra_adapt_tick(void)
 			const int sm0 = sm;
 
 			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
+				mv[nc][0] = (int)t;
+				mv[nc][1] = thr;
+				mv[nc][2] = sm0 * RA_SMALL_FACTOR;
+				mv[nc][3] = sm * RA_SMALL_FACTOR;
+				any = 1;
 				if (thr != (int)t) {
 					ST(g_ra_adj[nc], thr - (int)base);
 					ADD(g_ra_moves[nc], 1);
@@ -3328,6 +3351,8 @@ static void ra_adapt_tick(void)
 
 		ST(g_tn_due, 0);
 		cal_tiny_cost(g_tn_dev, &c);
+		tmv[0] = t;
+		tmv[1] = blk;
 		if (ra_adapt_on() &&
 		    rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
 		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
@@ -3335,6 +3360,9 @@ static void ra_adapt_tick(void)
 			ST(g_tiny_thr, (uint32_t)t);
 			ST(g_tiny_blk, (uint32_t)blk);
 			ADD(g_tn_moves, 1);
+			tmv[2] = t;
+			tmv[3] = blk;
+			any = 1;
 		}
 		for (int i = 0; i < RT_TB; i++) {
 			g_tn_cnt[i] >>= 1;
@@ -3345,6 +3373,15 @@ static void ra_adapt_tick(void)
 		g_tn_rounds++;
 	}
 	__sync_lock_release(&g_ad_lock);
+	if (any && LD(g_log_diag)) {
+		for (int nc = 0; nc < 2; nc++)
+			if (mv[nc][0] != mv[nc][1] || mv[nc][2] != mv[nc][3])
+				VM_KLOGI("adaptive: %s from read %d -> %d, 32K from %d -> %d", nc ? "NC" : "C",
+				         mv[nc][0], mv[nc][1], mv[nc][2], mv[nc][3]);
+		if (tmv[2])
+			VM_KLOGI("adaptive: tiny from read %d -> %d, block %d -> %d KiB", tmv[0], tmv[2],
+			         tmv[1] / 2, tmv[3] / 2);
+	}
 }
 
 static uint8_t *ra_ptr(const Dev *d, int i)
@@ -4508,8 +4545,53 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 /* Every write, whichever way it goes, is counted while it runs and marks the
  * pieces it touches dirty first (see "read ahead"). */
+static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                        void *part, uint32_t sector, void *buf, uint32_t nsec);
+
+/* With the log on: one transfer, timed (g_lg). */
+static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
+{
+	LgDev *g = &g_lg[d - g_dev];
+
+	if (write) {
+		ADD(g->wr_n, 1);
+		ADD(g->wr_sec, nsec);
+		ADD(g->wr_us, (uint64_t)us);
+		return;
+	}
+	{
+		const int k = nsec < RA_SMALL_SECTORS ? LG_TINY : nsec < RA_MIN_SECTORS ? LG_SMALL : LG_LARGE;
+
+		ADD(g->n[k], 1);
+		ADD(g->sec[k], nsec);
+		ADD(g->us[k], (uint64_t)us);
+	}
+	if (col) {
+		ADD(g->col_n, 1);
+		ADD(g->col_us, (uint64_t)us);
+	}
+	if (us > LD(g->max_us))
+		ST(g->max_us, us);                /* a lost update is fine */
+}
+
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
+{
+	const int lg = LD(g_log_diag) && nsec && on_port(part, d->port);
+	const uint32_t t0 = lg ? ksceKernelGetSystemTimeLow() : 0;
+	int col = 0, r;
+
+	if (lg && !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))
+		for (int i = 0; i < RA_PIECES; i++)
+			col |= __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING;
+	r = stage_xfer_w(d, write, io, ref, rd_ref, part, sector, buf, nsec);
+	if (lg)
+		lg_note(d, write, nsec, ksceKernelGetSystemTimeLow() - t0, col);
+	return r;
+}
+
+static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
+                        void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
 	int r;
 
@@ -5080,6 +5162,112 @@ void vm_stage_on_problem(void (*fn)(void))
 	__atomic_store_n(&g_on_problem, fn, __ATOMIC_RELEASE);
 }
 
+/* ---- the session lines (log on): what an app's time in front cost -------- */
+
+typedef struct {
+	LgDev    dev[VM_DEV_COUNT];
+	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock;
+} LgSnap;
+
+static void lg_snap(LgSnap *o)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const LgDev *g = &g_lg[i];
+		LgDev *t = &o->dev[i];
+
+		for (int k = 0; k < 3; k++) {
+			t->us[k] = LD(g->us[k]);
+			t->n[k] = LD(g->n[k]);
+			t->sec[k] = LD(g->sec[k]);
+		}
+		t->col_us = LD(g->col_us);
+		t->col_n = LD(g->col_n);
+		t->wr_us = LD(g->wr_us);
+		t->wr_n = LD(g->wr_n);
+		t->wr_sec = LD(g->wr_sec);
+		t->max_us = 0;
+	}
+	o->hits = LD(g_ra_hits);
+	o->kib = LD(g_ra_kib);
+	o->drops = LD(g_ra_drops);
+	o->waste_kib = LD(g_ra_waste_kib);
+	o->bad = LD(g_ra_bad);
+	o->nc_kib = LD(g_ra_nc_kib);
+	o->tiny = LD(g_ra_tiny_reads);
+	o->pipe = LD(g_pipe_reads);
+	o->off = LD(g_off_reads);
+	o->ncd = LD(g_ncd_reads);
+	o->dma = LD(g_dma_copies);
+	o->nc_stock = LD(g_nc_stock_kib);
+}
+
+static const char *lg_ra_name(int m)
+{
+	return m == VM_RA_ADAPTIVE ? "Adaptive" : m == VM_RA_OFF ? "Off" : "On";
+}
+
+/* us per MiB of a kind (0: none read) */
+static uint32_t lg_per_mib(uint64_t us, uint32_t sec)
+{
+	return sec ? (uint32_t)(us * 2048u / sec) : 0;
+}
+
+/* What `who` (in front for ms) cost, from snapshot a to now (b), with the
+ * settings in effect for it (the next app's are not loaded yet). */
+static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSnap *b)
+{
+	const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
+	int any = 0;
+
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const LgDev *x = &a->dev[i], *y = &b->dev[i];
+		uint32_t n[3], sec[3], all_sec = 0;
+		uint64_t us[3], all_us = 0;
+
+		if (y->n[0] + y->n[1] + y->n[2] + y->wr_n == x->n[0] + x->n[1] + x->n[2] + x->wr_n)
+			continue;
+		if (!any)
+			VM_KLOGI("session %s %u.%01us: R/A %s C%u NC%u, 32K C%u NC%u, tiny %u/%uK; "
+			         "copy %d ovl %d gpu %d dma %d", who, (unsigned)(ms / 1000u),
+			         (unsigned)(ms % 1000u / 100u), lg_ra_name(LD(g_ra_mode)), (unsigned)t0,
+			         (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
+			         (unsigned)ra_small_threshold(1, t1), (unsigned)tiny_thr(),
+			         (unsigned)(tiny_blk() / 2u), LD(g_offload), LD(g_pipeline), LD(g_gpu_safe),
+			         dma_state() == VM_DMA_ON);
+		any = 1;
+		for (int k = 0; k < 3; k++) {
+			n[k] = y->n[k] - x->n[k];
+			sec[k] = y->sec[k] - x->sec[k];
+			us[k] = y->us[k] - x->us[k];
+			all_us += us[k];
+			all_sec += sec[k];
+		}
+		VM_KLOGI("session dev %d: reads %u ms, %u MiB, %u us/MiB, max %u ms; during R/A "
+		         "piece %u (%u ms); writes %u (%u KiB) %u ms", i, (unsigned)(all_us / 1000u),
+		         (unsigned)(all_sec / 2048u), (unsigned)lg_per_mib(all_us, all_sec),
+		         (unsigned)(__atomic_exchange_n(&g_lg[i].max_us, 0, __ATOMIC_RELAXED) / 1000u),
+		         (unsigned)(y->col_n - x->col_n), (unsigned)((y->col_us - x->col_us) / 1000u),
+		         (unsigned)(y->wr_n - x->wr_n), (unsigned)((y->wr_sec - x->wr_sec) / 2u),
+		         (unsigned)((y->wr_us - x->wr_us) / 1000u));
+		VM_KLOGI("session dev %d: tiny %u (%u KiB) %u ms; 32K %u (%u MiB) %u us/MiB; "
+		         "large %u (%u MiB) %u us/MiB", i, (unsigned)n[0], (unsigned)(sec[0] / 2u),
+		         (unsigned)(us[0] / 1000u), (unsigned)n[1], (unsigned)(sec[1] / 2048u),
+		         (unsigned)lg_per_mib(us[1], sec[1]), (unsigned)n[2], (unsigned)(sec[2] / 2048u),
+		         (unsigned)lg_per_mib(us[2], sec[2]));
+	}
+	if (!any)
+		return;
+	VM_KLOGI("session R/A: hits %u (%u MiB, NC %u), dropped %u (%u MiB unused), unusable %u, "
+	         "tiny hits %u", (unsigned)(b->hits - a->hits), (unsigned)((b->kib - a->kib) / 1024u),
+	         (unsigned)((b->nc_kib - a->nc_kib) / 1024u), (unsigned)(b->drops - a->drops),
+	         (unsigned)((b->waste_kib - a->waste_kib) / 1024u), (unsigned)(b->bad - a->bad),
+	         (unsigned)(b->tiny - a->tiny));
+	VM_KLOGI("session: overlapped %u, core 3 %u, NC helper %u, NC standard %u MiB, DMA %u",
+	         (unsigned)(b->pipe - a->pipe), (unsigned)(b->off - a->off),
+	         (unsigned)(b->ncd - a->ncd), (unsigned)((b->nc_stock - a->nc_stock) / 1024u),
+	         (unsigned)(b->dma - a->dma));
+}
+
 void vm_stage_worker_tick(void)
 {
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
@@ -5305,6 +5493,28 @@ void vm_stage_worker_tick(void)
 		const uint32_t noid = __atomic_load_n(&g_fg_noid, __ATOMIC_RELAXED);
 
 		if (fg != last_fg) {
+			/* the session of the one before (log on), then the new one's */
+			static char who[16];
+			static uint64_t since_us;
+			static LgSnap at;
+			const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
+
+			if (LD(g_log_diag)) {
+				LgSnap cur;
+
+				lg_snap(&cur);
+				if (since_us)
+					lg_session(who[0] ? who : "the home screen",
+					           (uint32_t)((now_us - since_us) / 1000u), &at, &cur);
+				at = cur;
+				since_us = now_us;
+			} else {
+				since_us = 0;
+			}
+			if (fg)
+				memcpy(who, ft, sizeof(who));
+			else
+				who[0] = 0;
 			last_fg = fg;
 			if (fg)
 				VM_KLOGI("stage: in front: %s (pid 0x%08x)", ft, (unsigned)fg);

@@ -11,3 +11,12 @@ typedef struct SceDisplayFrameBuf {
 	unsigned width;
 	unsigned height;
 } SceDisplayFrameBuf;
+/* What stage.c needs: whose frame is on screen (the app in front). */
+typedef struct SceDisplayFrameBufInfo {
+	size_t             size;
+	int                pid;
+	unsigned int       vblankcount;
+	uintptr_t          paddr;
+	SceDisplayFrameBuf framebuf;
+	unsigned int       resolution;
+} SceDisplayFrameBufInfo;

@@ -66,6 +66,7 @@
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
 #include <psp2kern/io/dirent.h>
+#include <psp2kern/display.h>               /* SceDisplayFrameBufInfo (the app in front) */
 #include <taihen.h>
 
 #include "stage.h"
@@ -1912,6 +1913,97 @@ static int ra_title_ok(const char *t)
 	return n >= 4;
 }
 
+/* The home screen's own settings and what Adaptive learns there go by this
+ * name (a title id has 9 characters: never this). */
+#define HOME_TITLE "HOME"
+
+/* The home screen and the system's own apps have settings of their own
+ * (VM_KEY_SYSAPPS), as games do. */
+static volatile int g_sysapps = VM_DEF_SYSAPPS;
+
+/* A system app (NPXS*) that started or came back: unlike a game it is in
+ * front only once its frame is on screen - the system starts many of its
+ * own in the background, which never are. The worker looks (sys_cand_tick)
+ * every SYS_CAND_LOOK_US, SYS_CAND_LOOKS times at most. */
+#define SYS_CAND_LOOK_US 250000u
+#define SYS_CAND_LOOKS   40u
+static volatile SceUID g_sys_cand;                   /* atomic; 0: none           */
+static char            g_sys_cand_title[16];        /* written before g_sys_cand */
+static uint32_t        g_sys_cand_looks;            /* worker only               */
+/* ksceDisplayGetProcFrameBufInternal (SceDisplayForDriver 0x9FED47AC,
+ * 0x3BC165EF in vita-headers db/360): whose frame is on screen. */
+static int (*g_proc_fb)(SceUID pid, int head, int index, SceDisplayFrameBufInfo *info);
+
+/* The process whose frame is on screen (the built-in one, or HDMI), 0 if
+ * none can be told. */
+static SceUID fb_owner(void)
+{
+	if (!g_proc_fb)
+		return 0;
+	for (int head = 0; head < 2; head++)
+		for (int index = 0; index < 2; index++) {
+			SceDisplayFrameBufInfo info;
+
+			memset(&info, 0, sizeof(info));
+			info.size = sizeof(info);
+			if (g_proc_fb(-1, head, index, &info) >= 0 && info.pid > 0 && info.paddr)
+				return info.pid;
+		}
+	return 0;
+}
+
+static void fg_take(SceUID pid, const char *title);
+
+/* Worker: a system app waiting to be in front (g_sys_cand) is, once its frame
+ * is on screen - or at once where frames cannot be seen; one that never shows
+ * one (a background one) is let go after SYS_CAND_LOOKS looks. */
+static void sys_cand_tick(void)
+{
+	const SceUID c = __atomic_load_n(&g_sys_cand, __ATOMIC_ACQUIRE);
+
+	if (!c) {
+		g_sys_cand_looks = 0;
+		return;
+	}
+	if (!g_proc_fb || fb_owner() == c) {
+		char t[16];
+		SceUID exp = c;
+
+		memcpy(t, g_sys_cand_title, sizeof(t));
+		if (__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL,
+		                                __ATOMIC_RELAXED))
+			fg_take(c, t);
+		g_sys_cand_looks = 0;
+	} else if (++g_sys_cand_looks >= SYS_CAND_LOOKS) {
+		SceUID exp = c;
+
+		__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+		g_sys_cand_looks = 0;
+	}
+}
+
+/* 1 while a system app waits to be in front: the worker looks more often. */
+int vm_stage_looking(void)
+{
+	return __atomic_load_n(&g_sys_cand, __ATOMIC_ACQUIRE) != 0;
+}
+
+/* `pid` (title `t`) is the app in front from now. Any thread. */
+static void fg_take(SceUID pid, const char *t)
+{
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+	if (pid != fg) {                      /* another app: its storage afresh */
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
+		memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
+		g_fg_title[sizeof(g_fg_title) - 1] = 0;
+	}
+	__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
+	if (pid != fg)
+		ra_wake();                        /* the worker puts its settings in effect */
+}
+
 /* A process event: 1 started, 5 resumed (now in front), 3 exited, 4
  * suspended (back to the home screen). As PSVshell follows them: the
  * system's own apps (NPXS) never take the front, and while an exclusive
@@ -1933,23 +2025,27 @@ static void ra_proc_event(SceUID pid, int ev)
 			__atomic_fetch_add(&g_fg_noid, 1, __ATOMIC_RELAXED);
 			return;
 		}
-		if (ra_title_system(t)) {
-			return;
-		}
 		if (fg && fg != pid && g_exclusive_fn && g_exclusive_fn(NULL) > 0) {
 			return;
 		}
-		if (pid != fg) {                      /* another app: its storage afresh */
-			for (int i = 0; i < VM_DEV_COUNT; i++)
-				__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
-			memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
-			g_fg_title[sizeof(g_fg_title) - 1] = 0;
+		if (ra_title_system(t)) {
+			/* the home screen itself ("main"): in front when no app is;
+			 * another system app: once its frame is on screen */
+			if (LD(g_sysapps) && !(t[0] == 'm' && t[1] == 'a' && t[2] == 'i' && t[3] == 'n')) {
+				memcpy(g_sys_cand_title, t, sizeof(g_sys_cand_title) - 1);
+				g_sys_cand_title[sizeof(g_sys_cand_title) - 1] = 0;
+				__atomic_store_n(&g_sys_cand, pid, __ATOMIC_RELEASE);
+				ra_wake();
+			}
+			return;
 		}
-		__atomic_store_n(&g_ra_fg, pid, __ATOMIC_RELEASE);
-		if (pid != fg)
-			ra_wake();                        /* the worker puts its settings in effect */
+		__atomic_store_n(&g_sys_cand, 0, __ATOMIC_RELEASE);   /* a game takes the front */
+		fg_take(pid, t);
 	} else if (ev == 3 || ev == 4) {
 		SceUID exp = pid;
+
+		__atomic_compare_exchange_n(&g_sys_cand, &exp, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+		exp = pid;
 
 		if (__atomic_compare_exchange_n(&g_ra_fg, &exp, 0, 0, __ATOMIC_ACQ_REL,
 		                                __ATOMIC_RELAXED)) {
@@ -2544,7 +2640,7 @@ void vm_stage_cal_set(int on)
  * from the start. AD_KEEP games, the one longest away making room. Kept with
  * what it was learned under (read ahead's mode, the game's own thresholds):
  * taken up again only under the same. */
-#define AD_KEEP 8
+#define AD_KEEP 12
 typedef struct {
 	char     title[16];                  /* "": a free slot                    */
 	uint32_t key, used;
@@ -4141,6 +4237,9 @@ int vm_stage_init(void)
 		                           NID_EXCLUSIVE_RUNNING, &f) >= 0 && f)
 			g_exclusive_fn = (int (*)(const char *))f;
 		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceDisplay", 0x9FED47AC, 0x3BC165EF, &f) >= 0 && f)
+			g_proc_fb = (int (*)(SceUID, int, int, SceDisplayFrameBufInfo *))f;
+		f = 0;
 		if (module_get_export_func(KERNEL_PID, "SceKernelDmacMgr", LIB_DMAC_DRIVER,
 		                           NID_DMAC_MEMCPY, &f) >= 0 && f)
 			g_dmac_memcpy = (int (*)(void *, const void *, SceSize))f;
@@ -4296,6 +4395,8 @@ static void eff_lock(void)
 		ksceKernelDelayThread(100);
 }
 
+static int app_in_front(void);
+
 /* Put the settings in effect. Any thread. */
 static void eff_update(void)
 {
@@ -4303,8 +4404,7 @@ static void eff_update(void)
 	int needed, pipeline, offload, gpusafe, ra;
 
 	eff_lock();
-	if (__atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
-	    __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE))
+	if (app_in_front())
 		a = g_app_cur;
 	else
 		ra_app_global(&a);
@@ -4338,9 +4438,7 @@ static void eff_update(void)
 	/* adaptive: whose settings these are, and what it learns under (the
 	 * mode, the game's own thresholds - 0 none, 15 never) */
 	{
-		const int app = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
-		                __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) ==
-		                __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+		const int app = app_in_front();
 		uint32_t key = (uint32_t)ra & 0xFu;
 
 		for (int k = 0; k < 2; k++) {
@@ -4391,6 +4489,13 @@ void vm_stage_apply(const VmSettings *s)
 	ST(g_dma_want, s->dmacopy ? 1 : 0);
 	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
 	ST(g_verify, s->verify ? 1 : 0);
+	if ((s->sysapps ? 1 : 0) != LD(g_sysapps)) {
+		ST(g_sysapps, s->sysapps ? 1 : 0);
+		if (!LD(g_sysapps))
+			ST(g_sys_cand, 0);
+		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the worker: whose now */
+		ra_wake();
+	}
 	ST(g_log_diag, s->log ? 1 : 0);
 	/* the global ones, then what is in effect */
 	ST(g_glob_gpu, s->gpusafe >= VM_GPUSAFE_OFF && s->gpusafe <= VM_GPUSAFE_NODMA ? s->gpusafe
@@ -4412,14 +4517,16 @@ static void app_load(SceUID fg)
 
 	eff_lock();
 	ra_app_global(&g_app_cur);
-	if (fg && fg == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
+	if (!fg && LD(g_sysapps)) {
+		memcpy(g_app_title, HOME_TITLE, sizeof(HOME_TITLE));   /* the home screen's */
+	} else if (fg && fg == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
 		memcpy(g_app_title, g_fg_title, sizeof(g_app_title) - 1);
 		g_app_title[sizeof(g_app_title) - 1] = 0;
 	} else if (!fg || fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE)) {
 		g_app_title[0] = 0;
 	}                                     /* else suspended, reloaded: its title kept */
 	__sync_lock_release(&g_eff_lock);
-	if (fg && g_app_title[0] && ra_prof_load(g_app_title, &pf)) {
+	if (g_app_title[0] && ra_prof_load(g_app_title, &pf)) {
 		eff_lock();
 		g_app_cur = pf.app;
 		__sync_lock_release(&g_eff_lock);
@@ -4438,8 +4545,7 @@ void vm_stage_app_now(VmAppNow *o)
 {
 	memset(o, 0, sizeof(*o));
 	eff_lock();
-	if (__atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) &&
-	    __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE)) {
+	if (app_in_front()) {
 		memcpy(o->title, g_app_title, sizeof(o->title) - 1);
 		o->cur = g_app_cur;
 		o->saved = g_app_saved;
@@ -4456,11 +4562,13 @@ void vm_stage_app_now(VmAppNow *o)
 	o->global.gpusafe = LD(g_glob_gpu);
 }
 
+/* Whether the settings loaded (g_app_cur) are those of what is in front:
+ * an app, or the home screen (pid 0, HOME_TITLE) with VM_KEY_SYSAPPS on. */
 static int app_in_front(void)
 {
 	const SceUID pid = __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE);
 
-	return pid && pid == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) && g_app_title[0];
+	return pid == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) && g_app_title[0];
 }
 
 int vm_stage_app_set(const VmApp *a)
@@ -4575,6 +4683,7 @@ void vm_stage_worker_tick(void)
 	if (!g_cal_loaded && LD(g_live))
 		cal_load();                       /* what was measured before, once */
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
+	sys_cand_tick();                      /* a system app: in front once it shows */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "
@@ -4834,10 +4943,16 @@ void vm_stage_worker_tick(void)
 			ST(g_bm_fail, LD(g_off_maperr) + LD(g_ncd_maperr));
 			ST(g_bm_pid, fg);
 		}
+		/* the home screen in front: its own (VM_KEY_SYSAPPS), loaded in
+		 * the place of the app's - which comes back from its profile */
+		const int home = !fg && LD(g_sysapps);
+
 		if (__atomic_exchange_n(&g_app_reload, 0, __ATOMIC_ACQ_REL))
-			app_load(fg ? fg : __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE));
+			app_load(fg || home ? fg : __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE));
 		else if (fg && fg != __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE))
 			app_load(fg);
+		else if (home && !app_in_front())
+			app_load(0);
 		else if (fg != last_fg)
 			eff_update();
 		last_fg = fg;

@@ -49,8 +49,8 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 
 | Setting | What it does | Default |
 |---|---|---|
-| Driver: active / off / … | Shows whether the plugin is running. Select it for details | |
 | Driver | Whether the plugin starts with the console. **Off**: from the next start it loads nothing and every storage works the standard way; this page stays, so you can switch it on again. Takes effect after a restart | On |
+| Driver: active / off / … | Shows whether the plugin is running. Select it for details | |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
 
 **Advanced**
@@ -64,6 +64,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, n
 | Read ahead | Reads the next part of a file before it is asked for: **Adaptive**, **On** or **Off**. See below | Adaptive |
 | Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
 | Overlay (SELECT + arrows) | A small menu over any game, see below. Off takes effect at once; On after a restart, if it was off when the console started | On |
+| Profiles for system apps | The home screen (LiveArea) and the system's own apps (Settings, the browser, …) are treated like games: their own settings in the overlay, and *Adaptive* keeps what it learned for each. Off: they use the settings here | On |
 
 **Developer settings** (inside *Advanced*)
 
@@ -94,7 +95,7 @@ Data read early is thrown away if anything writes over it, so it can never be st
 
 It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned for a game is kept until the console restarts (for the last eight games), so a game you come back to goes on from there; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
+**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned for a game is kept until the console restarts (for the last twelve games or apps, the home screen too), so a game you come back to goes on from there; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
 
 All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
 
@@ -112,7 +113,7 @@ All benchmark values are under [Benchmarks](#benchmarks). The gain in real use i
 
 A game that uses SELECT + Right itself will open the overlay too. While the overlay is open, the game gets no buttons.
 
-The overlay sets things **for this game only**; each setting is *Global* until you change it. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
+The overlay sets things **for this game only** (or for the home screen or a system app, with *Profiles for system apps* on); each setting is *Global*, as in Settings, until you change it, and a game's own setting can switch something on or off whatever Settings has. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game.
 
 ### Tuning: measured on your console
 

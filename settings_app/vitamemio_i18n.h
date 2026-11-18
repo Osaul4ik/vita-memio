@@ -76,6 +76,8 @@ enum vm_i18n_id {
 	VM_I18N_STATUS_OFF,         /* the status row with Driver off                 */
 	VM_I18N_HINT_STATUS_OFF,
 	VM_I18N_ST_OFF,             /* a storage's help with Driver off               */
+	VM_I18N_ROW_SYSAPPS,        /* Advanced > Profiles for system apps            */
+	VM_I18N_HINT_SYSAPPS,
 	VM_I18N_COUNT
 };
 

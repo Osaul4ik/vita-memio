@@ -358,6 +358,8 @@ static int g_ov_adv;
 
 /* A change asked for in the overlay, made here: the app in front's own
  * settings (in effect at once; kept only by Save), or an action. */
+static const char *ov_name(const char *title);
+
 static void overlay_op(uint32_t op, char *msg, int cap)
 {
 	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON, VM_RA_ADAPTIVE };
@@ -427,7 +429,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	case OV_ITEM_SAVE:
 		r = vm_stage_app_save();
 		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: saved", an.title);
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: saved", ov_name(an.title));
 		break;
 	default:
 		return;
@@ -437,7 +439,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	if (r == VM_OK && save) {
 		r = vm_stage_app_save();
 		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: picked and saved", an.title);
+			snprintf(msg, cap, HUD_C_GOOD "%.15s: picked and saved", ov_name(an.title));
 	}
 	if (r == VM_ERR_NOT_READY)
 		snprintf(msg, cap, HUD_C_WARN "No app in front");
@@ -454,6 +456,12 @@ static const char *ov_color(int cur, int saved, int standard)
 	if (cur != saved)
 		return HUD_C_ACCENT;
 	return cur == VM_APP_GLOBAL || cur == standard ? HUD_C_TEXT : HUD_C_GOOD;
+}
+
+/* An app's name as shown: its title id, the home screen's by name. */
+static const char *ov_name(const char *title)
+{
+	return !memcmp(title, "HOME", 5) ? "home screen" : title;
 }
 
 /* "Global (Auto)" for a value that is the global one, else the value. */
@@ -577,7 +585,7 @@ static void overlay_feed(void)
 			/* a title id is 9 characters ("home screen" 11): the line fits */
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_TEXT "%.11s" HUD_C_DIM " %s" HUD_C_DIM
 			         "  core 3 %s " HUD_C_DIM "C %.7s" HUD_C_DIM " NC %.7s",
-			         an.title[0] ? an.title : "home screen",
+			         an.title[0] ? ov_name(an.title) : "home screen",
 			         fg.dev == VM_DEV_SD2VITA ? "SD2Vita" : fg.dev == VM_DEV_MEMCARD ? "memory card"
 			         : "", hud_bufmap(rn.bufmap), a, b);
 		}

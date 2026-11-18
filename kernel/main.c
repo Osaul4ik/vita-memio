@@ -307,8 +307,8 @@ static int worker(SceSize args, void *argp)
 
 		if (running && !g_guard_done && g_guard.phase == VM_GP_BOOT)
 			wait = VM_WORKER_BOOT_US;       /* waiting for the home screen */
-		else if (hud == VM_HUD_MENU)
-			wait = VM_WORKER_OVERLAY_US;
+		else if (hud == VM_HUD_MENU || (g_on && vm_stage_looking()))
+			wait = VM_WORKER_OVERLAY_US;    /* the overlay; a system app coming up */
 		else if (running && (!g_guard_done || hud == VM_HUD_SHOWN))
 			wait = VM_WORKER_FAST_US;
 		else if (vm_settings_pending() || vm_stage_pending())

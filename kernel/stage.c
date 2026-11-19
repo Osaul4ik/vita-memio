@@ -4111,7 +4111,7 @@ static void ra_adapt_tick(void)
 		ksceKernelDelayThread(10);
 	for (int nc = 0; nc < 2; nc++) {
 		const uint32_t base = ra_base_threshold(nc), t = ra_threshold(nc);
-		RtCost cost;
+		RtCost cost, ocost;
 		int thr = (int)t, sm;
 
 		if (!LD(g_ad_due[nc]))
@@ -4123,11 +4123,14 @@ static void ra_adapt_tick(void)
 
 			rt_ev_cost(&g_oo[nc], nc, &con, &cost);   /* ... and this game's, where measured */
 		}
-		/* what the game's pauses let a piece save: the device's figure is scaled by it
-		 * (the game's own measured one already holds it) */
-		hide[nc] = oo_hide(nc, cal_piece_us(g_ad_dev[nc], nc), &hide_known[nc]);
+		/* what the game's pauses let a piece save, for a kind that is off only (for one
+		 * that is on nothing is measured or looked up: oo_hide just drops what is kept).
+		 * The device's figure scaled by it is for the on/off say alone (ocost): the
+		 * thresholds below are learned from the unscaled one, as before */
+		ocost = cost;
+		hide[nc] = oo_hide(nc, g_oo[nc].off ? cal_piece_us(g_ad_dev[nc], nc) : 0, &hide_known[nc]);
 		if (g_oo[nc].off)
-			rt_hide_apply(&cost, nc, hide[nc]);
+			rt_hide_apply(&ocost, nc, hide[nc]);
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
 		if (ra_learn_on() && t != RA_THR_NONE) {
@@ -4151,7 +4154,7 @@ static void ra_adapt_tick(void)
 			/* then on or off, from what it did (the model's say for off) */
 			ol_on[nc] = 1;
 			ol[nc].hide = hide_known[nc] ? hide[nc] : 0xFFFFFFFFu;     /* not measured: on, or too little */
-			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost), &ol[nc])) {
+			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &ocost), &ol[nc])) {
 				oo_mv[nc] = 1;
 				any = 1;
 				for (int i = 0; i < VM_DEV_COUNT; i++)
@@ -5568,7 +5571,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	if (ms && r >= 0)
 		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : xi.nc == 2 ? -1 : xi.nc,
 		        nsec < RA_SMALL_SECTORS ? xi.tiny : xi.got != 0, nsec, us);
-	if (ms && r >= 0 && nsec >= RA_SMALL_SECTORS && xi.nc < 2 && LD(g_oo_off[xi.nc]))
+	if (ms && r >= 0 && nsec >= RA_SMALL_SECTORS && xi.nc < 2 && oo_off(xi.nc))
 		gap_note(d, xi.nc, nsec, t0, us);        /* the pause before it, on a stream */
 	return r;
 }

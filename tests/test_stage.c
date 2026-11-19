@@ -6479,12 +6479,113 @@ static void test_pauses_of_the_game(void)
 	__sync_lock_release(&g_ad_lock);
 }
 
+/* The game's pauses end to end: with read ahead on for every kind nothing of
+ * them is measured (the reads as before); for the kind that is off only, its
+ * own; they decide on/off but never the thresholds, which are learned from the
+ * device's figures as before; the way back needs them known. */
+static void test_pauses_only_for_off_kind(void)
+{
+	static uint8_t u[512 * 512];
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+
+	on_game(&s, 0x44);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	as_app(0x44);
+	vm_stage_worker_tick();
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+	/* every kind on: a stream, with long pauses between its reads - none kept */
+	fake_now_us = 1000;
+	for (uint32_t at = 0; at < 12 * 256; at += 256) {
+		CHECK(rd_ok(u, at, 256));
+		fake_now_us += 20000;
+	}
+	CHECK(d->ra_streak >= 12 && !d->gap_end[0] && !d->gap_end[1]);
+	for (int k = 0; k < 3; k++)
+		for (uint32_t b = 0; b < RT_GAP_B; b++)
+			CHECK(!LD(g_oo_acc[k].gap[b]));
+	/* the large reads' kind off: its pauses kept (on the stream), the other kind's not */
+	ra_settled(d);
+	ra_drop(d);
+	d->ra_streak = d->rs_streak = 0;
+	ST(g_oo_off[OO_C], 1);
+	g_oo[OO_C].off = 1;
+	for (uint32_t at = 0; at < 12 * 256; at += 256) {
+		CHECK(rd_ok(u, at, 256));
+		fake_now_us += 20000;
+	}
+	CHECK(d->gap_end[0] && !d->gap_end[1]);
+	CHECK(LD(g_oo_acc[OO_C].gap[RT_GAP_B - 1]) >= 8 * 256u);       /* pauses over 16 ms */
+	for (uint32_t b = 0; b + 1 < RT_GAP_B; b++)
+		CHECK(!LD(g_oo_acc[OO_C].gap[b]));
+	for (uint32_t b = 0; b < RT_GAP_B; b++)
+		CHECK(!LD(g_oo_acc[OO_NC].gap[b]));
+	/* adapted by Adaptive, the mode is not "off as measured" for a kind that is on */
+	ST(g_oo_off[OO_C], 0);
+	g_oo[OO_C].off = 0;
+	ra_drop(d);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* Thresholds are learned the same whether a kind is on or off (what the pauses
+ * say goes to the on/off say alone), and a kind off with its pauses unknown
+ * stays off, with them seen as covering a piece it may come back on. */
+static void test_pauses_do_not_move_thresholds(void)
+{
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	adapt_runs(0, 20, 3);
+	CHECK(ra_threshold(0) == 2 && !g_oo[OO_C].off);                  /* the reference */
+	/* the same with the kind off and no pauses seen */
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	g_oo[OO_C].off = 1;
+	ST(g_oo_off[OO_C], 1);
+	__sync_lock_release(&g_ad_lock);
+	adapt_runs(0, 20, 3);
+	CHECK(ra_threshold(0) == 2);                                     /* learned as ever */
+	CHECK(g_oo[OO_C].off);                                           /* too little seen to say: off */
+	/* pauses seen that cover a piece: the model says on again */
+	for (int i = 0; i < 6 && g_oo[OO_C].off; i++) {
+		ST(g_oo_acc[OO_C].gap[RT_GAP_B - 1], 4096);
+		adapt_runs(0, 20, 1);
+	}
+	CHECK(!g_oo[OO_C].off && !LD(g_oo_off[OO_C]));
+	CHECK(g_oo[OO_C].strikes == 1);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+	/* the counters of moves are for the tests after this one to count from zero */
+	for (int k = 0; k < 2; k++)
+		g_ra_moves[k] = g_rs_moves[k] = 0;
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
 
 	RUN(test_div_by);
 	RUN(test_pauses_of_the_game);
+	RUN(test_pauses_only_for_off_kind);
+	RUN(test_pauses_do_not_move_thresholds);
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);

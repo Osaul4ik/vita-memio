@@ -66,7 +66,7 @@ While a file is read in order, the spare core reads the next part early, so the 
 
 ## Results in games
 
-The plugin's own estimates from its log (PCH-1000, microSD in an SD2Vita, v1.5.0), from one short session per game of half a minute to four minutes, with loading screens. *Saved* is the time read ahead took off the game's waits for the card, on top of what the other settings give. These are rough figures, not stopwatch measurements, and they change with what you play.
+The plugin's own estimates from its log (PCH-1000, microSD in an SD2Vita, v1.5.0; v1.5.1 gives the same, also with *Low kernel memory*), from one short session per game of half a minute to four minutes, with loading screens. *Saved* is the time read ahead took off the game's waits for the card, on top of what the other settings give. These are rough figures, not stopwatch measurements, and they change with what you play.
 
 | Game | Session | Reads took | Saved by read ahead |
 |---|---:|---:|---:|

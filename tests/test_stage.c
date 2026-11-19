@@ -273,7 +273,7 @@ static void test_small_transfers_switch(void)
 	CHECK(memcmp(u, disk + 10 * 512, 8 * 512) == 0);
 	CHECK(rd(u, 3, 1) == 0 && last_buf == staging);          /* one sector */
 	CHECK(memcmp(u, disk + 3 * 512, 512) == 0);
-	memset(u, 0x5A, 8 * 512);
+	memset(u, 0x4A, 8 * 512);
 	CHECK(wr(u, 20, 8, REF_RD) == 0 && last_buf == staging);
 	CHECK(memcmp(disk + 20 * 512, u, 8 * 512) == 0);
 	CHECK(rd(u, 0, 0) == 0 && last_buf == u);                /* nothing to move: stock */
@@ -2349,10 +2349,10 @@ static void test_offload(void)
 		fake_memtype_to = elsewhere + sizeof(elsewhere);
 		fake_memtype_above = 0x8000;
 		fake_memtype = 0xD000;                /* the game's buffer: cached */
-		memset(elsewhere, 0x5A, sizeof(elsewhere));
+		memset(elsewhere, 0x4A, sizeof(elsewhere));
 		CHECK(rd(u, 0, 512) == 0 && memcmp(u, disk, 512 * 512) == 0);
 		CHECK(g_offload_state == -2 && copies_elsewhere == 0 && fake_usermap_live == 0);
-		CHECK(elsewhere[0] == 0x5A && elsewhere[sizeof(elsewhere) - 1] == 0x5A);
+		CHECK(elsewhere[0] == 0x4A && elsewhere[sizeof(elsewhere) - 1] == 0x4A);
 		vm_stage_worker_tick();
 		CHECK(g_offload_logged == -2);
 		fake_memtype_from = fake_memtype_to = NULL;
@@ -2766,10 +2766,10 @@ static void test_readahead(void)
 	for (uint32_t i = 0; i < 6; i++)
 		CHECK(rd_ok(u, i * 256, 256));
 	CHECK(!ra_idle(d));
-	memset(w, 0x5A, 256 * 512);
+	memset(w, 0x4A, 256 * 512);
 	CHECK(wr(w, 6 * 256, 256, REF_RD) == 0);
 	CHECK(ra_idle(d) && d->ra_streak == 0);
-	CHECK(rd_ok(u, 6 * 256, 256) && u[0] == 0x5A);
+	CHECK(rd_ok(u, 6 * 256, 256) && u[0] == 0x4A);
 	vm_stage_fini();
 
 	/* a write running when a piece's turn comes: it is not read at all (the
@@ -3486,13 +3486,13 @@ static void test_tiny_reads(void)
 	{
 		static uint8_t w[512];
 
-		memset(w, 0x5A, sizeof(w));
+		memset(w, 0x4A, sizeof(w));
 		CHECK(wr(w, at + 4, 1, REF_RD) >= 0);
-		disk[(at + 4) * 512] = 0x5A;
+		disk[(at + 4) * 512] = 0x4A;
 		CHECK(rd_ok(u, at, 1));
 		for (int k = 1; k < 8; k++)
 			CHECK(rd_ok(u, at + k, 1));
-		CHECK(rd(u, at + 4, 1) == 0 && u[0] == 0x5A);
+		CHECK(rd(u, at + 4, 1) == 0 && u[0] == 0x4A);
 	}
 	/* too old: not used */
 	at = 2300;
@@ -4079,7 +4079,7 @@ static void test_calibration(void)
 		CHECK(f != NULL);
 		if (f) {
 			fseek(f, 40, SEEK_SET);
-			fputc(0x5A, f);
+			fputc(0x4A, f);
 			fclose(f);
 		}
 		memset(g_cal, 0, sizeof(g_cal));
@@ -4509,7 +4509,7 @@ static void test_tune_v3(void)
 	c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
 	fwrite(&c, sizeof(c), 1, f);
 	for (int i = 0; i < 3 * (int)TUNE_SLOT_V3; i++)
-		fputc(0x5A, f);                   /* three old apps */
+		fputc(0x4A, f);                   /* three old apps */
 	fclose(f);
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = 0;
@@ -4556,7 +4556,7 @@ static void test_tune_v3(void)
 		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
 		fwrite(&c, sizeof(c), 1, f);
 		for (int i = 0; i < 2 * (int)TUNE_SLOT_V5; i++)
-			fputc(0x5A, f);               /* two old apps */
+			fputc(0x4A, f);               /* two old apps */
 		fclose(f);
 		memset(g_cal, 0, sizeof(g_cal));
 		g_cal_loaded = 0;
@@ -4575,7 +4575,7 @@ static void test_tune_v3(void)
 		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
 		fwrite(&c, sizeof(c), 1, f);
 		for (int i = 0; i < 2 * (int)TUNE_SLOT_V6; i++)
-			fputc(0x5A, f);               /* two old apps */
+			fputc(0x4A, f);               /* two old apps */
 		fclose(f);
 		memset(g_cal, 0, sizeof(g_cal));
 		g_cal_loaded = 0;
@@ -4851,7 +4851,7 @@ static void test_start_window(void)
 	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC, __ATOMIC_RELAXED);
 	vm_stage_worker_tick();
 	CHECK(g_st_rec.n == 1 && g_st_taken == 0x4A && g_st_rec.snap[0].ok == 1u << OO_C);
-	CHECK(tune_now() == VM_TUNE_LEARNING);               /* one of three: still learning */
+	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* this launch counted, 1 of 3: yellow */
 	/* in tuning.bin as soon as it is taken, the app still in front */
 	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 1 && tune_valid(&t.app) && t.app.st.snap[0].ok == 1u << OO_C);
 	CHECK(g_ad_fsig == tune_sig(&t.app) && !g_tune_live_due);
@@ -4867,6 +4867,7 @@ static void test_start_window(void)
 	CHECK(g_st_rec.n == 1);
 	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
 	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4B && g_st_rec.snap[1].ok == 1u << OO_C);
+	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* 2 of 3: yellow */
 	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 2);
 	ra_proc_event(0x4B, 4);
 	vm_stage_worker_tick();
@@ -4876,7 +4877,7 @@ static void test_start_window(void)
 	vm_stage_worker_tick();
 	st_reach3(TUNE_START_MANY_SEC, 5, 5, 5);
 	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4C);
-	CHECK(tune_now() == VM_TUNE_FAILED);                 /* this launch not counted: yellow */
+	CHECK(tune_now() == VM_TUNE_FAILED);                 /* this launch not counted: red */
 	st_reach3(TUNE_START_MANY_SEC * 2, 500, 500, 500);    /* judged once: this launch is out */
 	CHECK(g_st_rec.n == 2);
 	ra_proc_event(0x4C, 4);
@@ -4885,11 +4886,12 @@ static void test_start_window(void)
 	/* 4: nothing to learn from seen at all: waits to 100 MiB, then not counted */
 	as_app(0x4D);
 	vm_stage_worker_tick();
-	CHECK(tune_now() == VM_TUNE_LEARNING);               /* a new launch: learning again */
+	CHECK(tune_now() == VM_TUNE_LEARNING);               /* a new launch: counting again, blue */
 	st_reach3(TUNE_START_FEW_SEC, 0, 0, 0);
 	CHECK(g_st_rec.n == 2 && g_st_taken != 0x4D);
 	st_reach3(TUNE_START_MANY_SEC, 0, 0, 0);
 	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4D);
+	CHECK(tune_now() == VM_TUNE_FAILED);                 /* nothing to count: red, not yellow */
 	ra_proc_event(0x4D, 4);
 	vm_stage_worker_tick();
 
@@ -4913,6 +4915,53 @@ static void test_start_window(void)
 	vm_stage_worker_tick();
 	st_reach3(TUNE_START_FEW_SEC, 500, 500, 500);
 	CHECK(g_st_rec.n == TUNE_START_N && g_st_taken == 0x4F);
+	CHECK(tune_now() == VM_TUNE_DONE);                   /* a complete start stays green */
+	vm_stage_fini();
+}
+
+/* A launch is judged once: back in front after another launch (its reads
+ * counted from 0 again) it is not counted a second time - the start would
+ * hold the same launch twice and turn green after two real ones. */
+static void test_start_back_in_front(void)
+{
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	g_st_pid = 0;
+	g_st_taken = 0;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();
+
+	as_app(0x4A);                                        /* A: counted */
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
+	CHECK(g_st_rec.n == 1 && tune_now() == VM_TUNE_PARTIAL);
+	ra_proc_event(0x4A, 4);
+	vm_stage_worker_tick();
+	as_app(0x4B);                                        /* B: counted */
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
+	CHECK(g_st_rec.n == 2 && tune_now() == VM_TUNE_PARTIAL);
+	ra_proc_event(0x4B, 4);
+	vm_stage_worker_tick();
+	fake_pid = 0x4A;
+	ra_proc_event(0x4A, 5);                              /* A back in front */
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();                              /* the worker follows: the app, then its verdict */
+	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* still yellow, not blue */
+	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
+	CHECK(g_st_rec.n == 2 && tune_now() == VM_TUNE_PARTIAL);   /* not counted again */
+	ra_proc_event(0x4A, 4);
+	vm_stage_worker_tick();
+	as_app(0x4C);                                        /* C: the third, now complete */
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
+	CHECK(g_st_rec.n == TUNE_START_N && tune_now() == VM_TUNE_DONE);
 	vm_stage_fini();
 }
 
@@ -5766,7 +5815,7 @@ static void test_log_block(void)
 	lk_note(LK_C, 64, 10, 1, 0);
 	mapfail_note(0, &m, -1);
 	CHECK(g_mapfail_n == 0);
-	memset(&snap, 0x5A, sizeof(snap));
+	memset(&snap, 0x4A, sizeof(snap));
 	lg_snap(&snap);
 	CHECK(snap.dev[M].n[LG_SMALL] == 0 && snap.k[LK_C].n[0] == 0 && snap.hits == 0);
 	vm_stage_worker_tick();                               /* no session, no crash */
@@ -5902,7 +5951,7 @@ static void test_bg_no_readahead(void)
 	CHECK(rd_ok(u, 3500, 256));
 	CHECK(g_bg_n == 1 && g_bg_kib == 128 && g_bg_kept == 1 && ra_any(d) && d->ra_streak == streak);
 	/* ... a large write elsewhere: the stream not ended */
-	memset(w, 0x5A, 256 * 512);
+	memset(w, 0x4A, 256 * 512);
 	CHECK(wr(w, 3800, 256, REF_RD) == 0 && memcmp(disk + 3800 * 512, w, 256 * 512) == 0);
 	CHECK(d->ra_streak == streak && ra_any(d));
 	/* the app goes on from its pieces */
@@ -6697,6 +6746,7 @@ int main(void)
 	RUN(test_start_counts_follow_state);
 	RUN(test_start_kept_through_manual);
 	RUN(test_start_window);
+	RUN(test_start_back_in_front);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

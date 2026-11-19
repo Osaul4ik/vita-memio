@@ -2963,7 +2963,15 @@ static AdHeld            g_ad_in;             /* the one coming, as read        
 static SceUID            g_ad_pid;            /* the launch g_ad is of           */
 static TuneStart         g_st_rec;            /* g_ad_title's start (g_ad_lock)  */
 static SceUID            g_st_taken;          /* the launch whose start was taken (worker) */
+static volatile SceUID   g_st_ok;             /* the launch counted into the start (HUD's L) */
 static volatile SceUID   g_st_bad;            /* the launch judged not countable (HUD's L) */
+/* The last launches judged (worker's, no lock): a launch is judged once, also
+ * when it comes back to the front after another one (its reads are counted
+ * from 0 again then, and would be judged again, taking a second snapshot of
+ * the same launch). Only one app is suspended at a time; a few are enough. */
+#define ST_JUDGED_N 4u
+static struct { SceUID pid; int bad; } g_st_judged[ST_JUDGED_N];
+static uint32_t          g_st_judged_i;
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
 /* On or off, as measured (below, after ra_adapt_on): its state. */
@@ -5711,6 +5719,8 @@ static void prealloc(Dev *d)
 
 int vm_stage_init(void)
 {
+	memset(g_st_judged, 0, sizeof(g_st_judged));   /* a new session: no launch judged yet */
+	g_st_judged_i = 0;
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
 		{ H_RD_SD,  NID_READ_SD,   h_rd_sd  },
 		{ H_WR_SD,  NID_WRITE_SD,  h_wr_sd  },
@@ -6529,6 +6539,23 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
+static void st_judged_add(SceUID pid, int bad)
+{
+	const uint32_t i = g_st_judged_i++ % ST_JUDGED_N;
+
+	g_st_judged[i].pid = pid;
+	g_st_judged[i].bad = bad;
+}
+
+/* -1 not judged yet, 0 counted, 1 not countable. */
+static int st_judged_find(SceUID pid)
+{
+	for (uint32_t i = 0; i < ST_JUDGED_N; i++)
+		if (g_st_judged[i].pid == pid)
+			return g_st_judged[i].bad;
+	return -1;
+}
+
 /* Worker thread: the launch in front has read the window (see TUNE_START_*:
  * 50 MiB, or 100 MiB if a kind of read Adaptive had seen was still short of
  * runs to weigh) - what Adaptive holds is the launch's snapshot, with the
@@ -6548,6 +6575,18 @@ static void tune_start_tick(void)
 	memset(&shot, 0, sizeof(shot));
 	if (!fg || fg == g_st_taken || !app_in_front() || !strcmp(g_app_title, HOME_TITLE))
 		return;
+	{
+		const int j = st_judged_find(fg);
+
+		if (j >= 0) {                     /* back in front: judged before, not again */
+			g_st_taken = fg;
+			if (j)                        /* the HUD's L as it was */
+				ST(g_st_bad, fg);
+			else
+				ST(g_st_ok, fg);
+			return;
+		}
+	}
 	sec = __atomic_load_n(&g_st_sec, __ATOMIC_RELAXED);
 	reads = __atomic_load_n(&g_st_reads, __ATOMIC_RELAXED);
 	if (sec < TUNE_START_FEW_SEC)
@@ -6572,6 +6611,7 @@ static void tune_start_tick(void)
 		if (!ok) {
 			bad = 1;                      /* not enough to learn from: not a valid launch */
 			ST(g_st_bad, fg);
+			st_judged_add(fg, 1);
 		} else {
 			for (int i = 0; i < 2; i++) {
 				shot.ra_adj[i] = (int8_t)LD(g_ra_adj[i]);
@@ -6588,6 +6628,8 @@ static void tune_start_tick(void)
 			g_st_rec.snap[g_st_rec.n++] = shot;
 			n = g_st_rec.n;
 			took = 1;
+			ST(g_st_ok, fg);              /* the HUD's L: this launch is counted */
+			st_judged_add(fg, 0);
 			if (n == TUNE_START_N) {
 				TuneSnap agg;
 
@@ -7082,12 +7124,20 @@ void vm_stage_ra_now(VmRaNow *o)
 	{
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
-		/* the start of the app in front (tuning.bin): green all launches counted, blue
-		 * still learning, yellow the launch in front could not be counted */
+		/* the start of the app in front (tuning.bin): blue this launch is still being
+		 * counted, yellow it is counted but the start is not complete (1 or 2 of
+		 * 3), green the start is complete (all counted, its result worked out), red
+		 * this launch could not be counted. Read without g_ad_lock: g_ad_pid is
+		 * set last when the app changes, so with it equal to fg the start is this
+		 * app's; a frame that catches a change half done is drawn again at once. */
 		if (fg && fg == LD(g_ad_pid) && LD(g_ad_title[0]) && ad_key_auto(LD(g_ad_key)) &&
-		    ra_adapt_on())
-			o->tune = g_st_rec.n >= TUNE_START_N ? VM_TUNE_DONE :
-			          LD(g_st_bad) == fg ? VM_TUNE_FAILED : VM_TUNE_LEARNING;
+		    ra_adapt_on()) {
+			const uint32_t n = LD(g_st_rec.n);
+
+			o->tune = n >= TUNE_START_N        ? VM_TUNE_DONE :
+			          LD(g_st_bad) == fg       ? VM_TUNE_FAILED :
+			          n && LD(g_st_ok) == fg   ? VM_TUNE_PARTIAL : VM_TUNE_LEARNING;
+		}
 		if (!fg || fg != LD(g_bm_pid) || !LD(g_offload))
 			o->bufmap = VM_BUFMAP_NONE;
 		else if (LD(g_off_maperr) + LD(g_ncd_maperr) != LD(g_bm_fail))

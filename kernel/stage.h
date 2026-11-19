@@ -69,10 +69,12 @@ typedef struct VmRaNow {
 	int      tune;          /* the app in front's start (VM_TUNE_*)           */
 } VmRaNow;
 
-/* VmRaNow.tune: no start (no app, not Adaptive); learning (launches still to
- * be counted); done (all counted, mean or median taken); the launch in front
- * could not be counted (too little read, or too few runs to weigh). */
-enum { VM_TUNE_NONE, VM_TUNE_LEARNING, VM_TUNE_DONE, VM_TUNE_FAILED };
+/* VmRaNow.tune: no start (no app, not Adaptive); learning (the launch in front
+ * is still being counted); partial (the launch in front is counted, but the
+ * start has fewer than all its launches: 1 of 3, 2 of 3); done (all counted,
+ * the start is complete - mean or median); the launch in front could not be
+ * counted (too little read, or too few runs to weigh). */
+enum { VM_TUNE_NONE, VM_TUNE_LEARNING, VM_TUNE_PARTIAL, VM_TUNE_DONE, VM_TUNE_FAILED };
 
 /* VmRaNow.bufmap: copy on the system core off or nothing mapped yet; every
  * buffer mapped; some mapped from their 2nd page (their first in no block:

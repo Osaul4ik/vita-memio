@@ -156,9 +156,24 @@ static const char *hud_bufmap(int b)
 	     : b == VM_BUFMAP_REFUSED ? HUD_C_BAD "B" : HUD_C_DIM "B";
 }
 
+/* The colour of the L after Auto (VmRaNow.tune). */
+static const char *hud_tune_color(int tune)
+{
+	switch (tune) {
+	case VM_TUNE_LEARNING: return HUD_C_ACCENT;   /* this launch is being counted */
+	case VM_TUNE_PARTIAL:  return HUD_C_WARN;     /* counted, the start not complete: 1 or 2 of 3 */
+	case VM_TUNE_DONE:     return HUD_C_GOOD;     /* all counted, the result worked out */
+	case VM_TUNE_FAILED:   return HUD_C_BAD;      /* this launch could not be counted */
+	default:               return HUD_C_DIM;
+	}
+}
+
 /* Read ahead in the HUD, for the app in front:
  *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
- *   C:5:2/16/8 NC:never Auto L           (L: start learned, hud: green/blue/yellow;
+ *   C:5:2/16/8 NC:never Auto L           (L: the start learned - blue: counting this
+ *                                         launch, yellow: counted, 1 or 2 of 3, green:
+ *                                         all 3, worked out, red: this launch not
+ *                                         counted, grey: none (hud_tune_color);
  *                                         reads in a row before it starts:
  *                                         as set : now for large / 32 KiB /
  *                                         tiny reads; hud_streak_kind)
@@ -198,12 +213,11 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 		VmCal cal;
 
 		vm_stage_cal(-1, &cal);             /* tuning: green measuring, grey off */
-		/* L: the app's start (what its first launches left Adaptive): green all
-		 * counted, blue learning, yellow not counted/too little, grey none */
+		/* L: the app's start (what its first launches left Adaptive): blue this launch
+		 * is being counted, yellow it is counted (1 or 2 of 3), green all counted and
+		 * the result worked out, red this launch not counted, grey none */
 		snprintf(L[n++], VM_HUD_LINE_MAX, "%.20s %.20s %sAuto %sL", c, nc,
-		         cal.on ? HUD_C_GOOD : HUD_C_DIM,
-		         now.tune == VM_TUNE_DONE ? HUD_C_GOOD : now.tune == VM_TUNE_LEARNING ? HUD_C_ACCENT
-		         : now.tune == VM_TUNE_FAILED ? HUD_C_WARN : HUD_C_DIM);
+		         cal.on ? HUD_C_GOOD : HUD_C_DIM, hud_tune_color(now.tune));
 	}
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;

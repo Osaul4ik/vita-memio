@@ -4812,6 +4812,14 @@ static void test_start_kept_through_manual(void)
  * does not decide); a kind still short at the end is left out of that
  * launch's snapshot; a launch with no kind enough is not counted and the
  * next one tries again; three valid launches complete the start, each kept. */
+static int tune_now(void)
+{
+	VmRaNow rn;
+
+	vm_stage_ra_now(&rn);
+	return rn.tune;
+}
+
 static void test_start_window(void)
 {
 	VmSettings s;
@@ -4834,6 +4842,7 @@ static void test_start_window(void)
 	/* 1: 50 MiB, the ordinary kind enough, however many reads (a read is not a run) */
 	as_app(0x4A);
 	vm_stage_worker_tick();
+	CHECK(tune_now() == VM_TUNE_LEARNING);               /* the HUD's L: blue */
 	__atomic_store_n(&g_st_runs[OO_C], TUNE_START_MIN_RUNS, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_st_reads, 100000, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC - 1, __ATOMIC_RELAXED);
@@ -4842,6 +4851,7 @@ static void test_start_window(void)
 	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC, __ATOMIC_RELAXED);
 	vm_stage_worker_tick();
 	CHECK(g_st_rec.n == 1 && g_st_taken == 0x4A && g_st_rec.snap[0].ok == 1u << OO_C);
+	CHECK(tune_now() == VM_TUNE_LEARNING);               /* one of three: still learning */
 	/* in tuning.bin as soon as it is taken, the app still in front */
 	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 1 && tune_valid(&t.app) && t.app.st.snap[0].ok == 1u << OO_C);
 	CHECK(g_ad_fsig == tune_sig(&t.app) && !g_tune_live_due);
@@ -4866,6 +4876,7 @@ static void test_start_window(void)
 	vm_stage_worker_tick();
 	st_reach3(TUNE_START_MANY_SEC, 5, 5, 5);
 	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4C);
+	CHECK(tune_now() == VM_TUNE_FAILED);                 /* this launch not counted: yellow */
 	st_reach3(TUNE_START_MANY_SEC * 2, 500, 500, 500);    /* judged once: this launch is out */
 	CHECK(g_st_rec.n == 2);
 	ra_proc_event(0x4C, 4);
@@ -4874,6 +4885,7 @@ static void test_start_window(void)
 	/* 4: nothing to learn from seen at all: waits to 100 MiB, then not counted */
 	as_app(0x4D);
 	vm_stage_worker_tick();
+	CHECK(tune_now() == VM_TUNE_LEARNING);               /* a new launch: learning again */
 	st_reach3(TUNE_START_FEW_SEC, 0, 0, 0);
 	CHECK(g_st_rec.n == 2 && g_st_taken != 0x4D);
 	st_reach3(TUNE_START_MANY_SEC, 0, 0, 0);
@@ -4886,6 +4898,7 @@ static void test_start_window(void)
 	vm_stage_worker_tick();
 	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
 	CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[2].ok == 7);
+	CHECK(tune_now() == VM_TUNE_DONE);                   /* all three: green */
 	CHECK(g_st_rec.snap[0].ok == 1u << OO_C && g_st_rec.snap[1].ok == 1u << OO_C);   /* as taken */
 	CHECK(st_slot(dir, 0, &t) && t.app.st.n == TUNE_START_N);                      /* already in the file */
 	tune_start_agg(&g_st_rec, &ag, &med);

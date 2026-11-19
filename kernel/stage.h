@@ -66,7 +66,13 @@ typedef struct VmRaNow {
 	                         * (VM_BUFMAP_*), since it was started             */
 	uint32_t off;           /* Adaptive, off as measured now: bit 0 C, 1 NC,
 	                         * 2 tiny reads                                    */
+	int      tune;          /* the app in front's start (VM_TUNE_*)           */
 } VmRaNow;
+
+/* VmRaNow.tune: no start (no app, not Adaptive); learning (launches still to
+ * be counted); done (all counted, mean or median taken); the launch in front
+ * could not be counted (too little read, or too few runs to weigh). */
+enum { VM_TUNE_NONE, VM_TUNE_LEARNING, VM_TUNE_DONE, VM_TUNE_FAILED };
 
 /* VmRaNow.bufmap: copy on the system core off or nothing mapped yet; every
  * buffer mapped; some mapped from their 2nd page (their first in no block:

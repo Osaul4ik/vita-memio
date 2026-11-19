@@ -2963,6 +2963,7 @@ static AdHeld            g_ad_in;             /* the one coming, as read        
 static SceUID            g_ad_pid;            /* the launch g_ad is of           */
 static TuneStart         g_st_rec;            /* g_ad_title's start (g_ad_lock)  */
 static SceUID            g_st_taken;          /* the launch whose start was taken (worker) */
+static volatile SceUID   g_st_bad;            /* the launch judged not countable (HUD's L) */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
 /* On or off, as measured (below, after ra_adapt_on): its state. */
@@ -6570,6 +6571,7 @@ static void tune_start_tick(void)
 		memcpy(title, g_ad_title, sizeof(title));
 		if (!ok) {
 			bad = 1;                      /* not enough to learn from: not a valid launch */
+			ST(g_st_bad, fg);
 		} else {
 			for (int i = 0; i < 2; i++) {
 				shot.ra_adj[i] = (int8_t)LD(g_ra_adj[i]);
@@ -7080,6 +7082,12 @@ void vm_stage_ra_now(VmRaNow *o)
 	{
 		const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
 
+		/* the start of the app in front (tuning.bin): green all launches counted, blue
+		 * still learning, yellow the launch in front could not be counted */
+		if (fg && fg == LD(g_ad_pid) && LD(g_ad_title[0]) && ad_key_auto(LD(g_ad_key)) &&
+		    ra_adapt_on())
+			o->tune = g_st_rec.n >= TUNE_START_N ? VM_TUNE_DONE :
+			          LD(g_st_bad) == fg ? VM_TUNE_FAILED : VM_TUNE_LEARNING;
 		if (!fg || fg != LD(g_bm_pid) || !LD(g_offload))
 			o->bufmap = VM_BUFMAP_NONE;
 		else if (LD(g_off_maperr) + LD(g_ncd_maperr) != LD(g_bm_fail))

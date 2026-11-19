@@ -373,6 +373,9 @@ static inline void clean_out(void *p, uint32_t n)
 
 /* Verify mode: one shared cached buffer for the stock re-read. */
 static volatile int g_verify;
+/* Tuning measures only without Verify transfers (it reads everything again,
+ * so no time measured then is what it is); what was measured stays in use. */
+#define CAL_MEASURING() (LD(g_cal_on) && !LD(g_verify))
 static void        *g_shadow;
 static SceUID       g_shadow_uid = -1;
 static volatile int g_shadow_busy;
@@ -2439,7 +2442,7 @@ static void cal_waste(Dev *d, const RaPiece *pc)
 	CalDev *c = &g_cal[d - g_dev];
 	uint32_t n;
 
-	if (!LD(g_cal_on))
+	if (!CAL_MEASURING())
 		return;
 	ST(c->waste_us, LD(c->waste_us) + pc->held_us);
 	n = LD(c->waste_n) + 1;
@@ -3447,7 +3450,7 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 {
 	int b;
 
-	if (reads < 2 || LD(g_ra_mode) != VM_RA_ADAPTIVE ||
+	if (reads < 2 || LD(g_ra_mode) != VM_RA_ADAPTIVE || LD(g_verify) ||
 	    __atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE) || __sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
 	b = rt_tiny_bucket(reads);
@@ -3471,6 +3474,15 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 static int ra_adapt_on(void)
 {
 	return LD(g_ra_mode) == VM_RA_ADAPTIVE && !__atomic_load_n(&g_rt_on, __ATOMIC_ACQUIRE);
+}
+
+/* Whether Adaptive learns now: as in effect, but not while Verify transfers
+ * is on - it reads every transfer again (read ahead's served reads too), so
+ * every time measured then is not what it is. What was learned stays in
+ * effect meanwhile; nothing is counted, moved or switched. */
+static int ra_learn_on(void)
+{
+	return ra_adapt_on() && !LD(g_verify);
 }
 
 /* ---- on or off, from what read ahead did (ra_test.h: RtEv) ----------------
@@ -3582,7 +3594,7 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
  * kept with the stream until it ends. No lock: the stream's own thread. */
 static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
 {
-	if (!ra_adapt_on())
+	if (!ra_learn_on())
 		return;
 	if (small) {
 		const uint32_t b = (at - 1) / 4;
@@ -3602,7 +3614,7 @@ static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
  * another thread is at the counts. */
 static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 {
-	const int ok = len && ra_adapt_on() && !__sync_lock_test_and_set(&g_ad_lock, 1);
+	const int ok = len && ra_learn_on() && !__sync_lock_test_and_set(&g_ad_lock, 1);
 	uint32_t *pos;
 
 	if (!ok) {
@@ -3669,7 +3681,7 @@ static void ra_adapt_tick(void)
 		}
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
-		if (ra_adapt_on() && t != RA_THR_NONE) {
+		if (ra_learn_on() && t != RA_THR_NONE) {
 			const int sm0 = sm;
 
 			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
@@ -3706,7 +3718,7 @@ static void ra_adapt_tick(void)
 		cal_tiny_cost(g_tn_dev, &c);
 		tmv[0] = t;
 		tmv[1] = blk;
-		if (ra_adapt_on() &&
+		if (ra_learn_on() &&
 		    rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
 		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
 		                                              rt_tiny_card(&c, 1)), &c)) {
@@ -3717,7 +3729,7 @@ static void ra_adapt_tick(void)
 			tmv[3] = blk;
 			any = 1;
 		}
-		if (ra_adapt_on()) {
+		if (ra_learn_on()) {
 			ol_on[OO_TINY] = 1;
 			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c),
 			             &ol[OO_TINY])) {
@@ -3893,7 +3905,7 @@ static void ra_drop(Dev *d)
 				waste += d->ra[i].n - d->ra[i].off;
 				if (!d->ra[i].off) {
 					cal_waste(d, &d->ra[i]);   /* none of it used */
-					if (ra_adapt_on())
+					if (ra_learn_on())
 						oo_waste(d->ra[i].nc ? OO_NC : OO_C, d->ra[i].held_us);
 					Diag *const dg = LD(g_log_diag) ? DG() : NULL;
 
@@ -4380,7 +4392,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
                         uint8_t *p, uint32_t n, int *ret, int *how)
 {
 	const int clean = LD(g_gpu_safe) && g_dcache_clean;
-	const int cal = LD(g_cal_on);             /* calibration: block reads and hits timed */
+	const int cal = CAL_MEASURING();          /* calibration: block reads and hits timed */
 	uint32_t h0;
 	int wr, filled = 0;
 	void *shadow;
@@ -4719,9 +4731,9 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const int bg = mine && nsec && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && bg_req();
 	/* calibration on: when it started, and whether a piece held it up */
 	/* (also with Adaptive: who a piece held up, for its on or off) */
-	const uint32_t cal_m = mine && nsec && !bg && (LD(g_cal_on) || ra_adapt_on())
+	const uint32_t cal_m = mine && nsec && !bg && (CAL_MEASURING() || ra_learn_on())
 	                       ? cal_start(d, nsec, &cal_held) : 0;
-	const uint32_t cal_t0 = LD(g_cal_on) ? cal_m : 0;
+	const uint32_t cal_t0 = CAL_MEASURING() ? cal_m : 0;
 
 	/* the largest read request seen, for the log (a lost update is fine) */
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
@@ -5071,7 +5083,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	const int lg = mine && LD(g_log_diag);
 	/* Adaptive: the reads timed for "on or off, as measured" (oo_note; the
 	 * rest is the worker's, on the system core) */
-	const int ms = mine && !write && LD(d->enabled) && ra_adapt_on();
+	const int ms = mine && !write && LD(d->enabled) && ra_learn_on();
 	const uint32_t t0 = lg || ms ? ksceKernelGetSystemTimeLow() : 0;
 	XInfo xi = { 0, 0, 0 };
 	int col = 0, r;

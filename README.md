@@ -50,7 +50,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 | Overlay (SELECT + arrows) | A menu and HUD over any game. Off takes effect at once; On after a restart if it was off at the start | On |
 | Profiles for system apps | The home screen and system apps get their own settings and learning, like games | On |
 | *Developer settings* | | |
-| Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
+| Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only; Adaptive and Tuning learn nothing meanwhile | Off |
 | Enable log | Logs to `ur0:data/vita-memio/`, with a summary of each app's reads when it leaves the front | Off |
 | Statistics | Collects timings for the tester app | Off |
 

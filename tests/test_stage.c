@@ -5286,6 +5286,65 @@ static void test_log_block(void)
 	vm_stage_apply(&s);
 }
 
+/* Verify transfers on: Adaptive and Tuning learn nothing (every read is
+ * read again, so the times are not what they are) - no event counted, no
+ * stream, no round, nothing measured, nothing switched; read ahead still
+ * runs as learned. Off again: they learn as before. */
+static void test_verify_no_learning(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+	uint32_t at = 0;
+	int on;
+
+	on_game(&s, 0x44);
+	s.readahead = VM_RA_ADAPTIVE;
+	s.verify = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();                       /* the verify buffer */
+	CHECK(vm_stage_verify_ready() && d->ra_ready);
+	g_cal_on = 1;
+	memset(&g_cal[M], 0, sizeof(g_cal[M]));
+	g_cal_dirty = 0;
+	memset(g_oo_acc, 0, sizeof(g_oo_acc));
+	memset(g_ad_sec, 0, sizeof(g_ad_sec));
+	g_tn_ended = 0;
+	for (int r = 0; r < 3; r++) {                 /* streams, ended by a jump */
+		for (int i = 0; i < 8; i++, at += 256)
+			CHECK(rd_ok(u, at, 256));
+		at = (at + 512) % 2048;
+	}
+	for (uint32_t i = 0; i < 40; i++)              /* a run of tiny reads, ended */
+		CHECK(rd_ok(u, 3000 + i, 1));
+	CHECK(rd_ok(u, 3600, 1));
+	CHECK(g_ra_hits > 0);                         /* read ahead ran, verified */
+	CHECK(!g_oo_acc[OO_C].std_q && !g_oo_acc[OO_C].srv_q && !g_oo_acc[OO_C].waste);
+	CHECK(!g_ad_sec[0] && !g_ad_sec[1] && !g_tn_ended && !g_ad_due[0] && !g_tn_due);
+	CHECK(!g_cal[M].n_plain[0] && !g_cal[M].n_served[0] && !g_cal[M].tiny_hit_n &&
+	      !g_cal[M].tiny_blk_n && !g_cal_dirty);
+	vm_stage_worker_tick();                       /* no round: nothing moved */
+	CHECK(!g_oo_off[OO_C] && !g_oo_off[OO_NC] && !g_oo_off[OO_TINY]);
+	/* off: as before */
+	s.verify = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	for (int r = 0; r < 3; r++) {
+		for (int i = 0; i < 8; i++, at += 256)
+			CHECK(rd_ok(u, at % 3584, 256));
+		at = (at + 512) % 2048;
+	}
+	on = g_oo_acc[OO_C].std_q || g_oo_acc[OO_C].srv_q || g_ad_sec[0] || g_ad_due[0] ||
+	     g_cal[M].n_plain[0] || g_cal[M].n_served[0];
+	CHECK(on);
+	free(u);
+	vm_stage_fini();
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ra_adapt_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
 /* The app in front first: another app's reads are sped up (staged) but get
  * no read ahead - they neither take nor start nor break the app's stream,
  * keep its pieces (the standard way while it has some), take no tiny block,
@@ -5785,6 +5844,7 @@ int main(void)
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
 	RUN(test_log_block);
+	RUN(test_verify_no_learning);
 	RUN(test_bg_no_readahead);
 	RUN(test_lowmem_init);
 	RUN(test_lowmem_handover);

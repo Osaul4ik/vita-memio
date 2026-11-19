@@ -8,18 +8,14 @@ It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork
 
 DO NOT use these two plugins together under any circumstances.
 
-## What you get
-
-Faster reads and writes, with the biggest gain in anything that reads files in order. Every measured value is under [Benchmarks](#benchmarks). Results depend on your microSD, and games usually gain less than a benchmark.
-
 **Your data is safe by design.** A program reads exactly what it would read without the plugin. Writes are never delayed: when a write returns, the data is on the card. If anything goes wrong, that storage goes back to the normal way for the rest of the session.
 
 ## Install
 
-Get `vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx` and, if you want to measure your card, `vitamemio_tester.vpk` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest).
+Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it. It holds the plugin (`vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx`), the tester (`vitamemio_tester.vpk`) and `SHA256SUMS`.
 
 1. Copy `vitamemio_kernel.skprx`, `vitamemio_hud.skprx` and `vitamemio.suprx` to `ur0:tai/`.
-2. Add these lines to your taiHEN config. If `ux0:tai/config.txt` exists, edit that one, otherwise `ur0:tai/config.txt`:
+2. Add these lines to your taiHEN config (`ux0:tai/config.txt` if it exists, otherwise `ur0:tai/config.txt`). `vitamemio_hud.skprx` does not go there: the plugin loads it by itself.
 
    ```
    *KERNEL
@@ -28,112 +24,76 @@ Get `vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx` and, if y
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-   `vitamemio_hud.skprx` does not go in `config.txt`: the plugin loads it by itself.
 3. Restart the console.
-4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything starts switched off.
+4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything else is already set as recommended.
 
-That is all: the other defaults are the recommended ones. Back up your cards first, as with any plugin that touches storage.
+Back up your cards first, as with any plugin that touches storage. **To update:** replace all three files and restart; always update them together.
 
-**To update:** replace all three files and restart. Always update them together.
-
-## Uninstall
-
-1. In **Settings > Devices > vita-memio**, switch off every storage (or switch *Driver* off).
-2. Remove the plugin's lines from `config.txt`.
-3. Restart the console.
-4. Delete `ur0:tai/vitamemio_kernel.skprx`, `ur0:tai/vitamemio_hud.skprx`, `ur0:tai/vitamemio.suprx` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+**To uninstall:** switch off every storage (or *Driver*), remove the lines from `config.txt`, restart, then delete the three files and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
 
 ## Settings
 
-Everything is in **Settings > Devices > vita-memio** and takes effect at once, no restart needed, except *Driver*.
+Everything is in **Settings > Devices > vita-memio** and takes effect at once, except *Driver*.
 
 | Setting | What it does | Default |
 |---|---|---|
-| Driver | Whether the plugin starts with the console. **Off**: from the next start it loads nothing and every storage works the standard way; this page stays, so you can switch it on again. Takes effect after a restart | On |
-| Driver: active / off / … | Shows whether the plugin is running. Select it for details | |
+| Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing; this page stays, so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
-
-**Advanced**
-
-| Setting | What it does | Default |
-|---|---|---|
-| GPU-safe reads | Makes sure the graphics chip always sees data correctly. **All**: after every read, costs a little speed. **Non-DMA**: not after *DMA copy*'s copies, faster; if a game shows graphics glitches, use All. Recommended for playing | Non-DMA |
+| *Advanced* | | |
+| GPU-safe reads | Makes sure the graphics chip sees the data. **All**: after every read. **Non-DMA**: not after *DMA copy*'s copies, faster. If a game shows graphics glitches, use All | Non-DMA |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
-| Copy on the system core | Moves copying from the game's CPU core to the console's spare core, so the game's core is free sooner. See below | C + NC R/A |
-| DMA copy | Copying is done by the console's DMA controller instead of the CPU, in about half the time. It switches itself off if anything goes wrong | On |
+| Copy on the system core | Moves copying to the console's spare core, so the game's core is free sooner: *Off*, *Cached only*, *C + NC R/A* (plus graphics data read ahead), *C + NC All* (mostly for experimenting) | C + NC R/A |
+| DMA copy | Copying is done by the DMA controller, in about half the time. Switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before it is asked for: **Adaptive**, **On** or **Off**. See below | Adaptive |
-| Small transfers too | Also speeds up transfers under 32 KiB, the file system's own bookkeeping | On |
-| Overlay (SELECT + arrows) | A small menu over any game, see below. Off takes effect at once; On after a restart, if it was off when the console started | On |
-| Profiles for system apps | The home screen (LiveArea) and the system's own apps (Settings, the browser, …) are treated like games: their own settings in the overlay, and *Adaptive* keeps what it learned for each. Off: they use the settings here | On |
-
-**Developer settings** (inside *Advanced*)
-
-| Setting | What it does | Default |
-|---|---|---|
+| Small transfers too | Also speeds up transfers under 32 KiB | On |
+| Overlay (SELECT + arrows) | A menu and HUD over any game. Off takes effect at once; On after a restart if it was off at the start | On |
+| Profiles for system apps | The home screen and system apps get their own settings and learning, like games | On |
+| *Developer settings* | | |
 | Verify transfers | Reads every transfer again the normal way and compares. Slow, for checking only | Off |
-| Enable log | Writes logs to `ur0:data/vita-memio/`. Each time an app leaves the front, a few `session` lines show how long its reads took (by size), how many came while read ahead was busy, and what read ahead brought and wasted; *Adaptive*'s changes are logged too | Off |
-| Statistics | Collects timings for the tester app; switch it on before testing | Off |
+| Enable log | Logs to `ur0:data/vita-memio/`, with a summary of each app's reads when it leaves the front | Off |
+| Statistics | Collects timings for the tester app | Off |
 
 If the plugin ever could not start properly, a **Reset safe mode** row appears under the status.
 
-### Copy on the system core
-
-| Choice | What runs on the spare core |
-|---|---|
-| Off | Nothing |
-| Cached only | Copies of ordinary reads of 16 KiB or more |
-| **C + NC R/A** | That, plus what *Read ahead* already read for graphics data. Without *Read ahead* it is the same as *Cached only* |
-| C + NC All | That, plus the graphics data reads themselves. In my tests this only moved work between cores, so it is here mostly for experimenting |
-
-In numbers: with *Read ahead* on, copying graphics data on the spare core took the work on the game's cores from 12.2 to 1.7 ms per MiB, at about 1% less speed. Ordinary 1 MiB reads cost the game's core 3 ms per MiB instead of 22.
-
 ### Read ahead
 
-While a file is being read in order, the spare core reads the next part early, so the card does not sit idle between requests. It starts after five large reads in a row, or sixteen of 32 KiB; smaller reads in order are read in 32 KiB blocks from the eighth on.
+While a file is read in order, the spare core reads the next part early, so the card does not sit idle between requests. Data read early is thrown away if anything writes over it, so it is never stale, and it is not read at all while a write runs. It takes about 40 KiB more memory per storage.
 
-Data read early is thrown away if anything writes over it, so it can never be stale, and *Verify transfers* checks it like everything else. It uses about 40 KiB more memory per storage.
+**Adaptive** works out for each game, while you play, after how many reads in a row read ahead pays off (large reads, 32 KiB reads and very small reads, each on its own) and how big a block to read for very small ones. It also counts what read ahead actually saved in that game, for ordinary memory, graphics memory and very small reads. Where it comes out as a loss, read ahead switches off for that kind of read, and back on when the game's own figures show a gain. Everything it learns is kept for every game, also across restarts.
 
-It helps most when a game reads long stretches in order, and very little when a game jumps around. That varies a lot from game to game, which is what the test below is for.
+**On** uses fixed points: five large reads, sixteen of 32 KiB, or eight very small ones.
 
-**Adaptive** starts from the same point (the game's own from the R/A Test, or five) and while you play it works out, from how the game reads, which starting point would have paid off best, and switches to it, usually within the first second or two of a loading screen. It stays between two and eight reads and never switches itself off; a kind of read the test set to *never* stays never. Reads of 32 KiB in a row get their own starting point, worked out the same way: between 4 and 32 reads (16 with *On*). What it has learned is kept for every game and app (the home screen too), also across restarts, so a game you come back to goes on from there rather than learning again; it starts afresh if you change the game's read ahead settings. It does the same for very small reads in a row (under 32 KiB): from which one the plugin reads a block of the file at once, and how big (8, 16 or 32 KiB). It also keeps count of what read ahead actually did in each game, for each kind of read (ordinary memory, graphics memory, the very small reads): the time it saved on the reads it served, against reads of the same kind that went the standard way at the same moments, less the time other reads waited for pieces nobody used. Where that comes out as a loss, read ahead switches itself off for that kind in that game; it switches back on once its estimate, with that game's own figures, shows a gain. The HUD shows `-` for a kind switched off this way. While the R/A Test runs, read ahead uses the standard five for both kinds, and nothing adapts.
+## Results in games
 
-All benchmark values are under [Benchmarks](#benchmarks). The gain in real use is smaller.
+The plugin's own estimates from its log (PCH-1000, microSD in an SD2Vita, v1.5.0), from one short session per game of half a minute to four minutes, with loading screens. *Saved* is the time read ahead took off the game's waits for the card, on top of what the other settings give. These are rough figures, not stopwatch measurements, and they change with what you play.
 
-## Overlay
+| Game | Session | Reads took | Saved by read ahead |
+|---|---:|---:|---:|
+| PCSG01179 | 174 s | 9.4 s | 52.8 s (85%) |
+| GTA San Andreas (port) | 87 s | 15.1 s | 22.5 s (60%) |
+| PCSB00404 | 28 s | 2.8 s | 12.4 s (81%) |
+| NFS Underground 2 (port) | 104 s | 11.7 s | 12.0 s (51%) |
+| PCSB00419 | 82 s | 3.0 s | 2.0 s (40%) |
+| PCSB00986 | 90 s | 2.9 s | 1.6 s (35%) |
+| PCSE01254 | 134 s | 8.2 s | 1.5 s (16%) |
+| PCSB00554 | 95 s | 4.7 s | 1.5 s (24%) |
+| PCSB01030 | 104 s | 10.2 s | 1.1 s (10%) |
+| PCSB00296 | 78 s | 5.8 s | 1.0 s (15%) |
+| PCSF00024 | 167 s | 32.1 s | 0.8 s (2%) |
+| PCSB00245 | 64 s | 2.1 s | 0.7 s (24%) |
+| PCSB00724 | 67 s | 3.4 s | 0.3 s (8%) |
+| PCSB00118 | 222 s | 6.0 s | 0.3 s (4%) |
 
-*Overlay* in *Advanced* is on by default. Switched off, it is gone at once; switched on again, it works at once if it was on when the console started, else after a restart. In any game:
+The percentage is the share of the waiting it removed. Games that read files in many very small pieces gain the most. Most loading is not limited by storage, so a loading screen gets shorter by less than this.
 
-| Keys | |
-|---|---|
-| SELECT + Right | Opens the overlay; again: closes it and shows the HUD |
-| SELECT + Left | From the HUD back to the overlay; again: closes it |
-| SELECT + Up or Down | Closes everything |
-| Up / Down | Choose a line |
-| Left / Right, Cross | Change a value, or do the action |
+## Overlay and HUD
 
-A game that uses SELECT + Right itself will open the overlay too. While the overlay is open, the game gets no buttons.
+In any game, **SELECT + Right** opens the overlay and, pressed again, closes it and shows the HUD. **SELECT + Left** goes back; **SELECT + Up/Down** closes everything. Up/Down choose a line, Left/Right or Cross change it. While the overlay is open, the game gets no buttons.
 
-The overlay sets things **for this game only** (or for the home screen or a system app, with *Profiles for system apps* on); each setting is *Global*, as in Settings, until you change it, and a game's own setting can switch something on or off whatever Settings has. White means standard, blue changed but not saved, green saved and different from the standard. *Show advanced* adds Overlapped reads and GPU-safe reads. **Save** keeps your changes for this game, in `ux0:data/vita-memio/ra/` (a profile saved by an older version on the internal storage moves there the first time the game starts).
+The overlay sets things **for this game only**. Each line is *Global* (as in Settings) until you change it: white is standard, blue changed but not saved, green saved. **Save** keeps them in `ux0:data/vita-memio/ra/`. *Show advanced* adds Overlapped reads and GPU-safe reads.
 
-### Tuning: measured on your console
-
-*Tuning* in the overlay is for the whole console, not one game, and is *Auto* by default. The plugin measures how much time read ahead saves on your console and what a read for nothing costs, for each storage. Once it has measured enough, *Adaptive* and the R/A Test use your console's figures instead of the standard ones. After a few games with loading screens you can set it *Off* if you like; what was measured is kept and still used. The figures, and what *Adaptive* learned for each game, are kept together in one file on the memory card or SD2Vita, `ux0:data/vita-memio/tuning.bin` (under 2 KiB, plus about 370 bytes for each game that learned something), not on the internal storage. It is edited in place: only the part that changed (one game's entry, or the measured figures; a new game's entry is added at the end) is written, only when you switch to another app, and only if something there actually moved, so once everything is learned it is hardly written at all. Triangle on the line, twice, forgets what was measured and learned.
-
-### R/A test: let the plugin choose for your game
-
-The test is in the overlay while Read ahead is *On* or *Off* for the game. With *Adaptive* it is not shown: Adaptive works this out by itself while you play.
-
-1. Open the overlay and choose **Start R/A Test**, ideally before the game loads.
-2. Play for a few minutes, including a loading screen. The HUD shows how much was read.
-3. Open the overlay and choose **Stop R/A Test**.
-
-The plugin works out what read ahead brings this game and saves the result for it: on or off, when to start (*C streak* for ordinary reads, *NC streak* for graphics data) and whether to copy on the spare core. If too little was read, it says so and changes nothing.
-
-It judges from how the game reads and cannot see the frame rate. The result depends on what you played, so test the part you care about. Test during play only and it may decide read ahead is not worth it, because it never saw the loading.
-
-## HUD
-
-The HUD is part of the overlay and shows through its keys; with *Overlay* off there is no HUD. It shows, for the storage the game reads from:
+- **Tuning** (*Auto* by default) measures, for each storage, what read ahead saves on your console and what a read for nothing costs; Adaptive then uses these figures. They are kept with what Adaptive learned in `ux0:data/vita-memio/tuning.bin` (about 370 bytes per game), written only when something changed. Triangle, twice, forgets them.
+- **R/A Test** (shown while Read ahead is *On* or *Off*): start it, play a few minutes including a loading screen, stop it. The plugin then saves for this game whether read ahead pays off and when it starts.
 
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
@@ -143,19 +103,17 @@ C:5:5/16/3 NC:3:2/16/3 Auto
 Core 3 B C: 98%  NC: 0%
 ```
 
-- **R / W:** speed right now. **R/W:** total read and written while the HUD or the overlay was on screen.
-- **B:** the game's buffers for copying on the spare core, since it started (also in the overlay): **green** all usable; **yellow** some had a first page the system cannot share, so that part was copied on the game's core; **red** some could not be used at all, and were copied on the game's core. The data is right either way. Grey while nothing has been copied there yet.
-- **C / NC:** reads in a row before read ahead starts, for cached (C) and non-cacheable (NC) memory, as set:now for large, 32 KiB and very small reads. For example `C:5:2/8/3`: set at 5; now large reads from the 2nd, 32 KiB reads from the 8th, very small reads from the 3rd (one figure for both C and NC). **Auto** at the end is green while *Tuning* measures, grey when it is off.
-- **Core 3, C:** the share of copying of ordinary data done on the spare core since the HUD opened.
-- **Core 3, NC:** the share of graphics data handled on the spare core: read there (*C + NC All*) or copied there from read ahead (*C + NC R/A* and *All*). Graphics data read the standard way counts against it.
+- **R / W:** speed now; **R/W:** total while the HUD or overlay was on screen.
+- **C / NC:** where read ahead starts for cached and graphics memory, as *set:now* for large / 32 KiB / very small reads; `-` where Adaptive switched it off. **Auto** is green while Tuning measures.
+- **Core 3 C / NC:** the share of copying done on the spare core. **B:** whether the game's buffers could be used there (green all, yellow partly, red not; the data is right either way).
 
 ## Tester
 
-Install `vitamemio_tester.vpk` to measure your own card. It tests reads and writes of several sizes and many small files, checks every byte, and adds each result to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings: to compare, change a setting and run it again. For the copy timings in the report, switch on *Statistics* (Advanced > Developer settings) first.
+`vitamemio_tester.vpk` measures your own card: reads and writes of several sizes and many small files, every byte checked, each result added to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings. For copy timings, switch on *Statistics* first.
 
 ## Benchmarks
 
-Measured with the tester (quick profile: 16 MiB file, 3 runs, every byte checked) on a PCH-1000, firmware 3.65, with a microSD in an SD2Vita. With the plugin: *Overlapped reads* on *Auto*, *Copy on the system core* on *C + NC R/A*, *Small transfers too* on. Columns go from slowest to fastest.
+Tester, quick profile (16 MiB file, 3 runs, every byte checked), PCH-1000, firmware 3.65, microSD in an SD2Vita. Plugin: *Overlapped reads* Auto, *Copy on the system core* C + NC R/A, *Small transfers too* on.
 
 | Test | Unit | Without plugin | GPU-safe on | GPU-safe on + Read ahead | GPU-safe off + Read ahead |
 |---|---|---:|---:|---:|---:|
@@ -179,31 +137,19 @@ Measured with the tester (quick profile: 16 MiB file, 3 runs, every byte checked
 | Random write 128 KiB | IOPS | 105.1 | 138.0 | 107.5 | 113.7 |
 | Random write 1 MiB | IOPS | 14.6 | 17.6 | 13.6 | 16.4 |
 
-*NC* is non-cacheable memory, as games use for graphics data; *NCphy* and *CDRAM* are other kinds of memory games keep it in.
-
-- **Results depend on your microSD.** Cards differ a lot, especially in writes, so your numbers will not match these.
-- **The gain from *Read ahead* is from the benchmark,** which reads files strictly in order. In real use it is smaller, and in games it depends on how each game reads: some gain a lot, some almost nothing.
-- **Writes vary between runs,** because the card sometimes pauses to do its own housekeeping. *Read ahead* and *GPU-safe reads* do not change how writes work, so differences in those rows are not from them.
-- Most game loading is not limited by storage, so games gain less than file copies.
+*NC*, *NCphy* and *CDRAM* are the kinds of memory games keep graphics data in. Your card will give other numbers, especially for writes, which also vary between runs as the card does its own housekeeping. *Read ahead* and *GPU-safe reads* do not change how writes work.
 
 ## Error C1-2569-2
 
-This error means the system is out of kernel memory. It can also appear as a crash right after you switch the plugin on, or when you open Settings while another app is running.
-
-1. If another app is running, close it first.
-2. Leave the plugin on for only one storage. Each storage you switch on takes 256 KiB.
-3. Switch off *Read ahead*, *Overlapped reads* and *Copy on the system core*.
-4. Switch off *Overlay*, then restart.
-5. Remove other kernel plugins from your taiHEN config.
+The system is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, leave only one storage on (each takes 256 KiB), switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
 
 ## Good to know
 
-- Only the storages you switch on are touched. The internal storage, game cards, USB storage and Wi-Fi never are.
-- Memory: 256 KiB per storage you switch on, 128 KiB more while *Overlapped reads* or *Copy on the system core* are in use, and about 40 KiB more with *Read ahead*. The overlay and the HUD take about 40 KiB more; with *Overlay* off, nothing.
-- While the console starts, the plugin only sets aside its memory: every transfer goes the standard way. It comes on as soon as the home screen (LiveArea) is up.
-- If the console restarts before the plugin has then shown that it works (its first 64 transfers), the next start loads nothing, so a bad setting cannot trap you in a reboot loop. Holding **L** while the console starts skips all plugins.
-- Tested on one console so far: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
-- The Settings page and the HUD are in English.
+- Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
+- Memory: 256 KiB per storage, 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*.
+- While the console starts, every transfer goes the standard way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
+- Its files on the internal storage are only the settings, the boot guard and the log; what it learns goes to `ux0:data/vita-memio/`.
+- Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 
 ## Disclaimer
 
@@ -223,29 +169,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
 All credit for the original project goes to **[Juan Garcia Alvite](https://github.com/juanjsebgarcia)**, the author of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage): the technique, the research, the original implementation, its testing and documentation.
 
-**Built on**
-
-- [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu: the hooking framework.
-- [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW. The Settings page is added the way HENkaku's own Settings plugin does it ([`plugin/user.c`](https://github.com/henkaku/henkaku/blob/master/plugin/user.c)).
-- [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers).
-
-**Ideas and references**
-
-- [IOStaging](https://github.com/bythos14) by bythos14: the staging-buffer idea the original project credits as its inspiration.
-- [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba: the layout names of the Devices page. No YAMT code is used.
-- [PSVshell](https://github.com/Electry/PSVshell) by Electry: the look of the tester and of the PSVshell-style HUD. No PSVshell code is used.
-
-**Included**
-
-- [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov: a subset for the tester and the HUD, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
-
-**Artwork**
-
-- The logo, the tester's icon and its LiveArea are original artwork drawn by `tools/gen_art.py`; their lettering is set in [Inter](https://rsms.me/inter/) by Rasmus Andersson (SIL Open Font License 1.1).
-
-**Tools**
-
-- [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120, [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW, [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) and GCC's sanitizers.
+- **Built on:** [taiHEN](https://github.com/yifanlu/taiHEN) by Yifan Lu; [HENkaku](https://github.com/henkaku/henkaku) and [Ensō](https://github.com/TheOfficialFloW/enso) by the HENkaku team and TheFloW (the Settings page is added the way HENkaku's own Settings plugin does it, [`plugin/user.c`](https://github.com/henkaku/henkaku/blob/master/plugin/user.c)); [VitaSDK](https://vitasdk.org) and its [headers](https://github.com/vitasdk/vita-headers).
+- **Ideas and references:** [IOStaging](https://github.com/bythos14) by bythos14 (the staging-buffer idea the original project credits); [YAMT](https://github.com/SKGleba/yamt-vita) by SKGleba (the layout names of the Devices page); [PSVshell](https://github.com/Electry/PSVshell) by Electry (the look of the tester and the HUD). No YAMT or PSVshell code is used.
+- **Included:** a subset of [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov Zhekov, under the SIL Open Font License 1.1 (`include/OFL-Terminus.txt`, also inside the VPK).
+- **Artwork:** the logo, the tester's icon and LiveArea are original, drawn by `tools/gen_art.py`; their lettering is set in [Inter](https://rsms.me/inter/) by Rasmus Andersson (SIL Open Font License 1.1).
+- **Tools:** [vitacompanion](https://github.com/devnoname120/vitacompanion) by devnoname120, [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheFloW, [cppcheck](https://cppcheck.sourceforge.io/), [QEMU](https://www.qemu.org/) and GCC's sanitizers.
 
 ## License
 

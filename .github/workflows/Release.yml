@@ -3,7 +3,8 @@ name: release
 # Publishes a GitHub release, started by hand only (Actions > release > Run
 # workflow). It runs the same checks as the build workflow - host tests,
 # cppcheck and the VitaSDK build - and only then creates the tag on the commit
-# it built and the release with the built files. The release text is
+# it built and the release with the built files in one archive,
+# vita-memio-<version>.zip. The release text is
 # .github/release-notes/<tag>.md, which must exist on that commit.
 
 on:
@@ -93,6 +94,13 @@ jobs:
         with:
           name: release-files
           path: dist
+      - name: One archive
+        run: |
+          cd dist
+          zip -X -9 "../vita-memio-${TAG#v}.zip" vitamemio_kernel.skprx vitamemio_hud.skprx \
+            vitamemio.suprx vitamemio_tester.vpk SHA256SUMS
+        env:
+          TAG: ${{ inputs.release }}
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,6 +111,4 @@ jobs:
             gh release delete "$REMOVE" --yes --cleanup-tag
           fi
           gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \
-            --notes-file ".github/release-notes/${TAG}.md" \
-            dist/vitamemio_kernel.skprx dist/vitamemio_hud.skprx dist/vitamemio.suprx \
-            dist/vitamemio_tester.vpk dist/SHA256SUMS
+            --notes-file ".github/release-notes/${TAG}.md" "vita-memio-${TAG#v}.zip"

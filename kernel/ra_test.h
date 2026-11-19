@@ -341,7 +341,10 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  *        pieces saved here, what a piece for nothing held up here), says
  *        on brings more than RT_EV_MARGIN: on again.
  * The sums are kept over the last rounds (RT_EV_KEEP of each round left);
- * the game's costs stay with it (tuning.bin) for the model while off. */
+ * the game's costs stay with it (tuning.bin) for the model while off. Off
+ * lasts while the game is in front: it comes back to the front with every
+ * kind on (its costs kept), so a loss has to be shown again - an off from
+ * figures gone wrong is never kept for good. */
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u

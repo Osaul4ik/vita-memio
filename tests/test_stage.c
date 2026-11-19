@@ -4437,14 +4437,15 @@ static void test_onoff_measured(void)
 		CHECK(!g_oo_acc[OO_NC].std_q);            /* taken */
 	}
 	__sync_lock_release(&g_ad_lock);
-	/* kept with the app: away and back */
+	/* the costs kept with the app, off not: away and back, on again (a loss
+	 * shown again first, on fresh reads) */
 	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
-	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 1);
+	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 0);
 	CHECK(tune_valid(&g_ad_out.app) && g_ad_out.app.oo_held[OO_NC] == 5000);
 	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
-	CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && g_oo[OO_NC].held_each == 5000 &&
-	      g_oo[OO_NC].std_rate > 49000);
-	/* an app that learned only that is still worth its slot */
+	CHECK(g_oo_off[OO_NC] == 0 && !g_oo[OO_NC].off && !g_oo[OO_NC].hold &&
+	      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
+	/* an app that learned only its costs is still worth its slot */
 	{
 		TuneApp t;
 
@@ -4453,7 +4454,7 @@ static void test_onoff_measured(void)
 		t.tiny_thr = RA_TINY_STREAK;
 		t.tiny_blk = RA_TINY_SECTORS;
 		CHECK(!tune_learned(&t));
-		t.oo_off[OO_TINY] = 1;
+		t.oo_held[OO_TINY] = 900;                  /* what read ahead cost in it */
 		CHECK(tune_learned(&t) && tune_valid(&t));
 		t.oo_off[OO_TINY] = 2;
 		CHECK(!tune_valid(&t));

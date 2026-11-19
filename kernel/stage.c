@@ -2923,12 +2923,14 @@ static uint32_t tune_sig(const TuneApp *t)
 	return tune_fnv(tune_fnv(0x811C9DC5u, t->title, TUNE_TITLE), v, sizeof(v)) | 1u;
 }
 
-/* Whether it learned anything: a threshold not where it starts. */
+/* Whether it learned anything: a threshold not where it starts, or what
+ * read ahead cost in it (for the model, RtEv). */
 static int tune_learned(const TuneApp *t)
 {
 	return t->ra_adj[0] || t->ra_adj[1] || t->rs_adj[0] || t->rs_adj[1] ||
 	       t->tiny_thr != RA_TINY_STREAK || t->tiny_blk != RA_TINY_SECTORS ||
-	       t->oo_off[0] || t->oo_off[1] || t->oo_off[2];
+	       t->oo_srv[0] || t->oo_srv[1] || t->oo_srv[2] ||
+	       t->oo_held[0] || t->oo_held[1] || t->oo_held[2];
 }
 
 /* Whether h holds what tuning.bin does not (yet): to be written. */
@@ -2996,7 +2998,7 @@ static void tune_pack(TuneApp *t)
 	tune_put(t->tn_reads, g_tn_reads, RT_TB, s);
 	tune_put(t->tn_sec, g_tn_sec, RT_TB, s);
 	for (int u = 0; u < 3; u++) {
-		t->oo_off[u] = g_oo[u].off;
+		t->oo_off[u] = 0;                  /* off lasts the time in front (RtEv) */
 		t->oo_std[u] = g_oo[u].std_rate;
 		t->oo_srv[u] = g_oo[u].srv_rate;
 		t->oo_held[u] = g_oo[u].held_each;
@@ -3042,11 +3044,11 @@ static void tune_restore(const TuneApp *t)
 	g_tn_ended = 0;
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
 	for (int u = 0; u < 3; u++) {
-		g_oo[u].off = t->oo_off[u];
+		g_oo[u].off = g_oo[u].hold = 0;    /* back in front: on, to be shown again */
 		g_oo[u].std_rate = t->oo_std[u];
 		g_oo[u].srv_rate = t->oo_srv[u];
 		g_oo[u].held_each = t->oo_held[u];
-		ST(g_oo_off[u], t->oo_off[u]);
+		ST(g_oo_off[u], 0);
 	}
 	ADD(g_ad_restored, 1);
 }

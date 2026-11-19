@@ -279,16 +279,26 @@ static inline volatile int *dbusy(Dev *d)
 
 static SceUID g_ra_fg;                    /* the app in front (see the app events) */
 
+/* Another app's request than the one in front's (another process: the
+ * system's own, one in the background) while an app is in front. The
+ * kernel's own requests count as the app's: they may be its asynchronous
+ * reads. With the home screen in front: none is. */
+static int bg_req(void)
+{
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED);
+	SceUID pid;
+
+	if (!fg)
+		return 0;
+	pid = ksceKernelGetProcessId();
+	return pid != fg && pid != KERNEL_PID;
+}
+
 /* Whether this request may take d's buffers: always, unless they are shared
  * and another app than the one in front asks (see g_sh). */
 static int share_may(const Dev *d)
 {
-	SceUID fg, pid;
-
-	if (!d->shared || !(fg = __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED)))
-		return 1;
-	pid = ksceKernelGetProcessId();
-	if (pid == fg || pid == KERNEL_PID)
+	if (!d->shared || !bg_req())
 		return 1;
 	ADD(g_sh.yielded, 1);
 	return 0;
@@ -720,6 +730,7 @@ typedef struct {
 	LgDev    dev[VM_DEV_COUNT];
 	LgKind   k[3];
 	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock, wskip;
+	uint32_t bg_n, bg_kib, bg_kept;
 } LgSnap;
 
 /* What only the log uses - the per-transfer counts (lg_note, lk_note), the
@@ -1861,6 +1872,13 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 #define RA_RETIRE_MS    50
 
 static volatile int g_readahead;          /* the setting                      */
+/* The app in front first (stage_xfer_one): another app's reads are sped up
+ * as before, but read ahead is the app's alone - they neither use nor start
+ * nor break its streams, nor drop its pieces (while they are live such a
+ * read goes the standard way), nor take the tiny reads' block, nor count
+ * for Adaptive or the calibration; a write of theirs no longer ends its
+ * streams (the pieces it touches are still marked). For the log: */
+static uint32_t g_bg_n, g_bg_kib, g_bg_kept;                    /* atomics */
 static uint32_t g_ra_hits, g_ra_kib, g_ra_drops, g_ra_waste_kib, g_ra_bad;   /* atomics */
 static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_read) */
 static uint32_t g_ra_tiny_reads;          /* atomic: tiny reads from their block */
@@ -4696,10 +4714,13 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	int verify, ret = 0, mine = on_port(part, d->port);
 	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
 	int cal_held = 0;
+	/* another app's request while one is in front: no read ahead for it
+	 * (see g_bg_n); looked at only while read ahead is up */
+	const int bg = mine && nsec && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && bg_req();
 	/* calibration on: when it started, and whether a piece held it up */
 	/* (also with Adaptive: who a piece held up, for its on or off) */
-	const uint32_t cal_m = mine && nsec && (LD(g_cal_on) || ra_adapt_on()) ? cal_start(d, nsec, &cal_held)
-	                                                                     : 0;
+	const uint32_t cal_m = mine && nsec && !bg && (LD(g_cal_on) || ra_adapt_on())
+	                       ? cal_start(d, nsec, &cal_held) : 0;
 	const uint32_t cal_t0 = LD(g_cal_on) ? cal_m : 0;
 
 	/* the largest read request seen, for the log (a lost update is fine) */
@@ -4712,7 +4733,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		} else {
 			ADD(d->all_rd, (uint64_t)nsec * 512);
 			/* the app in front's reads, per storage (the HUD shows its own) */
-			if (nsec >= RA_MIN_SECTORS && __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED))
+			if (nsec >= RA_MIN_SECTORS && __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED) && !bg)
 				__atomic_fetch_add(&g_fg_sec[d - g_dev], nsec, __ATOMIC_RELAXED);
 		}
 	}
@@ -4724,8 +4745,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 		rt_note(d, part, sector, nc, nsec, write);
 	}
+	if (bg && !write) {
+		ADD(g_bg_n, 1);
+		ADD(g_bg_kib, nsec / 2);
+	}
 	/* Tiny reads: from their own block, if it holds them */
-	if (mine && !write && nsec && nsec < RA_SMALL_SECTORS &&
+	if (mine && !write && !bg && nsec && nsec < RA_SMALL_SECTORS &&
 	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret, &xi->tiny))
 		return ret;
 	/* A non-cacheable caller buffer: the standard path is the faster one
@@ -4742,8 +4767,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data (what the pieces do not
 		 * cover goes to the system core there too, with "C + NC") */
-		if (!write && nsec >= RA_SMALL_SECTORS && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
-		    mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
+		if (!write && !bg && nsec >= RA_SMALL_SECTORS &&
+		    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held, &xi->got);
 		/* "C + NC": read on the system core instead */
 		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
@@ -4758,9 +4783,17 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) &&
 	    ra_live(d)) {
 		ret = io(ref, part, sector, buf, nsec);
-		if (!write)
+		if (!write && !bg)
 			ra_note_small_stock(d, part, sector, nsec, 0, ret);
 		return ret;
+	}
+	/* ... and another app's transfer of any size while the app has pieces
+	 * (a slow stream of its own may still use them, see RA_MAX_AGE_US): a
+	 * write the standard way still marks the ones it touches */
+	if (bg && ra_any(d)) {
+		if (!write)
+			ADD(g_bg_kept, 1);
+		return io(ref, part, sector, buf, nsec);
 	}
 	/* GPU-safe reads asked for, but this firmware has no cache clean to
 	 * keep that promise: such reads take the standard path, which leaves
@@ -4769,7 +4802,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		return io(ref, part, sector, buf, nsec);
 	if (!take(d, mine, nsec)) {
 		ret = io(ref, part, sector, buf, nsec);
-		if (mine && !write)
+		if (mine && !write && !bg)
 			ra_note_small_stock(d, part, sector, nsec, 0, ret);
 		return ret;
 	}
@@ -4803,12 +4836,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const uint32_t sector0 = sector;
 	/* read ahead: this read continues the stream from the pieces, if they
 	 * hold it; anything else drops them first (they are in the buffers) */
-	const int ra = !write && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
+	const int ra = !write && !bg && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 	uint32_t ra_got = 0;                  /* of it from the pieces (calibration) */
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
-	if (write && nsec >= RA_MIN_SECTORS) {
+	if (write && nsec >= RA_MIN_SECTORS && !bg_req()) {
 		ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 		d->ra_streak = 0;                     /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
@@ -4944,7 +4977,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);          /* the copier is done with it */
-	if (!write && ret >= 0 && !left && !LD(d->fallback) && !problem &&
+	if (!write && !bg && ret >= 0 && !left && !LD(d->fallback) && !problem &&
 	    ra_note(d, part, sector0, nsec, 0)) {
 		cal_read(d, 0, nsec, ra_got, cal_t0, cal_held);
 		if (ra)
@@ -5773,6 +5806,9 @@ static void lg_snap(LgSnap *o)
 	o->ncd = LD(g_ncd_reads);
 	o->dma = LD(g_dma_copies);
 	o->nc_stock = LD(g_nc_stock_kib);
+	o->bg_n = LD(g_bg_n);
+	o->bg_kib = LD(g_bg_kib);
+	o->bg_kept = LD(g_bg_kept);
 }
 
 static const char *lg_ra_name(int m)
@@ -5876,6 +5912,10 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 	         (unsigned)(b->pipe - a->pipe), (unsigned)(b->off - a->off),
 	         (unsigned)(b->ncd - a->ncd), (unsigned)((b->nc_stock - a->nc_stock) / 1024u),
 	         (unsigned)(b->dma - a->dma));
+	if (b->bg_n != a->bg_n)
+		VM_KLOGI("session: other apps' reads %u (%u MiB), no read ahead; the standard way to "
+		         "keep the app's pieces %u", (unsigned)(b->bg_n - a->bg_n),
+		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
 void vm_stage_worker_tick(void)

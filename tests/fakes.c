@@ -388,7 +388,7 @@ pthread_t fake_usermap_thread, fake_unmap_thread;   /* which thread mapped / unm
 int fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
 SceUID ksceKernelGetProcessId(void)
 {
-	return fake_pid;
+	return __atomic_load_n(&fake_pid, __ATOMIC_RELAXED);   /* a test may switch it meanwhile */
 }
 
 SceUID ksceKernelGetThreadId(void)

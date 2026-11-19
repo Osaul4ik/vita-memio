@@ -3259,6 +3259,7 @@ static void test_data_always_right(void)
 		}
 		pthread_mutex_unlock(&disk_lock);
 		fz_bad = fz_checked = 0;
+		g_bg_n = g_bg_kib = g_bg_kept = 0;
 		__atomic_store_n(&fz_stop, 0, __ATOMIC_RELEASE);
 		CHECK(pthread_create(&w, NULL, fz_writer, (void *)(uintptr_t)(phase + 7)) == 0);
 		for (int op = 0; op < 1500; op++) {
@@ -3273,6 +3274,9 @@ static void test_data_always_right(void)
 				vm_stage_apply(&s);
 				for (int k = 0; k < 3; k++)
 					ST(g_oo_off[k], (seed >> (16 + k)) & 1);
+				/* whose the requests are: the app's, or another app's (no
+				 * read ahead for those, the app's pieces kept) */
+				__atomic_store_n(&fake_pid, (seed >> 20) % 3 == 0 ? 0x99 : 0x44, __ATOMIC_RELAXED);
 				vm_stage_worker_tick();
 				continue;
 			}
@@ -3300,6 +3304,10 @@ static void test_data_always_right(void)
 		}
 		__atomic_store_n(&fz_stop, 1, __ATOMIC_RELEASE);
 		pthread_join(w, NULL);
+		printf("  data: phase %d, other apps' reads %u, the standard way to keep pieces %u\n",
+		       phase, g_bg_n, g_bg_kept);
+		CHECK(g_bg_n > 100);
+		__atomic_store_n(&fake_pid, 0x44, __ATOMIC_RELAXED);
 		/* and once still: all of it the last version */
 		for (uint32_t at = 0; at < FZ_SECTORS; at += 256)
 			fz_read(u, at, 256);
@@ -5278,6 +5286,81 @@ static void test_log_block(void)
 	vm_stage_apply(&s);
 }
 
+/* The app in front first: another app's reads are sped up (staged) but get
+ * no read ahead - they neither take nor start nor break the app's stream,
+ * keep its pieces (the standard way while it has some), take no tiny block,
+ * and a write of theirs does not end its streams. The kernel's own requests
+ * count as the app's. */
+static void test_bg_no_readahead(void)
+{
+	uint8_t *u = user_buf(256), *w = user_buf(256);
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+	uint32_t at = 0, hits, streak, tiny;
+
+	on_game(&s, 0x44);
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(d->ra_ready && fake_pid == 0x44);
+	g_bg_n = g_bg_kib = g_bg_kept = 0;
+	for (int i = 0; i < 8; i++, at += 256)
+		CHECK(rd_ok(u, at, 256));
+	ra_settled(d);
+	CHECK(ra_any(d));
+	hits = g_ra_hits;
+	streak = d->ra_streak;
+	/* another app reads elsewhere: right data, the app's pieces and stream kept */
+	fake_pid = 0x99;
+	CHECK(rd_ok(u, 3500, 256));
+	CHECK(g_bg_n == 1 && g_bg_kib == 128 && g_bg_kept == 1 && ra_any(d) && d->ra_streak == streak);
+	/* ... a large write elsewhere: the stream not ended */
+	memset(w, 0x5A, 256 * 512);
+	CHECK(wr(w, 3800, 256, REF_RD) == 0 && memcmp(disk + 3800 * 512, w, 256 * 512) == 0);
+	CHECK(d->ra_streak == streak && ra_any(d));
+	/* the app goes on from its pieces */
+	fake_pid = 0x44;
+	CHECK(rd_ok(u, at, 256));
+	at += 256;
+	CHECK(g_ra_hits > hits);
+	/* no pieces: another app's stream is staged, but starts no read ahead */
+	ra_settled(d);
+	ra_drop(d);
+	fake_pid = 0x99;
+	streak = d->ra_streak;
+	hits = g_ra_hits;
+	{
+		const int here = copies_here;
+
+		for (uint32_t i = 0, a = 2048; i < 8; i++, a += 128)
+			CHECK(rd_ok(u, a, 128));
+		CHECK(copies_here > here);                /* staged: the faster path */
+	}
+	ra_settled(d);
+	CHECK(!ra_any(d) && d->ra_streak == streak && g_ra_hits == hits);
+	/* ... nor tiny reads in a row: no block */
+	tiny = g_ra_tiny_reads;
+	for (uint32_t i = 0; i < 24; i++)
+		CHECK(rd_ok(u, 100 + i, 1));
+	CHECK(g_ra_tiny_reads == tiny && d->t_end == d->t_start);
+	/* the kernel's own: as the app's */
+	fake_pid = KERNEL_PID;
+	for (uint32_t i = 0; i < 24; i++)
+		CHECK(rd_ok(u, 200 + i, 1));
+	CHECK(g_ra_tiny_reads > tiny);
+	/* the home screen in front: any request as the app's */
+	ra_proc_event(0x44, 4);
+	fake_pid = 0x99;
+	tiny = g_ra_tiny_reads;
+	for (uint32_t i = 0; i < 24; i++)
+		CHECK(rd_ok(u, 300 + i, 1));
+	CHECK(g_ra_tiny_reads > tiny);
+	as_app(0x44);
+	free(u);
+	free(w);
+	vm_stage_fini();
+}
+
 /* ---- Low kernel memory: one buffer for both storages ---------------------- */
 
 /* At the start, with both storages on: one staging buffer and one second
@@ -5702,6 +5785,7 @@ int main(void)
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
 	RUN(test_log_block);
+	RUN(test_bg_no_readahead);
 	RUN(test_lowmem_init);
 	RUN(test_lowmem_handover);
 	RUN(test_lowmem_data_right);

@@ -58,7 +58,7 @@ If the plugin ever could not start properly, a **Reset safe mode** row appears u
 
 ### Read ahead
 
-While a file is read in order, the spare core reads the next part early, so the card does not sit idle between requests. Data read early is thrown away if anything writes over it, so it is never stale, and it is not read at all while a write runs. It takes about 40 KiB more memory per storage.
+While a file is read in order, the spare core reads the next part early, so the card does not sit idle between requests. Data read early is thrown away if anything writes over it, so it is never stale, and it is not read at all while a write runs. It takes about 40 KiB more memory per storage. Read ahead is for the app in front only: other apps' reads (the system's, music in the background) are still sped up, but they neither use nor break its streams.
 
 **Adaptive** works out for each game, while you play, after how many reads in a row read ahead pays off (large reads, 32 KiB reads and very small reads, each on its own) and how big a block to read for very small ones. It also counts what read ahead actually saved in that game, for ordinary memory, graphics memory and very small reads. Where it comes out as a loss, read ahead switches off for that kind of read, and back on when the game's own figures show a gain. Everything it learns is kept for every game, also across restarts.
 

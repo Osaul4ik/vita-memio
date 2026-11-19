@@ -93,7 +93,7 @@ In any game, **SELECT + Right** opens the overlay and, pressed again, closes it 
 
 The overlay sets things **for this game only**. Each line is *Global* (as in Settings) until you change it: white is standard, blue changed but not saved, green saved. **Save** keeps them in `ux0:data/vita-memio/ra/`. *Show advanced* adds Overlapped reads and GPU-safe reads.
 
-- **Tuning** (*Auto* by default) measures, for each storage, what read ahead saves on your console and what a read for nothing costs; Adaptive then uses these figures. They are kept with what Adaptive learned in `ux0:data/vita-memio/tuning.bin` (about 370 bytes per game), written only when something changed. Triangle, twice, forgets them.
+- **Tuning** (*Auto* by default) measures, for each storage, what read ahead saves on your console and what a read for nothing costs; Adaptive then uses these figures. They are kept in `ux0:data/vita-memio/tuning.bin`, together with each game's *start*: what Adaptive held after the first 50 MiB of a launch (100 MiB if those were many reads). The first three launches of a game each leave one such snapshot; with the third they are replaced by their mean, which is then never changed - every later launch begins from it, and Adaptive goes on by itself from there (not from where the last play ended). About 500 bytes per game, written only when something changed. Triangle, twice, forgets them.
 - **R/A Test** (shown while Read ahead is *On* or *Off*): start it, play a few minutes including a loading screen, stop it. The plugin then saves for this game whether read ahead pays off and when it starts.
 
 ```

@@ -1914,6 +1914,12 @@ static volatile tai_hook_ref_t g_proc_ref;
 static char           g_fg_title[16];       /* its title id ("" none / not known) */
 static uint32_t       g_fg_sec[VM_DEV_COUNT];   /* its reads per storage (atomics) */
 static uint32_t       g_fg_noid;            /* atomic: processes with no title id (log) */
+/* The launch in front, for its start (tuning.bin): what it has read since
+ * it began, while Adaptive learned (sectors, reads; atomics), and whose
+ * they are (g_fg_lock). A launch is a process: back in front from the home
+ * screen it goes on counting. */
+static SceUID         g_st_pid;
+static uint32_t       g_st_sec, g_st_reads;
 static void eff_update(void);
 static SceUID g_app_pid;
 
@@ -2176,6 +2182,11 @@ static void fg_take(SceUID pid, const char *t)
 	if (pid != fg) {                      /* another app: its storage afresh */
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
+		if (pid != g_st_pid) {            /* another launch: its reads from 0 */
+			g_st_pid = pid;
+			__atomic_store_n(&g_st_sec, 0, __ATOMIC_RELAXED);
+			__atomic_store_n(&g_st_reads, 0, __ATOMIC_RELAXED);
+		}
 		memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
 		g_fg_title[sizeof(g_fg_title) - 1] = 0;
 	}
@@ -2794,19 +2805,46 @@ static void cal_set_now(int on)
  * the front (its title, then the slot found). In memory, one app at a time:
  * the one in front learns (g_ad); the one before is held, packed, until its
  * slot is written (g_ad_out); and the one coming, as read (g_ad_in). A
- * TuneApp is what Adaptive keeps for an app: its
- * thresholds, and the runs behind them in 16 bits a count with a shift a
- * group. Looked at when another app comes to the front - the runs alone
- * never make it write: once all is learned, it is hardly written. */
+ * TuneApp is what Adaptive keeps for an app, in memory: its thresholds, and
+ * the runs behind them in 16 bits a count with a shift a group - for the
+ * same launch coming back to the front. The file keeps only an app's start
+ * (TuneStart, below): what a launch's first reads left Adaptive with, taken
+ * in three launches and then their mean, never changed again. A later
+ * launch begins from that, not from where an earlier one ended. */
 #define TUNE_DIR      "ux0:data/vita-memio"
 #define TUNE_FILE     TUNE_DIR "/tuning.bin"
 #define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  5u                           /* 1: whole each time, 2: 12 apps,
-                                                    * 3: no on/off, 4: on/off by rounds */
-#define TUNE_SLOT_V3  328u                         /* versions 3 and 4's slots: their */
-#define TUNE_SLOT_V4  360u                         /* calibration is read             */
+#define TUNE_VERSION  6u                           /* 1: whole each time, 2: 12 apps,
+                                                    * 3: no on/off, 4: on/off by rounds,
+                                                    * 5: the last state kept, 6: the start */
+#define TUNE_SLOT_V3  328u                         /* versions 3 to 5's slots: their */
+#define TUNE_SLOT_V4  360u                         /* calibration is read            */
+#define TUNE_SLOT_V5  368u
+
+/* The start of a game: what Adaptive held after the first reads of a launch
+ * (not the state it ended in - a start and a game's play are not alike). The
+ * first TUNE_START_N launches each leave one snapshot; with the last, they
+ * are replaced by their mean, which is then never touched again. Taken once
+ * the launch has read TUNE_START_FEW_SEC sectors (50 MiB) - or, if those
+ * were many reads (more than TUNE_START_MANY_READS), TUNE_START_MANY_SEC
+ * (100 MiB). */
+#define TUNE_START_N          3u
+#define TUNE_START_FEW_SEC    (50u * 2048u)
+#define TUNE_START_MANY_SEC   (100u * 2048u)
+#define TUNE_START_MANY_READS 1000u
 #define TUNE_TITLE    12u                          /* TuneApp.title, its 0 too */
+
+typedef struct {                       /* what Adaptive held, at a launch's start */
+	int8_t   ra_adj[2], rs_adj[2];
+	uint8_t  tiny_thr, tiny_blk, pad[2];
+	uint32_t oo_std[3], oo_srv[3], oo_held[3];   /* this game's costs (0: none measured) */
+} TuneSnap;
+
+typedef struct {
+	uint8_t  n, pad[3];                  /* snapshots taken; TUNE_START_N: the mean, in snap[0] */
+	TuneSnap snap[TUNE_START_N];
+} TuneStart;
 
 typedef struct {
 	char     title[12];
@@ -2817,6 +2855,7 @@ typedef struct {
 	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
 	uint8_t  oo_off[3], oo_pad;          /* on or off, from what it did (RtEv) */
 	uint32_t oo_std[3], oo_srv[3], oo_held[3];   /* this game's costs */
+	TuneStart st;                        /* the start (the only part kept in the file) */
 } TuneApp;
 
 typedef struct {
@@ -2855,6 +2894,7 @@ static uint32_t tune_slot_check(const TuneSlot *t)
 typedef struct {
 	TuneApp  app;                        /* app.title "": none                 */
 	uint32_t fslot, fsig;                /* 1 + its slot in tuning.bin (0 none), what that holds */
+	SceUID   pid;                        /* the launch its live state is of (0: from the file) */
 } AdHeld;
 
 static char              g_ad_title[16];      /* whose g_ad is (under g_ad_lock) */
@@ -2862,6 +2902,9 @@ static uint32_t          g_ad_key;
 static uint32_t          g_ad_fslot, g_ad_fsig;   /* g_ad_title's in tuning.bin  */
 static AdHeld            g_ad_out;            /* the one before, until written   */
 static AdHeld            g_ad_in;             /* the one coming, as read         */
+static SceUID            g_ad_pid;            /* the launch g_ad is of           */
+static TuneStart         g_st_rec;            /* g_ad_title's start (g_ad_lock)  */
+static SceUID            g_st_taken;          /* the launch whose start was taken (worker) */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
 /* On or off, as measured (below, after ra_adapt_on): its state. */
@@ -2896,6 +2939,7 @@ static void ra_adapt_clear(void)
 	g_tn_ended = 0;
 	memset(g_ad_sec, 0, sizeof(g_ad_sec));
 	memset(g_ad_rounds, 0, sizeof(g_ad_rounds));
+	memset(&g_st_rec, 0, sizeof(g_st_rec));
 	g_tn_rounds = 0;
 	ST(g_ad_due[0], 0);
 	ST(g_ad_due[1], 0);
@@ -2911,26 +2955,19 @@ static int tune_title_is(const TuneApp *t, const char *title)
 	return t->title[0] && !strncmp(t->title, title, TUNE_TITLE - 1);
 }
 
-/* An app's slot as one word: who and its thresholds (0: none). */
+/* An app's slot as one word: who and its start (0: none). */
 static uint32_t tune_sig(const TuneApp *t)
 {
-	const int32_t v[8] = { (int32_t)t->key, t->ra_adj[0], t->ra_adj[1], t->rs_adj[0],
-	                       t->rs_adj[1], (int32_t)t->tiny_thr, (int32_t)t->tiny_blk,
-	                       t->oo_off[0] | t->oo_off[1] << 1 | t->oo_off[2] << 2 };
-
 	if (!t->title[0])
 		return 0;
-	return tune_fnv(tune_fnv(0x811C9DC5u, t->title, TUNE_TITLE), v, sizeof(v)) | 1u;
+	return tune_fnv(tune_fnv(tune_fnv(0x811C9DC5u, t->title, TUNE_TITLE), &t->key, sizeof(t->key)),
+	                &t->st, sizeof(t->st)) | 1u;
 }
 
-/* Whether it learned anything: a threshold not where it starts, or what
- * read ahead cost in it (for the model, RtEv). */
+/* Whether it has a start (a snapshot at least) worth keeping. */
 static int tune_learned(const TuneApp *t)
 {
-	return t->ra_adj[0] || t->ra_adj[1] || t->rs_adj[0] || t->rs_adj[1] ||
-	       t->tiny_thr != RA_TINY_STREAK || t->tiny_blk != RA_TINY_SECTORS ||
-	       t->oo_srv[0] || t->oo_srv[1] || t->oo_srv[2] ||
-	       t->oo_held[0] || t->oo_held[1] || t->oo_held[2];
+	return t->st.n > 0;
 }
 
 /* Whether h holds what tuning.bin does not (yet): to be written. */
@@ -3003,6 +3040,107 @@ static void tune_pack(TuneApp *t)
 		t->oo_srv[u] = g_oo[u].srv_rate;
 		t->oo_held[u] = g_oo[u].held_each;
 	}
+	t->st = g_st_rec;
+}
+
+/* The slot as it goes to the file: who, and the start - none of the live
+ * state (what a game ended in is not where the next one begins). */
+static void tune_strip(TuneApp *t)
+{
+	const TuneStart st = t->st;
+	char title[TUNE_TITLE];
+	const uint32_t key = t->key;
+
+	memcpy(title, t->title, sizeof(title));
+	memset(t, 0, sizeof(*t));
+	memcpy(t->title, title, sizeof(title));
+	t->key = key;
+	t->tiny_thr = RA_TINY_STREAK;
+	t->tiny_blk = RA_TINY_SECTORS;
+	t->st = st;
+}
+
+/* Whether a snapshot is one this build would have taken. */
+static int tune_snap_ok(const TuneSnap *s)
+{
+	int tiny_ok = 0;
+
+	for (int i = 0; i < RT_TINY_T_N; i++)
+		tiny_ok |= s->tiny_thr == rt_tiny_thr[i];
+	return tiny_ok && (s->tiny_blk == 16 || s->tiny_blk == 32 || s->tiny_blk == 64) &&
+	       s->ra_adj[0] >= -8 && s->ra_adj[0] <= 8 && s->ra_adj[1] >= -8 && s->ra_adj[1] <= 8 &&
+	       s->rs_adj[0] >= -32 && s->rs_adj[0] <= 32 && s->rs_adj[1] >= -32 && s->rs_adj[1] <= 32;
+}
+
+/* The mean of n sums, rounded away from 0 at a half. */
+static int tune_mean(int sum, int n)
+{
+	return sum >= 0 ? (sum + n / 2) / n : -((-sum + n / 2) / n);
+}
+
+/* The value of tab[0..n) nearest to v (the tiny reads' thresholds and
+ * blocks are from a table: a mean between two is not one of them). */
+static uint32_t tune_nearest(uint32_t v, const uint8_t *tab, int n)
+{
+	uint32_t best = tab[0], bd = 0xFFFFFFFFu;
+
+	for (int i = 0; i < n; i++) {
+		const uint32_t d = v > tab[i] ? v - tab[i] : tab[i] - v;
+
+		if (d < bd) {
+			bd = d;
+			best = tab[i];
+		}
+	}
+	return best;
+}
+
+/* All the snapshots taken, replaced by their mean in the first (the
+ * costs: of those measured - 0 is none). */
+static void tune_start_mean(TuneStart *r)
+{
+	static const uint8_t blks[3] = { 16, 32, 64 };
+	const int n = (int)r->n;
+	int sra[2] = { 0, 0 }, srs[2] = { 0, 0 };
+	uint32_t sthr = 0, sblk = 0;
+	TuneSnap m;
+
+	if (n < 1)
+		return;
+	memset(&m, 0, sizeof(m));
+	for (int i = 0; i < n; i++) {
+		const TuneSnap *s = &r->snap[i];
+
+		for (int k = 0; k < 2; k++) {
+			sra[k] += s->ra_adj[k];
+			srs[k] += s->rs_adj[k];
+		}
+		sthr += s->tiny_thr;
+		sblk += s->tiny_blk;
+	}
+	for (int k = 0; k < 2; k++) {
+		m.ra_adj[k] = (int8_t)tune_mean(sra[k], n);
+		m.rs_adj[k] = (int8_t)tune_mean(srs[k], n);
+	}
+	m.tiny_thr = (uint8_t)tune_nearest((uint32_t)tune_mean((int)sthr, n), rt_tiny_thr, RT_TINY_T_N);
+	m.tiny_blk = (uint8_t)tune_nearest((uint32_t)tune_mean((int)sblk, n), blks, 3);
+	for (int u = 0; u < 3; u++) {
+		uint64_t a = 0, b = 0, c = 0;
+		int na = 0, nb = 0, nc = 0;
+
+		for (int i = 0; i < n; i++) {
+			const TuneSnap *s = &r->snap[i];
+
+			if (s->oo_std[u]) { a += s->oo_std[u]; na++; }
+			if (s->oo_srv[u]) { b += s->oo_srv[u]; nb++; }
+			if (s->oo_held[u]) { c += s->oo_held[u]; nc++; }
+		}
+		m.oo_std[u] = na ? (uint32_t)((a + (uint64_t)na / 2) / (uint64_t)na) : 0;
+		m.oo_srv[u] = nb ? (uint32_t)((b + (uint64_t)nb / 2) / (uint64_t)nb) : 0;
+		m.oo_held[u] = nc ? (uint32_t)((c + (uint64_t)nc / 2) / (uint64_t)nc) : 0;
+	}
+	memset(r->snap, 0, sizeof(r->snap));
+	r->snap[0] = m;
 }
 
 /* Whether t is one this build would have written (else nothing of it is
@@ -3018,6 +3156,11 @@ static int tune_valid(const TuneApp *t)
 		tiny_ok |= t->tiny_thr == rt_tiny_thr[i];
 	for (int u = 0; u < 3; u++)
 		if (t->oo_off[u] > 1)
+			return 0;
+	if (t->st.n > TUNE_START_N)
+		return 0;
+	for (uint32_t i = 0; i < (t->st.n == TUNE_START_N ? 1u : t->st.n); i++)
+		if (!tune_snap_ok(&t->st.snap[i]))
 			return 0;
 	return tiny_ok && (t->tiny_blk == 16 || t->tiny_blk == 32 || t->tiny_blk == 64) &&
 	       t->sh_ad <= 16 && t->sh_tn <= 16 && ra_title_ok(title) &&
@@ -3053,6 +3196,31 @@ static void tune_restore(const TuneApp *t)
 	ADD(g_ad_restored, 1);
 }
 
+/* g_ad_lock held, after ra_adapt_clear: a game's start values (the mean of
+ * its first launches) in effect - its thresholds and costs; the runs behind
+ * them are not kept (they were of one stretch of play), so Adaptive weighs
+ * what it sees now, in full rounds, from there. */
+static void tune_restore_start(const TuneStart *r)
+{
+	const TuneSnap *s = &r->snap[0];
+
+	for (int i = 0; i < 2; i++) {
+		ST(g_ra_adj[i], s->ra_adj[i]);
+		ST(g_rs_adj[i], s->rs_adj[i]);
+	}
+	ST(g_tiny_thr, s->tiny_thr);
+	ST(g_tiny_blk, s->tiny_blk);
+	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;
+	for (int u = 0; u < 3; u++) {
+		g_oo[u].off = g_oo[u].hold = 0;
+		g_oo[u].std_rate = s->oo_std[u];
+		g_oo[u].srv_rate = s->oo_srv[u];
+		g_oo[u].held_each = s->oo_held[u];
+		ST(g_oo_off[u], 0);
+	}
+	ADD(g_ad_restored, 1);
+}
+
 /* What is in effect is `title`'s (""; none: the home screen with no
  * settings of its own, the global settings) under `key`. The same as
  * before: Adaptive goes on learning. Else what it learned is held for the
@@ -3062,6 +3230,7 @@ static void tune_restore(const TuneApp *t)
 static void ra_adapt_switch(const char *title, uint32_t key)
 {
 	const AdHeld *h = NULL;
+	const SceUID pid = title[0] ? __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) : 0;
 
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
@@ -3075,6 +3244,7 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 		if (title[0] && tune_title_is(&g_ad_out.app, title))
 			g_ad_in = g_ad_out;           /* the one coming was the one before: its place */
 		tune_pack(&g_ad_out.app);
+		g_ad_out.pid = g_ad_pid;
 		g_ad_out.fslot = g_ad_fslot;
 		g_ad_out.fsig = g_ad_fsig;
 	}
@@ -3086,9 +3256,15 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 	if (h) {
 		g_ad_fslot = h->fslot;            /* the same app, the same place */
 		g_ad_fsig = h->fsig;
-		if (h->app.key == key && tune_valid(&h->app))
-			tune_restore(&h->app);
+		if (h->app.key == key && tune_valid(&h->app)) {
+			g_st_rec = h->app.st;         /* its start, as far as taken */
+			if (pid && h->pid == pid)
+				tune_restore(&h->app);    /* the same launch back in front: where it was */
+			else if (g_st_rec.n == TUNE_START_N)
+				tune_restore_start(&g_st_rec);   /* a launch: from its start values */
+		}
 	}
+	g_ad_pid = pid;
 	{
 		size_t i = 0;
 
@@ -3199,6 +3375,7 @@ static int tune_write_out(SceUID fd)
 		return 1;
 	}
 	t.app = g_ad_out.app;
+	tune_strip(&t.app);
 	t.check = tune_slot_check(&t);
 	sig = tune_sig(&t.app);
 	if (!g_ad_out.fslot) {
@@ -3353,7 +3530,7 @@ static void tune_fetch(const char *title)
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	TuneHead h, want, v3, v4;
+	TuneHead h, want, v3, v4, v5;
 	uint32_t on = 0, c, check = 0;
 	SceOff end;
 	int ok, old;
@@ -3363,9 +3540,11 @@ static int tune_read(void)
 	tune_head(&want);
 	tune_head_of(&v3, 3u, TUNE_SLOT_V3);
 	tune_head_of(&v4, 4u, TUNE_SLOT_V4);
+	tune_head_of(&v5, 5u, TUNE_SLOT_V5);
 	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h);
-	/* versions 3 and 4: their calibration only */
-	old = ok && (!memcmp(&h, &v3, sizeof(h)) || !memcmp(&h, &v4, sizeof(h)));
+	/* versions 3 to 5: their calibration only */
+	old = ok && (!memcmp(&h, &v3, sizeof(h)) || !memcmp(&h, &v4, sizeof(h)) ||
+	             !memcmp(&h, &v5, sizeof(h)));
 	if (!ok || (!old && memcmp(&h, &want, sizeof(h)))) {
 		ksceIoClose(fd);
 		return 0;
@@ -4741,6 +4920,12 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	if (mine && !write && nsec > __atomic_load_n(&g_rd_max, __ATOMIC_RELAXED))
 		__atomic_store_n(&g_rd_max, nsec, __ATOMIC_RELAXED);
 
+	/* the launch's reads, for its start (internal storage: never read ahead) */
+	if (mine && !write && nsec && !bg && d != &g_dev[VM_DEV_INTERNAL] &&
+	    __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED) && ra_learn_on()) {
+		__atomic_fetch_add(&g_st_sec, nsec, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&g_st_reads, 1, __ATOMIC_RELAXED);
+	}
 	if (mine && LD(g_count_all)) {
 		if (write) {
 			ADD(d->all_wr, (uint64_t)nsec * 512);
@@ -6015,6 +6200,61 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
+/* Worker thread: the launch in front has read enough (TUNE_START_FEW_SEC,
+ * or TUNE_START_MANY_SEC after many reads) - what Adaptive holds is the
+ * launch's snapshot; the TUNE_START_N-th turns them all into their mean,
+ * and from then on the start is not touched. Once a launch. */
+static void tune_start_tick(void)
+{
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+	uint32_t sec, reads, n = 0, mib = 0;
+	int took = 0;
+	char title[16] = { 0 };
+	TuneSnap shot;
+
+	memset(&shot, 0, sizeof(shot));
+	if (!fg || fg == g_st_taken || !app_in_front() || !strcmp(g_app_title, HOME_TITLE))
+		return;
+	sec = __atomic_load_n(&g_st_sec, __ATOMIC_RELAXED);
+	reads = __atomic_load_n(&g_st_reads, __ATOMIC_RELAXED);
+	if (sec < TUNE_START_FEW_SEC || (reads > TUNE_START_MANY_READS && sec < TUNE_START_MANY_SEC))
+		return;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (g_st_rec.n >= TUNE_START_N) {
+		g_st_taken = fg;                  /* fixed already: not touched */
+	} else if (g_ad_pid == fg && g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE && ra_learn_on()) {
+		for (int i = 0; i < 2; i++) {
+			shot.ra_adj[i] = (int8_t)LD(g_ra_adj[i]);
+			shot.rs_adj[i] = (int8_t)LD(g_rs_adj[i]);
+		}
+		shot.tiny_thr = (uint8_t)LD(g_tiny_thr);
+		shot.tiny_blk = (uint8_t)LD(g_tiny_blk);
+		for (int u = 0; u < 3; u++) {
+			shot.oo_std[u] = g_oo[u].std_rate;
+			shot.oo_srv[u] = g_oo[u].srv_rate;
+			shot.oo_held[u] = g_oo[u].held_each;
+		}
+		g_st_rec.snap[g_st_rec.n++] = shot;
+		if (g_st_rec.n == TUNE_START_N) {
+			tune_start_mean(&g_st_rec);
+			shot = g_st_rec.snap[0];
+		}
+		n = g_st_rec.n;
+		memcpy(title, g_ad_title, sizeof(title));
+		g_st_taken = fg;
+		took = 1;
+	}
+	__sync_lock_release(&g_ad_lock);
+	mib = sec / 2048u;
+	if (took && LD(g_log_diag))
+		VM_KLOGI("start %s: launch %u of %u after %u MiB (%u reads)%s: C +%d/%d NC +%d/%d, tiny %u/%u KiB",
+		         title, (unsigned)n, (unsigned)TUNE_START_N, (unsigned)mib, (unsigned)reads,
+		         n == TUNE_START_N ? ", the mean - fixed" : "", (int)shot.ra_adj[0],
+		         (int)shot.rs_adj[0], (int)shot.ra_adj[1], (int)shot.rs_adj[1],
+		         (unsigned)shot.tiny_thr, (unsigned)shot.tiny_blk / 2);
+}
+
 void vm_stage_worker_tick(void)
 {
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
@@ -6023,6 +6263,7 @@ void vm_stage_worker_tick(void)
 	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
+	tune_start_tick();                    /* a launch's start, once it has read enough */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "

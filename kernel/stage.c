@@ -6715,7 +6715,7 @@ void vm_stage_worker_tick(void)
 			/* the session of the one before (log on), then the new one's */
 			static char who[16];
 			static uint64_t since_us;
-			const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
+			const uint64_t wide_us = (uint64_t)ksceKernelGetSystemTimeWide();
 			Diag *const dg = DG();
 
 			if (LD(g_log_diag) && dg) {
@@ -6724,9 +6724,9 @@ void vm_stage_worker_tick(void)
 				lg_snap(&cur);
 				if (since_us)
 					lg_session(who[0] ? who : "the home screen",
-					           (uint32_t)((now_us - since_us) / 1000u), &dg->at, &cur);
+					           (uint32_t)((wide_us - since_us) / 1000u), &dg->at, &cur);
 				dg->at = cur;
-				since_us = now_us;
+				since_us = wide_us;
 			} else {
 				since_us = 0;
 			}

@@ -5368,7 +5368,7 @@ static void test_learned_kept_in_file(void)
 	}
 	/* packing: counts up to any size come back to the shift */
 	{
-		TuneApp t;
+		TuneApp ta;
 
 		while (__sync_lock_test_and_set(&g_ad_lock, 1))
 			;
@@ -5377,15 +5377,15 @@ static void test_learned_kept_in_file(void)
 		g_ad.pos[0][9] = 5000000u;
 		g_ad.pos[1][3] = 1234u;
 		g_tn_cnt[4] = 70000u;
-		tune_pack(&t);
+		tune_pack(&ta);
 		ra_adapt_clear();
-		CHECK(tune_valid(&t));
-		tune_restore(&t);
-		CHECK(g_ad.pos[1][3] >> t.sh_ad == 1234u >> t.sh_ad &&
-		      g_ad.pos[0][9] >> t.sh_ad == 5000000u >> t.sh_ad && g_tn_cnt[4] >> t.sh_tn == 70000u >> t.sh_tn);
-		CHECK(t.sh_ad > 0 && sizeof(TuneApp) <= 512);
-		t.tiny_blk = 48;                              /* not one this build writes */
-		CHECK(!tune_valid(&t));
+		CHECK(tune_valid(&ta));
+		tune_restore(&ta);
+		CHECK(g_ad.pos[1][3] >> ta.sh_ad == 1234u >> ta.sh_ad &&
+		      g_ad.pos[0][9] >> ta.sh_ad == 5000000u >> ta.sh_ad && g_tn_cnt[4] >> ta.sh_tn == 70000u >> ta.sh_tn);
+		CHECK(ta.sh_ad > 0 && sizeof(TuneApp) <= 512);
+		ta.tiny_blk = 48;                              /* not one this build writes */
+		CHECK(!tune_valid(&ta));
 		ra_adapt_clear();
 		g_ad_title[0] = 0;
 		__sync_lock_release(&g_ad_lock);

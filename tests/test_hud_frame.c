@@ -12,6 +12,7 @@
 
 #include "../kernel/hud.c"
 #include "vm_test.h"
+#include "fakes.h"
 
 #define W  960
 #define H  544
@@ -110,9 +111,60 @@ static void test_no_blink(void)
 	free(g_ref_b);
 }
 
+static int bare(const uint32_t *fb)
+{
+	for (int i = 0; i < W * H; i++)
+		if (fb[i] != BG)
+			return 0;
+	return 1;
+}
+
+/* The rows the frames draw with are in the cache's block: none while
+ * nothing is shown; with no memory nothing is drawn (and nothing breaks);
+ * with only a small block, the rows alone and the panel composed each
+ * frame, the same as from a cache. */
+static void test_rows_in_block(void)
+{
+	uint32_t *fb = malloc(W * H * 4), *ref = malloc(W * H * 4);
+	const unsigned rows_only = (HUD_ROWS_BYTES + 0xFFF) & ~0xFFFu;
+
+	vm_hud_set_text(k_a, 0);
+	CHECK(g_rows == NULL && g_cache_uid < 0);
+	frame(fb);
+	CHECK(bare(fb));
+	/* no memory */
+	fake_alloc_fail = 1;
+	vm_hud_set_text(k_a, 3);
+	CHECK(g_rows == NULL && g_cache_uid < 0);
+	frame(fb);
+	CHECK(bare(fb) && g_readers == 0 && !g_row_busy[0]);
+	fake_alloc_fail = 0;
+	vm_hud_set_text(k_a, 0);
+	/* only a small block: the rows alone */
+	fake_alloc_max = rows_only;
+	vm_hud_set_text(k_a, 3);
+	CHECK(g_rows != NULL && g_cache_uid >= 0 && (uint8_t *)g_rows + HUD_ROWS_BYTES == g_cache.px);
+	CHECK(g_cache.bytes == (int)rows_only - HUD_ROWS_BYTES && g_cache.bytes < hud_cache_bytes(&g_text[g_front], W));
+	frame(fb);
+	CHECK(!bare(fb));
+	fake_alloc_max = 0;
+	vm_hud_set_text(k_a, 0);
+	CHECK(g_rows == NULL && g_cache_uid < 0);
+	/* the whole block: rows, then the cache; the same panel */
+	vm_hud_set_text(k_a, 3);
+	CHECK(g_rows != NULL && g_cache.bytes >= hud_cache_bytes(&g_text[g_front], W));
+	frame(ref);
+	CHECK(!memcmp(fb, ref, W * H * 4));
+	vm_hud_set_text(k_a, 0);
+	CHECK(g_rows == NULL && g_cache_uid < 0);
+	free(fb);
+	free(ref);
+}
+
 int main(void)
 {
 	RUN(test_no_blink);
+	RUN(test_rows_in_block);
 	if (vm_failures) {
 		printf("test_hud_frame: %d FAILED\n", vm_failures);
 		return 1;

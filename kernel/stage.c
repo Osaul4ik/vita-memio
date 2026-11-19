@@ -80,6 +80,12 @@
  *     (1.7 -> 2.3 us per block), so writes keep memcpy. */
 #include "fastcopy.h"
 #include "vm_memblock.h"
+
+/* Code off the transfer path - the worker, Adaptive's rounds, the files, the
+ * log, setup - is compiled for size (GCC: cold functions are optimised for
+ * size and kept apart from the hot code); the transfer path stays at -O2. */
+#define COLD __attribute__((cold, optimize("Os")))
+#define RT_COLD COLD
 #include "ra_test.h"                     /* the read ahead model (Adaptive, the test) */
 #ifndef vm_copy_from_stage
 #define vm_copy_from_stage stage_copy_out   /* the DMA controller or the CPU (below) */
@@ -467,7 +473,6 @@ typedef struct {
 	uint32_t n[3], sec[3], col_n, wr_n, wr_sec;
 	uint32_t max_us;                       /* the longest read (taken per session) */
 } LgDev;
-static LgDev g_lg[3];                      /* VM_DEV_COUNT (atomics)          */
 /* ... and by kind (the large and 32 KiB reads into ordinary memory, into
  * non-cacheable memory, the tiny ones: LK_*), for Adaptive's work - how the
  * reads went: [0] the standard way, [1] all from read ahead, [2] partly
@@ -482,7 +487,6 @@ typedef struct {
 	uint64_t us[3], col_us, held_us;
 	uint32_t n[3], sec[3], col_n, col_max, waste, spoilt;
 } LgKind;
-static LgKind g_lk[3];                     /* atomics                         */
 
 /* What a read did, for the log (stage_xfer_one, ra_nc_read, ra_tiny_read). */
 typedef struct {
@@ -612,7 +616,28 @@ typedef struct MapFail {
 	MapFailBlk blk[MAPFAIL_BLKS];
 	char     title[16];        /* the app in front                          */
 } MapFail;
-static MapFail           g_mapfail[MAPFAIL_LOG];
+/* The session lines' snapshot (see lg_session). */
+typedef struct {
+	LgDev    dev[VM_DEV_COUNT];
+	LgKind   k[3];
+	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock, wskip;
+} LgSnap;
+
+/* What only the log uses - the per-transfer counts (lg_note, lk_note), the
+ * refused mappings described, the session's starting snapshot - in a block
+ * of its own, made the first time the log is switched on (vm_stage_apply)
+ * and kept from then on, as a transfer may be using it at any moment: with
+ * the log never on, none of it takes memory. */
+typedef struct {
+	LgDev    lg[3];                    /* VM_DEV_COUNT (atomics)              */
+	LgKind   lk[3];                    /* atomics                             */
+	MapFail  mapfail[MAPFAIL_LOG];
+	LgSnap   at;                       /* the worker's                        */
+} Diag;
+static Diag *volatile g_diag;                  /* atomic; published once      */
+static SceUID         g_diag_uid = -1;
+static volatile int   g_diag_busy;
+#define DG() __atomic_load_n(&g_diag, __ATOMIC_ACQUIRE)
 static volatile uint32_t g_mapfail_n;          /* refusals described (claimed) */
 static uint32_t          g_mapfail_logged;     /* the worker's                 */
 
@@ -1443,16 +1468,20 @@ static int mapfail_probe(SceUID pid, uintptr_t user, uint32_t len)
 	return 0;
 }
 
-static void mapfail_note(int which, const OffMap *m, int err)
+COLD static void mapfail_note(int which, const OffMap *m, int err)
 {
-	const uint32_t i = __atomic_fetch_add(&g_mapfail_n, 1, __ATOMIC_RELAXED);
+	Diag *const dg = DG();
 	const uintptr_t base = (uintptr_t)m->user;
+	uint32_t i;
 	MapFail *f;
 	VmMemBlockInfoEx info;
 
+	if (!dg)
+		return;                                /* the log never on: not described */
+	i = __atomic_fetch_add(&g_mapfail_n, 1, __ATOMIC_RELAXED);
 	if (i >= MAPFAIL_LOG)
 		return;
-	f = &g_mapfail[i];
+	f = &dg->mapfail[i];
 	f->which = which;
 	f->err = err;
 	f->pid = m->pid;
@@ -1861,7 +1890,7 @@ static int ra_app_set_any(const VmApp *a)
 }
 
 /* One profile file, if usable. */
-static int ra_prof_read(const char *path, RaProf *out)
+COLD static int ra_prof_read(const char *path, RaProf *out)
 {
 	RaProfileFile f;
 	RaProf p;
@@ -1898,7 +1927,7 @@ static void ra_prof_save_locked(const char *title, const RaProf *in);
 /* 1 and the profile if the app has a usable one: its file (or the copy an
  * older version's save cut short left), else an older version's on ur0,
  * moved here. g_prof_lock held. */
-static int ra_prof_load_locked(const char *title, RaProf *out)
+COLD static int ra_prof_load_locked(const char *title, RaProf *out)
 {
 	char path[96];
 	int ok;
@@ -1928,7 +1957,7 @@ static int ra_prof_load_locked(const char *title, RaProf *out)
 	return ok;
 }
 
-static int ra_prof_load(const char *title, RaProf *out)
+COLD static int ra_prof_load(const char *title, RaProf *out)
 {
 	int ok;
 
@@ -1944,7 +1973,7 @@ static int ra_prof_load(const char *title, RaProf *out)
  * else a new file. A write cut short leaves a file whose check fails: the
  * app then has the global settings until it is saved again. g_prof_lock
  * held. */
-static void ra_prof_save_locked(const char *title, const RaProf *in)
+COLD static void ra_prof_save_locked(const char *title, const RaProf *in)
 {
 	char path[96];
 	RaProfileFile p;
@@ -1982,7 +2011,7 @@ static void ra_prof_save_locked(const char *title, const RaProf *in)
 		VM_KLOGW("stage: profile for %s not saved (short write)", title);
 }
 
-static void ra_prof_save(const char *title, const RaProf *in)
+COLD static void ra_prof_save(const char *title, const RaProf *in)
 {
 	while (__sync_lock_test_and_set(&g_prof_lock, 1))
 		ksceKernelDelayThread(100);
@@ -2042,7 +2071,7 @@ static void fg_take(SceUID pid, const char *t)
  * system's own apps (NPXS) never take the front, and while an exclusive
  * app (a game) runs, another process starting does not either. Any thread;
  * the worker is woken to follow the change. */
-static void ra_proc_event(SceUID pid, int ev)
+COLD static void ra_proc_event(SceUID pid, int ev)
 {
 	/* a process id is a UID: any value but 0 (the high bit may be set) */
 	if (!pid)
@@ -2082,7 +2111,7 @@ static void ra_proc_event(SceUID pid, int ev)
 	}
 }
 
-static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
+COLD static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 {
 	const tai_hook_ref_t ref = vm_hook_ref(&g_proc_ref);
 
@@ -2227,7 +2256,7 @@ static volatile int  g_cal_loaded;           /* set under g_tune_lock */
  * time, if it is timed (a large read) - else 0 - and *held whether a piece was
  * being read. The clock is read only if one of the two needs it: most small
  * requests cost a look at three pieces. */
-static uint32_t cal_start(Dev *d, uint32_t nsec, int *held)
+COLD static uint32_t cal_start(Dev *d, uint32_t nsec, int *held)
 {
 	int reading = 0;
 	uint32_t now;
@@ -2356,7 +2385,7 @@ static uint32_t cal_median(const uint16_t *h, uint32_t n)
 }
 
 /* A series' median for the log, "-" if it has none. */
-static void cal_text(char *o, size_t n, const uint16_t *h, uint32_t count)
+COLD static void cal_text(char *o, size_t n, const uint16_t *h, uint32_t count)
 {
 	if (count)
 		snprintf(o, n, "%u", (unsigned)(cal_median(h, count) % 100000u));
@@ -2400,7 +2429,7 @@ static void cal_cost(int dev, RtCost *cost, VmCal *o)
 		*o = v;
 }
 
-void vm_stage_cal(int dev, VmCal *out)
+COLD void vm_stage_cal(int dev, VmCal *out)
 {
 	RtCost c;
 
@@ -2471,7 +2500,7 @@ static CalSaved g_cal_saved[VM_DEV_COUNT];   /* worker */
 
 static void cal_tiny_cost(int dev, RtTinyCost *t);
 
-static void cal_snapshot(void)
+COLD static void cal_snapshot(void)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		CalSaved *o = &g_cal_saved[i];
@@ -2510,7 +2539,7 @@ static int cal_grown(uint32_t now, uint32_t then, uint32_t min)
  * in use now (or no longer) that was not then, one in use moved by more than
  * 5 %, or, while too little is measured, a count grown by half. Once the
  * figures settle, nothing more is written. */
-static int cal_worth_saving(void)
+COLD static int cal_worth_saving(void)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const CalSaved *o = &g_cal_saved[i];
@@ -2561,7 +2590,7 @@ static void tune_lock(void)
 /* An older version's calib.bin into g_cal (the calibration alone); 1 if it
  * was whole and right (else g_cal cleared). Read once, if there is no
  * tuning.bin yet; the first save of tuning.bin removes it. */
-static int cal_read_file(const char *path)
+COLD static int cal_read_file(const char *path)
 {
 	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
 	CalHead h;
@@ -2601,7 +2630,7 @@ static int cal_read_file(const char *path)
 
 static void tune_forget_learned(void);
 
-void vm_stage_cal_reset(void)
+COLD void vm_stage_cal_reset(void)
 {
 	cal_load();
 	memset(g_cal, 0, sizeof(g_cal));      /* the figures: the fixed ones again */
@@ -2613,7 +2642,7 @@ void vm_stage_cal_reset(void)
 	VM_KLOGI("stage: calibration and what was learned reset");
 }
 
-void vm_stage_cal_set(int on)
+COLD void vm_stage_cal_set(int on)
 {
 	cal_load();
 	ST(g_cal_on, on ? 1 : 0);
@@ -2735,7 +2764,7 @@ static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts 
 static void oo_clear(void);
 
 /* Afresh (g_ad_lock held). */
-static void ra_adapt_clear(void)
+COLD static void ra_adapt_clear(void)
 {
 	memset(&g_ad, 0, sizeof(g_ad));
 	for (int k = 0; k < 2; k++) {
@@ -2764,7 +2793,7 @@ static int tune_title_is(const TuneApp *t, const char *title)
 }
 
 /* An app's slot as one word: who and its thresholds (0: none). */
-static uint32_t tune_sig(const TuneApp *t)
+COLD static uint32_t tune_sig(const TuneApp *t)
 {
 	const int32_t v[8] = { (int32_t)t->key, t->ra_adj[0], t->ra_adj[1], t->rs_adj[0],
 	                       t->rs_adj[1], (int32_t)t->tiny_thr, (int32_t)t->tiny_blk,
@@ -2857,7 +2886,7 @@ static void tune_pack(TuneApp *t)
 
 /* Whether t is one this build would have written (else nothing of it is
  * used). */
-static int tune_valid(const TuneApp *t)
+COLD static int tune_valid(const TuneApp *t)
 {
 	char title[TUNE_TITLE];
 	int tiny_ok = 0;
@@ -2909,7 +2938,7 @@ static void tune_restore(const TuneApp *t)
  * one before (g_ad_out, written by the worker), and it starts from what was
  * held for this one - just before, or read from the file (g_ad_in) - or
  * afresh. */
-static void ra_adapt_switch(const char *title, uint32_t key)
+COLD static void ra_adapt_switch(const char *title, uint32_t key)
 {
 	const AdHeld *h = NULL;
 
@@ -2973,7 +3002,7 @@ static int tune_learn_worth(void)
 
 /* What was learned, forgotten (Tuning reset): what is held, the one in
  * front starts afresh, and the file is written anew (none of it kept). */
-static void tune_forget_learned(void)
+COLD static void tune_forget_learned(void)
 {
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
@@ -2986,7 +3015,7 @@ static void tune_forget_learned(void)
 }
 
 /* The calibration part, at the file's position (sequentially): 1 if written. */
-static int tune_write_cal(SceUID fd)
+COLD static int tune_write_cal(SceUID fd)
 {
 	const uint32_t on = (uint32_t)LD(g_cal_on);
 	uint32_t c = tune_fnv(0x811C9DC5u, &on, sizeof(on));
@@ -3018,7 +3047,7 @@ static int tune_write_cal(SceUID fd)
 }
 
 /* The header this build writes. */
-static void tune_head_of(TuneHead *h, uint32_t version, uint32_t slot)
+COLD static void tune_head_of(TuneHead *h, uint32_t version, uint32_t slot)
 {
 	const TuneHead h0 = { TUNE_MAGIC, version, VM_DEV_COUNT, TUNE_CAL_SIZE, slot, 0 };
 
@@ -3035,7 +3064,7 @@ static void tune_head(TuneHead *h)
 /* The one before's slot, where it lies (a new app's: after the last), if it
  * holds what the file does not: 1 if written or nothing to write.
  * g_tune_lock held. */
-static int tune_write_out(SceUID fd)
+COLD static int tune_write_out(SceUID fd)
 {
 	TuneSlot t;
 	uint32_t sig, slot;
@@ -3075,7 +3104,7 @@ static int tune_write_out(SceUID fd)
 
 /* A new file - the header and the calibration, no app yet - when there is
  * none in this layout: once. */
-static int tune_write_all(void)
+COLD static int tune_write_all(void)
 {
 	TuneHead h;
 	SceUID fd;
@@ -3103,7 +3132,7 @@ static int tune_write_all(void)
 
 /* What changed since the file was written, written where it lies
  * (g_tune_lock held). */
-static void cal_save_locked(void)
+COLD static void cal_save_locked(void)
 {
 	SceUID fd;
 
@@ -3146,7 +3175,7 @@ static void cal_save_locked(void)
  * slot found. Not there: held as none, so it is not looked for again; one
  * whose check fails keeps its place: the app learns again, written there.
  * g_tune_lock held. */
-static void tune_fetch_locked(const char *title)
+COLD static void tune_fetch_locked(const char *title)
 {
 	const uint32_t n = TUNE_TITLE;
 	TuneSlot t;
@@ -3200,7 +3229,7 @@ static void tune_fetch(const char *title)
 
 /* tuning.bin's header and calibration; how many slots it has. Its layout
  * right: 1 (the calibration used if its own check passes). */
-static int tune_read(void)
+COLD static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
 	TuneHead h, want, v3, v4;
@@ -3252,7 +3281,7 @@ static int tune_read(void)
 /* Once, by the worker: what was measured before; with no tuning.bin in this
  * layout, an older version's calib.bin (the calibration alone), moved into a
  * new tuning.bin at the first save (and the branch's v2 on ur0 removed). */
-static void cal_load(void)
+COLD static void cal_load(void)
 {
 	SceUID fd;
 
@@ -3370,7 +3399,7 @@ static int oo_off(int u)
 }
 
 /* All afresh (g_ad_lock held): read ahead on for every kind, nothing kept. */
-static void oo_clear(void)
+COLD static void oo_clear(void)
 {
 	memset(g_oo, 0, sizeof(g_oo));
 	memset(g_oo_time, 0, sizeof(g_oo_time));
@@ -3392,7 +3421,7 @@ typedef struct { int pm, now; int64_t net, time; uint32_t std, srv, held; } OoLo
 /* The worker, a round of kind u over (g_ad_lock held): `gain` what the model
  * (with this game's costs) says read ahead brings, the counts' scale. 1 if
  * it went on or off. */
-static int oo_round(int u, int64_t gain, OoLog *lg)
+COLD static int oo_round(int u, int64_t gain, OoLog *lg)
 {
 	OoAcc a;
 	int moved;
@@ -3455,7 +3484,7 @@ static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
  * RA_ADAPT_RUNS of a kind (or RA_ADAPT_SECTORS read in them), its thresholds
  * weighed again. Not counted (and dropped) while Adaptive is not in effect or
  * another thread is at the counts. */
-static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
+COLD static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 {
 	const int ok = len && ra_adapt_on() && !__sync_lock_test_and_set(&g_ad_lock, 1);
 	uint32_t *pos;
@@ -3495,7 +3524,7 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 
 /* Worker thread: the rounds that are due weighed - the threshold of each
  * kind of the large reads, (T, B) of the tiny ones - so a request only counts. */
-static void ra_adapt_tick(void)
+COLD static void ra_adapt_tick(void)
 {
 	/* what moved, logged once the lock is let go (log on) */
 	int mv[2][4], tmv[4], oo_mv[3] = { 0, 0, 0 }, any = 0;
@@ -3736,8 +3765,10 @@ static void ra_drop(Dev *d)
 					cal_waste(d, &d->ra[i]);   /* none of it used */
 					if (ra_adapt_on())
 						oo_waste(d->ra[i].nc ? OO_NC : OO_C, d->ra[i].held_us);
-					if (LD(g_log_diag)) {
-						LgKind *g = &g_lk[d->ra[i].nc ? LK_NC : LK_C];
+					Diag *const dg = LD(g_log_diag) ? DG() : NULL;
+
+					if (dg) {
+						LgKind *g = &dg->lk[d->ra[i].nc ? LK_NC : LK_C];
 
 						ADD(g->waste, 1);
 						ADD(g->held_us, (uint64_t)d->ra[i].held_us);
@@ -4082,7 +4113,7 @@ static void ra_release(Dev *d)
 
 /* Worker: the read-ahead thread of a device whose helper exists. 0 or the
  * error (nothing kept). */
-static int ra_setup(Dev *d)
+COLD static int ra_setup(Dev *d)
 {
 	Dev *arg = d;
 	int r;
@@ -4226,9 +4257,9 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_run_sec = n;
 	}
 	d->t_next = sector + n;
-	if (LD(g_log_diag) && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&
+	if (LD(g_log_diag) && DG() && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&
 	    sector + n <= LD(d->t_end) && __atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST))
-		ADD(g_lk[LK_TINY].spoilt, 1);         /* in a block a write spoilt */
+		ADD(DG()->lk[LK_TINY].spoilt, 1);         /* in a block a write spoilt */
 	if (oo_off(OO_TINY)) {                /* off as measured: the run still counted */
 		ST(d->t_end, LD(d->t_start));
 		__sync_lock_release(&d->busy);
@@ -4819,11 +4850,15 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                         void *part, uint32_t sector, void *buf, uint32_t nsec, XInfo *xi);
 
-/* With the log on: one transfer, timed (g_lg). */
+/* With the log on: one transfer, timed (Diag.lg). */
 static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
 {
-	LgDev *g = &g_lg[d - g_dev];
+	Diag *const dg = DG();
+	LgDev *g;
 
+	if (!dg)
+		return;
+	g = &dg->lg[d - g_dev];
 	if (write) {
 		ADD(g->wr_n, 1);
 		ADD(g->wr_sec, nsec);
@@ -4846,15 +4881,16 @@ static void lg_note(Dev *d, int write, uint32_t nsec, uint32_t us, int col)
 }
 
 /* With the log on: a read of kind k (< 0: device memory) and how it went
- * (g_lk: 0 standard, 1 all from read ahead, 2 partly / tiny: 1 from the
+ * (Diag.lk: 0 standard, 1 all from read ahead, 2 partly / tiny: 1 from the
  * block, 2 the block read for it). */
 static void lk_note(int k, uint32_t nsec, uint32_t us, int col, int how)
 {
+	Diag *const dg = DG();
 	LgKind *g;
 
-	if (k < 0)
+	if (k < 0 || !dg)
 		return;
-	g = &g_lk[k];
+	g = &dg->lk[k];
 	ADD(g->n[how], 1);
 	ADD(g->sec[how], nsec);
 	ADD(g->us[how], (uint64_t)us);
@@ -4972,7 +5008,7 @@ static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
  * the tiny reads' buffers if what is set will use them (their threads come
  * later, from the worker, once the home screen is up). One that fails is
  * tried again when it is needed. */
-static void prealloc(Dev *d)
+COLD static void prealloc(Dev *d)
 {
 	ensure_buf(d);
 	if (!__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE))
@@ -4989,7 +5025,7 @@ static void prealloc(Dev *d)
 	}
 }
 
-int vm_stage_init(void)
+COLD int vm_stage_init(void)
 {
 	static const struct { int h; uint32_t nid; void *fn; } k_hooks[H_COUNT] = {
 		{ H_RD_SD,  NID_READ_SD,   h_rd_sd  },
@@ -5081,7 +5117,7 @@ int vm_stage_init(void)
  * import of ksceKernelInvokeProcEventHandler (an import, not an export: there
  * is none to hook; an import is one word to change, safe while it runs).
  * 1 the first time, 0 after. */
-int vm_stage_go(void)
+COLD int vm_stage_go(void)
 {
 	if (!LD(g_hold) || !LD(g_live))
 		return 0;
@@ -5098,7 +5134,7 @@ int vm_stage_go(void)
 	return 1;
 }
 
-void vm_stage_fini(void)
+COLD void vm_stage_fini(void)
 {
 	ST(g_live, 0);                      /* nothing allocated, nothing comes on, again */
 	/* Stop taking the faster path, then wait for any transfer in flight. */
@@ -5175,7 +5211,7 @@ static void eff_lock(void)
 static int app_in_front(void);
 
 /* Put the settings in effect. Any thread. */
-static void eff_update(void)
+COLD static void eff_update(void)
 {
 	VmApp a;
 	int needed, pipeline, offload, gpusafe, ra;
@@ -5233,7 +5269,64 @@ static void eff_update(void)
 	__sync_lock_release(&g_eff_lock);
 }
 
-void vm_stage_apply(const VmSettings *s)
+/* With the log on, once: what each of the plugin's blocks really takes - the
+ * size asked for against what the system set aside for it, and in how many
+ * physical stretches. */
+COLD static void mem_report_one(const char *what, int dev, SceUID uid, uint32_t asked)
+{
+	VmMemBlockInfoEx info;
+	int r;
+
+	if (uid < 0)
+		return;
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	r = ksceKernelMemBlockGetInfoEx(uid, &info);
+	if (r < 0) {
+		VM_KLOGI("stage: memory %s (dev %d): %u KiB asked, info 0x%08x", what, dev,
+		         (unsigned)(asked / 1024), (unsigned)r);
+		return;
+	}
+	VM_KLOGI("stage: memory %s dev %d: asked %u, set aside %u, mapped %u B; type 0x%08x; "
+	         "%u stretches, the first %u B at 0x%08x", what, dev, (unsigned)asked,
+	         (unsigned)info.alloc_map_size, (unsigned)info.mapped_size, (unsigned)info.type,
+	         (unsigned)info.physical_range_count_written, (unsigned)info.physical_sizes[0],
+	         (unsigned)(uintptr_t)info.physical_addresses[0]);
+}
+
+COLD static void mem_report(void)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const Dev *d = &g_dev[i];
+
+		mem_report_one("staging", i, d->uid, STAGE_BYTES);
+		mem_report_one("second buffer", i, d->uid2, PIPE_TAIL_SECTORS * 512);
+		mem_report_one("tiny block", i, d->t_uid, RA_TINY_SECTORS * 512);
+	}
+	mem_report_one("log counts", -1, g_diag_uid, (uint32_t)sizeof(Diag));
+	if (g_shadow_uid >= 0)
+		mem_report_one("verify", -1, g_shadow_uid, STAGE_BYTES);
+}
+
+/* The log's block (see Diag): made once, the first time the log is on. */
+COLD static void diag_make(void)
+{
+	void *b = NULL;
+
+	if (DG() || __sync_lock_test_and_set(&g_diag_busy, 1))
+		return;
+	if (!DG() && alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, (sizeof(Diag) + 0xFFFu) & ~0xFFFu,
+	                       &g_diag_uid, &b) >= 0) {
+		memset(b, 0, sizeof(Diag));
+		__atomic_store_n(&g_diag, (Diag *)b, __ATOMIC_RELEASE);   /* published last */
+	} else if (!DG()) {
+		g_diag_uid = -1;
+		VM_KLOGW("stage: the log's counts not allocated: no session lines");
+	}
+	__sync_lock_release(&g_diag_busy);
+}
+
+COLD void vm_stage_apply(const VmSettings *s)
 {
 	/* the internal storage never: its setting is reserved (VM_KEY_INTERNAL) */
 	const int hold = LD(g_hold);
@@ -5271,7 +5364,9 @@ void vm_stage_apply(const VmSettings *s)
 		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the worker: whose now */
 		ra_wake();
 	}
-	ST(g_log_diag, s->log ? 1 : 0);
+	if (s->log)
+		diag_make();
+	ST(g_log_diag, s->log && DG() ? 1 : 0);
 	/* the global ones, then what is in effect */
 	ST(g_glob_gpu, s->gpusafe >= VM_GPUSAFE_OFF && s->gpusafe <= VM_GPUSAFE_NODMA ? s->gpusafe
 	                                                                         : VM_GPUSAFE_ALL);
@@ -5286,7 +5381,7 @@ void vm_stage_apply(const VmSettings *s)
 
 /* The app in front's own settings, from its profile (worker thread; fg 0:
  * none). Changes not saved for the one before are dropped. */
-static void app_load(SceUID fg)
+COLD static void app_load(SceUID fg)
 {
 	RaProf pf;
 
@@ -5321,7 +5416,7 @@ static void app_load(SceUID fg)
 	eff_update();
 }
 
-void vm_stage_app_now(VmAppNow *o)
+COLD void vm_stage_app_now(VmAppNow *o)
 {
 	memset(o, 0, sizeof(*o));
 	eff_lock();
@@ -5351,7 +5446,7 @@ static int app_in_front(void)
 	return pid == __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) && g_app_title[0];
 }
 
-int vm_stage_app_set(const VmApp *a)
+COLD int vm_stage_app_set(const VmApp *a)
 {
 	VmApp v;
 
@@ -5372,7 +5467,7 @@ int vm_stage_app_set(const VmApp *a)
 	return VM_OK;
 }
 
-int vm_stage_ratest_start(void)
+COLD int vm_stage_ratest_start(void)
 {
 	if (!app_in_front())
 		return VM_ERR_NOT_READY;
@@ -5403,12 +5498,12 @@ int vm_stage_ratest_stale(void)
 	       fg != __atomic_load_n(&g_rt_pid, __ATOMIC_RELAXED);
 }
 
-void vm_stage_ratest_cancel(void)
+COLD void vm_stage_ratest_cancel(void)
 {
 	__atomic_store_n(&g_rt_on, 0, __ATOMIC_RELEASE);
 }
 
-void vm_stage_ratest_stop(VmRaTestPick *o)
+COLD void vm_stage_ratest_stop(VmRaTestPick *o)
 {
 	RaPick p;
 
@@ -5432,7 +5527,7 @@ void vm_stage_ratest_stop(VmRaTestPick *o)
 	o->offload = p.copy_nc ? VM_OFFLOAD_ALL : VM_OFFLOAD_ALWAYS;
 }
 
-int vm_stage_app_save(void)
+COLD int vm_stage_app_save(void)
 {
 	RaProf pf;
 	char title[sizeof(g_app_title)];
@@ -5475,16 +5570,16 @@ void vm_stage_on_problem(void (*fn)(void))
 
 /* ---- the session lines (log on): what an app's time in front cost -------- */
 
-typedef struct {
-	LgDev    dev[VM_DEV_COUNT];
-	LgKind   k[3];
-	uint32_t hits, kib, drops, waste_kib, bad, nc_kib, tiny, pipe, off, ncd, dma, nc_stock, wskip;
-} LgSnap;
 
-static void lg_snap(LgSnap *o)
+COLD static void lg_snap(LgSnap *o)
 {
+	const Diag *const dg = DG();
+
+	memset(o, 0, sizeof(*o));
+	if (!dg)
+		return;
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		const LgDev *g = &g_lg[i];
+		const LgDev *g = &dg->lg[i];
 		LgDev *t = &o->dev[i];
 
 		for (int k = 0; k < 3; k++) {
@@ -5500,7 +5595,7 @@ static void lg_snap(LgSnap *o)
 		t->max_us = 0;
 	}
 	for (int i = 0; i < 3; i++) {
-		const LgKind *g = &g_lk[i];
+		const LgKind *g = &dg->lk[i];
 		LgKind *t = &o->k[i];
 
 		for (int j = 0; j < 3; j++) {
@@ -5543,8 +5638,9 @@ static uint32_t lg_per_mib(uint64_t us, uint32_t sec)
 
 /* What `who` (in front for ms) cost, from snapshot a to now (b), with the
  * settings in effect for it (the next app's are not loaded yet). */
-static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSnap *b)
+COLD static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSnap *b)
 {
+	Diag *const dg = DG();                  /* there: a is its snapshot */
 	const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
 	int any = 0;
 
@@ -5575,7 +5671,7 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		VM_KLOGI("session dev %d: reads %u ms, %u MiB, %u us/MiB, max %u ms; during R/A "
 		         "piece %u (%u ms); writes %u (%u KiB) %u ms", i, (unsigned)(all_us / 1000u),
 		         (unsigned)(all_sec / 2048u), (unsigned)lg_per_mib(all_us, all_sec),
-		         (unsigned)(__atomic_exchange_n(&g_lg[i].max_us, 0, __ATOMIC_RELAXED) / 1000u),
+		         (unsigned)(__atomic_exchange_n(&dg->lg[i].max_us, 0, __ATOMIC_RELAXED) / 1000u),
 		         (unsigned)(y->col_n - x->col_n), (unsigned)((y->col_us - x->col_us) / 1000u),
 		         (unsigned)(y->wr_n - x->wr_n), (unsigned)((y->wr_sec - x->wr_sec) / 2u),
 		         (unsigned)((y->wr_us - x->wr_us) / 1000u));
@@ -5592,7 +5688,7 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		const LgKind *x = &a->k[k], *y = &b->k[k];
 		uint32_t n[3], sec[3];
 		uint64_t us[3];
-		const uint32_t cmax = __atomic_exchange_n(&g_lk[k].col_max, 0, __ATOMIC_RELAXED);
+		const uint32_t cmax = __atomic_exchange_n(&dg->lk[k].col_max, 0, __ATOMIC_RELAXED);
 
 		for (int j = 0; j < 3; j++) {
 			n[j] = y->n[j] - x->n[j];
@@ -5632,7 +5728,7 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 	         (unsigned)(b->dma - a->dma));
 }
 
-void vm_stage_worker_tick(void)
+COLD void vm_stage_worker_tick(void)
 {
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
 	const uint32_t now_us = ksceKernelGetSystemTimeLow();
@@ -5792,9 +5888,9 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ncd_maperr), (unsigned)LD(g_ncd_err));
 	}
 	/* Refused mappings, each once (see MapFail). */
-	while (g_mapfail_logged < MAPFAIL_LOG && g_mapfail_logged < LD(g_mapfail_n) &&
-	       __atomic_load_n(&g_mapfail[g_mapfail_logged].ready, __ATOMIC_ACQUIRE)) {
-		const MapFail *f = &g_mapfail[g_mapfail_logged++];
+	while (DG() && g_mapfail_logged < MAPFAIL_LOG && g_mapfail_logged < LD(g_mapfail_n) &&
+	       __atomic_load_n(&DG()->mapfail[g_mapfail_logged].ready, __ATOMIC_ACQUIRE)) {
+		const MapFail *f = &DG()->mapfail[g_mapfail_logged++];
 
 		VM_KLOGW("stage: map refused (%s) 0x%08x: app %s pid 0x%08x, buffer 0x%08x + %u B, "
 		         "memory type 0x%04x%s", f->which ? "C + NC All" : "copy on core 3",
@@ -5860,17 +5956,17 @@ void vm_stage_worker_tick(void)
 			/* the session of the one before (log on), then the new one's */
 			static char who[16];
 			static uint64_t since_us;
-			static LgSnap at;
 			const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
+			Diag *const dg = DG();
 
-			if (LD(g_log_diag)) {
+			if (LD(g_log_diag) && dg) {
 				LgSnap cur;
 
 				lg_snap(&cur);
 				if (since_us)
 					lg_session(who[0] ? who : "the home screen",
-					           (uint32_t)((now_us - since_us) / 1000u), &at, &cur);
-				at = cur;
+					           (uint32_t)((now_us - since_us) / 1000u), &dg->at, &cur);
+				dg->at = cur;
 				since_us = now_us;
 			} else {
 				since_us = 0;
@@ -5902,6 +5998,7 @@ void vm_stage_worker_tick(void)
 			VM_KLOGI("stage: v%s, app events %s, title ids %s, in front: %s", VM_BUILD_STR,
 			         g_proc_hook >= 0 ? "followed" : "NOT hooked",
 			         g_title_fn ? "there" : "MISSING", fg ? ft : "the home screen");
+			mem_report();
 		}
 		was_on = on;
 	}
@@ -6060,7 +6157,7 @@ int vm_stage_verify_ready(void)
 
 /* A release of the helper or of the verify buffer waits for a request still
  * in flight (see pipe_retire): the worker should come back soon. */
-int vm_stage_pending(void)
+COLD int vm_stage_pending(void)
 {
 	if (!LD(g_verify) && __atomic_load_n(&g_shadow, __ATOMIC_ACQUIRE))
 		return 1;
@@ -6071,7 +6168,7 @@ int vm_stage_pending(void)
 	return 0;
 }
 
-void vm_stage_ra_now(VmRaNow *o)
+COLD void vm_stage_ra_now(VmRaNow *o)
 {
 	memset(o, 0, sizeof(*o));
 	o->mode = LD(g_ra_mode);
@@ -6100,7 +6197,7 @@ void vm_stage_ra_now(VmRaNow *o)
 	}
 }
 
-void vm_stage_fg(VmFg *o)
+COLD void vm_stage_fg(VmFg *o)
 {
 	uint32_t best = 0;
 
@@ -6125,7 +6222,7 @@ void vm_stage_fg(VmFg *o)
 		o->dev = -1;                          /* too little read to tell */
 }
 
-void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib)
+COLD void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib)
 {
 	for (int i = 0; i < 4; i++)
 		cp_core_kib[i] = __atomic_load_n(&g_cp_core_kib[i], __ATOMIC_RELAXED);
@@ -6146,7 +6243,7 @@ void vm_stage_count_hud(int on)
 	ST(g_count_all, LD(g_count_cfg) || LD(g_count_hud) ? 1 : 0);
 }
 
-void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
+COLD void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const Dev *d = &g_dev[i];
@@ -6168,7 +6265,7 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active)
 	}
 }
 
-void vm_stage_dma(VmDma *out)
+COLD void vm_stage_dma(VmDma *out)
 {
 	memset(out, 0, sizeof(*out));
 	out->size = sizeof(*out);
@@ -6189,7 +6286,7 @@ void vm_stage_dma(VmDma *out)
 	out->last_err = LD(g_dma_last_err);
 }
 
-void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
+COLD void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const VmTimingDev *t = &g_dev[i].tm;
@@ -6207,7 +6304,7 @@ void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT])
  * card transfer). Read only; vita-memio never changes it. 1 on, 0 off,
  * -1 if the driver's getter isn't available. */
 
-int vm_stage_memcard_slow(void)
+COLD int vm_stage_memcard_slow(void)
 {
 	static int (*get)(void);
 	static int tried;

@@ -281,12 +281,13 @@ int ksceKernelDeleteThread(SceUID id)
 
 /* ---- memory blocks --------------------------------------------------------- */
 static void *g_blocks[64];
+unsigned fake_alloc_max;
 
 SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, void *opt)
 {
 	(void)name; (void)type; (void)opt;
 	fake_alloc_calls++;
-	if (fake_alloc_fail)
+	if (fake_alloc_fail || (fake_alloc_max && size > fake_alloc_max))
 		return -6;
 	for (int i = 1; i < 64; i++) {
 		if (!g_blocks[i]) {

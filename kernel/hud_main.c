@@ -217,10 +217,14 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 
 static int rt_line(char *o);
 
+/* The lines the HUD's and the overlay's text are built in, one after the
+ * other on the worker (each built afresh; vm_hud_set_* copy them). */
+static char g_lines[VM_HUD_LINES][VM_HUD_LINE_MAX];
+
 static void hud_feed(const VmDevState *now)
 {
 	static uint64_t last_rd[VM_DEV_COUNT], last_wr[VM_DEV_COUNT], last_us;
-	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
+	char (*const L)[VM_HUD_LINE_MAX] = g_lines;
 	static int hud_failed;           /* tried once and failed: do not retry */
 	static int was_shown;            /* on screen at the last call         */
 	const uint64_t now_us = (uint64_t)ksceKernelGetSystemTimeWide();
@@ -527,7 +531,7 @@ static void ov_center(char *o, int width, int under, const char *color, const ch
 
 static void overlay_feed(void)
 {
-	static char L[VM_HUD_LINES][VM_HUD_LINE_MAX];
+	char (*const L)[VM_HUD_LINE_MAX] = g_lines;
 	static int shown;                     /* the overlay is on screen         */
 	static uint32_t base_core[4], base_ncs, base_nco;
 	static char msg[VM_HUD_LINE_MAX];

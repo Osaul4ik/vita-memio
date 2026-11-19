@@ -106,8 +106,9 @@ static void reset(void)
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (g_dev[i].pipe_made)
 			pipe_release(&g_dev[i]);       /* a test that left its helper */
+	diag_make();                           /* the log's block, as with the log on */
 	fakes_reset();
-	memset(g_mapfail, 0, sizeof(g_mapfail));
+	memset(DG()->mapfail, 0, sizeof(DG()->mapfail));
 	g_mapfail_n = g_mapfail_logged = 0;
 	for (size_t i = 0; i < sizeof(disk); i++)
 		disk[i] = (uint8_t)(i * 31 + (i >> 9));
@@ -2201,19 +2202,19 @@ static void test_offload(void)
 	CHECK(copies_elsewhere == 0 && g_off_maperr == 1 && g_offload_state == 0);
 	CHECK(g_offload_err == (int)0x80020001 && sems_empty(d) && g_off_reads == 0);
 	/* ... and described for the log: once, by the worker */
-	CHECK(g_mapfail_n == 1 && g_mapfail[0].ready && g_mapfail[0].which == 0 &&
-	      g_mapfail[0].err == (int)0x80020001 && g_mapfail[0].pid == 0x42 &&
-	      g_mapfail[0].len == 700 * 512 && g_mapfail[0].nseg >= 1 && g_mapfail[0].nblk >= 1 &&
-	      g_mapfail[0].blk[0].info == 0 && g_mapfail[0].seg[0].off == 0);
+	CHECK(g_mapfail_n == 1 && DG()->mapfail[0].ready && DG()->mapfail[0].which == 0 &&
+	      DG()->mapfail[0].err == (int)0x80020001 && DG()->mapfail[0].pid == 0x42 &&
+	      DG()->mapfail[0].len == 700 * 512 && DG()->mapfail[0].nseg >= 1 && DG()->mapfail[0].nblk >= 1 &&
+	      DG()->mapfail[0].blk[0].info == 0 && DG()->mapfail[0].seg[0].off == 0);
 	{                                                 /* the stretches cover the buffer */
 		uint32_t cov = 0;
 
-		for (int k = 0; k < g_mapfail[0].nseg; k++) {
-			CHECK(g_mapfail[0].seg[k].off == cov && g_mapfail[0].seg[k].uid >= 0);
-			CHECK(g_mapfail[0].seg[k].map == (int)0x80020001);   /* the fake refuses them all */
-			cov += g_mapfail[0].seg[k].len;
+		for (int k = 0; k < DG()->mapfail[0].nseg; k++) {
+			CHECK(DG()->mapfail[0].seg[k].off == cov && DG()->mapfail[0].seg[k].uid >= 0);
+			CHECK(DG()->mapfail[0].seg[k].map == (int)0x80020001);   /* the fake refuses them all */
+			cov += DG()->mapfail[0].seg[k].len;
 		}
-		CHECK(cov == 700 * 512 && !g_mapfail[0].more && fake_usermap_live == 0);
+		CHECK(cov == 700 * 512 && !DG()->mapfail[0].more && fake_usermap_live == 0);
 	}
 
 	vm_stage_worker_tick();
@@ -2234,9 +2235,9 @@ static void test_offload(void)
 	fake_noblock_lo = (uintptr_t)u;
 	fake_noblock_hi = ((uintptr_t)u & ~(uintptr_t)4095) + 8192;   /* its first page or two */
 	CHECK(rd(u, 3, 700) == 0 && memcmp(u, disk + 3 * 512, 700 * 512) == 0);
-	CHECK(g_off_maperr == 1 && g_mapfail_n == 1 && g_mapfail[1 - 1].ready);
+	CHECK(g_off_maperr == 1 && g_mapfail_n == 1 && DG()->mapfail[1 - 1].ready);
 	{
-		const MapFail *f = &g_mapfail[0];
+		const MapFail *f = &DG()->mapfail[0];
 
 		CHECK(f->nseg == 2 && f->seg[0].off == 0 && f->seg[0].uid < 0 && f->seg[0].map < 0);
 		CHECK(f->seg[1].off == f->seg[0].len && f->seg[1].uid >= 0 && f->seg[1].map == 0);
@@ -2453,6 +2454,23 @@ static int ra_idle(const Dev *d)
 		if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE)
 			return 0;
 	return 1;
+}
+
+/* Wait (2 s at most) until read ahead's thread has read every queued piece. */
+static void ra_settled(const Dev *d)
+{
+	for (int t = 0; t < 2000; t++) {
+		int busy = 0;
+
+		for (int i = 0; i < RA_PIECES; i++) {
+			const int st = __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE);
+
+			busy |= st == RA_QUEUED || st == RA_READING;
+		}
+		if (!busy)
+			return;
+		usleep(1000);
+	}
 }
 
 /* Read [at, at + n) and check it against the disk. */
@@ -4309,6 +4327,7 @@ static void test_onoff_measured(void)
 		CHECK(rd_ok(u, at, 256));
 	CHECK(g_oo_acc[OO_C].std_q >= 5 * 256 && g_oo_acc[OO_C].srv_q >= 256 &&
 	      g_oo_acc[OO_C].std_q + g_oo_acc[OO_C].srv_q == 10 * 256 && !g_oo_acc[OO_NC].std_q);
+	ra_settled(d);                            /* the pieces ahead read (no race) */
 	ra_drop(d);
 	CHECK(g_oo_acc[OO_C].waste >= 1);         /* what was left read for nothing */
 	fake_memtype = 0x8000;
@@ -5170,6 +5189,81 @@ static void test_ra_slow_stream(void)
 	free(u);
 }
 
+/* The log's counts live in a block of their own (Diag), made the first time
+ * the log is on and kept: with the log never on there is none, and what
+ * would be counted or described is not, harmlessly; a block that cannot be
+ * had leaves the log without session lines. */
+static void test_log_block(void)
+{
+	Diag *const kept = DG();
+	const SceUID kept_uid = g_diag_uid;
+	VmSettings s;
+	OffMap m;
+	LgSnap snap;
+	Diag *made;
+
+	on_game(&s, 0x51);
+	__atomic_store_n(&g_diag, NULL, __ATOMIC_SEQ_CST);   /* as if never on */
+	g_diag_uid = -1;
+	s.log = 0;
+	vm_stage_apply(&s);
+	CHECK(!DG() && !LD(g_log_diag));
+	/* nothing to count into: nothing counted, nothing described */
+	memset(&m, 0, sizeof(m));
+	m.len = 4096;
+	g_mapfail_n = 0;
+	lg_note(&g_dev[M], 0, 64, 10, 1);
+	lk_note(LK_C, 64, 10, 1, 0);
+	mapfail_note(0, &m, -1);
+	CHECK(g_mapfail_n == 0);
+	memset(&snap, 0x5A, sizeof(snap));
+	lg_snap(&snap);
+	CHECK(snap.dev[M].n[LG_SMALL] == 0 && snap.k[LK_C].n[0] == 0 && snap.hits == 0);
+	vm_stage_worker_tick();                               /* no session, no crash */
+	/* the log on without the memory: off */
+	s.log = 1;
+	fake_alloc_fail = 1;
+	vm_stage_apply(&s);
+	CHECK(!DG() && !LD(g_log_diag) && g_diag_uid < 0);
+	fake_alloc_fail = 0;
+	/* on: made, empty, counting */
+	vm_stage_apply(&s);
+	made = DG();
+	CHECK(made && LD(g_log_diag) && g_diag_uid >= 0);
+	CHECK(made && made->lg[M].n[LG_SMALL] == 0 && made->mapfail[0].ready == 0);
+	lg_note(&g_dev[M], 0, 64, 10, 1);
+	CHECK(made && made->lg[M].n[LG_SMALL] == 1 && made->lg[M].col_n == 1);
+	/* off again: kept (a transfer may hold it), not counted into */
+	s.log = 0;
+	vm_stage_apply(&s);
+	CHECK(DG() == made && !LD(g_log_diag));
+	s.log = 1;
+	vm_stage_apply(&s);
+	CHECK(DG() == made && LD(g_log_diag));                /* the same one again */
+	/* the log just on: each block's real size, once (here the log's own:
+	 * the tests' storages have their buffers from the test, not blocks) */
+	s.log = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	fake_log_clear();
+	s.log = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	{
+		char want[48];
+		const char *c;
+
+		snprintf(want, sizeof(want), "stage: memory log counts dev -1: asked %u,", (unsigned)sizeof(Diag));
+		c = fake_log_find(want);
+		CHECK(c != NULL && strlen(c) + 40 < 192);   /* with the prefix: not cut */
+	}
+	ksceKernelFreeMemBlock(g_diag_uid);
+	__atomic_store_n(&g_diag, kept, __ATOMIC_SEQ_CST);
+	g_diag_uid = kept_uid;
+	s.log = 0;
+	vm_stage_apply(&s);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -5238,6 +5332,7 @@ int main(void)
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
+	RUN(test_log_block);
 	RUN(test_data_always_right);
 
 	free(staging);

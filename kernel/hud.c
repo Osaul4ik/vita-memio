@@ -44,15 +44,18 @@ static volatile int g_ov_front = 0;
 /* The HUD keeps the composed panel in g_cache, at four bits a pixel
  * (ordinary cached memory, allocated by the worker while the HUD is on), so a frame only copies
  * it; built again when the text or the framebuffer size changes. Without the
- * cache it composes one row at a time in g_row.
+ * cache it composes one row at a time (the rows: see g_rows).
  *
  * A frame never waits for the worker: `g_seq` is odd while the worker
  * changes the cache, and a frame that saw it odd, or changed while it
  * copied, draws the panel again straight from the text (it overwrites the
  * whole panel). `g_readers` counts the frames inside, so a block is freed
  * only once none can still be reading it. A row for each index (0, 1): the
- * frames of the two layers may be drawn at once. */
-static uint32_t     g_row[2][HUD_ROW_MAX];
+ * frames of the two layers may be drawn at once. The rows are at the start of
+ * the cache's block (g_rows), so nothing of it takes memory while neither
+ * the HUD nor the overlay is shown; without a block nothing is drawn. */
+#define HUD_ROWS_BYTES ((int)(2 * HUD_ROW_MAX * sizeof(uint32_t)))
+static uint32_t *volatile g_rows;           /* atomic; the cache block's start */
 static volatile int g_row_busy[2];
 static volatile uint32_t g_seq;
 static volatile int g_readers;
@@ -158,8 +161,15 @@ static void draw_frame(int head, int index, const SceDisplayFrameBuf *pParam)
 		t = &g_text[g_front];
 		ov = &g_ov[g_ov_front];
 
+		uint32_t *const rows = __atomic_load_n(&g_rows, __ATOMIC_SEQ_CST);   /* after counted */
+
+		if (!rows) {
+			__atomic_fetch_sub(&g_readers, 1, __ATOMIC_SEQ_CST);
+			__sync_lock_release(busy);
+			return;
+		}
 		uint32_t prev_dacr = hud_dacr_open();
-		uint32_t *row = g_row[index & 1];
+		uint32_t *row = rows + (index & 1) * HUD_ROW_MAX;
 
 		/* the HUD: from the cache the worker composed (vm_hud_set_text) */
 		if (t->n > 0)
@@ -243,17 +253,19 @@ static int readers_gone(void)
 	return 0;
 }
 
-/* Put `uid`/`px`/`bytes` in as the cache (uid -1: no cache) and free the old
- * one once no frame can be reading it. Worker thread only. */
-static void cache_swap(SceUID uid, uint8_t *px, int bytes)
+/* Put the block `uid` at `base` of `size` in as the rows and the cache (uid
+ * -1: none) and free the old one once no frame can be using it. Worker
+ * thread only. */
+static void cache_swap(SceUID uid, uint8_t *base, int size)
 {
 	SceUID old;
 
 	cache_begin();
 	old = g_cache_uid;
 	g_cache_uid = uid;
-	g_cache.px = px;
-	g_cache.bytes = bytes;
+	__atomic_store_n(&g_rows, (uint32_t *)base, __ATOMIC_SEQ_CST);   /* before readers_gone */
+	g_cache.px = base ? base + HUD_ROWS_BYTES : NULL;
+	g_cache.bytes = base ? size - HUD_ROWS_BYTES : 0;
 	g_cache.w = 0;                     /* nothing composed in it yet */
 	cache_end();
 	if (readers_gone()) {
@@ -271,9 +283,9 @@ static void cache_swap(SceUID uid, uint8_t *px, int bytes)
 	}
 }
 
-/* A cache big enough for `t` (at the largest font), or none if the HUD is off
- * If the memory is not there, the panel is just
- * composed every frame. */
+/* A block with the rows and a cache big enough for `t` (at the largest font).
+ * If the memory is not there, the rows alone, and the panel is composed every
+ * frame. */
 static void cache_release_if_unused(void);
 
 static void cache_fit(const HudText *t)
@@ -291,7 +303,7 @@ static void cache_fit(const HudText *t)
 	want = hud_cache_bytes(t, g_fb_w);
 	if (want <= g_cache.bytes || want == failed_bytes)
 		return;
-	size = (want + 0xFFF) & ~0xFFF;
+	size = (want + HUD_ROWS_BYTES + 0xFFF) & ~0xFFF;
 	memset(&opt, 0, sizeof(opt));
 	opt.size = sizeof(opt);
 	uid = ksceKernelAllocMemBlock("SceVitaMemioHud", SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW,
@@ -300,7 +312,18 @@ static void cache_fit(const HudText *t)
 		if (uid >= 0)
 			ksceKernelFreeMemBlock(uid);
 		failed_bytes = want;
-		return;
+		if (g_cache_uid >= 0)
+			return;                    /* the smaller one stays */
+		/* none at all: the rows alone, so the panel is composed every frame */
+		size = (HUD_ROWS_BYTES + 0xFFF) & ~0xFFF;
+		base = NULL;
+		uid = ksceKernelAllocMemBlock("SceVitaMemioHud", SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW,
+		                              size, &opt);
+		if (uid < 0 || ksceKernelGetMemBlockBase(uid, &base) < 0) {
+			if (uid >= 0)
+				ksceKernelFreeMemBlock(uid);
+			return;                    /* nothing drawn until memory is there */
+		}
 	}
 	cache_swap(uid, base, size);
 }

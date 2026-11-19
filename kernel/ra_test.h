@@ -18,11 +18,6 @@
 #ifndef VITAMEMIO_RA_TEST_H
 #define VITAMEMIO_RA_TEST_H
 
-/* stage.c builds the model's worker-side functions for size (see COLD there) */
-#ifndef RT_COLD
-#define RT_COLD
-#endif
-
 #include <stdint.h>
 
 #define RT_MIN_SECTORS     128u          /* large reads: as RA_MIN_SECTORS      */
@@ -169,7 +164,7 @@ typedef struct {
 	uint64_t sect[RT_RUN];
 } RtScores;
 
-static inline RT_COLD void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t gain16,
+static inline void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t gain16,
                              int32_t waste_us, RtScores *o)
 {
 	uint64_t sect = 0, r0 = 0, r1 = 0, r2 = 0;   /* R(m+1), R(m+2), R(m+3) */
@@ -187,7 +182,7 @@ static inline RT_COLD void rt_scores(const uint32_t *pos, const uint32_t *run, i
 
 /* Kind k: large[m] for a threshold of m reads, small[b] for the 32 KiB reads'
  * of 4b (their runs are kept in fours: a piece holds four). */
-static inline RT_COLD void rt_kind_scores(const RaTest *t, int k, const RtCost *cost, RtScores *large,
+static inline void rt_kind_scores(const RaTest *t, int k, const RtCost *cost, RtScores *large,
                                   RtScores *small)
 {
 	rt_scores(t->pos[k], t->run[k], cost->gain16[k], cost->waste_us, large);
@@ -202,7 +197,7 @@ static inline int rt_small_bucket(int thr)
 }
 
 /* What threshold thr would bring for kind k with On, both sizes. */
-static inline RT_COLD int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCost *cost,
+static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCost *cost,
                                     uint64_t *sectors)
 {
 	RtScores l, s;
@@ -214,7 +209,7 @@ static inline RT_COLD int64_t rt_kind_score(const RaTest *t, int k, int thr, con
 }
 
 /* The answer; the runs still open count as ended. */
-static inline RT_COLD void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost *cost)
+static inline void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost *cost)
 {
 	int64_t total = 0, nc_best = 0;
 	int loss = 0;
@@ -278,7 +273,7 @@ static inline RT_COLD void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost 
 		p->thr[0] = p->thr[1] = 0;
 }
 
-static inline RT_COLD void ra_test_pick(RaTest *t, RaPick *p)
+static inline void ra_test_pick(RaTest *t, RaPick *p)
 {
 	ra_test_pick_cost(t, p, &rt_cost_fixed);
 }
@@ -289,7 +284,7 @@ static inline RT_COLD void ra_test_pick(RaTest *t, RaPick *p)
 
 /* The best of sc[lo..hi]: `cur` unless another is better by more than
  * `margin` (us). */
-static inline RT_COLD int rt_best(const int64_t *sc, int lo, int hi, int cur, int64_t margin)
+static inline int rt_best(const int64_t *sc, int lo, int hi, int cur, int64_t margin)
 {
 	int best = cur;
 
@@ -303,7 +298,7 @@ static inline RT_COLD int rt_best(const int64_t *sc, int lo, int hi, int cur, in
  * threshold: *thr (2..8) for the large reads, *sm (in fours, RT_SMALL_LO..HI)
  * for the 32 KiB reads, each on its own - kept unless another is better by
  * more than `margin`. 1 if either changed. */
-static inline RT_COLD int ra_adapt_pick(const RaTest *t, int k, int *thr, int *sm, int64_t margin,
+static inline int ra_adapt_pick(const RaTest *t, int k, int *thr, int *sm, int64_t margin,
                                 const RtCost *cost)
 {
 	RtScores l, s;
@@ -321,7 +316,7 @@ static inline RT_COLD int ra_adapt_pick(const RaTest *t, int k, int *thr, int *s
 
 /* What thresholds (thr, sm) bring kind k over the counts (both sizes):
  * time saved less the pieces read for nothing, in the counts' scale. */
-static inline RT_COLD int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, const RtCost *cost)
+static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, const RtCost *cost)
 {
 	RtScores l, s;
 
@@ -368,7 +363,7 @@ typedef struct {
 } RtEv;
 
 /* What read ahead brought over the stretch, us (0: too little to tell). */
-static inline RT_COLD int64_t rt_ev_net(const RtEv *e, int tiny)
+static inline int64_t rt_ev_net(const RtEv *e, int tiny)
 {
 	if (e->std_q < (tiny ? RT_EV_MIN_STD_T : RT_EV_MIN_STD) ||
 	    e->srv_q < (tiny ? RT_EV_MIN_SRV_T : RT_EV_MIN_SRV))
@@ -379,7 +374,7 @@ static inline RT_COLD int64_t rt_ev_net(const RtEv *e, int tiny)
 /* A round of the kind is over: its reads added (std_*, srv_*: as above;
  * held, waste: its pieces for nothing), `pm` what the model with this
  * game's costs says read ahead brings, permille. 1 if it went on or off. */
-static inline RT_COLD int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q,
+static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q,
                               uint32_t srv_us, uint32_t srv_q, uint32_t held, uint32_t waste,
                               int64_t pm, int64_t *net_out, int64_t *time_out)
 {
@@ -448,7 +443,7 @@ static inline RT_COLD int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32
 /* The model's cost with this game's measures where there are (`base`: the
  * console's): a sector from the pieces saves what the standard way takes
  * less what a served one did, a piece for nothing what it held up here. */
-static inline RT_COLD void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *o)
+static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *o)
 {
 	*o = *base;
 	if (e->std_rate && e->srv_rate) {
@@ -462,7 +457,7 @@ static inline RT_COLD void rt_ev_cost(const RtEv *e, int k, const RtCost *base, 
 
 /* Kind k's counts halved: what was read long ago weighs less (a game's
  * loading and its play differ). */
-static inline RT_COLD void ra_adapt_age(RaTest *t, int k)
+static inline void ra_adapt_age(RaTest *t, int k)
 {
 	for (int i = 0; i < RT_POS; i++) {
 		t->pos[k][i] >>= 1;
@@ -511,7 +506,7 @@ static inline int rt_tiny_bucket(uint32_t reads)
 	     : reads <= 128 ? 20 : 21;
 }
 
-static inline RT_COLD int64_t rt_tiny_card(const RtTinyCost *c, uint32_t sectors)
+static inline int64_t rt_tiny_card(const RtTinyCost *c, uint32_t sectors)
 {
 	return (int64_t)c->a_us + (int64_t)c->b16_us * sectors / 16;
 }
@@ -524,7 +519,7 @@ typedef struct {
 	int64_t  card_s[RT_TB];
 } RtTinyRuns;
 
-static inline RT_COLD void rt_tiny_prep(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+static inline void rt_tiny_prep(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
                                 const RtTinyCost *c, RtTinyRuns *o)
 {
 	o->n = 0;
@@ -542,7 +537,7 @@ static inline RT_COLD void rt_tiny_prep(const uint32_t *cnt, const uint32_t *rea
 	}
 }
 
-static inline RT_COLD int64_t rt_tiny_score_prep(const RtTinyRuns *p, int t, int blk, const RtTinyCost *c)
+static inline int64_t rt_tiny_score_prep(const RtTinyRuns *p, int t, int blk, const RtTinyCost *c)
 {
 	const int64_t card_b = rt_tiny_card(c, (uint32_t)blk);
 	int64_t sc = 0;
@@ -564,7 +559,7 @@ static inline RT_COLD int64_t rt_tiny_score_prep(const RtTinyRuns *p, int t, int
 
 /* What (T, B) brings over the runs: cnt[i] runs in bucket i (any scale),
  * reads[i] and sec[i] their reads and sectors (the same scale). */
-static inline RT_COLD int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+static inline int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
                                     int t, int blk, const RtTinyCost *c)
 {
 	RtTinyRuns p;
@@ -575,7 +570,7 @@ static inline RT_COLD int64_t rt_tiny_score(const uint32_t *cnt, const uint32_t 
 
 /* Adaptive's pick: the (T, B) that would have brought the most, (*t, *blk)
  * unless another is better by more than `margin`. 1 if it changed. */
-static inline RT_COLD int rt_tiny_pick(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
+static inline int rt_tiny_pick(const uint32_t *cnt, const uint32_t *reads, const uint32_t *sec,
                                int *t, int *blk, int64_t margin, const RtTinyCost *c)
 {
 	RtTinyRuns p;

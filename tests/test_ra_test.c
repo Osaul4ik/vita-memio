@@ -146,8 +146,9 @@ static void test_small_pick(void)
 
 /* On or off, from what read ahead did: off once served reads, against the
  * standard ones of the same stretch, less what pieces for nothing held up,
- * cost more than the margin; on again when the model (with this game's
- * costs) says it brings more than it; a change stays a while. */
+ * cost more than the margin; on again when the model (with the device's
+ * costs) says it brings more than it: on at once, and the next off asks for
+ * more (strikes). */
 static void test_ev(void)
 {
 	RtEv e;
@@ -166,12 +167,55 @@ static void test_ev(void)
 
 		for (; r < 20 && !moved; r++)
 			moved = rt_ev_round(&e, 0, 50000, 2048, 10000, 2048, 50000, 10, 0, NULL, NULL);
-		CHECK(moved && e.off && e.hold == RT_EV_HOLD && e.held_each == 5000);
+		CHECK(moved && e.off && e.strikes == 0 && e.held_each == 5000);
 	}
-	/* off: the model's say alone; it stays off a while whatever it says */
-	for (int i = 0; i < (int)RT_EV_HOLD; i++)
-		CHECK(!rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && e.off);
-	CHECK(rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && !e.off);   /* now on */
+	/* off: the model's say alone, and it is enough at once - no round to wait out */
+	CHECK(!rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 10, NULL, NULL) && e.off);   /* below the margin */
+	CHECK(rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && !e.off);  /* now on */
+	/* ... what it served and held up before is cleared: a loss is shown afresh */
+	CHECK(e.strikes == 1 && !e.srv_q && !e.srv_us && !e.held_us && !e.waste);
+	CHECK(rt_ev_net(&e, 0) == 0);
+	/* a return makes the next off harder: twice the margin, twice the reads.
+	 * 3 % lost over 1 MiB served and 1 MiB standard: off at strike 0 ... */
+	memset(&e, 0, sizeof(e));
+	{
+		int moved = 0;
+
+		for (int i = 0; i < 20 && !moved; i++)
+			moved = rt_ev_round(&e, 0, 50000, 2048, 53100, 2048, 0, 0, 0, NULL, NULL);
+		CHECK(moved && e.off);
+	}
+	/* ... not after one return (the margin is 4 %), however long it goes on */
+	memset(&e, 0, sizeof(e));
+	e.strikes = 1;
+	for (int i = 0; i < 40; i++)
+		CHECK(!rt_ev_round(&e, 0, 50000, 2048, 53100, 2048, 0, 0, 0, NULL, NULL) && !e.off);
+	/* a handful of served reads (a round of 600 sectors), pieces for nothing:
+	 * too little to turn it off */
+	memset(&e, 0, sizeof(e));
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 2000, 600, 24000, 4, 0, NULL, NULL) && !e.off);
+	CHECK(rt_ev_net(&e, 0) == 0);
+	/* the same loss over a MiB served: off */
+	memset(&e, 0, sizeof(e));
+	CHECK(rt_ev_round(&e, 0, 55000, 2048, 56000, 2048, 5000, 4, 0, NULL, NULL) && e.off);
+	/* off, on, off, on ...: each return makes the loss to show larger (here
+	 * 5 %: off at strikes 0 and 1, not at 2) - it settles on */
+	{
+		int offs = 0;
+
+		memset(&e, 0, sizeof(e));
+		for (int cyc = 0; cyc < 12; cyc++) {
+			int moved = 0;
+
+			for (int i = 0; i < 400 && !moved; i++)
+				moved = rt_ev_round(&e, 0, 55000, 2048, 56000, 2048, 5000, 4, 0, NULL, NULL);
+			if (!moved)
+				break;
+			offs++;
+			CHECK(rt_ev_round(&e, 0, 55000, 2048, 0, 0, 0, 0, 500, NULL, NULL) && !e.off);
+		}
+		CHECK(offs == 2 && e.strikes == 2 && !e.off);
+	}
 	/* too little read either way: never off from it */
 	memset(&e, 0, sizeof(e));
 	for (int i = 0; i < 40; i++)
@@ -208,15 +252,69 @@ static void test_ev(void)
 	e.held_each = 2500;
 	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
 	CHECK(c.gain16[1] == 312 && c.gain16[0] == rt_cost_fixed.gain16[0] && c.waste_us == 2500);
+	/* off: nothing of the game's read ahead is measured now - the device's costs alone */
+	e.off = 1;
+	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
+	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1] && c.waste_us == rt_cost_fixed.waste_us);
+	e.off = 0;
 	e.srv_rate = 0;
 	e.held_each = 0;
 	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
 	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1] && c.waste_us == rt_cost_fixed.waste_us);
 }
 
+/* The game's pauses: what of a piece's read time they cover. */
+static void test_hide(void)
+{
+	uint32_t sec[RT_GAP_B];
+	RtCost c = rt_cost_fixed;
+
+	/* the steps */
+	CHECK(rt_gap_bucket(0) == 0 && rt_gap_bucket(249) == 0 && rt_gap_bucket(250) == 1 &&
+	      rt_gap_bucket(499) == 1 && rt_gap_bucket(500) == 2 && rt_gap_bucket(1999) == 3 &&
+	      rt_gap_bucket(2000) == 4 && rt_gap_bucket(15999) == 6 && rt_gap_bucket(16000) == 7 &&
+	      rt_gap_bucket(0xFFFFFFFFu) == 7);
+	/* too little seen: nothing taken off */
+	memset(sec, 0, sizeof(sec));
+	sec[0] = RT_GAP_MIN_SEC - 1;
+	CHECK(rt_hide_pm(sec, RT_PIECE_US) == 1000 && !rt_hide_known(sec));
+	sec[0] = RT_GAP_MIN_SEC;
+	CHECK(rt_hide_known(sec));
+	sec[0] = 0;
+	/* reads back to back (pauses under 250 us): next to nothing to overlap */
+	sec[0] = 20000;
+	CHECK(rt_hide_pm(sec, RT_PIECE_US) < 30);
+	/* pauses of 16 ms and more: the whole piece is covered */
+	memset(sec, 0, sizeof(sec));
+	sec[7] = 20000;
+	CHECK(rt_hide_pm(sec, RT_PIECE_US) == 1000);
+	/* half the reads after a long pause, half back to back: about half */
+	memset(sec, 0, sizeof(sec));
+	sec[0] = 10000;
+	sec[7] = 10000;
+	{
+		const uint32_t pm = rt_hide_pm(sec, RT_PIECE_US);
+
+		CHECK(pm > 480 && pm < 530);
+	}
+	/* a pause as long as the piece covers it: a slower card needs a longer one */
+	memset(sec, 0, sizeof(sec));
+	sec[5] = 20000;                                  /* 6 ms */
+	CHECK(rt_hide_pm(sec, 6000) == 1000 && rt_hide_pm(sec, 12000) == 500);
+	CHECK(rt_hide_pm(sec, 0) == 1000);
+	/* the saving a sector is scaled, never raised */
+	rt_hide_apply(&c, 0, 500);
+	CHECK(c.gain16[0] == rt_cost_fixed.gain16[0] / 2 && c.gain16[1] == rt_cost_fixed.gain16[1]);
+	rt_hide_apply(&c, 1, 5000);
+	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1]);
+	rt_hide_apply(&c, 1, 0);
+	CHECK(c.gain16[1] == 0);
+}
+
 int main(void)
 {
 	test_ev();
+	test_hide();
 	test_scores_one_pass();
 	test_small_pick();
 	test_tiny_model();

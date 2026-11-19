@@ -213,6 +213,7 @@ typedef struct Dev {
 	RaPiece       ra[RA_PIECES];
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
+	uint32_t      gap_end[2];             /* when the last read of each memory kind ended (us) */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
 	/* the stream of 32 KiB reads, kept apart (see RA_SMALL_SECTORS) */
 	uint32_t      rs_end, rs_streak;
@@ -2569,6 +2570,21 @@ static void cal_cost(int dev, RtCost *cost, VmCal *o)
 		*o = v;
 }
 
+/* A 128 KiB read on storage dev into memory kind nc: the median measured (the
+ * standard way), else RT_PIECE_US - what a piece takes to be read, for what
+ * the game's pauses can cover of it (rt_hide_pm). */
+static uint32_t cal_piece_us(int dev, int nc)
+{
+	if (dev >= 0 && dev < VM_DEV_COUNT) {
+		const CalDev *c = &g_cal[dev];
+		const uint32_t n = LD(c->n_plain[nc]);
+
+		if (n >= VM_CAL_MIN_PLAIN)
+			return cal_median(c->plain[nc], n);
+	}
+	return RT_PIECE_US;
+}
+
 void vm_stage_cal(int dev, VmCal *out)
 {
 	RtCost c;
@@ -2957,9 +2973,11 @@ static volatile int g_oo_off[3];
 typedef struct {
 	uint64_t std_us, srv_us, held_us;    /* a round can last long (no stream ends) */
 	uint32_t std_q, srv_q, waste;
+	uint32_t gap[RT_GAP_B];              /* sectors read after a pause of each step (RT_GAP_B) */
 } OoAcc;
 static OoAcc        g_oo_acc[3];         /* atomics */
 static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts */
+static uint32_t     g_oo_gap[2][RT_GAP_B];   /* the pauses kept (worker's), aged as the counts */
 static void oo_clear(void);
 
 /* Afresh (g_ad_lock held). */
@@ -3273,7 +3291,7 @@ static void tune_restore(const TuneApp *t)
 	g_tn_ended = 0;
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
 	for (int u = 0; u < 3; u++) {
-		g_oo[u].off = g_oo[u].hold = 0;    /* back in front: on, to be shown again */
+		g_oo[u].off = g_oo[u].strikes = 0;   /* back in front: on, to be shown again */
 		g_oo[u].std_rate = t->oo_std[u];
 		g_oo[u].srv_rate = t->oo_srv[u];
 		g_oo[u].held_each = t->oo_held[u];
@@ -3301,7 +3319,7 @@ static void tune_restore_start(const TuneStart *r)
 	ST(g_tiny_blk, s->tiny_blk);
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;
 	for (int u = 0; u < 3; u++) {
-		g_oo[u].off = g_oo[u].hold = 0;
+		g_oo[u].off = g_oo[u].strikes = 0;
 		g_oo[u].std_rate = s->oo_std[u];
 		g_oo[u].srv_rate = s->oo_srv[u];
 		g_oo[u].held_each = s->oo_held[u];
@@ -3826,7 +3844,8 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
 	st_learned(d, OO_TINY);
 	/* a round's worth: weighed by the worker (ra_adapt_tick) */
-	if (++g_tn_ended >= (g_tn_rounds ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) && !LD(g_tn_due)) {
+	if (++g_tn_ended >= (g_tn_rounds && !g_oo[OO_TINY].off ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) &&
+	    !LD(g_tn_due)) {
 		ST(g_tn_due, 1);
 		g_tn_dev = (int)(d - g_dev);
 		__sync_lock_release(&g_ad_lock);
@@ -3888,6 +3907,55 @@ static void oo_waste(int u, uint32_t held_us)
 	ADD(g_oo_acc[u].held_us, held_us);
 }
 
+/* A read of `nsec` sectors into memory kind nc (0, 1) that started at t0 and
+ * took `us`, for a kind that is off (the caller looks): if it goes on a
+ * stream, the pause before it is kept. The two
+ * clocks are the on/off measure's own - nothing is read for this. Racing
+ * threads at most blur a pause (a lost update). */
+static void gap_note(Dev *d, int nc, uint32_t nsec, uint32_t t0, uint32_t us)
+{
+	const uint32_t last = d->gap_end[nc];
+	uint32_t gap;
+
+	d->gap_end[nc] = t0 + us;
+	if (!last || (d->ra_streak < 2 && d->rs_streak < 2))
+		return;                              /* not on a stream: not what read ahead would cover */
+	gap = t0 - last;
+	if ((int32_t)gap < 0)
+		gap = 0;
+	ADD(g_oo_acc[nc].gap[rt_gap_bucket(gap)], nsec);
+}
+
+/* The worker (g_ad_lock held): kind nc's pauses of the round taken into what is
+ * kept, the part of a piece's read they cover (`piece_us`), and the kept ones
+ * aged as the counts are. Only a kind that is off keeps any: for one that is
+ * on nothing is measured and what is left is dropped, so that each stay off
+ * starts from the game as it is then. 0 until there is enough to say (the
+ * kind is not turned on from nothing); `known` says which. */
+static uint32_t oo_hide(int nc, uint32_t piece_us, int *known)
+{
+	uint32_t pm = 0;
+
+	*known = 0;
+	if (!g_oo[nc].off) {
+		for (uint32_t b = 0; b < RT_GAP_B; b++)
+			__atomic_store_n(&g_oo_acc[nc].gap[b], 0, __ATOMIC_RELAXED);
+		memset(g_oo_gap[nc], 0, sizeof(g_oo_gap[nc]));
+		return 1000;
+	}
+	for (uint32_t b = 0; b < RT_GAP_B; b++) {
+		const uint32_t add = __atomic_exchange_n(&g_oo_acc[nc].gap[b], 0, __ATOMIC_RELAXED);
+
+		g_oo_gap[nc][b] = (g_oo_gap[nc][b] > 0xFFFFFFFFu - add ? 0xFFFFFFFFu : g_oo_gap[nc][b] + add);
+	}
+	*known = rt_hide_known(g_oo_gap[nc]);
+	if (*known)
+		pm = rt_hide_pm(g_oo_gap[nc], piece_us);
+	for (uint32_t b = 0; b < RT_GAP_B; b++)
+		g_oo_gap[nc][b] -= g_oo_gap[nc][b] / 8;
+	return pm;
+}
+
 /* Whether read ahead runs for kind u now. Hot path. */
 static int oo_off(int u)
 {
@@ -3907,12 +3975,15 @@ static void oo_clear(void)
 		ST(g_oo_acc[u].srv_q, 0);
 		ST(g_oo_acc[u].held_us, 0);
 		ST(g_oo_acc[u].waste, 0);
+		for (uint32_t b = 0; b < RT_GAP_B; b++)
+			ST(g_oo_acc[u].gap[b], 0);
 	}
+	memset(g_oo_gap, 0, sizeof(g_oo_gap));
 }
 
 /* For the log: a round's look - the model's permille, what the reads said
  * (net, us, over the kind's time), the game's costs, the way now. */
-typedef struct { int pm, now; int64_t net, time; uint32_t std, srv, held; } OoLog;
+typedef struct { int pm, now; int64_t net, time; uint32_t std, srv, held, hide; } OoLog;
 
 /* The worker, a round of kind u over (g_ad_lock held): `gain` what the model
  * (with this game's costs) says read ahead brings, the counts' scale. 1 if
@@ -4007,8 +4078,10 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	}
 	st_learned(d, nc ? OO_NC : OO_C);
 	/* a round's worth: weighed by the worker (ra_adapt_tick), not here */
-	if ((++g_ad.ended[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) ||
-	     g_ad_sec[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_SECTORS : RA_ADAPT_SECTORS_FIRST)) &&
+	/* a kind that is off gets a round as soon as a first one would: the way back
+	 * should not wait for a full round of what the game reads little of */
+	if ((++g_ad.ended[nc] >= (g_ad_rounds[nc] && !g_oo[nc ? OO_NC : OO_C].off ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) ||
+	     g_ad_sec[nc] >= (g_ad_rounds[nc] && !g_oo[nc ? OO_NC : OO_C].off ? RA_ADAPT_SECTORS : RA_ADAPT_SECTORS_FIRST)) &&
 	    !LD(g_ad_due[nc])) {
 		ST(g_ad_due[nc], 1);
 		g_ad_dev[nc] = (int)(d - g_dev);
@@ -4027,6 +4100,8 @@ static void ra_adapt_tick(void)
 	int mv[2][4], tmv[4], oo_mv[3] = { 0, 0, 0 }, any = 0;
 	OoLog ol[3];
 	int ol_on[3] = { 0, 0, 0 };
+	uint32_t hide[2] = { 1000, 1000 };
+	int hide_known[2] = { 0, 0 };
 
 	if (!LD(g_ad_due[0]) && !LD(g_ad_due[1]) && !LD(g_tn_due))
 		return;                           /* (a stale look is caught next time) */
@@ -4048,6 +4123,11 @@ static void ra_adapt_tick(void)
 
 			rt_ev_cost(&g_oo[nc], nc, &con, &cost);   /* ... and this game's, where measured */
 		}
+		/* what the game's pauses let a piece save: the device's figure is scaled by it
+		 * (the game's own measured one already holds it) */
+		hide[nc] = oo_hide(nc, cal_piece_us(g_ad_dev[nc], nc), &hide_known[nc]);
+		if (g_oo[nc].off)
+			rt_hide_apply(&cost, nc, hide[nc]);
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
 		/* both sizes' thresholds, each on its own, in one pass */
 		if (ra_learn_on() && t != RA_THR_NONE) {
@@ -4070,9 +4150,12 @@ static void ra_adapt_tick(void)
 			}
 			/* then on or off, from what it did (the model's say for off) */
 			ol_on[nc] = 1;
+			ol[nc].hide = hide_known[nc] ? hide[nc] : 0xFFFFFFFFu;     /* not measured: on, or too little */
 			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &cost), &ol[nc])) {
 				oo_mv[nc] = 1;
 				any = 1;
+				for (int i = 0; i < VM_DEV_COUNT; i++)
+					g_dev[i].gap_end[nc] = 0;    /* its pauses start from the next read */
 			}
 		}
 		ra_adapt_age(&g_ad, nc);
@@ -4117,14 +4200,19 @@ static void ra_adapt_tick(void)
 	__sync_lock_release(&g_ad_lock);
 	if (LD(g_log_diag))
 		for (int u = 0; u < 3; u++)
-			if (ol_on[u])
+			if (ol_on[u]) {
+				char hb[40] = "";
+
+				if (u != OO_TINY && ol[u].hide != 0xFFFFFFFFu)
+					snprintf(hb, sizeof(hb), ", pauses cover %u permille", (unsigned)ol[u].hide);
 				VM_KLOGI("round %s: model %d permille; reads net %d ms of %u ms (standard %u, "
-				         "R/A %u %s, piece for nothing %u us); %s",
+				         "R/A %u %s, piece for nothing %u us%s); %s",
 				         u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm,
 				         (int)(ol[u].net / 1000), (unsigned)(ol[u].time / 1000),
 				         (unsigned)ol[u].std, (unsigned)ol[u].srv,
-				         u == OO_TINY ? "us a read" : "us/MiB", (unsigned)ol[u].held,
+				         u == OO_TINY ? "us a read" : "us/MiB", (unsigned)ol[u].held, hb,
 				         ol[u].now ? "off" : "on");
+			}
 	if (any && LD(g_log_diag)) {
 		for (int nc = 0; nc < 2; nc++)
 			if (mv[nc][0] != mv[nc][1] || mv[nc][2] != mv[nc][3])
@@ -5480,6 +5568,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	if (ms && r >= 0)
 		oo_note(nsec < RA_SMALL_SECTORS ? OO_TINY : xi.nc == 2 ? -1 : xi.nc,
 		        nsec < RA_SMALL_SECTORS ? xi.tiny : xi.got != 0, nsec, us);
+	if (ms && r >= 0 && nsec >= RA_SMALL_SECTORS && xi.nc < 2 && LD(g_oo_off[xi.nc]))
+		gap_note(d, xi.nc, nsec, t0, us);        /* the pause before it, on a stream */
 	return r;
 }
 

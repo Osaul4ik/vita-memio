@@ -3773,6 +3773,16 @@ static void test_adaptive_rounds(void)
 	adapt_small_runs_raw(0, 1, 1);
 	CHECK(g_ad_due[0]);
 	vm_stage_worker_tick();
+	/* a kind that is off is weighed as the first round was - 8 runs, not 32:
+	 * the way back does not wait for a full round of what the game reads little of */
+	g_oo[OO_C].off = 1;
+	adapt_small_runs_raw(0, 1, RA_ADAPT_RUNS_FIRST - 1);
+	CHECK(!g_ad_due[0]);
+	adapt_small_runs_raw(0, 1, 1);
+	CHECK(g_ad_due[0]);
+	vm_stage_worker_tick();
+	g_oo[OO_C].off = 0;
+	ST(g_oo_off[OO_C], 0);
 	/* or 3 MiB first: runs of 5 large reads (640 KiB) - the 5th run */
 	adapt_runs_raw(0, 5, 4);
 	CHECK(!g_ad_due[0] && g_ad_sec[0] == 4 * 5 * 256);
@@ -4443,7 +4453,7 @@ static void test_onoff_measured(void)
 	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 0);
 	CHECK(tune_valid(&g_ad_out.app) && g_ad_out.app.oo_held[OO_NC] == 5000);
 	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
-	CHECK(g_oo_off[OO_NC] == 0 && !g_oo[OO_NC].off && !g_oo[OO_NC].hold &&
+	CHECK(g_oo_off[OO_NC] == 0 && !g_oo[OO_NC].off && !g_oo[OO_NC].strikes &&
 	      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
 	/* an app is worth a slot once it has a start (a snapshot) to keep */
 	{
@@ -6399,11 +6409,82 @@ static void test_overlay_files_deferred(void)
 	vm_stage_fini();
 }
 
+/* The game's pauses: measured for a kind that is off only, kept by size for
+ * reads on a stream only, taken by the worker with the kept ones aged, and
+ * what they cover of a piece's read. */
+static void test_pauses_of_the_game(void)
+{
+	Dev *d = &g_dev[M];
+	int known;
+
+	reset();
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	/* a kind that is on: nothing is kept, what was seen is dropped, 1000 */
+	d->ra_streak = d->rs_streak = 5;
+	gap_note(d, 0, 256, 1000000, 6000);
+	gap_note(d, 0, 256, 1006020, 6000);
+	CHECK(LD(g_oo_acc[0].gap[0]) == 256u);
+	CHECK(oo_hide(0, RT_PIECE_US, &known) == 1000 && !known);
+	CHECK(!LD(g_oo_acc[0].gap[0]));
+	/* off: the first read has no read before it: nothing kept; the pause is of the
+	 * next. Too little to say: 0 and not known - it is not turned on from that */
+	g_oo[0].off = 1;
+	d->gap_end[0] = 0;
+	gap_note(d, 0, 256, 2000000, 6000);
+	CHECK(d->gap_end[0] == 2006000 && !LD(g_oo_acc[0].gap[0]));
+	CHECK(oo_hide(0, RT_PIECE_US, &known) == 0 && !known);
+	/* reads back to back on a stream: the next starts as the last ended */
+	{
+		uint32_t t = 2006000;
+
+		for (int i = 0; i < 40; i++) {
+			gap_note(d, 0, 256, t + 20, 6000);   /* 20 us after the one before */
+			t += 20 + 6000;
+		}
+	}
+	CHECK(LD(g_oo_acc[0].gap[0]) == 40 * 256u);
+	CHECK(oo_hide(0, RT_PIECE_US, &known) < 30 && known);
+	CHECK(!LD(g_oo_acc[0].gap[0]) && g_oo_gap[0][0] > 0);   /* taken, kept, aged */
+	/* not on a stream (a read that begins one, or a lone one): not kept */
+	d->ra_streak = d->rs_streak = 1;
+	gap_note(d, 0, 256, 5000000, 6000);
+	for (uint32_t b = 0; b < RT_GAP_B; b++)
+		CHECK(!LD(g_oo_acc[0].gap[b]));
+	/* a game that works between reads: pauses of 20 ms, the whole piece covered -
+	 * the old back-to-back reads age away as new ones come */
+	d->ra_streak = 5;
+	{
+		uint32_t t = 6000000, h = 0;
+
+		for (int round = 0; round < 40 && h != 1000; round++) {
+			for (int i = 0; i < 8; i++) {
+				gap_note(d, 0, 256, t + 20000, 6000);
+				t += 20000 + 6000;
+			}
+			h = oo_hide(0, RT_PIECE_US, &known);
+		}
+		CHECK(h > 900 && known);
+	}
+	/* the kind goes on: what was kept is dropped, so the next stay off starts afresh */
+	g_oo[0].off = 0;
+	gap_note(d, 0, 256, 90000000, 6000);
+	CHECK(oo_hide(0, RT_PIECE_US, &known) == 1000 && !known);
+	for (uint32_t b = 0; b < RT_GAP_B; b++)
+		CHECK(!g_oo_gap[0][b] && !LD(g_oo_acc[0].gap[b]));
+	/* the other kind is its own */
+	CHECK(oo_hide(1, RT_PIECE_US, &known) == 1000 && !known);
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
 
 	RUN(test_div_by);
+	RUN(test_pauses_of_the_game);
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);

@@ -336,25 +336,34 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  * work: the game's own swings (10-20 % a round) were larger than what read
  * ahead changes (2-6 %).
  *   on:  off once that net is below -RT_EV_MARGIN of the kind's time, over
- *        enough reads of both ways;
- *   off: the model, with this game's own costs (what a sector from the
- *        pieces saved here, what a piece for nothing held up here), says
- *        on brings more than RT_EV_MARGIN: on again.
- * The sums are kept over the last rounds (RT_EV_KEEP of each round left);
- * the game's costs stay with it (tuning.bin) for the model while off. Off
- * lasts while the game is in front: it comes back to the front with every
- * kind on (its costs kept), so a loss has to be shown again - an off from
- * figures gone wrong is never kept for good. */
+ *        enough reads of both ways (RT_EV_MIN_*);
+ *   off: read ahead serves nothing, so nothing of the game's is measured of
+ *        it - the model alone, with the DEVICE's costs (calibration: what a
+ *        sector from the pieces saves, what a piece for nothing holds up) over
+ *        the streams still counted, says on brings more than RT_EV_MARGIN: on
+ *        again, at once - no waiting, no clock. What the game showed while it
+ *        was on (srv_rate, held_each) is of that stretch only and is not used
+ *        for off.
+ * Going off again after such a return needs more: each return (a "strike",
+ * up to RT_EV_STRIKES_MAX) doubles the margin and the reads it takes to show a
+ * loss, so a kind that is wrong both ways settles on, with a loss too small to
+ * matter against a gain that could be large (a wrong off costs a multiple of
+ * what a wrong on does). The sums served by read ahead are cleared on the
+ * return: a loss is shown again on fresh reads.
+ * The sums are kept over the last rounds (7/8 of each round left); the
+ * game's costs stay with it (tuning.bin). The game comes back to the front
+ * with every kind on and no strikes, so an off from figures gone wrong is
+ * never kept for good. */
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u
-#define RT_EV_MIN_SRV    1024u          /* from read ahead: 512 KiB (tiny: reads) */
+#define RT_EV_MIN_SRV    2048u          /* from read ahead: 1 MiB (tiny: reads)   */
 #define RT_EV_MIN_SRV_T  32u
 
-#define RT_EV_HOLD       8u             /* rounds a change stays before another    */
+#define RT_EV_STRIKES_MAX 3u            /* returns from off that make the next off harder */
 
 typedef struct {
-	uint8_t  off, hold, pad[2];
+	uint8_t  off, strikes, pad[2];   /* strikes: returns from off, this stay in front */
 	/* this stretch (kept RT_EV_KEEP a round) */
 	uint32_t std_us, std_q;             /* the standard way: time, sectors (tiny: reads) */
 	uint32_t srv_us, srv_q;             /* served all or partly (tiny: and the reads
@@ -368,8 +377,11 @@ typedef struct {
 /* What read ahead brought over the stretch, us (0: too little to tell). */
 static inline int64_t rt_ev_net(const RtEv *e, int tiny)
 {
-	if (e->std_q < (tiny ? RT_EV_MIN_STD_T : RT_EV_MIN_STD) ||
-	    e->srv_q < (tiny ? RT_EV_MIN_SRV_T : RT_EV_MIN_SRV))
+	/* each return from off asks for twice the reads before a loss counts */
+	const uint32_t k = e->strikes < RT_EV_STRIKES_MAX ? e->strikes : RT_EV_STRIKES_MAX;
+
+	if (e->std_q < ((tiny ? RT_EV_MIN_STD_T : RT_EV_MIN_STD) << k) ||
+	    e->srv_q < ((tiny ? RT_EV_MIN_SRV_T : RT_EV_MIN_SRV) << k))
 		return 0;
 	return (int64_t)e->srv_q * e->std_us / e->std_q - e->srv_us - e->held_us;
 }
@@ -423,16 +435,17 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 		*net_out = net;
 	if (time_out)
 		*time_out = time;
-	if (e->hold) {
-		e->hold--;                       /* a change stays a while */
-	} else if (!e->off) {
-		if (net && net * 1000 < -(int64_t)RT_EV_MARGIN * time)
+	if (!e->off) {
+		const uint32_t k = e->strikes < RT_EV_STRIKES_MAX ? e->strikes : RT_EV_STRIKES_MAX;
+
+		if (net && net * 1000 < -(int64_t)(RT_EV_MARGIN << k) * time)
 			e->off = 1;
 	} else if (pm > (int64_t)RT_EV_MARGIN) {
-		e->off = 0;
+		e->off = 0;                      /* back on, at once: no round to wait out */
+		if (e->strikes < RT_EV_STRIKES_MAX)
+			e->strikes++;
+		e->srv_us = e->srv_q = e->held_us = e->waste = 0;   /* a loss to be shown afresh */
 	}
-	if (e->off != was)
-		e->hold = RT_EV_HOLD;
 	/* the stretch: 7/8 of it kept a round */
 	e->std_us -= e->std_us / 8;
 	e->std_q -= e->std_q / 8;
@@ -443,12 +456,85 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 	return e->off != was;
 }
 
-/* The model's cost with this game's measures where there are (`base`: the
- * console's): a sector from the pieces saves what the standard way takes
- * less what a served one did, a piece for nothing what it held up here. */
+/* ---- the game's pauses: what of a piece's read time can be overlapped ------
+ * Measured ONLY for a kind that is off (read ahead on for all: nothing is
+ * measured, the hot path as it was); it is what tells whether to turn it on.
+ * A piece read ahead saves a read only as far as the game is busy elsewhere
+ * while it is read: with reads back to back (the game waits for the card) the
+ * next piece is still in flight when it is asked for, and read ahead brings
+ * nothing, whatever it brought on another stretch. The pause before each read
+ * of a stream (its start less the end of the one before: both clocks are read
+ * for the on/off measure already) is kept by size in RT_GAP_B steps, from the
+ * moment the kind went off. `hide` is the part of a piece's read
+ * (P us, the card's, calibrated) that those pauses cover, permille. Until
+ * enough has been seen to say (RT_GAP_MIN_SEC) the kind stays off: it is not
+ * turned on from figures that cannot tell. It scales what a sector from the
+ * pieces is taken to save in the device's figure, which is what the model
+ * uses while off. */
+#define RT_GAP_B         8u
+#define RT_GAP_MIN_SEC   512u           /* 256 KiB of a stream's reads, to say  */
+#define RT_PIECE_US      6500u          /* a 128 KiB read on the card, unmeasured */
+
+/* the step of a pause (us): 0-250, -500, -1 ms, -2, -4, -8, -16, longer */
+static inline uint32_t rt_gap_bucket(uint32_t us)
+{
+	/* every edge is a power of two times 125 us: the step is the bit length of
+	 * us / 125, less one (one clz, no loop: a read's hot path) */
+	const uint32_t v = us / 125u;
+	const uint32_t b = v < 2u ? 0u : 31u - (uint32_t)__builtin_clz(v);
+
+	return b < RT_GAP_B - 1u ? b : RT_GAP_B - 1u;
+}
+
+static inline uint32_t rt_gap_rep(uint32_t b)       /* a step's middle (us) */
+{
+	static const uint32_t rep[RT_GAP_B] = { 125, 375, 750, 1500, 3000, 6000, 12000, 24000 };
+
+	return rep[b < RT_GAP_B ? b : RT_GAP_B - 1u];
+}
+
+/* Whether the sectors seen (sec[step]) are enough to say. */
+static inline int rt_hide_known(const uint32_t *sec)
+{
+	uint64_t all = 0;
+
+	for (uint32_t b = 0; b < RT_GAP_B; b++)
+		all += sec[b];
+	return all >= RT_GAP_MIN_SEC;
+}
+
+/* permille of a piece's read time (piece_us) the pauses cover, over the
+ * sectors read after each, sec[step]; 1000 where there are too few. */
+static inline uint32_t rt_hide_pm(const uint32_t *sec, uint32_t piece_us)
+{
+	uint64_t all = 0, cov = 0;
+
+	if (!piece_us || !rt_hide_known(sec))
+		return 1000;
+	for (uint32_t b = 0; b < RT_GAP_B; b++) {
+		const uint32_t r = rt_gap_rep(b);
+
+		all += sec[b];
+		cov += (uint64_t)sec[b] * (r < piece_us ? r : piece_us);
+	}
+	return (uint32_t)(cov * 1000u / (all * piece_us));
+}
+
+/* Kind k's saving a sector, scaled by the pauses. */
+static inline void rt_hide_apply(RtCost *c, int k, uint32_t hide_pm)
+{
+	c->gain16[k] = (int32_t)((int64_t)c->gain16[k] * (hide_pm < 1000u ? hide_pm : 1000u) / 1000);
+}
+
+/* The model's cost with this game's measures where there are and read ahead
+ * is on (`base`: the device's, calibrated; it alone while off): a sector from
+ * the pieces saves what the standard way takes less what a served one did, a
+ * piece for nothing what it held up here. */
 static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *o)
 {
 	*o = *base;
+	if (e->off)
+		return;                          /* nothing of read ahead is measured now: the device's */
 	if (e->std_rate && e->srv_rate) {
 		const int64_t d16 = ((int64_t)e->std_rate - e->srv_rate) * 16 / 2048;   /* a sector */
 

@@ -1920,6 +1920,10 @@ static uint32_t       g_fg_noid;            /* atomic: processes with no title i
  * screen it goes on counting. */
 static SceUID         g_st_pid;
 static uint32_t       g_st_sec, g_st_reads;
+/* ... and the runs Adaptive learned from meanwhile, by kind (OO_C, OO_NC,
+ * OO_TINY: what it counts in ra_adapt_end and ra_tiny_end) - what a start's
+ * reliability is judged by, not the number of reads (atomics). */
+static uint32_t       g_st_runs[3];
 static void eff_update(void);
 static SceUID g_app_pid;
 
@@ -2186,6 +2190,8 @@ static void fg_take(SceUID pid, const char *t)
 			g_st_pid = pid;
 			__atomic_store_n(&g_st_sec, 0, __ATOMIC_RELAXED);
 			__atomic_store_n(&g_st_reads, 0, __ATOMIC_RELAXED);
+			for (int k = 0; k < 3; k++)
+				__atomic_store_n(&g_st_runs[k], 0, __ATOMIC_RELAXED);
 		}
 		memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
 		g_fg_title[sizeof(g_fg_title) - 1] = 0;
@@ -2808,41 +2814,64 @@ static void cal_set_now(int on)
  * TuneApp is what Adaptive keeps for an app, in memory: its thresholds, and
  * the runs behind them in 16 bits a count with a shift a group - for the
  * same launch coming back to the front. The file keeps only an app's start
- * (TuneStart, below): what a launch's first reads left Adaptive with, taken
- * in three launches and then their mean, never changed again. A later
- * launch begins from that, not from where an earlier one ended. */
+ * (TuneStart, below): what a launch's first reads left Adaptive with, one
+ * snapshot for each of the first three valid launches, every one kept as it
+ * was taken, never changed again. A later launch begins from what they
+ * agree on (their mean, or their median where they differ much), not from
+ * where an earlier one ended. */
 #define TUNE_DIR      "ux0:data/vita-memio"
 #define TUNE_FILE     TUNE_DIR "/tuning.bin"
 #define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  6u                           /* 1: whole each time, 2: 12 apps,
+#define TUNE_VERSION  7u                           /* 1: whole each time, 2: 12 apps,
                                                     * 3: no on/off, 4: on/off by rounds,
-                                                    * 5: the last state kept, 6: the start */
-#define TUNE_SLOT_V3  328u                         /* versions 3 to 5's slots: their */
+                                                    * 5: the last state kept, 6: the start
+                                                    * (their mean), 7: the start's
+                                                    * launches kept, taken by runs */
+#define TUNE_SLOT_V3  328u                         /* versions 3 to 6's slots: their */
 #define TUNE_SLOT_V4  360u                         /* calibration is read            */
 #define TUNE_SLOT_V5  368u
+#define TUNE_SLOT_V6  504u                         /* (same layout; taken another way) */
 
 /* The start of a game: what Adaptive held after the first reads of a launch
  * (not the state it ended in - a start and a game's play are not alike). The
- * first TUNE_START_N launches each leave one snapshot; with the last, they
- * are replaced by their mean, which is then never touched again. Taken once
- * the launch has read TUNE_START_FEW_SEC sectors (50 MiB) - or, if those
- * were many reads (more than TUNE_START_MANY_READS), TUNE_START_MANY_SEC
- * (100 MiB). */
+ * first TUNE_START_N valid launches each leave one snapshot, and each is
+ * kept as it was taken (the spread between launches is what tells how far a
+ * start can be trusted); what a later launch begins from is worked out from
+ * them (tune_start_agg), when it comes to the front.
+ *
+ * The window is the launch's reads, the same way for every launch: the
+ * first TUNE_START_FEW_SEC sectors (50 MiB); if a kind of read Adaptive
+ * learns from (C, NC, tiny: the runs it weighs in rounds) has been seen but
+ * counted fewer than TUNE_START_MIN_RUNS runs by then - too few to weigh -
+ * on to TUNE_START_MANY_SEC (100 MiB). A kind with that many runs at the
+ * end of the window is in the snapshot (TuneSnap.ok); one with fewer is
+ * left out of it (its figures are not reliable), and if no kind has enough
+ * even then, the launch is not counted at all. The number of reads does not
+ * decide: a run of a kind may be two reads or hundreds. */
 #define TUNE_START_N          3u
 #define TUNE_START_FEW_SEC    (50u * 2048u)
 #define TUNE_START_MANY_SEC   (100u * 2048u)
-#define TUNE_START_MANY_READS 1000u
+#define TUNE_START_MIN_RUNS   (RA_ADAPT_RUNS_FIRST + RA_ADAPT_RUNS)  /* the first round and a full one */
 #define TUNE_TITLE    12u                          /* TuneApp.title, its 0 too */
+
+/* How far apart launches may be for their mean to stand for them (else
+ * their median does): a threshold's steps, the tiny reads' places in their
+ * tables; a cost is judged by a third of the highest. */
+#define TUNE_WIDE_ADJ         2
+#define TUNE_WIDE_SMALL       8
+#define TUNE_WIDE_TABLE       1
 
 typedef struct {                       /* what Adaptive held, at a launch's start */
 	int8_t   ra_adj[2], rs_adj[2];
-	uint8_t  tiny_thr, tiny_blk, pad[2];
+	uint8_t  tiny_thr, tiny_blk;
+	uint8_t  ok;                         /* bit u (OO_C, OO_NC, OO_TINY): that kind had runs enough */
+	uint8_t  pad;
 	uint32_t oo_std[3], oo_srv[3], oo_held[3];   /* this game's costs (0: none measured) */
 } TuneSnap;
 
 typedef struct {
-	uint8_t  n, pad[3];                  /* snapshots taken; TUNE_START_N: the mean, in snap[0] */
+	uint8_t  n, pad[3];                  /* snapshots taken, all kept; TUNE_START_N: complete */
 	TuneSnap snap[TUNE_START_N];
 } TuneStart;
 
@@ -2964,7 +2993,9 @@ static uint32_t tune_sig(const TuneApp *t)
 	                &t->st, sizeof(t->st)) | 1u;
 }
 
-/* Whether it has a start (a snapshot at least) worth keeping. */
+/* Whether it has a start (a snapshot at least) worth keeping: each launch's
+ * result is written as it is taken (one small write of the slot, in place),
+ * so that a restart of the console between sessions loses nothing. */
 static int tune_learned(const TuneApp *t)
 {
 	return t->st.n > 0;
@@ -3067,80 +3098,120 @@ static int tune_snap_ok(const TuneSnap *s)
 
 	for (int i = 0; i < RT_TINY_T_N; i++)
 		tiny_ok |= s->tiny_thr == rt_tiny_thr[i];
-	return tiny_ok && (s->tiny_blk == 16 || s->tiny_blk == 32 || s->tiny_blk == 64) &&
+	return tiny_ok && (s->tiny_blk == 16 || s->tiny_blk == 32 || s->tiny_blk == 64) && s->ok <= 7 &&
 	       s->ra_adj[0] >= -8 && s->ra_adj[0] <= 8 && s->ra_adj[1] >= -8 && s->ra_adj[1] <= 8 &&
 	       s->rs_adj[0] >= -32 && s->rs_adj[0] <= 32 && s->rs_adj[1] >= -32 && s->rs_adj[1] <= 32;
 }
 
 /* The mean of n sums, rounded away from 0 at a half. */
-static int tune_mean(int sum, int n)
+static int64_t tune_mean(int64_t sum, int n)
 {
 	return sum >= 0 ? (sum + n / 2) / n : -((-sum + n / 2) / n);
 }
 
-/* The value of tab[0..n) nearest to v (the tiny reads' thresholds and
- * blocks are from a table: a mean between two is not one of them). */
-static uint32_t tune_nearest(uint32_t v, const uint8_t *tab, int n)
+/* The tiny reads' thresholds and blocks come from tables (a value between
+ * two is not one of them): what their places in them agree on is taken, not
+ * the values. */
+static const uint8_t tune_blks[3] = { 16, 32, 64 };
+
+static int tune_tab_at(const uint8_t *tab, int n, uint8_t v)
 {
-	uint32_t best = tab[0], bd = 0xFFFFFFFFu;
-
-	for (int i = 0; i < n; i++) {
-		const uint32_t d = v > tab[i] ? v - tab[i] : tab[i] - v;
-
-		if (d < bd) {
-			bd = d;
-			best = tab[i];
-		}
-	}
-	return best;
+	for (int i = 0; i < n; i++)
+		if (tab[i] == v)
+			return i;
+	return 0;
 }
 
-/* All the snapshots taken, replaced by their mean in the first (the
- * costs: of those measured - 0 is none). */
-static void tune_start_mean(TuneStart *r)
+/* What launches agree on: their mean - but if the lowest and the highest
+ * of them are more than `wide` apart, their median, which one odd launch
+ * does not move (the mean of values far apart is one no launch had).
+ * v[0..n), n 1 to 3 (of two, the median is the mean). `rel`: wide is a
+ * third of the highest instead (a cost). *med counts the medians taken. */
+static int64_t tune_agg(const int64_t *v, int n, int64_t wide, int rel, int *med)
 {
-	static const uint8_t blks[3] = { 16, 32, 64 };
-	const int n = (int)r->n;
-	int sra[2] = { 0, 0 }, srs[2] = { 0, 0 };
-	uint32_t sthr = 0, sblk = 0;
-	TuneSnap m;
+	int64_t lo = v[0], hi = v[0], sum = 0;
 
-	if (n < 1)
-		return;
-	memset(&m, 0, sizeof(m));
 	for (int i = 0; i < n; i++) {
-		const TuneSnap *s = &r->snap[i];
+		if (v[i] < lo)
+			lo = v[i];
+		if (v[i] > hi)
+			hi = v[i];
+		sum += v[i];
+	}
+	if (rel)
+		wide = hi / 3;
+	if (n >= 3 && hi - lo > wide) {
+		if (med)
+			(*med)++;
+		return sum - lo - hi;             /* the one between */
+	}
+	return tune_mean(sum, n);
+}
 
-		for (int k = 0; k < 2; k++) {
-			sra[k] += s->ra_adj[k];
-			srs[k] += s->rs_adj[k];
-		}
-		sthr += s->tiny_thr;
-		sblk += s->tiny_blk;
-	}
-	for (int k = 0; k < 2; k++) {
-		m.ra_adj[k] = (int8_t)tune_mean(sra[k], n);
-		m.rs_adj[k] = (int8_t)tune_mean(srs[k], n);
-	}
-	m.tiny_thr = (uint8_t)tune_nearest((uint32_t)tune_mean((int)sthr, n), rt_tiny_thr, RT_TINY_T_N);
-	m.tiny_blk = (uint8_t)tune_nearest((uint32_t)tune_mean((int)sblk, n), blks, 3);
+/* The start a game's later launches begin from: what its snapshots agree
+ * on, each kind from the snapshots it was reliable in (TuneSnap.ok), the
+ * costs from those measured (0 is none). A kind none of them had runs
+ * enough in (a game that does not read so, or never enough of it) is left
+ * as a fresh game's. *med: how many of the figures went by the median. */
+static void tune_start_agg(const TuneStart *r, TuneSnap *o, int *med)
+{
+	const int n = r->n < TUNE_START_N ? (int)r->n : (int)TUNE_START_N;
+
+	memset(o, 0, sizeof(*o));
+	o->tiny_thr = RA_TINY_STREAK;
+	o->tiny_blk = RA_TINY_SECTORS;
+	*med = 0;
 	for (int u = 0; u < 3; u++) {
-		uint64_t a = 0, b = 0, c = 0;
-		int na = 0, nb = 0, nc = 0;
+		int idx[TUNE_START_N], k = 0;
 
-		for (int i = 0; i < n; i++) {
-			const TuneSnap *s = &r->snap[i];
+		for (int i = 0; i < n; i++)
+			if (r->snap[i].ok & (1u << u))
+				idx[k++] = i;
+		if (!k)
+			continue;
+		o->ok |= (uint8_t)(1u << u);
+		if (u < 2) {
+			int64_t a[TUNE_START_N], b[TUNE_START_N];
 
-			if (s->oo_std[u]) { a += s->oo_std[u]; na++; }
-			if (s->oo_srv[u]) { b += s->oo_srv[u]; nb++; }
-			if (s->oo_held[u]) { c += s->oo_held[u]; nc++; }
+			for (int j = 0; j < k; j++) {
+				a[j] = r->snap[idx[j]].ra_adj[u];
+				b[j] = r->snap[idx[j]].rs_adj[u];
+			}
+			o->ra_adj[u] = (int8_t)tune_agg(a, k, TUNE_WIDE_ADJ, 0, med);
+			o->rs_adj[u] = (int8_t)tune_agg(b, k, TUNE_WIDE_SMALL, 0, med);
+		} else {
+			int64_t t[TUNE_START_N], b[TUNE_START_N];
+
+			for (int j = 0; j < k; j++) {
+				t[j] = tune_tab_at(rt_tiny_thr, RT_TINY_T_N, r->snap[idx[j]].tiny_thr);
+				b[j] = tune_tab_at(tune_blks, 3, r->snap[idx[j]].tiny_blk);
+			}
+			o->tiny_thr = rt_tiny_thr[tune_agg(t, k, TUNE_WIDE_TABLE, 0, med)];
+			o->tiny_blk = tune_blks[tune_agg(b, k, TUNE_WIDE_TABLE, 0, med)];
 		}
-		m.oo_std[u] = na ? (uint32_t)((a + (uint64_t)na / 2) / (uint64_t)na) : 0;
-		m.oo_srv[u] = nb ? (uint32_t)((b + (uint64_t)nb / 2) / (uint64_t)nb) : 0;
-		m.oo_held[u] = nc ? (uint32_t)((c + (uint64_t)nc / 2) / (uint64_t)nc) : 0;
+		for (int w = 0; w < 3; w++) {         /* the costs: standard, served, held */
+			int64_t c[TUNE_START_N];
+			int nc = 0;
+
+			for (int j = 0; j < k; j++) {
+				const TuneSnap *s = &r->snap[idx[j]];
+				const uint32_t x = w == 0 ? s->oo_std[u] : w == 1 ? s->oo_srv[u] : s->oo_held[u];
+
+				if (x)
+					c[nc++] = x;
+			}
+			if (nc) {
+				const uint32_t y = (uint32_t)tune_agg(c, nc, 0, 1, med);
+
+				if (w == 0)
+					o->oo_std[u] = y;
+				else if (w == 1)
+					o->oo_srv[u] = y;
+				else
+					o->oo_held[u] = y;
+			}
+		}
 	}
-	memset(r->snap, 0, sizeof(r->snap));
-	r->snap[0] = m;
 }
 
 /* Whether t is one this build would have written (else nothing of it is
@@ -3159,7 +3230,7 @@ static int tune_valid(const TuneApp *t)
 			return 0;
 	if (t->st.n > TUNE_START_N)
 		return 0;
-	for (uint32_t i = 0; i < (t->st.n == TUNE_START_N ? 1u : t->st.n); i++)
+	for (uint32_t i = 0; i < t->st.n; i++)           /* every launch's snapshot is kept */
 		if (!tune_snap_ok(&t->st.snap[i]))
 			return 0;
 	return tiny_ok && (t->tiny_blk == 16 || t->tiny_blk == 32 || t->tiny_blk == 64) &&
@@ -3196,14 +3267,17 @@ static void tune_restore(const TuneApp *t)
 	ADD(g_ad_restored, 1);
 }
 
-/* g_ad_lock held, after ra_adapt_clear: a game's start values (the mean of
- * its first launches) in effect - its thresholds and costs; the runs behind
- * them are not kept (they were of one stretch of play), so Adaptive weighs
- * what it sees now, in full rounds, from there. */
+/* g_ad_lock held, after ra_adapt_clear: a game's start values (what its
+ * first launches agree on) in effect - its thresholds and costs; the runs
+ * behind them are not kept (they were of one stretch of play), so Adaptive
+ * weighs what it sees now, in full rounds, from there. */
 static void tune_restore_start(const TuneStart *r)
 {
-	const TuneSnap *s = &r->snap[0];
+	TuneSnap a;
+	const TuneSnap *s = &a;
+	int med;
 
+	tune_start_agg(r, &a, &med);
 	for (int i = 0; i < 2; i++) {
 		ST(g_ra_adj[i], s->ra_adj[i]);
 		ST(g_rs_adj[i], s->rs_adj[i]);
@@ -3530,7 +3604,7 @@ static void tune_fetch(const char *title)
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	TuneHead h, want, v3, v4, v5;
+	TuneHead h, want, v3, v4, v5, v6;
 	uint32_t on = 0, c, check = 0;
 	SceOff end;
 	int ok, old;
@@ -3541,10 +3615,11 @@ static int tune_read(void)
 	tune_head_of(&v3, 3u, TUNE_SLOT_V3);
 	tune_head_of(&v4, 4u, TUNE_SLOT_V4);
 	tune_head_of(&v5, 5u, TUNE_SLOT_V5);
+	tune_head_of(&v6, 6u, TUNE_SLOT_V6);
 	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h);
-	/* versions 3 to 5: their calibration only */
+	/* versions 3 to 6: their calibration only (6's start was taken another way) */
 	old = ok && (!memcmp(&h, &v3, sizeof(h)) || !memcmp(&h, &v4, sizeof(h)) ||
-	             !memcmp(&h, &v5, sizeof(h)));
+	             !memcmp(&h, &v5, sizeof(h)) || !memcmp(&h, &v6, sizeof(h)));
 	if (!ok || (!old && memcmp(&h, &want, sizeof(h)))) {
 		ksceIoClose(fd);
 		return 0;
@@ -3623,6 +3698,15 @@ static uint32_t tiny_blk(void)
 
 static void cal_tiny_cost(int dev, RtTinyCost *t);
 
+/* A run of kind u (OO_C, OO_NC, OO_TINY) counted for Adaptive, in the launch
+ * in front (as its reads are: not internal storage, which is never read
+ * ahead): one more of what its start is judged by. */
+static void st_learned(const Dev *d, int u)
+{
+	if (d != &g_dev[VM_DEV_INTERNAL] && __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED))
+		__atomic_fetch_add(&g_st_runs[u], 1, __ATOMIC_RELAXED);
+}
+
 /* A run of tiny reads has ended: `reads` in a row, `sectors` in all; every
  * RA_ADAPT_RUNS of them (of two reads or more), (T, B) weighed again with
  * this storage's figures - moved if another is better by more than three
@@ -3638,6 +3722,7 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	g_tn_cnt[b] += RA_ADAPT_ONE;
 	g_tn_reads[b] += reads * RA_ADAPT_ONE;
 	g_tn_sec[b] += sectors * RA_ADAPT_ONE;
+	st_learned(d, OO_TINY);
 	/* a round's worth: weighed by the worker (ra_adapt_tick) */
 	if (++g_tn_ended >= (g_tn_rounds ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) && !LD(g_tn_due)) {
 		ST(g_tn_due, 1);
@@ -3818,6 +3903,7 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	} else {
 		g_ad.run[nc][len < RT_RUN ? len : RT_RUN - 1] += RA_ADAPT_ONE;
 	}
+	st_learned(d, nc ? OO_NC : OO_C);
 	/* a round's worth: weighed by the worker (ra_adapt_tick), not here */
 	if ((++g_ad.ended[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_RUNS : RA_ADAPT_RUNS_FIRST) ||
 	     g_ad_sec[nc] >= (g_ad_rounds[nc] ? RA_ADAPT_SECTORS : RA_ADAPT_SECTORS_FIRST)) &&
@@ -6200,15 +6286,19 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
-/* Worker thread: the launch in front has read enough (TUNE_START_FEW_SEC,
- * or TUNE_START_MANY_SEC after many reads) - what Adaptive holds is the
- * launch's snapshot; the TUNE_START_N-th turns them all into their mean,
- * and from then on the start is not touched. Once a launch. */
+/* Worker thread: the launch in front has read the window (see TUNE_START_*:
+ * 50 MiB, or 100 MiB if a kind of read Adaptive had seen was still short of
+ * runs to weigh) - what Adaptive holds is the launch's snapshot, with the
+ * kinds that had runs enough marked. The same for every launch. A launch in
+ * which no kind had enough even then is not counted: no snapshot, and the
+ * next launch tries again. Once a launch. The TUNE_START_N-th snapshot
+ * completes the start; the three stay as they were taken. */
 static void tune_start_tick(void)
 {
 	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
-	uint32_t sec, reads, n = 0, mib = 0;
-	int took = 0;
+	uint32_t sec, reads, runs[3], n = 0, mib = 0;
+	uint8_t ok = 0;
+	int took = 0, short_kind = 0, med = 0, bad = 0;
 	char title[16] = { 0 };
 	TuneSnap shot;
 
@@ -6217,42 +6307,66 @@ static void tune_start_tick(void)
 		return;
 	sec = __atomic_load_n(&g_st_sec, __ATOMIC_RELAXED);
 	reads = __atomic_load_n(&g_st_reads, __ATOMIC_RELAXED);
-	if (sec < TUNE_START_FEW_SEC || (reads > TUNE_START_MANY_READS && sec < TUNE_START_MANY_SEC))
+	if (sec < TUNE_START_FEW_SEC)
+		return;
+	for (int u = 0; u < 3; u++) {
+		runs[u] = __atomic_load_n(&g_st_runs[u], __ATOMIC_RELAXED);
+		if (runs[u] >= TUNE_START_MIN_RUNS)
+			ok |= (uint8_t)(1u << u);
+		else if (runs[u])
+			short_kind = 1;                   /* seen, but too few to weigh */
+	}
+	/* 50 MiB is the window if every kind seen has enough by then; else 100 */
+	if ((!ok || short_kind) && sec < TUNE_START_MANY_SEC)
 		return;
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	if (g_st_rec.n >= TUNE_START_N) {
 		g_st_taken = fg;                  /* fixed already: not touched */
 	} else if (g_ad_pid == fg && g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE && ra_learn_on()) {
-		for (int i = 0; i < 2; i++) {
-			shot.ra_adj[i] = (int8_t)LD(g_ra_adj[i]);
-			shot.rs_adj[i] = (int8_t)LD(g_rs_adj[i]);
-		}
-		shot.tiny_thr = (uint8_t)LD(g_tiny_thr);
-		shot.tiny_blk = (uint8_t)LD(g_tiny_blk);
-		for (int u = 0; u < 3; u++) {
-			shot.oo_std[u] = g_oo[u].std_rate;
-			shot.oo_srv[u] = g_oo[u].srv_rate;
-			shot.oo_held[u] = g_oo[u].held_each;
-		}
-		g_st_rec.snap[g_st_rec.n++] = shot;
-		if (g_st_rec.n == TUNE_START_N) {
-			tune_start_mean(&g_st_rec);
-			shot = g_st_rec.snap[0];
-		}
-		n = g_st_rec.n;
+		g_st_taken = fg;                  /* judged: once a launch, counted or not */
 		memcpy(title, g_ad_title, sizeof(title));
-		g_st_taken = fg;
-		took = 1;
+		if (!ok) {
+			bad = 1;                      /* not enough to learn from: not a valid launch */
+		} else {
+			for (int i = 0; i < 2; i++) {
+				shot.ra_adj[i] = (int8_t)LD(g_ra_adj[i]);
+				shot.rs_adj[i] = (int8_t)LD(g_rs_adj[i]);
+			}
+			shot.tiny_thr = (uint8_t)LD(g_tiny_thr);
+			shot.tiny_blk = (uint8_t)LD(g_tiny_blk);
+			shot.ok = ok;
+			for (int u = 0; u < 3; u++) {
+				shot.oo_std[u] = g_oo[u].std_rate;
+				shot.oo_srv[u] = g_oo[u].srv_rate;
+				shot.oo_held[u] = g_oo[u].held_each;
+			}
+			g_st_rec.snap[g_st_rec.n++] = shot;
+			n = g_st_rec.n;
+			took = 1;
+			if (n == TUNE_START_N) {
+				TuneSnap agg;
+
+				tune_start_agg(&g_st_rec, &agg, &med);
+				shot = agg;               /* for the log: what the launches agree on */
+			}
+		}
 	}
 	__sync_lock_release(&g_ad_lock);
 	mib = sec / 2048u;
-	if (took && LD(g_log_diag))
-		VM_KLOGI("start %s: launch %u of %u after %u MiB (%u reads)%s: C +%d/%d NC +%d/%d, tiny %u/%u KiB",
+	if (took && n == TUNE_START_N && LD(g_log_diag))   /* one line a game, not one a launch */
+		VM_KLOGI("start %s: launch %u of %u after %u MiB (%u reads; runs C %u NC %u tiny %u, "
+		         "enough:%s%s%s)%s: C +%d/%d NC +%d/%d, tiny %u/%u KiB",
 		         title, (unsigned)n, (unsigned)TUNE_START_N, (unsigned)mib, (unsigned)reads,
-		         n == TUNE_START_N ? ", the mean - fixed" : "", (int)shot.ra_adj[0],
-		         (int)shot.rs_adj[0], (int)shot.ra_adj[1], (int)shot.rs_adj[1],
+		         (unsigned)runs[OO_C], (unsigned)runs[OO_NC], (unsigned)runs[OO_TINY],
+		         ok & 1u ? " C" : "", ok & 2u ? " NC" : "", ok & 4u ? " tiny" : "",
+		         n == TUNE_START_N ? (med ? ", done - median where the launches differ" : ", done - mean") : "",
+		         (int)shot.ra_adj[0], (int)shot.rs_adj[0], (int)shot.ra_adj[1], (int)shot.rs_adj[1],
 		         (unsigned)shot.tiny_thr, (unsigned)shot.tiny_blk / 2);
+	if (bad && LD(g_log_diag))
+		VM_KLOGI("start %s: launch not counted - %u MiB read, runs C %u NC %u tiny %u "
+		         "(%u needed)", title, (unsigned)mib, (unsigned)runs[OO_C], (unsigned)runs[OO_NC],
+		         (unsigned)runs[OO_TINY], (unsigned)TUNE_START_MIN_RUNS);
 }
 
 void vm_stage_worker_tick(void)

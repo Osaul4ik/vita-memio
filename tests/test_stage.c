@@ -4553,14 +4553,38 @@ static void test_tune_v3(void)
 		cal_load();
 		CHECK(!g_tune_ok && g_tune_n == 0 && g_cal[M].waste_n == 12);
 	}
+	/* version 6 (the start as the mean alone) the same: its calibration, its apps learned anew */
+	f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (f) {
+		g_cal[M].waste_n = 13;
+		tune_head_of(&h, 6u, TUNE_SLOT_V6);
+		fwrite(&h, sizeof(h), 1, f);
+		fwrite(&on, sizeof(on), 1, f);
+		fwrite(g_cal, sizeof(g_cal), 1, f);
+		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
+		fwrite(&c, sizeof(c), 1, f);
+		for (int i = 0; i < 2 * (int)TUNE_SLOT_V6; i++)
+			fputc(0x5A, f);               /* two old apps */
+		fclose(f);
+		memset(g_cal, 0, sizeof(g_cal));
+		g_cal_loaded = 0;
+		cal_load();
+		CHECK(!g_tune_ok && g_tune_n == 0 && g_cal[M].waste_n == 13);
+		CHECK(TUNE_SLOT_V6 == (uint32_t)sizeof(TuneSlot));   /* the layout did not change */
+	}
 	vm_stage_fini();
 }
 
-/* The mean of a game's start snapshots: thresholds rounded, the tiny
- * reads' ones to the table, the costs of those measured only. */
-static void test_start_mean(void)
+/* What a game's start snapshots agree on (tune_start_agg): their mean where
+ * they are close, their median where they are far apart; each kind only from
+ * the launches it was reliable in; the tiny reads' ones by their places in
+ * the tables; the costs of those measured only. */
+static void test_start_agg(void)
 {
 	TuneStart r;
+	TuneSnap o;
+	int med;
 
 	CHECK(tune_mean(-3, 3) == -1 && tune_mean(2, 3) == 1 && tune_mean(-5, 3) == -2 && tune_mean(0, 3) == 0);
 	memset(&r, 0, sizeof(r));
@@ -4568,19 +4592,206 @@ static void test_start_mean(void)
 	for (int i = 0; i < 3; i++) {
 		r.snap[i].tiny_thr = RA_TINY_STREAK;
 		r.snap[i].tiny_blk = RA_TINY_SECTORS;
+		r.snap[i].ok = 7;
 	}
-	r.snap[0].ra_adj[0] = -3;  r.snap[1].ra_adj[0] = 2;  r.snap[2].ra_adj[0] = 2;   /* 1/3: 0 */
-	r.snap[0].ra_adj[1] = -4;  r.snap[1].ra_adj[1] = -4; r.snap[2].ra_adj[1] = 1;   /* -7/3: -2 */
-	r.snap[0].rs_adj[0] = 8;   r.snap[1].rs_adj[0] = 12; r.snap[2].rs_adj[0] = 4;   /* 8 */
-	r.snap[0].tiny_thr = 2;    r.snap[1].tiny_thr = 16;  r.snap[2].tiny_thr = 3;    /* 7: nearest 6 */
-	r.snap[0].tiny_blk = 16;   r.snap[1].tiny_blk = 64;  r.snap[2].tiny_blk = 64;   /* 48: 32 or 64 */
-	r.snap[0].oo_std[OO_NC] = 50000; r.snap[2].oo_std[OO_NC] = 60000;               /* 2 measured */
-	r.snap[1].oo_held[OO_C] = 1000;
-	tune_start_mean(&r);
-	CHECK(r.n == 3 && r.snap[0].ra_adj[0] == 0 && r.snap[0].ra_adj[1] == -2 && r.snap[0].rs_adj[0] == 8);
-	CHECK(r.snap[0].tiny_thr == 6 && (r.snap[0].tiny_blk == 32 || r.snap[0].tiny_blk == 64));
-	CHECK(r.snap[0].oo_std[OO_NC] == 55000 && r.snap[0].oo_held[OO_C] == 1000 && r.snap[0].oo_srv[OO_C] == 0);
-	CHECK(r.snap[1].tiny_thr == 0 && r.snap[2].oo_std[OO_NC] == 0 && tune_snap_ok(&r.snap[0]));
+	r.snap[0].ra_adj[0] = 1;   r.snap[1].ra_adj[0] = 2;  r.snap[2].ra_adj[0] = 2;   /* spread 1: mean 5/3: 2 */
+	r.snap[0].ra_adj[1] = -4;  r.snap[1].ra_adj[1] = -4; r.snap[2].ra_adj[1] = 1;   /* spread 5: median -4 (mean -2) */
+	r.snap[0].rs_adj[0] = 8;   r.snap[1].rs_adj[0] = 12; r.snap[2].rs_adj[0] = 4;   /* spread 8: still the mean, 8 */
+	r.snap[0].tiny_thr = 2;    r.snap[1].tiny_thr = 16;  r.snap[2].tiny_thr = 3;    /* places 0, 6, 1: median, 3 */
+	r.snap[0].tiny_blk = 16;   r.snap[1].tiny_blk = 64;  r.snap[2].tiny_blk = 64;   /* places 0, 2, 2: median, 64 */
+	r.snap[0].oo_std[OO_NC] = 50000; r.snap[2].oo_std[OO_NC] = 60000;               /* 2 measured: their mean */
+	r.snap[1].oo_held[OO_C] = 1000;                                                 /* 1 measured */
+	r.snap[0].oo_std[OO_C] = 10000; r.snap[1].oo_std[OO_C] = 11000; r.snap[2].oo_std[OO_C] = 30000;   /* far: median */
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ra_adj[0] == 2 && o.ra_adj[1] == -4 && o.rs_adj[0] == 8 && o.rs_adj[1] == 0);
+	CHECK(o.tiny_thr == 3 && o.tiny_blk == 64 && o.ok == 7 && tune_snap_ok(&o));
+	CHECK(o.oo_std[OO_NC] == 55000 && o.oo_held[OO_C] == 1000 && o.oo_srv[OO_C] == 0 && o.oo_std[OO_C] == 11000);
+	CHECK(med == 4);                                    /* ra_adj NC, both tiny ones, the cost */
+	CHECK(r.n == 3 && r.snap[1].tiny_thr == 16 && r.snap[2].ra_adj[1] == 1);   /* the launches stay as they were */
+
+	/* the same numbers, close together: no median */
+	for (int i = 0; i < 3; i++) {
+		r.snap[i].ra_adj[1] = (int8_t)(-4 + i);        /* -4 -3 -2 */
+		r.snap[i].tiny_thr = RA_TINY_STREAK;
+		r.snap[i].tiny_blk = RA_TINY_SECTORS;
+		r.snap[i].oo_std[OO_C] = (uint32_t)(10000 + 500 * i);
+	}
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ra_adj[1] == -3 && o.tiny_thr == RA_TINY_STREAK && o.tiny_blk == RA_TINY_SECTORS &&
+	      o.oo_std[OO_C] == 10500 && med == 0);
+
+	/* a kind not reliable in a launch is left out of that kind's figures */
+	r.snap[1].ok = 1u << OO_C;
+	r.snap[1].ra_adj[1] = -8;                          /* what too few runs left there */
+	r.snap[0].ra_adj[1] = 2;
+	r.snap[2].ra_adj[1] = 3;
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ra_adj[1] == 3 && o.ok == 7);              /* of 2 and 3 alone: 5/2 up */
+	/* two launches: the mean (their median) whatever the spread */
+	r.snap[0].ra_adj[1] = -8;
+	r.snap[2].ra_adj[1] = 8;
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ra_adj[1] == 0 && med == 0);
+	/* a kind none was reliable in: as a fresh game's, whatever the launches hold */
+	for (int i = 0; i < 3; i++) {
+		r.snap[i].ok = (uint8_t)(1u << OO_C);
+		r.snap[i].oo_std[OO_TINY] = 5555;
+		r.snap[i].tiny_thr = 12;
+	}
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ok == 1u << OO_C && o.tiny_thr == RA_TINY_STREAK && o.tiny_blk == RA_TINY_SECTORS &&
+	      o.oo_std[OO_TINY] == 0 && o.ra_adj[1] == 0 && o.oo_std[OO_NC] == 0);
+	/* fewer launches than the three: what there is */
+	r.n = 2;
+	r.snap[0].ra_adj[0] = 4;
+	r.snap[1].ra_adj[0] = 1;
+	r.snap[2].ra_adj[0] = -8;                          /* not one of them */
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ra_adj[0] == 3);                           /* 5/2 */
+	r.n = 0;
+	tune_start_agg(&r, &o, &med);
+	CHECK(o.ok == 0 && o.ra_adj[0] == 0 && o.tiny_thr == RA_TINY_STREAK);
+}
+
+static void st_reach3(uint32_t sec, uint32_t c, uint32_t nc, uint32_t tiny);   /* (below) */
+static int st_slot(const char *dir, uint32_t i, TuneSlot *t);
+
+/* What Adaptive learns from is counted for a launch's start: a run of each
+ * kind counted by Adaptive, in the app in front, on the cards - not tiny
+ * ones of a single read, not the internal storage, not while Verify is on. */
+static void test_start_runs_counted(void)
+{
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	g_st_pid = 0;                                       /* no launch before this test's */
+	g_st_taken = 0;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 && g_st_runs[OO_TINY] == 0);
+	adapt_runs_raw(0, 20, 5);
+	adapt_runs_raw(1, 20, 3);
+	CHECK(g_st_runs[OO_C] == 5 && g_st_runs[OO_NC] == 3 && g_st_runs[OO_TINY] == 0);
+	ra_tiny_end(&g_dev[M], 4, 16);
+	ra_tiny_end(&g_dev[M], 6, 24);
+	ra_tiny_end(&g_dev[M], 1, 4);                       /* one read: not a run to learn from */
+	CHECK(g_st_runs[OO_TINY] == 2);
+	/* the internal storage is never read ahead: nothing to learn from */
+	for (uint32_t i = 1; i <= 20; i++)
+		ra_adapt_read(&g_dev[VM_DEV_INTERNAL], 0, i, 256);
+	ra_adapt_end(&g_dev[VM_DEV_INTERNAL], 0, 0, 20);
+	CHECK(g_st_runs[OO_C] == 5);
+	/* Verify on: Adaptive learns nothing, and so nothing is counted */
+	g_verify = 1;
+	adapt_runs_raw(0, 20, 4);
+	ra_tiny_end(&g_dev[M], 4, 16);
+	CHECK(g_st_runs[OO_C] == 5 && g_st_runs[OO_TINY] == 2);
+	g_verify = 0;
+	/* another launch: from nothing */
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	as_app(0x4A);
+	vm_stage_worker_tick();
+	CHECK(g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 && g_st_runs[OO_TINY] == 0);
+	vm_stage_fini();
+}
+
+/* The window of a launch's start, the same for every launch: 50 MiB if every
+ * kind seen has runs enough by then, else on to 100 MiB (the number of reads
+ * does not decide); a kind still short at the end is left out of that
+ * launch's snapshot; a launch with no kind enough is not counted and the
+ * next one tries again; three valid launches complete the start, each kept. */
+static void test_start_window(void)
+{
+	VmSettings s;
+	const char *dir;
+	TuneSlot t;
+	TuneSnap ag;
+	int med;
+
+	fakes_tmpdir_remove();
+	dir = fakes_tmpdir_new();
+	reset();
+	g_st_pid = 0;                                       /* no launch before this test's */
+	g_st_taken = 0;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();
+
+	/* 1: 50 MiB, the ordinary kind enough, however many reads (a read is not a run) */
+	as_app(0x4A);
+	vm_stage_worker_tick();
+	__atomic_store_n(&g_st_runs[OO_C], TUNE_START_MIN_RUNS, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_reads, 100000, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC - 1, __ATOMIC_RELAXED);
+	vm_stage_worker_tick();
+	CHECK(g_st_rec.n == 0);
+	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC, __ATOMIC_RELAXED);
+	vm_stage_worker_tick();
+	CHECK(g_st_rec.n == 1 && g_st_taken == 0x4A && g_st_rec.snap[0].ok == 1u << OO_C);
+	ra_proc_event(0x4A, 4);
+	vm_stage_worker_tick();
+
+	/* 2: at 50 MiB the NC kind is seen but short: on to 100 MiB, where it is left out */
+	as_app(0x4B);
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
+	CHECK(g_st_rec.n == 1 && g_st_taken != 0x4B);
+	st_reach3(TUNE_START_MANY_SEC - 1, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
+	CHECK(g_st_rec.n == 1);
+	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
+	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4B && g_st_rec.snap[1].ok == 1u << OO_C);
+	ra_proc_event(0x4B, 4);
+	vm_stage_worker_tick();
+
+	/* 3: too few of every kind even at 100 MiB: not counted, and not counted later either */
+	as_app(0x4C);
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_MANY_SEC, 5, 5, 5);
+	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4C);
+	st_reach3(TUNE_START_MANY_SEC * 2, 500, 500, 500);    /* judged once: this launch is out */
+	CHECK(g_st_rec.n == 2);
+	ra_proc_event(0x4C, 4);
+	vm_stage_worker_tick();
+
+	/* 4: nothing to learn from seen at all: waits to 100 MiB, then not counted */
+	as_app(0x4D);
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, 0, 0, 0);
+	CHECK(g_st_rec.n == 2 && g_st_taken != 0x4D);
+	st_reach3(TUNE_START_MANY_SEC, 0, 0, 0);
+	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4D);
+	ra_proc_event(0x4D, 4);
+	vm_stage_worker_tick();
+
+	/* 5: all three kinds enough at 50 MiB: the third valid launch completes the start */
+	as_app(0x4E);
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
+	CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[2].ok == 7);
+	CHECK(g_st_rec.snap[0].ok == 1u << OO_C && g_st_rec.snap[1].ok == 1u << OO_C);   /* as taken */
+	tune_start_agg(&g_st_rec, &ag, &med);
+	CHECK(ag.ok == 7);
+	ra_proc_event(0x4E, 4);
+	vm_stage_worker_tick();
+	CHECK(st_slot(dir, 0, &t) && t.app.st.n == TUNE_START_N && tune_valid(&t.app) &&
+	      t.app.st.snap[0].ok == 1u << OO_C && t.app.st.snap[1].ok == 1u << OO_C && t.app.st.snap[2].ok == 7);
+
+	/* the start is complete: a further launch changes nothing, whatever it read */
+	as_app(0x4F);
+	vm_stage_worker_tick();
+	st_reach3(TUNE_START_FEW_SEC, 500, 500, 500);
+	CHECK(g_st_rec.n == TUNE_START_N && g_st_taken == 0x4F);
+	vm_stage_fini();
 }
 
 /* Log on: an app's time in front ends with its session lines - its reads
@@ -4741,12 +4952,32 @@ static void test_system_apps(void)
 	vm_stage_fini();
 }
 
-/* The launch's reads so far (what the hooks counted), and the worker's look. */
-static void st_reach(uint32_t sec, uint32_t reads)
+/* The launch's reads so far, and the runs Adaptive learned from in them, by
+ * kind (what the hooks counted), and the worker's look. */
+static void st_reach3(uint32_t sec, uint32_t c, uint32_t nc, uint32_t tiny)
 {
 	__atomic_store_n(&g_st_sec, sec, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_reads, reads, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_reads, c + nc + tiny, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_runs[OO_C], c, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_runs[OO_NC], nc, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_runs[OO_TINY], tiny, __ATOMIC_RELAXED);
 	vm_stage_worker_tick();
+}
+
+/* ... of the ordinary kind alone */
+static void st_reach(uint32_t sec, uint32_t runs)
+{
+	st_reach3(sec, runs, 0, 0);
+}
+
+/* What three launches agree on, worked out here the plain way: their mean,
+ * or the one between if the lowest and the highest are more than `wide` apart. */
+static int expect3(int a, int b, int c, int wide)
+{
+	const int lo = a < b ? (a < c ? a : c) : (b < c ? b : c);
+	const int hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
+
+	return hi - lo > wide ? a + b + c - lo - hi : tune_mean(a + b + c, 3);
 }
 
 /* A slot of tuning.bin as it lies (0: not there). */
@@ -4767,8 +4998,9 @@ static int st_slot(const char *dir, uint32_t i, TuneSlot *t)
 }
 
 /* What a game starts from (tuning.bin): not where Adaptive ended, but what it
- * held after the first 50 MiB (100 after many reads) of a launch - taken in
- * the first three launches, then their mean, kept as it is. */
+ * held after the first 50 MiB of a launch (100 if a kind it learns from was
+ * still short of runs) - one snapshot from each of the first three valid
+ * launches, every one kept, what they agree on worked out from them. */
 static void test_learned_kept_in_file(void)
 {
 	static uint8_t u[256 * 512];
@@ -4796,16 +5028,17 @@ static void test_learned_kept_in_file(void)
 		CHECK(rd_ok(u, at, 256));
 	CHECK(g_st_sec == 4 * 256 && g_st_reads == 4);
 	CHECK(rd_ok(u, 3000, 1) && g_st_sec == 4 * 256 + 1 && g_st_reads == 5);
-	/* 50 MiB after few reads: the start is taken; after many, at 100 MiB */
-	st_reach(TUNE_START_FEW_SEC - 1, 10);
+	/* 50 MiB with the runs enough: the start is taken; with a kind seen but short
+	 * of runs the window goes on to 100 MiB (not the number of reads decides) */
+	st_reach(TUNE_START_FEW_SEC - 1, 100);
 	CHECK(g_st_rec.n == 0);
-	st_reach(TUNE_START_FEW_SEC, TUNE_START_MANY_READS + 1);
+	st_reach(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS - 1);
 	CHECK(g_st_rec.n == 0 && g_st_taken != 0x44);
-	st_reach(TUNE_START_MANY_SEC - 1, TUNE_START_MANY_READS + 1);
+	st_reach(TUNE_START_MANY_SEC - 1, TUNE_START_MIN_RUNS - 1);
 	CHECK(g_st_rec.n == 0);
-	st_reach(TUNE_START_MANY_SEC, TUNE_START_MANY_READS + 1);
-	CHECK(g_st_rec.n == 1 && g_st_taken == 0x44);
-	st_reach(TUNE_START_MANY_SEC * 2, 1);           /* once a launch */
+	st_reach(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS);     /* enough by 100 MiB */
+	CHECK(g_st_rec.n == 1 && g_st_taken == 0x44 && g_st_rec.snap[0].ok == 1u << OO_C);
+	st_reach(TUNE_START_MANY_SEC * 2, 100);         /* once a launch */
 	CHECK(g_st_rec.n == 1);
 	ra_proc_event(0x44, 4);
 	vm_stage_worker_tick();
@@ -4837,7 +5070,7 @@ static void test_learned_kept_in_file(void)
 	CHECK(g_ra_adj[0] != -3);
 	ra_proc_event(0x42, 4);                         /* ... and what it ended in is not kept */
 	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 3 && g_tune_n == 2);
+	CHECK(fake_tune_writes == 3 && g_tune_n == 2);  /* each launch's result written at once */
 	CHECK(st_slot(dir, 1, &t) && tune_title_is(&t.app, "PCSE00001") && tune_valid(&t.app) &&
 	      t.app.st.n == 1 && t.app.st.snap[0].ra_adj[0] == -3 && t.app.ra_adj[0] == 0 &&
 	      t.app.pos[0][5] == 0 && t.app.run[0][10] == 0);
@@ -4876,15 +5109,24 @@ static void test_learned_kept_in_file(void)
 	CHECK(a[2] == -3);
 	st_reach(TUNE_START_FEW_SEC, 100);
 	{
-		const int mean = tune_mean(a[0] + a[1] + a[2], 3);
+		TuneSnap ag;
+		int med, mean;
 
-		CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[0].ra_adj[0] == mean);
-		CHECK(g_st_rec.snap[1].ra_adj[0] == 0 && g_st_rec.snap[2].ra_adj[0] == 0);   /* replaced by one */
-		CHECK(tune_snap_ok(&g_st_rec.snap[0]));
+		/* every launch's own result kept - none replaced by a number made of them */
+		CHECK(g_st_rec.n == TUNE_START_N);
+		CHECK(g_st_rec.snap[0].ra_adj[0] == a[0] && g_st_rec.snap[1].ra_adj[0] == a[1] &&
+		      g_st_rec.snap[2].ra_adj[0] == a[2]);
+		CHECK(tune_snap_ok(&g_st_rec.snap[0]) && tune_snap_ok(&g_st_rec.snap[1]) &&
+		      tune_snap_ok(&g_st_rec.snap[2]));
+		tune_start_agg(&g_st_rec, &ag, &med);
+		mean = ag.ra_adj[0];
+		CHECK(mean == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
 		ra_proc_event(0x4A, 4);
 		vm_stage_worker_tick();
 		CHECK(fake_tune_writes == 5 && g_tune_n == 2);
-		CHECK(st_slot(dir, 1, &t) && t.app.st.n == TUNE_START_N && t.app.st.snap[0].ra_adj[0] == mean);
+		CHECK(st_slot(dir, 1, &t) && t.app.st.n == TUNE_START_N && tune_valid(&t.app) &&
+		      t.app.st.snap[0].ra_adj[0] == a[0] && t.app.st.snap[1].ra_adj[0] == a[1] &&
+		      t.app.st.snap[2].ra_adj[0] == a[2]);
 
 		/* the 4th launch and on: from the start values - not where an earlier one ended */
 		as_app(0x4B);
@@ -4895,7 +5137,8 @@ static void test_learned_kept_in_file(void)
 		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);                      /* Adaptive goes on by itself */
 		CHECK(g_ra_adj[0] != mean || g_ad_rounds[0] > 1);
 		st_reach(TUNE_START_FEW_SEC * 3, 100);
-		CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[0].ra_adj[0] == mean);   /* never touched */
+		CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[0].ra_adj[0] == a[0] &&
+		      g_st_rec.snap[2].ra_adj[0] == a[2]);                /* never touched */
 		ra_proc_event(0x4B, 4);
 		vm_stage_worker_tick();
 		CHECK(fake_tune_writes == 5);                             /* nothing to write */
@@ -4956,7 +5199,7 @@ static void test_learned_kept_in_file(void)
 
 		as_app(0x4D);
 		vm_stage_worker_tick();
-		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == tune_mean(a[0] + a[1] + a[2], 3));
+		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
 		ra_app_global(&ap);
 		ap.ra = VM_RA_ADAPTIVE;
 		ap.thr[0] = 3;
@@ -4989,7 +5232,7 @@ static void test_learned_kept_in_file(void)
 		CHECK(g_tune_n == n0 + 1u || g_tune_n == n0);
 		as_app(0x101);
 		vm_stage_worker_tick();
-		CHECK(g_st_rec.n == 1);                       /* another app's slot: whole */
+		CHECK(g_st_rec.n == 1);                       /* another app's start: whole */
 		ra_proc_event(0x101, 4);
 		vm_stage_worker_tick();
 	}
@@ -6090,7 +6333,9 @@ int main(void)
 	RUN(test_session_log);
 	RUN(test_onoff_measured);
 	RUN(test_tune_v3);
-	RUN(test_start_mean);
+	RUN(test_start_agg);
+	RUN(test_start_runs_counted);
+	RUN(test_start_window);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

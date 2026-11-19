@@ -39,6 +39,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 |---|---|---|
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing; this page stays, so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
+| Low kernel memory | Shown while both storages are on. The two share one set of buffers: 384 KiB less kernel memory. The app in front comes first: its reads from either card are sped up in turn, other apps' go the standard way meanwhile. Copying between the cards gains less. Takes effect after a restart | Off |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data. **All**: after every read. **Non-DMA**: not after *DMA copy*'s copies, faster. If a game shows graphics glitches, use All | Non-DMA |
 | Overlapped reads | Faster reads. **Auto** tunes itself to your card, **Fixed** uses built-in tuning | Auto |
@@ -141,12 +142,12 @@ Tester, quick profile (16 MiB file, 3 runs, every byte checked), PCH-1000, firmw
 
 ## Error C1-2569-2
 
-The system is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, leave only one storage on (each takes 256 KiB), switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
+The system is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, switch on *Low kernel memory* or leave only one storage on (each takes up to 416 KiB), switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
 
 ## Good to know
 
 - Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
-- Memory: 256 KiB per storage, 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*.
+- Memory: 256 KiB per storage (with *Low kernel memory*, one set for both), 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*.
 - While the console starts, every transfer goes the standard way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
 - Its files on the internal storage are only the settings, the boot guard and the log; what it learns goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

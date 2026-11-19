@@ -154,7 +154,9 @@ typedef struct Dev {
 	int           port;          /* SDIF port, or -1: the memory card          */
 	SceUID        uid;
 	void         *buf;           /* NC staging buffer, NULL until allocated    */
-	volatile int  busy;
+	volatile int  busy;          /* use dbusy(): shared ones take g_sh.busy    */
+	int           shared;        /* Low kernel memory: buffers in g_sh (set at
+	                              * the start, before the hooks)               */
 	volatile int  enabled;       /* from settings                              */
 	volatile int  want;          /* ... as set, also while the console starts  */
 	volatile int  fallback;      /* error/mismatch seen: stock for the session */
@@ -242,6 +244,55 @@ typedef struct Dev {
 	uint32_t      ra_wbusy;               /* writes on the device right now    */
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
+
+/* Low kernel memory (VM_KEY_LOWMEM, read at the start): the SD2Vita and the
+ * memory card, both set on, share one staging buffer and one second buffer
+ * instead of one each (384 KiB less); each keeps its own tiny reads' block
+ * and threads. One request at a time on either takes them (a shared `busy`:
+ * the other one's request meanwhile goes the standard way, as on a busy
+ * device). Read ahead's pieces live in them: only the storage that used
+ * them last (owner) can have pieces, and a request of the other one drops
+ * them first (take) - so a piece is never one storage's data in the other's
+ * buffer. Freed only at the end (vm_stage_fini).
+ *
+ * The app in front comes first: while one is in front, another app's
+ * request (another process: the system's own, one in the background) does
+ * not take them at all and goes the standard way, so it neither holds them
+ * when the app wants them nor drops the app's pieces (share_may). The
+ * kernel's own requests take them as before: they may be the app's (its
+ * asynchronous reads). With the home screen in front, any request. */
+static struct {
+	volatile int busy;
+	Dev         *owner;                /* the busy holder's                    */
+	SceUID       uid, uid2;
+	void        *buf, *buf2;
+	uint32_t     handovers, other_busy; /* atomics: for the log               */
+	uint32_t     yielded;              /* atomic: not the app in front's       */
+} g_sh = { .uid = -1, .uid2 = -1 };
+static volatile int g_lowmem_set;          /* the setting                      */
+static int          g_share_on;            /* in effect for this start         */
+
+static inline volatile int *dbusy(Dev *d)
+{
+	return d->shared ? &g_sh.busy : &d->busy;
+}
+
+static SceUID g_ra_fg;                    /* the app in front (see the app events) */
+
+/* Whether this request may take d's buffers: always, unless they are shared
+ * and another app than the one in front asks (see g_sh). */
+static int share_may(const Dev *d)
+{
+	SceUID fg, pid;
+
+	if (!d->shared || !(fg = __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED)))
+		return 1;
+	pid = ksceKernelGetProcessId();
+	if (pid == fg || pid == KERNEL_PID)
+		return 1;
+	ADD(g_sh.yielded, 1);
+	return 0;
+}
 
 static Dev g_dev[VM_DEV_COUNT] = {
 	[VM_DEV_SD2VITA]  = { .port = 1, .uid = -1, .uid2 = -1, .th = -1, .sem_go = -1, .sem_done = -1, .sem_free = -1,
@@ -380,24 +431,39 @@ static void ensure_buf(Dev *d)
 	if (!LD(g_live) || __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || LD(d->unusable) ||
 	    LD(d->alloc_err))
 		return;
+	if (d->shared && g_sh.buf) {
+		__atomic_store_n(&d->buf, g_sh.buf, __ATOMIC_RELEASE);   /* the other one's */
+		return;
+	}
 	r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, STAGE_BYTES, &uid, &base);
 	if (r < 0) {
 		ST(d->alloc_logged, 0);         /* the worker logs it */
 		ST(d->alloc_err, r);
 		return;
 	}
-	d->uid = uid;
+	if (d->shared) {
+		g_sh.uid = uid;                   /* kept to the end, for both */
+		g_sh.buf = base;
+	} else {
+		d->uid = uid;
+	}
 	__atomic_store_n(&d->buf, base, __ATOMIC_RELEASE);   /* published last */
 }
+
+
+static void ra_drop(Dev *d);
 
 /* Take the device buffer for one request, or 0 if the request stays stock. */
 static int take(Dev *d, int mine, uint32_t nsec)
 {
 	if (!mine || !LD(d->enabled) || LD(d->fallback) ||
-	    !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || nsec < LD(g_min_sectors) || !nsec)
+	    !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || nsec < LD(g_min_sectors) || !nsec ||
+	    !share_may(d))
 		return 0;
-	if (__sync_lock_test_and_set(&d->busy, 1)) {
+	if (__sync_lock_test_and_set(dbusy(d), 1)) {
 		ADD(d->st.passthru, 1);
+		if (d->shared)
+			ADD(g_sh.other_busy, 1);
 		return 0;
 	}
 	/* Re-check after taking the buffer: vm_stage_fini clears `enabled` first and
@@ -405,8 +471,16 @@ static int take(Dev *d, int mine, uint32_t nsec)
 	 * just before that must not go on to use the buffer. */
 	__sync_synchronize();
 	if (!LD(d->enabled) || LD(d->fallback)) {
-		__sync_lock_release(&d->busy);
+		__sync_lock_release(dbusy(d));
 		return 0;
+	}
+	/* Low kernel memory: the buffers were the other storage's - its pieces
+	 * (in them) dropped first, waiting for one being read */
+	if (d->shared && __atomic_load_n(&g_sh.owner, __ATOMIC_RELAXED) != d) {
+		if (g_sh.owner)
+			ra_drop(g_sh.owner);
+		__atomic_store_n(&g_sh.owner, d, __ATOMIC_RELAXED);
+		ADD(g_sh.handovers, 1);
 	}
 	return 1;
 }
@@ -420,6 +494,37 @@ static int take(Dev *d, int mine, uint32_t nsec)
 #define PIPE_HANDOFF_NS    50000u
 #define PIPE_MIN_TAIL      8
 #define PIPE_TAIL_SECTORS  (STAGE_SECTORS / 2)   /* the second buffer's size    */
+
+/* Device d's second buffer, if it has none: its own, or with Low kernel
+ * memory the shared one (made by the first that needs it). 0 or the error. */
+static int ensure_buf2(Dev *d)
+{
+	int r;
+
+	if (d->buf2)
+		return 0;
+	if (!d->shared) {
+		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2);
+		if (r < 0) {
+			d->uid2 = -1;
+			d->buf2 = NULL;
+		}
+		return r < 0 ? r : 0;
+	}
+	if (!g_sh.buf2) {
+		void *b = NULL;
+
+		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &g_sh.uid2, &b);
+		if (r < 0) {
+			g_sh.uid2 = -1;
+			return r;
+		}
+		g_sh.buf2 = b;
+	}
+	d->uid2 = -1;                         /* not this device's to free */
+	d->buf2 = g_sh.buf2;
+	return 0;
+}
 /* Per-sector costs before anything is measured (SD2Vita): the card read, and
  * the copy without and with the GPU-safe clean. */
 #define PIPE_DEF_IO_NS     25000u
@@ -1220,7 +1325,7 @@ static int pipe_retire(Dev *d)
 	__atomic_store_n(&d->pipe_ready, 0, __ATOMIC_SEQ_CST);
 	__sync_synchronize();                 /* pairs with the fence in take() */
 	/* an acquire load: the request's last use of the buffers comes first */
-	for (int i = 0; __atomic_load_n(&d->busy, __ATOMIC_ACQUIRE); i++) {
+	for (int i = 0; __atomic_load_n(dbusy(d), __ATOMIC_ACQUIRE); i++) {
 		if (i >= PIPE_RETIRE_MS)
 			return 0;
 		ksceKernelDelayThread(1000);
@@ -1241,8 +1346,7 @@ static int pipe_setup(Dev *d)
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->pipe_quit = 0;
 	/* its buffer: already there if made at the start (prealloc) */
-	if (!d->buf2 &&
-	    (r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2)) < 0) {
+	if (!d->buf2 && (r = ensure_buf2(d)) < 0) {
 		d->uid2 = -1;
 		d->buf2 = NULL;
 		return r;
@@ -3734,6 +3838,20 @@ static int ra_any(const Dev *d)
 	return 0;
 }
 
+/* Pieces of a stream still being read lie in d's staging buffers: its own,
+ * or with Low kernel memory the other storage's (a small transfer then goes
+ * the standard way rather than drop them; a look only - take decides). */
+static int ra_live(const Dev *d)
+{
+	const Dev *o = d->shared ? __atomic_load_n(&g_sh.owner, __ATOMIC_RELAXED) : d;
+
+	if (!o)
+		return 0;
+	return ra_any(o) &&
+	       ksceKernelGetSystemTimeLow() - __atomic_load_n(&o->ra_last_us, __ATOMIC_RELAXED) <
+	       RA_LIVE_US;
+}
+
 /* Drop every piece: the queued ones at once, the one being read once it is
  * done. The staging buffers are then this request's again. */
 static void ra_drop(Dev *d)
@@ -4027,10 +4145,25 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 {
 	const int small = d->ra_noted_small;
-	const int nc = small ? d->rs_nc : d->ra_nc;
-	const uint32_t streak = small ? d->rs_streak : d->ra_streak;
-	uint32_t thr = ra_threshold(nc), next = small ? d->rs_end : d->ra_last_end;
+	int nc;
+	uint32_t streak, thr, next;
 	int want, live = 0;
+
+	if (small) {
+		/* the 32 KiB stream's fields: a read the standard way on another
+		 * thread may note one at the same moment (ra_note_small) */
+		if (__sync_lock_test_and_set(&d->rs_lock, 1))
+			return;                           /* refilled after the next read */
+		nc = d->rs_nc;
+		streak = d->rs_streak;
+		next = d->rs_end;
+		__sync_lock_release(&d->rs_lock);
+	} else {
+		nc = d->ra_nc;
+		streak = d->ra_streak;
+		next = d->ra_last_end;
+	}
+	thr = ra_threshold(nc);
 
 	if (small)
 		thr = ra_small_threshold(nc, thr);
@@ -4163,7 +4296,7 @@ static int ra_retire(Dev *d)
 {
 	__atomic_store_n(&d->ra_ready, 0, __ATOMIC_SEQ_CST);
 	__sync_synchronize();
-	for (int i = 0; __atomic_load_n(&d->busy, __ATOMIC_ACQUIRE); i++) {
+	for (int i = 0; __atomic_load_n(dbusy(d), __ATOMIC_ACQUIRE); i++) {
 		if (i >= RA_RETIRE_MS)
 			return 0;
 		ksceKernelDelayThread(1000);
@@ -4179,7 +4312,7 @@ static int ra_retire(Dev *d)
 
 		for (int i = 0; i < RA_PIECES; i++)
 			reading |= __atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) == RA_READING;
-		if (!reading && !__atomic_load_n(&d->busy, __ATOMIC_ACQUIRE))
+		if (!reading && !__atomic_load_n(dbusy(d), __ATOMIC_ACQUIRE))
 			break;
 		if (t >= RA_RETIRE_MS)
 			return 0;
@@ -4234,12 +4367,13 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 	int wr, filled = 0;
 	void *shadow;
 
-	if ((LD(g_gpu_safe) && !g_dcache_clean) || __sync_lock_test_and_set(&d->busy, 1))
+	if ((LD(g_gpu_safe) && !g_dcache_clean) || !share_may(d) ||
+	    __sync_lock_test_and_set(dbusy(d), 1))
 		return 0;                             /* (no cache clean: the standard path) */
 	__sync_synchronize();                     /* pairs with ra_retire's fence */
 	if (!__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) || !d->t_buf || !LD(d->enabled) ||
 	    LD(d->fallback)) {
-		__sync_lock_release(&d->busy);
+		__sync_lock_release(dbusy(d));
 		return 0;
 	}
 	if (sector == d->t_next && part == d->t_part) {
@@ -4256,7 +4390,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		ADD(DG()->lk[LK_TINY].spoilt, 1);         /* in a block a write spoilt */
 	if (oo_off(OO_TINY)) {                /* off as measured: the run still counted */
 		ST(d->t_end, LD(d->t_start));
-		__sync_lock_release(&d->busy);
+		__sync_lock_release(dbusy(d));
 		return 0;
 	}
 	if (!(LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) && sector + n <= LD(d->t_end) &&
@@ -4270,7 +4404,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		ST(d->t_end, LD(d->t_start));
 		d->t_part = part;
 		if (d->t_streak < tiny_thr() || n > blk || sector > 0xFFFFFFFFu - blk) {
-			__sync_lock_release(&d->busy);
+			__sync_lock_release(dbusy(d));
 			return 0;
 		}
 		/* as a piece: the range before the look at ra_wbusy, both in one order
@@ -4283,7 +4417,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		if (wr || io(ref, part, sector, d->t_buf, blk) < 0) {
 			/* a write now, or the card's end: this read the standard way */
 			ST(d->t_end, sector);
-			__sync_lock_release(&d->busy);
+			__sync_lock_release(dbusy(d));
 			return 0;
 		}
 		d->t_io = io;
@@ -4308,7 +4442,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 			ST(d->t_end, LD(d->t_start));
 		__sync_lock_release(&g_shadow_busy);
 	}
-	__sync_lock_release(&d->busy);
+	__sync_lock_release(dbusy(d));
 	if (LD(d->fallback)) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
@@ -4343,7 +4477,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		return ret;
 	}
 	if (!__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
-		__sync_lock_release(&d->busy);          /* switched off meanwhile */
+		__sync_lock_release(dbusy(d));          /* switched off meanwhile */
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, p, nsec);
 	}
@@ -4386,7 +4520,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	}
 	if (COUNT_CORES() && own)                  /* graphics data the game's thread copied */
 		__atomic_fetch_add(&g_ra_nc_own_kib, own / 2, __ATOMIC_RELAXED);
-	__sync_lock_release(&d->busy);
+	__sync_lock_release(dbusy(d));
 	if (bad) {
 		void (*const fn)(void) = __atomic_load_n(&g_on_problem, __ATOMIC_ACQUIRE);
 
@@ -4463,7 +4597,7 @@ static void ncd_map(OffMap *m)
 }
 
 /* A game's read into non-cacheable memory, by the helper straight
- * into the game's buffer, with d->busy already held. 1 if done here (*ret:
+ * into the game's buffer, with dbusy(d) already held. 1 if done here (*ret:
  * its result), 0 if it stays standard (no helper, no usable mapping). On a
  * failed read the whole request is read again the standard way, so the
  * caller gets what the system gives. */
@@ -4523,17 +4657,19 @@ static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t s
 {
 	int done;
 
-	if (__sync_lock_test_and_set(&d->busy, 1)) {
+	if (!share_may(d))
+		return 0;
+	if (__sync_lock_test_and_set(dbusy(d), 1)) {
 		ADD(g_ncd_busy, 1);
 		return 0;
 	}
 	__sync_synchronize();                 /* pairs with pipe_retire's fence */
 	if (!LD(d->enabled) || LD(d->fallback)) {
-		__sync_lock_release(&d->busy);
+		__sync_lock_release(dbusy(d));
 		return 0;
 	}
 	done = ncd_job(d, io, ref, part, sector, p, nsec, pid, ret);
-	__sync_lock_release(&d->busy);
+	__sync_lock_release(dbusy(d));
 	return done;
 }
 
@@ -4619,9 +4755,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
 	 * waits for the card either way; a write still makes them unusable). */
-	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) && ra_any(d) &&
-	    ksceKernelGetSystemTimeLow() - __atomic_load_n(&d->ra_last_us, __ATOMIC_RELAXED) <
-	    RA_LIVE_US) {
+	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) &&
+	    ra_live(d)) {
 		ret = io(ref, part, sector, buf, nsec);
 		if (!write)
 			ra_note_small_stock(d, part, sector, nsec, 0, ret);
@@ -4817,7 +4952,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	if (verify)
 		__sync_lock_release(&g_shadow_busy);
-	__sync_lock_release(&d->busy);
+	__sync_lock_release(dbusy(d));
 	if (ret < 0) {
 		ADD(d->st.errors, 1);
 		ST(d->fallback, 1);
@@ -5007,11 +5142,8 @@ static void prealloc(Dev *d)
 	ensure_buf(d);
 	if (!__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE))
 		return;
-	if ((LD(g_pipeline) || LD(g_offload) || LD(g_readahead)) && !d->buf2 &&
-	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, PIPE_TAIL_SECTORS * 512, &d->uid2, &d->buf2) < 0) {
-		d->uid2 = -1;
-		d->buf2 = NULL;
-	}
+	if (LD(g_pipeline) || LD(g_offload) || LD(g_readahead))
+		(void)ensure_buf2(d);                 /* tried again when needed */
 	if (LD(g_readahead) && !d->t_buf &&
 	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
 		d->t_uid = -1;
@@ -5064,6 +5196,13 @@ int vm_stage_init(void)
 	 * (g_hold, vm_stage_go); the others get theirs when they are switched on
 	 * (vm_stage_apply). */
 	ST(g_live, 1);
+	/* Low kernel memory: decided once, here - both storages set on */
+	g_share_on = LD(g_lowmem_set) && LD(g_dev[VM_DEV_SD2VITA].want) &&
+	             LD(g_dev[VM_DEV_MEMCARD].want) && !g_dev[VM_DEV_SD2VITA].buf &&
+	             !g_dev[VM_DEV_MEMCARD].buf;
+	g_dev[VM_DEV_SD2VITA].shared = g_dev[VM_DEV_MEMCARD].shared = g_share_on;
+	if (g_share_on)
+		VM_KLOGI("stage: low kernel memory: one buffer for the SD2Vita and the memory card");
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		if (LD(g_dev[i].want))
 			prealloc(&g_dev[i]);
@@ -5137,7 +5276,7 @@ void vm_stage_fini(void)
 		ST(g_dev[i].unusable, 1);       /* and never allocate again */
 	}
 	for (int i = 0; i < VM_DEV_COUNT; i++)
-		while (__atomic_load_n(&g_dev[i].busy, __ATOMIC_ACQUIRE))
+		while (__atomic_load_n(dbusy(&g_dev[i]), __ATOMIC_ACQUIRE))
 			ksceKernelDelayThread(1000);
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		__atomic_store_n(&g_dev[i].pipe_ready, 0, __ATOMIC_SEQ_CST);   /* nothing in flight now */
@@ -5178,6 +5317,20 @@ void vm_stage_fini(void)
 		ksceKernelFreeMemBlock(g_shadow_uid);
 		g_shadow_uid = -1;
 	}
+	/* Low kernel memory: the shared buffers, last */
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		if (g_dev[i].shared) {
+			__atomic_store_n(&g_dev[i].buf, NULL, __ATOMIC_RELEASE);
+			g_dev[i].buf2 = NULL;
+		}
+	if (g_sh.uid >= 0)
+		ksceKernelFreeMemBlock(g_sh.uid);
+	if (g_sh.uid2 >= 0)
+		ksceKernelFreeMemBlock(g_sh.uid2);
+	g_sh.uid = g_sh.uid2 = -1;
+	g_sh.buf = g_sh.buf2 = NULL;
+	__atomic_store_n(&g_sh.owner, NULL, __ATOMIC_RELAXED);
+	g_dev[VM_DEV_SD2VITA].shared = g_dev[VM_DEV_MEMCARD].shared = g_share_on = 0;
 }
 
 /* ---- the settings in effect: the global ones, or the app in front's -------
@@ -5297,6 +5450,8 @@ static void mem_report(void)
 		mem_report_one("second buffer", i, d->uid2, PIPE_TAIL_SECTORS * 512);
 		mem_report_one("tiny block", i, d->t_uid, RA_TINY_SECTORS * 512);
 	}
+	mem_report_one("shared staging", -1, g_sh.uid, STAGE_BYTES);
+	mem_report_one("shared second buffer", -1, g_sh.uid2, PIPE_TAIL_SECTORS * 512);
 	mem_report_one("log counts", -1, g_diag_uid, (uint32_t)sizeof(Diag));
 	if (g_shadow_uid >= 0)
 		mem_report_one("verify", -1, g_shadow_uid, STAGE_BYTES);
@@ -5358,6 +5513,7 @@ void vm_stage_apply(const VmSettings *s)
 		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the worker: whose now */
 		ra_wake();
 	}
+	ST(g_lowmem_set, s->lowmem ? 1 : 0);   /* used at the start only */
 	if (s->log)
 		diag_make();
 	ST(g_log_diag, s->log && DG() ? 1 : 0);
@@ -5866,6 +6022,11 @@ void vm_stage_worker_tick(void)
 				         fr[VM_DEV_SD2VITA][0], fr[VM_DEV_SD2VITA][1], fr[VM_DEV_SD2VITA][2],
 				         fr[VM_DEV_MEMCARD][0], fr[VM_DEV_MEMCARD][1], fr[VM_DEV_MEMCARD][2]);
 		}
+		if (g_share_on)
+			VM_KLOGI("stage: one buffer for both storages: handed over %u times; the standard "
+			         "way: %u as it was taken, %u not the app in front's",
+			         (unsigned)LD(g_sh.handovers), (unsigned)LD(g_sh.other_busy),
+			         (unsigned)LD(g_sh.yielded));
 		if (LD(g_offload) || __atomic_load_n(&g_off_reads, __ATOMIC_RELAXED))
 			VM_KLOGI("stage: copied on the system core %u reads %u MiB (%u from the 2nd page), "
 			         "mapping failed %u (0x%08x)",

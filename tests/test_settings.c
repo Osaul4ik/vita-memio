@@ -217,7 +217,9 @@ static void test_driver_key(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.sd2vita == 1 && s.driver == 1 && s.sysapps == VM_DEF_SYSAPPS);   /* newer: defaults */
+	CHECK(s.lowmem == 0 && VM_DEF_LOWMEM == 0);                              /* 1.5.0's too */
 	CHECK(vm_settings_set(VM_KEY_SYSAPPS, 2) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_LOWMEM, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_DRIVER, 0) == VM_OK);
 	vm_settings_flush();
 	vm_settings_init();                       /* the next start */

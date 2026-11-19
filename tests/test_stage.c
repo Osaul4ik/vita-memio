@@ -56,8 +56,11 @@ static int fake_copy(void *d, const void *s, size_t n)
 #define REF_RD       1
 #define REF_WR       2
 #define M            VM_DEV_MEMCARD
+#define REF_RD2      3                    /* the second card (disk2): Low kernel memory */
+#define REF_WR2      4
 
 static uint8_t disk[DISK_SECTORS * 512];
+static uint8_t disk2[DISK_SECTORS * 512];
 static pthread_mutex_t disk_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t *staging;
 
@@ -86,7 +89,12 @@ static int fake_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, u
 	if (sector > DISK_SECTORS || n > DISK_SECTORS - sector)
 		return -5;                            /* past the card's end */
 	pthread_mutex_lock(&disk_lock);           /* the stress test writes meanwhile */
-	if (ref == REF_RD) {
+	if (ref == REF_RD2 || ref == REF_WR2) {   /* the other card */
+		if (ref == REF_RD2)
+			memcpy(buf, disk2 + (size_t)sector * 512, (size_t)n * 512);
+		else
+			memcpy(disk2 + (size_t)sector * 512, buf, (size_t)n * 512);
+	} else if (ref == REF_RD) {
 		memcpy(buf, disk + (size_t)sector * 512, (size_t)n * 512);
 		if (corrupt_staged && buf == staging)
 			((uint8_t *)buf)[0] ^= 0xFF;
@@ -119,6 +127,12 @@ static void reset(void)
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->ra_th = d->ra_go = d->ra_done = d->t_uid = -1;
 	g_readahead = 0;
+	g_lowmem_set = g_share_on = 0;                  /* each storage its own buffers */
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		g_dev[i].shared = 0;
+	g_sh.busy = 0;
+	g_sh.owner = NULL;
+	g_sh.handovers = g_sh.other_busy = 0;
 	g_hold = 0;                                     /* the home screen is up */
 	g_sysapps = 0;                                  /* as before: games only */
 	g_app_pid = 0;
@@ -5264,6 +5278,361 @@ static void test_log_block(void)
 	vm_stage_apply(&s);
 }
 
+/* ---- Low kernel memory: one buffer for both storages ---------------------- */
+
+/* At the start, with both storages on: one staging buffer and one second
+ * buffer for the two, each its own tiny reads' block; with one storage on,
+ * or the switch off, each its own; all freed at the end. */
+static void test_lowmem_init(void)
+{
+	VmSettings s = devices_on(1, 0, 1);
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA], *const mc = &g_dev[VM_DEV_MEMCARD];
+	int n;
+
+	/* off: two of each, as before */
+	boot_state();
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(!g_share_on && !sd->shared && !mc->shared);
+	CHECK(fake_alloc_calls == 6 && sd->buf != mc->buf && sd->buf2 != mc->buf2);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 6);
+	/* on, both storages: one staging and one second buffer for the two */
+	boot_state();
+	s.lowmem = 1;
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(g_share_on && sd->shared && mc->shared);
+	CHECK(fake_alloc_calls == 4);                 /* staging, second, two tiny blocks */
+	CHECK(sd->buf && sd->buf == mc->buf && sd->buf2 && sd->buf2 == mc->buf2);
+	CHECK(sd->t_buf && mc->t_buf && sd->t_buf != mc->t_buf);
+	CHECK(sd->uid < 0 && mc->uid < 0 && sd->uid2 < 0 && mc->uid2 < 0);   /* the share's own */
+	CHECK(g_sh.uid >= 0 && g_sh.uid2 >= 0 && g_sh.buf == sd->buf && g_sh.buf2 == sd->buf2);
+	CHECK(fake_log_find("stage: low kernel memory: one buffer") != NULL);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_apply(&s);
+	CHECK(fake_alloc_calls == 4 && sd->enabled && mc->enabled && sd->buf == mc->buf);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 4 && g_sh.uid < 0 && g_sh.uid2 < 0 && !g_share_on);
+	count_free_bufs(&n);
+	CHECK(n == 0 && !sd->buf2 && !mc->buf2);
+	/* on, one storage only: nothing to share */
+	boot_state();
+	s = devices_on(0, 0, 1);
+	s.lowmem = 1;
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(!g_share_on && !mc->shared && fake_alloc_calls == 3 && mc->uid >= 0);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 3);
+}
+
+/* Both storages on their buffers, shared, as the start makes them with Low
+ * kernel memory (the staging buffer the test's own); read ahead set by `s`. */
+static void lowmem_on(VmSettings *s, int ra, int offload)
+{
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA];
+
+	reset();
+	memset(sd, 0, sizeof(*sd));
+	sd->port = -1;
+	sd->uid = sd->uid2 = sd->t_uid = -1;
+	sd->th = sd->th2 = sd->ra_th = -1;
+	sd->sem_go = sd->sem_done = sd->sem_free = sd->sem_cgo = sd->sem_fin = -1;
+	sd->ra_go = sd->ra_done = -1;
+	g_share_on = sd->shared = g_dev[M].shared = 1;
+	g_sh.uid = -1;
+	g_sh.buf = staging;
+	sd->buf = staging;
+	sd->enabled = 1;
+	g_title_fn = fake_title;
+	as_app(0x44);
+	memset(s, 0, sizeof(*s));
+	s->memcard = s->sd2vita = 1;
+	s->stats = 1;
+	s->pipeline = VM_PIPE_AUTO;
+	s->offload = offload;
+	s->readahead = ra;
+	s->lowmem = 1;
+	vm_stage_apply(s);
+	g_live = 1;
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+}
+
+/* After lowmem_on: everything given back, the second storage as at boot. */
+static void lowmem_off(void)
+{
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA];
+
+	g_sh.buf = NULL;                              /* the test's: not freed */
+	vm_stage_fini();
+	memset(sd, 0, sizeof(*sd));
+	sd->port = 1;
+	sd->uid = sd->uid2 = sd->t_uid = -1;
+	sd->th = sd->th2 = sd->ra_th = -1;
+	sd->sem_go = sd->sem_done = sd->sem_free = sd->sem_cgo = sd->sem_fin = -1;
+	sd->ra_go = sd->ra_done = -1;
+}
+
+static int rd2(uint8_t *u, uint32_t sector, uint32_t n)
+{
+	return stage_xfer(&g_dev[VM_DEV_SD2VITA], 0, fake_io, REF_RD2, 0, NULL, sector, u, n);
+}
+
+/* The handover: the memory card's stream has pieces in the shared buffers;
+ * the SD2Vita's next read drops them first and gets its own card's data;
+ * the memory card then reads its own again, from the card. */
+static void test_lowmem_handover(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA], *const mc = &g_dev[M];
+	uint32_t at = 0;
+
+	lowmem_on(&s, VM_RA_ON, VM_OFFLOAD_OFF);
+	for (uint32_t i = 0; i < sizeof(disk2); i++)
+		disk2[i] = (uint8_t)(i * 17 + 99 + (i >> 9));   /* another card: other data */
+	CHECK(sd->buf == mc->buf && sd->buf2 && sd->buf2 == mc->buf2 && sd->ra_ready && mc->ra_ready);
+	for (int i = 0; i < 8; i++, at += 256)
+		CHECK(rd_ok(u, at, 256));
+	ra_settled(mc);
+	CHECK(ra_any(mc) && g_sh.owner == mc);
+	/* the other card, over the same buffers: the pieces gone, its own data */
+	memset(u, 0xEE, 256 * 512);
+	CHECK(rd2(u, at, 256) == 0 && memcmp(u, disk2 + (size_t)at * 512, 256 * 512) == 0);
+	CHECK(!ra_any(mc) && g_sh.owner == sd && g_sh.handovers >= 2);
+	/* the memory card's stream again: its own card's data, never the other's */
+	for (int i = 0; i < 6; i++, at += 256)
+		CHECK(rd_ok(u, at, 256));
+	CHECK(g_sh.owner == mc && !ra_any(sd));
+	/* a small transfer on the other card while the stream's pieces are live:
+	 * the standard way, the pieces kept */
+	ra_settled(mc);
+	if (ra_any(mc)) {
+		const uint32_t h = g_sh.handovers;
+
+		CHECK(rd2(u, 0, 8) == 0 && memcmp(u, disk2, 8 * 512) == 0);
+		CHECK(ra_any(mc) && g_sh.owner == mc && g_sh.handovers == h);
+	}
+	/* the app in front first: another app's request on the other card goes
+	 * the standard way and leaves the app's pieces alone */
+	at = 0;                                       /* a new stream (the card is 2 MiB) */
+	for (int i = 0; i < 8; i++, at += 256)
+		CHECK(rd_ok(u, at, 256));
+	ra_settled(mc);
+	CHECK(ra_any(mc) && g_sh.owner == mc);
+	{
+		const uint32_t h = g_sh.handovers, y = g_sh.yielded;
+		const int io0 = io_here;
+
+		fake_pid = 0x99;                          /* not the app in front */
+		CHECK(rd2(u, 512, 256) == 0 && memcmp(u, disk2 + 512 * 512, 256 * 512) == 0);
+		CHECK(g_sh.yielded == y + 1 && g_sh.handovers == h && g_sh.owner == mc && ra_any(mc));
+		CHECK(io_here > io0);                     /* read the standard way, on its own thread */
+		fake_pid = 0x44;                          /* the app: its pieces still there */
+		CHECK(rd_ok(u, at, 256));
+		at += 256;
+		CHECK(g_sh.owner == mc);
+		fake_pid = KERNEL_PID;                    /* the kernel's own: may be the app's */
+		CHECK(rd2(u, 512, 256) == 0 && memcmp(u, disk2 + 512 * 512, 256 * 512) == 0);
+		CHECK(g_sh.owner == sd && g_sh.yielded == y + 1);
+		/* the home screen in front: any request */
+		ra_proc_event(0x44, 4);                   /* the app goes */
+		CHECK(__atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED) == 0);
+		fake_pid = 0x99;
+		CHECK(rd_ok(u, 0, 256));
+		CHECK(g_sh.owner == mc && g_sh.yielded == y + 1);
+		as_app(0x44);
+	}
+	free(u);
+	lowmem_off();
+}
+
+/* As test_data_always_right, with the two storages on one buffer: a reader
+ * on each (on their own threads, so they meet), a writer on both, read ahead
+ * switched under them; each card has its own data (the card in every
+ * sector), so a piece of one handed to the other shows. */
+static uint32_t lm_ver[2][FZ_SECTORS];        /* atomics */
+static uint32_t lm_bad, lm_checked;           /* atomics */
+static volatile int lm_stop;
+
+static int lm_io(int c, int write, uint8_t *u, uint32_t at, uint32_t n)
+{
+	return c ? stage_xfer(&g_dev[VM_DEV_SD2VITA], write, fake_io, write ? REF_WR2 : REF_RD2,
+	                      REF_RD2, NULL, at, u, n)
+	         : stage_xfer(&g_dev[M], write, fake_io, write ? REF_WR : REF_RD, REF_RD, NULL, at,
+	                      u, n);
+}
+
+static void lm_read(int c, uint8_t *u, uint32_t at, uint32_t n)
+{
+	uint32_t lo[512];
+
+	for (uint32_t i = 0; i < n; i++)
+		lo[i] = __atomic_load_n(&lm_ver[c][at + i], __ATOMIC_ACQUIRE);
+	if (lm_io(c, 0, u, at, n) != 0) {
+		__atomic_fetch_add(&lm_bad, 1000000, __ATOMIC_RELAXED);
+		return;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		const uint32_t hi = __atomic_load_n(&lm_ver[c][at + i], __ATOMIC_ACQUIRE) + 1;
+
+		__atomic_fetch_add(&lm_checked, 1, __ATOMIC_RELAXED);
+		if (!fz_ok(u + (size_t)i * 512, (at + i) | (uint32_t)c << 24, lo[i], hi))
+			__atomic_fetch_add(&lm_bad, 1, __ATOMIC_RELAXED);
+	}
+}
+
+static void *lm_writer(void *arg)
+{
+	uint8_t *b = malloc(256 * 512);
+	uint32_t seed = (uint32_t)(uintptr_t)arg;
+
+	while (!__atomic_load_n(&lm_stop, __ATOMIC_ACQUIRE)) {
+		uint32_t at, n;
+		int c;
+
+		seed = seed * 1103515245u + 12345u;
+		c = (seed >> 30) & 1;
+		n = (seed >> 8) % 4 == 0 ? 64 + (seed >> 12) % 192 : 1 + (seed >> 12) % 24;
+		at = (seed >> 20) % (FZ_SECTORS - n);
+		for (uint32_t i = 0; i < n; i++)
+			fz_fill(b + (size_t)i * 512, (at + i) | (uint32_t)c << 24,
+			        __atomic_load_n(&lm_ver[c][at + i], __ATOMIC_RELAXED) + 1);
+		if (lm_io(c, 1, b, at, n) != 0)
+			__atomic_fetch_add(&lm_bad, 1000000, __ATOMIC_RELAXED);
+		for (uint32_t i = 0; i < n; i++)
+			__atomic_fetch_add(&lm_ver[c][at + i], 1, __ATOMIC_RELEASE);
+		for (volatile int k = 0; k < (int)(seed >> 26); k++)
+			;
+	}
+	free(b);
+	return NULL;
+}
+
+typedef struct { int c; uint32_t seed; int ops; } LmArg;
+
+static void lm_ops(int c, uint8_t *u, uint32_t *seed, int ops)
+{
+	for (int op = 0; op < ops; op++) {
+		uint32_t kind, at, n, len;
+
+		*seed = *seed * 1103515245u + 12345u;
+		kind = (*seed >> 8) % 10;
+		if (kind <= 4) {                           /* a stream */
+			n = (*seed >> 12) % 3 == 0 ? 64 : (*seed >> 12) % 3 == 1 ? 128 : 256;
+			len = 2 + (*seed >> 16) % 10;
+			if (n * len > FZ_SECTORS / 2)
+				len = FZ_SECTORS / 2 / n;
+			at = (*seed >> 20) % (FZ_SECTORS - n * len);
+			for (uint32_t r = 0; r < len; r++, at += n)
+				lm_read(c, u, at, n);
+		} else if (kind <= 7) {                    /* tiny reads in a row */
+			len = 2 + (*seed >> 12) % 40;
+			n = 1 + (*seed >> 18) % 4;
+			at = (*seed >> 20) % (FZ_SECTORS - n * len);
+			for (uint32_t r = 0; r < len; r++, at += n)
+				lm_read(c, u, at, n);
+		} else {                                   /* anywhere, any size */
+			n = 1 + (*seed >> 12) % 512;
+			at = (*seed >> 22) % (FZ_SECTORS - n);
+			lm_read(c, u, at, n);
+		}
+	}
+}
+
+static void *lm_reader(void *argp)
+{
+	LmArg *a = argp;
+	uint8_t *u = user_buf(512);
+
+	while (!__atomic_load_n(&lm_stop, __ATOMIC_ACQUIRE) && a->ops > 0) {
+		lm_ops(a->c, u, &a->seed, 1);
+		a->ops--;
+	}
+	free(u);
+	return NULL;
+}
+
+static void test_lowmem_data_right(void)
+{
+	uint8_t *u = user_buf(512);
+	uint32_t seed = 4242;
+
+	for (int phase = 0; phase < 4; phase++) {
+		VmSettings s;
+		pthread_t w, r;
+		LmArg other = { 1, 777u + (uint32_t)phase, 1500 };
+
+		fakes_tmpdir_remove();
+		fakes_tmpdir_new();
+		lowmem_on(&s, VM_RA_ADAPTIVE, phase & 1 ? VM_OFFLOAD_OFF : VM_OFFLOAD_ALL);
+		fake_memtype = phase >= 2 ? 0x8000 : 0xD000;
+		pthread_mutex_lock(&disk_lock);
+		for (uint32_t i = 0; i < FZ_SECTORS; i++) {
+			lm_ver[0][i] = lm_ver[1][i] = 0;
+			fz_fill(disk + (size_t)i * 512, i, 0);
+			fz_fill(disk2 + (size_t)i * 512, i | 1u << 24, 0);
+		}
+		pthread_mutex_unlock(&disk_lock);
+		lm_bad = lm_checked = 0;
+		__atomic_store_n(&lm_stop, 0, __ATOMIC_RELEASE);
+		CHECK(g_dev[M].buf == g_dev[VM_DEV_SD2VITA].buf && g_dev[M].buf2 &&
+		      g_dev[M].buf2 == g_dev[VM_DEV_SD2VITA].buf2);
+		CHECK(pthread_create(&w, NULL, lm_writer, (void *)(uintptr_t)(phase + 3)) == 0);
+		CHECK(pthread_create(&r, NULL, lm_reader, &other) == 0);   /* the SD2Vita's */
+		for (int op = 0; op < 1500; op++) {
+			seed = seed * 1103515245u + 12345u;
+			if ((seed >> 8) % 12 == 0) {               /* switches under them */
+				const int m = (seed >> 12) % 3;
+
+				s.readahead = m == 0 ? VM_RA_ADAPTIVE : m == 1 ? VM_RA_ON : VM_RA_OFF;
+				vm_stage_apply(&s);
+				for (int k = 0; k < 3; k++)
+					ST(g_oo_off[k], (seed >> (16 + k)) & 1);
+				vm_stage_worker_tick();
+				continue;
+			}
+			/* mostly the memory card's, now and then the other's on this
+			 * thread too: the buffers change hands both ways */
+			lm_ops((seed >> 20) % 5 == 0, u, &seed, 1);
+			if (op % 50 == 0)
+				vm_stage_worker_tick();
+		}
+		pthread_join(r, NULL);
+		__atomic_store_n(&lm_stop, 1, __ATOMIC_RELEASE);
+		pthread_join(w, NULL);
+		for (int c = 0; c < 2; c++)
+			for (uint32_t at = 0; at < FZ_SECTORS; at += 256)
+				lm_read(c, u, at, 256);
+		for (uint32_t i = 0; i < FZ_SECTORS; i++) {
+			uint8_t b[512], b2[512];
+
+			pthread_mutex_lock(&disk_lock);
+			memcpy(b, disk + (size_t)i * 512, 512);
+			memcpy(b2, disk2 + (size_t)i * 512, 512);
+			pthread_mutex_unlock(&disk_lock);
+			if (!fz_ok(b, i, lm_ver[0][i], lm_ver[0][i]) ||
+			    !fz_ok(b2, i | 1u << 24, lm_ver[1][i], lm_ver[1][i]))
+				lm_bad++;
+		}
+		printf("  shared: phase %d, %u of %u sectors wrong, buffers handed over %u times, "
+		       "%u requests the standard way meanwhile\n", phase, lm_bad, lm_checked,
+		       g_sh.handovers, g_sh.other_busy);
+		CHECK(lm_bad == 0 && lm_checked > 100000 && g_sh.handovers > 50);
+		fake_memtype = 0xD000;
+		lowmem_off();
+	}
+	free(u);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ra_adapt_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -5333,6 +5702,9 @@ int main(void)
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
 	RUN(test_log_block);
+	RUN(test_lowmem_init);
+	RUN(test_lowmem_handover);
+	RUN(test_lowmem_data_right);
 	RUN(test_data_always_right);
 
 	free(staging);

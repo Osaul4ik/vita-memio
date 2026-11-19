@@ -4703,6 +4703,100 @@ static void test_start_runs_counted(void)
 	vm_stage_fini();
 }
 
+/* What a launch has read and the runs counted for its start go with the
+ * Adaptive state they were learned into: a state not carried on (another key)
+ * begins them again; the same launch back from the home screen goes on; the
+ * pid is the one given with the title, not whatever g_ra_fg is by then. */
+static void test_start_counts_follow_state(void)
+{
+	VmSettings s;
+	char title[16];
+	uint32_t key;
+	SceUID pid;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	g_st_pid = 0;
+	g_st_taken = 0;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(g_st_pid == 0x44 && g_ad_title[0] && g_ad_pid == 0x44);
+	memcpy(title, g_ad_title, sizeof(title));
+	key = g_ad_key;
+	pid = g_st_pid;
+
+	/* the home screen and back (the same launch, whatever g_ra_fg says by then): counting goes on */
+	__atomic_store_n(&g_st_sec, 1000, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_runs[OO_C], 10, __ATOMIC_RELAXED);
+	ra_adapt_switch_pid("", 0, 0);
+	__atomic_store_n(&g_ra_fg, 0, __ATOMIC_RELAXED);
+	ra_adapt_switch_pid(title, key, pid);
+	CHECK(g_ad_pid == pid && g_st_sec == 1000 && g_st_runs[OO_C] == 10);
+
+	/* another key (the thresholds set by hand): its state is not carried on, nor are the counts */
+	ra_adapt_switch_pid(title, key ^ (1u << 4), pid);
+	CHECK(g_st_sec == 0 && g_st_reads == 0 && g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 &&
+	      g_st_runs[OO_TINY] == 0);
+
+	/* no pid in effect (none given with the title): nothing of another launch is reset */
+	__atomic_store_n(&g_st_sec, 77, __ATOMIC_RELAXED);
+	ra_adapt_switch_pid("", 0, 0);
+	CHECK(g_st_sec == 77);
+	vm_stage_fini();
+}
+
+/* An app's start is its own: with its thresholds set by hand those are used
+ * and the start stays (in memory and in the file); with them off again the
+ * start is in effect. */
+static void test_start_kept_through_manual(void)
+{
+	const uint32_t KA = VM_RA_ADAPTIVE;                    /* Adaptive, no thresholds of its own */
+	const uint32_t KM = VM_RA_ADAPTIVE | (4u << 4);        /* ... the C threshold set by hand    */
+	TuneApp a, stripped;
+
+	reset();
+	memset(&a, 0, sizeof(a));
+	memcpy(a.title, "PCSE00001", 9);
+	a.key = KA;
+	a.tiny_thr = RA_TINY_STREAK;
+	a.tiny_blk = RA_TINY_SECTORS;
+	a.st.n = TUNE_START_N;
+	for (int i = 0; i < (int)TUNE_START_N; i++) {
+		a.st.snap[i].tiny_thr = RA_TINY_STREAK;
+		a.st.snap[i].tiny_blk = RA_TINY_SECTORS;
+		a.st.snap[i].ra_adj[0] = 2;
+		a.st.snap[i].ok = 1;
+	}
+	stripped = a;
+	tune_strip(&stripped);
+	CHECK(tune_valid(&stripped));
+	memset(&g_ad_in, 0, sizeof(g_ad_in));
+	g_ad_in.app = stripped;
+	g_ad_in.fslot = 1;
+	g_ad_in.fsig = tune_sig(&stripped);
+
+	ra_adapt_switch_pid("PCSE00001", KA, 0x50);            /* a launch: from its start */
+	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 2);
+	ra_adapt_switch_pid("PCSE00001", KM, 0x50);            /* set by hand: those are used */
+	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
+	ra_adapt_switch_pid("", 0, 0);
+	CHECK(g_ad_out.app.st.n == TUNE_START_N && !ad_unsaved(&g_ad_out));   /* nothing to write over it */
+	ra_adapt_switch_pid("PCSE00001", KM, 0x51);            /* another launch, still by hand */
+	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
+	ra_adapt_switch_pid("PCSE00001", KA, 0x51);            /* off again: the start is in effect */
+	CHECK(g_ra_adj[0] == 2);
+	ra_adapt_switch_pid("", 0, 0);
+	CHECK(g_ad_out.app.st.n == TUNE_START_N && !ad_unsaved(&g_ad_out));
+	/* no snapshot is taken with thresholds set by hand */
+	CHECK(ad_key_auto(KA) && !ad_key_auto(KM) && !ad_key_auto(VM_RA_ON));
+}
+
 /* The window of a launch's start, the same for every launch: 50 MiB if every
  * kind seen has runs enough by then, else on to 100 MiB (the number of reads
  * does not decide); a kind still short at the end is left out of that
@@ -4738,6 +4832,9 @@ static void test_start_window(void)
 	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC, __ATOMIC_RELAXED);
 	vm_stage_worker_tick();
 	CHECK(g_st_rec.n == 1 && g_st_taken == 0x4A && g_st_rec.snap[0].ok == 1u << OO_C);
+	/* in tuning.bin as soon as it is taken, the app still in front */
+	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 1 && tune_valid(&t.app) && t.app.st.snap[0].ok == 1u << OO_C);
+	CHECK(g_ad_fsig == tune_sig(&t.app) && !g_tune_live_due);
 	ra_proc_event(0x4A, 4);
 	vm_stage_worker_tick();
 
@@ -4750,6 +4847,7 @@ static void test_start_window(void)
 	CHECK(g_st_rec.n == 1);
 	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
 	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4B && g_st_rec.snap[1].ok == 1u << OO_C);
+	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 2);
 	ra_proc_event(0x4B, 4);
 	vm_stage_worker_tick();
 
@@ -4779,6 +4877,7 @@ static void test_start_window(void)
 	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
 	CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[2].ok == 7);
 	CHECK(g_st_rec.snap[0].ok == 1u << OO_C && g_st_rec.snap[1].ok == 1u << OO_C);   /* as taken */
+	CHECK(st_slot(dir, 0, &t) && t.app.st.n == TUNE_START_N);                      /* already in the file */
 	tune_start_agg(&g_st_rec, &ag, &med);
 	CHECK(ag.ok == 7);
 	ra_proc_event(0x4E, 4);
@@ -5193,7 +5292,8 @@ static void test_learned_kept_in_file(void)
 		vm_stage_worker_tick();
 		CHECK(fake_tune_writes == w0 + 20);           /* nothing taken: no write */
 	}
-	/* the game's own threshold changed: not what it was taken under - afresh */
+	/* the game's own threshold set by hand: that is used, the start stays (and is
+	 * in effect again when the threshold is off) */
 	{
 		VmApp ap;
 
@@ -5204,7 +5304,15 @@ static void test_learned_kept_in_file(void)
 		ap.ra = VM_RA_ADAPTIVE;
 		ap.thr[0] = 3;
 		CHECK(vm_stage_app_set(&ap) == VM_OK);
-		CHECK(g_st_rec.n == 0 && g_ra_adj[0] == 0);
+		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
+		ra_proc_event(0x4D, 4);
+		vm_stage_worker_tick();
+		CHECK(!ad_unsaved(&g_ad_out));                /* nothing to write over the start */
+		as_app(0x4D);
+		vm_stage_worker_tick();                       /* by hand still (its profile) */
+		ap.thr[0] = 0;
+		CHECK(vm_stage_app_set(&ap) == VM_OK);        /* off: the start is in effect */
+		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
 		ra_proc_event(0x4D, 4);
 		vm_stage_worker_tick();
 	}
@@ -6335,6 +6443,8 @@ int main(void)
 	RUN(test_tune_v3);
 	RUN(test_start_agg);
 	RUN(test_start_runs_counted);
+	RUN(test_start_counts_follow_state);
+	RUN(test_start_kept_through_manual);
 	RUN(test_start_window);
 	RUN(test_profiles);
 	RUN(test_review_fixes);

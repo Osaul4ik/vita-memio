@@ -1924,6 +1924,13 @@ static uint32_t       g_st_sec, g_st_reads;
  * OO_TINY: what it counts in ra_adapt_end and ra_tiny_end) - what a start's
  * reliability is judged by, not the number of reads (atomics). */
 static uint32_t       g_st_runs[3];
+static void st_counts_reset(void)
+{
+	__atomic_store_n(&g_st_sec, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_st_reads, 0, __ATOMIC_RELAXED);
+	for (int k = 0; k < 3; k++)
+		__atomic_store_n(&g_st_runs[k], 0, __ATOMIC_RELAXED);
+}
 static void eff_update(void);
 static SceUID g_app_pid;
 
@@ -2188,10 +2195,7 @@ static void fg_take(SceUID pid, const char *t)
 			__atomic_store_n(&g_fg_sec[i], 0, __ATOMIC_RELAXED);
 		if (pid != g_st_pid) {            /* another launch: its reads from 0 */
 			g_st_pid = pid;
-			__atomic_store_n(&g_st_sec, 0, __ATOMIC_RELAXED);
-			__atomic_store_n(&g_st_reads, 0, __ATOMIC_RELAXED);
-			for (int k = 0; k < 3; k++)
-				__atomic_store_n(&g_st_runs[k], 0, __ATOMIC_RELAXED);
+			st_counts_reset();
 		}
 		memcpy(g_fg_title, t, sizeof(g_fg_title) - 1);
 		g_fg_title[sizeof(g_fg_title) - 1] = 0;
@@ -2713,6 +2717,7 @@ static int cal_worth_saving(void)
 static void cal_save_locked(void);
 static void cal_load(void);
 static int  g_tune_cal_due;                    /* the calibration to be written (g_tune_lock) */
+static volatile int g_tune_live_due;           /* a launch's start just taken: its slot to be written now */
 /* tuning.bin, one at a time: the worker, and the overlay's Tuning switch
  * and reset (its own thread). */
 static volatile int g_tune_lock;
@@ -2895,6 +2900,9 @@ typedef struct {
 	TuneApp  app;
 	uint32_t check;               /* 0 over all zeros: an empty slot never passes */
 } TuneSlot;
+/* Versions 6 and 7 share the slot's layout (6's start was taken another way):
+ * 6's header is recognised by this size. */
+typedef char tune_slot_v6_size_matches[sizeof(TuneSlot) == TUNE_SLOT_V6 ? 1 : -1];
 
 #define TUNE_CAL_SIZE  ((uint32_t)(4u + sizeof(CalDev) * VM_DEV_COUNT + 4u))   /* on, devs, check */
 #define TUNE_CAL_OFF   ((SceOff)sizeof(TuneHead))
@@ -2984,13 +2992,22 @@ static int tune_title_is(const TuneApp *t, const char *title)
 	return t->title[0] && !strncmp(t->title, title, TUNE_TITLE - 1);
 }
 
-/* An app's slot as one word: who and its start (0: none). */
+/* Adaptive with no thresholds of the app's own: the start is taken, put in
+ * effect and kept from this. With the app's own thresholds set by hand those
+ * are used and the start is left as it is - kept for when they are off again
+ * (the key: the mode, then each kind's own threshold, 0 none). */
+static int ad_key_auto(uint32_t key)
+{
+	return (key & 0xFFFu) == (uint32_t)VM_RA_ADAPTIVE;
+}
+
+/* An app's slot as one word: who and its start (0: none). The key is not in
+ * it: the start is the app's, whatever the settings were set to since. */
 static uint32_t tune_sig(const TuneApp *t)
 {
 	if (!t->title[0])
 		return 0;
-	return tune_fnv(tune_fnv(tune_fnv(0x811C9DC5u, t->title, TUNE_TITLE), &t->key, sizeof(t->key)),
-	                &t->st, sizeof(t->st)) | 1u;
+	return tune_fnv(tune_fnv(0x811C9DC5u, t->title, TUNE_TITLE), &t->st, sizeof(t->st)) | 1u;
 }
 
 /* Whether it has a start (a snapshot at least) worth keeping: each launch's
@@ -3080,12 +3097,10 @@ static void tune_strip(TuneApp *t)
 {
 	const TuneStart st = t->st;
 	char title[TUNE_TITLE];
-	const uint32_t key = t->key;
 
 	memcpy(title, t->title, sizeof(title));
 	memset(t, 0, sizeof(*t));
-	memcpy(t->title, title, sizeof(title));
-	t->key = key;
+	memcpy(t->title, title, sizeof(title));      /* (the key: none, the start is the app's) */
 	t->tiny_thr = RA_TINY_STREAK;
 	t->tiny_blk = RA_TINY_SECTORS;
 	t->st = st;
@@ -3301,10 +3316,11 @@ static void tune_restore_start(const TuneStart *r)
  * one before (g_ad_out, written by the worker), and it starts from what was
  * held for this one - just before, or read from the file (g_ad_in) - or
  * afresh. */
-static void ra_adapt_switch(const char *title, uint32_t key)
+static void ra_adapt_switch_pid(const char *title, uint32_t key, SceUID pid_in)
 {
 	const AdHeld *h = NULL;
-	const SceUID pid = title[0] ? __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) : 0;
+	const SceUID pid = title[0] ? pid_in : 0;
+	int same_launch = 0;
 
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
@@ -3330,15 +3346,25 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 	if (h) {
 		g_ad_fslot = h->fslot;            /* the same app, the same place */
 		g_ad_fsig = h->fsig;
-		if (h->app.key == key && tune_valid(&h->app)) {
-			g_st_rec = h->app.st;         /* its start, as far as taken */
-			if (pid && h->pid == pid)
+		if (tune_valid(&h->app)) {
+			g_st_rec = h->app.st;         /* its start, as far as taken: kept through the
+			                               * time its thresholds are set by hand */
+			if (h->app.key == key && pid && h->pid == pid) {
 				tune_restore(&h->app);    /* the same launch back in front: where it was */
-			else if (g_st_rec.n == TUNE_START_N)
+				same_launch = 1;
+			} else if (ad_key_auto(key) && g_st_rec.n == TUNE_START_N)
 				tune_restore_start(&g_st_rec);   /* a launch: from its start values */
 		}
 	}
 	g_ad_pid = pid;
+	/* What the launch has read and the runs counted for its start go with the
+	 * Adaptive state they were learned into: if that state was not carried on
+	 * (another key, not held), they begin again with it - a snapshot is not
+	 * taken from fresh figures on old counts. A launch back in front from the
+	 * home screen (restored above) goes on counting; while it is behind,
+	 * nothing is counted (no app in front). */
+	if (title[0] && pid && pid == g_st_pid && !same_launch)
+		st_counts_reset();
 	{
 		size_t i = 0;
 
@@ -3348,6 +3374,12 @@ static void ra_adapt_switch(const char *title, uint32_t key)
 	}
 	g_ad_key = key;
 	__sync_lock_release(&g_ad_lock);
+}
+
+/* The same, the launch being the app in front (the tests). */
+static void __attribute__((unused)) ra_adapt_switch(const char *title, uint32_t key)
+{
+	ra_adapt_switch_pid(title, key, __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE));
 }
 
 /* Afresh, whatever is in effect (the tests). */
@@ -3500,6 +3532,76 @@ static int tune_write_all(void)
 	__sync_lock_release(&g_ad_lock);
 	g_tune_ok = 1;
 	return 1;
+}
+
+/* The app in front's start, as soon as it is taken (g_tune_lock held, fd
+ * open): its slot, in place - what a game ends in is not kept, only the start
+ * (tune_strip), so one small write a launch of the first three. 1 if written
+ * or nothing to write. */
+static int tune_write_live(SceUID fd)
+{
+	TuneSlot t;
+	uint32_t sig, slot;
+	SceOff off;
+	int ok;
+
+	memset(&t, 0, sizeof(t));
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (!g_ad_title[0] || (g_ad_key & 0xFu) != VM_RA_ADAPTIVE || !g_st_rec.n) {
+		__sync_lock_release(&g_ad_lock);
+		return 1;
+	}
+	tune_pack(&t.app);
+	tune_strip(&t.app);
+	sig = tune_sig(&t.app);
+	if (sig == g_ad_fsig) {               /* the file holds it already */
+		__sync_lock_release(&g_ad_lock);
+		return 1;
+	}
+	if (!g_ad_fslot)
+		g_ad_fslot = ++g_tune_n;          /* a new app: after the last */
+	slot = g_ad_fslot;
+	__sync_lock_release(&g_ad_lock);
+	t.check = tune_slot_check(&t);
+	off = TUNE_SLOT_OFF(slot - 1u);
+	ok = ksceIoLseek(fd, off, SCE_SEEK_SET) == off &&
+	     ksceIoWrite(fd, &t, sizeof(t)) == (int)sizeof(t);
+	if (!ok)
+		return 0;
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		ksceKernelDelayThread(10);
+	if (g_ad_fslot == slot && tune_title_is(&t.app, g_ad_title))
+		g_ad_fsig = sig;                  /* what the file holds now */
+	__sync_lock_release(&g_ad_lock);
+	return 1;
+}
+
+/* Worker, g_tune_live_due: the start just taken into tuning.bin (g_tune_lock
+ * held). The one before first, if still to be written (the same app's older
+ * state must not come after this). Not yet possible (the file not read, not
+ * written): due stays, tried again. */
+static void tune_save_live_locked(void)
+{
+	SceUID fd;
+
+	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE))
+		return;
+	if (!g_tune_ok) {                     /* none yet (or not this layout) */
+		if (!tune_write_all())
+			return;
+		cal_snapshot();
+		g_tune_cal_due = 0;
+	}
+	fd = ksceIoOpen(TUNE_FILE, SCE_O_WRONLY, 0666);   /* in place: no truncation */
+	if (fd < 0) {
+		g_tune_ok = 0;                    /* gone: anew, next time */
+		return;
+	}
+	tune_write_out(fd);
+	if (tune_write_live(fd))
+		ST(g_tune_live_due, 0);
+	ksceIoClose(fd);
 }
 
 /* What changed since the file was written, written where it lies
@@ -5724,7 +5826,10 @@ static void eff_update(void)
 
 			key |= (t == RA_THR_NONE ? 15u : t & 0xFu) << (4 + 4 * k);
 		}
-		ra_adapt_switch(app ? g_app_title : "", key);
+		/* the pid read with the title: both are the loaded app's (g_ra_fg may
+		 * have moved on since app_in_front looked - a process event) */
+		ra_adapt_switch_pid(app ? g_app_title : "", key,
+		                    app ? __atomic_load_n(&g_app_pid, __ATOMIC_ACQUIRE) : 0);
 	}
 	/* The helper (and copier) wanted again after no setting wanted it: a
 	 * fresh try at making them, whichever setting was switched on. */
@@ -6323,7 +6428,7 @@ static void tune_start_tick(void)
 		ksceKernelDelayThread(10);
 	if (g_st_rec.n >= TUNE_START_N) {
 		g_st_taken = fg;                  /* fixed already: not touched */
-	} else if (g_ad_pid == fg && g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE && ra_learn_on()) {
+	} else if (g_ad_pid == fg && g_ad_title[0] && ad_key_auto(g_ad_key) && ra_learn_on()) {
 		g_st_taken = fg;                  /* judged: once a launch, counted or not */
 		memcpy(title, g_ad_title, sizeof(title));
 		if (!ok) {
@@ -6353,6 +6458,8 @@ static void tune_start_tick(void)
 		}
 	}
 	__sync_lock_release(&g_ad_lock);
+	if (took)
+		ST(g_tune_live_due, 1);           /* written now, not when the app is left */
 	mib = sec / 2048u;
 	if (took && n == TUNE_START_N && LD(g_log_diag))   /* one line a game, not one a launch */
 		VM_KLOGI("start %s: launch %u of %u after %u MiB (%u reads; runs C %u NC %u tiny %u, "
@@ -6378,6 +6485,11 @@ void vm_stage_worker_tick(void)
 		cal_load();                       /* what was measured before, once */
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	tune_start_tick();                    /* a launch's start, once it has read enough */
+	if (LD(g_tune_live_due)) {            /* ... and in tuning.bin at once */
+		tune_lock();
+		tune_save_live_locked();
+		__sync_lock_release(&g_tune_lock);
+	}
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
 		VM_KLOGW("stage: GPU-safe reads are on but the cache clean function was not found - "

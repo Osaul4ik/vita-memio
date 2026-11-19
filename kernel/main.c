@@ -334,6 +334,7 @@ static int worker(SceSize args, void *argp)
 		vm_stage_worker_tick();
 		vm_stage_get(now, 1);
 		vm_hud_link_tick(now, worker_wake);
+		vm_stage_io_tick();               /* the overlay's files, from here: its stack free */
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			int fell_back = now[i].status == VM_ST_FALLBACK && prev[i].status != VM_ST_FALLBACK;
 			int new_err = now[i].errors != prev[i].errors ||

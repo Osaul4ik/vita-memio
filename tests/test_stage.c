@@ -2487,6 +2487,28 @@ static void ra_settled(const Dev *d)
 	}
 }
 
+/* The overlay's asks and the worker doing them (vm_stage_io_tick), at once. */
+static void cal_set_done(int on)
+{
+	vm_stage_cal_set(on);
+	vm_stage_io_tick();
+}
+
+static void cal_reset_done(void)
+{
+	vm_stage_cal_reset();
+	vm_stage_io_tick();
+}
+
+static int app_save_done(void)
+{
+	const int r = vm_stage_app_save();
+
+	if (r == VM_OK)
+		vm_stage_io_tick();
+	return r;
+}
+
 /* Read [at, at + n) and check it against the disk. */
 static int rd_ok(uint8_t *u, uint32_t at, uint32_t n)
 {
@@ -3944,7 +3966,7 @@ static void test_calibration(void)
 		CHECK(rd(u, i * 256, 256) == 0);
 	CHECK(!k->n_plain[0] && !k->n_served[0] && !g_cal_dirty);
 
-	vm_stage_cal_set(1);
+	cal_set_done(1);
 	CHECK(g_cal_on);
 	/* a stream: the first read starts it, the 2nd .. 5th from the card, the
 	 * pieces read after the 5th; then a read elsewhere drops one unused */
@@ -3994,7 +4016,7 @@ static void test_calibration(void)
 
 	/* written only when worth it (internal storage): what is in use now is
 	 * what was saved - more of the same, nothing to write */
-	vm_stage_cal_set(1);                                 /* saved: the snapshot */
+	cal_set_done(1);                                 /* saved: the snapshot */
 	CHECK(!cal_worth_saving());
 	k->plain[0][28] += 40;                               /* the same medians */
 	k->n_plain[0] += 40;
@@ -4004,13 +4026,13 @@ static void test_calibration(void)
 	k->served[0][15] += 400;                             /* served median 3875: 8.6 % more gain */
 	k->n_served[0] += 400;
 	CHECK(cal_worth_saving());
-	vm_stage_cal_set(1);
+	cal_set_done(1);
 	CHECK(!cal_worth_saving());
 	/* still learning: a count grown by half is kept, a little is not */
 	k->n_plain[1] = 20;
 	k->plain[1][20] = 20;
 	CHECK(cal_worth_saving());
-	vm_stage_cal_set(1);
+	cal_set_done(1);
 	k->n_plain[1] += 5;
 	k->plain[1][20] += 5;
 	CHECK(!cal_worth_saving());
@@ -4031,7 +4053,7 @@ static void test_calibration(void)
 	k->n_served[0] -= 40;
 
 	/* kept: the file, the switch with it */
-	vm_stage_cal_set(1);
+	cal_set_done(1);
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = 0;
 	g_cal_loaded = 0;
@@ -4085,7 +4107,7 @@ static void test_calibration(void)
 	adapt_runs(0, 20, 1);
 	CHECK(ra_threshold(0) == 2);
 	/* reset: nothing measured any more, the fixed figures, the file too */
-	vm_stage_cal_reset();
+	cal_reset_done();
 	vm_stage_cal(M, &c);
 	CHECK(!c.have_waste && c.waste_us == RT_WASTE_US && !k->waste_n);
 	k->waste_n = 99;
@@ -4093,7 +4115,7 @@ static void test_calibration(void)
 	cal_load();
 	CHECK(!k->waste_n);
 	CHECK(g_dev[M].st.errors == 0 && !g_dev[M].fallback);
-	vm_stage_cal_set(0);
+	cal_set_done(0);
 	CHECK(!g_cal_on);
 	/* Off kept in the file: Off at the next start, whatever the default */
 	g_cal_on = 1;
@@ -4141,7 +4163,7 @@ static void test_tiny_adaptive(void)
 	CHECK(g_dev[M].t_buf && tiny_thr() == RA_TINY_STREAK && tiny_blk() == RA_TINY_SECTORS);
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
-	vm_stage_cal_set(1);
+	cal_set_done(1);
 	for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++)
 		tiny_run(r * 100, 40);
 	CHECK(g_tiny_thr == 2 && g_tiny_blk == 64 && g_tn_moves == 1 && tiny_thr() == 2);
@@ -4259,7 +4281,7 @@ static void test_app_settings(void)
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	g_title_fn = fake_title;
 	ra_app_global(&a);
-	CHECK(vm_stage_app_set(&a) == VM_ERR_NOT_READY && vm_stage_app_save() == VM_ERR_NOT_READY);
+	CHECK(vm_stage_app_set(&a) == VM_ERR_NOT_READY && app_save_done() == VM_ERR_NOT_READY);
 	as_app(0x44);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
@@ -4271,7 +4293,7 @@ static void test_app_settings(void)
 	a.ra = VM_RA_ON;
 	a.thr[0] = 3;
 	a.thr[1] = VM_RA_NEVER;
-	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+	CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK);
 	CHECK(ra_threshold(0) == 3 && ra_threshold(1) == VM_RA_NEVER);
 	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.thr[0] == 3);
 	/* suspended: the global ones; its profile deleted by hand keeps its title */
@@ -4285,14 +4307,14 @@ static void test_app_settings(void)
 	/* all global again: the profile stays (all global), no removing and
 	 * making it again; saved again unchanged: nothing written */
 	ra_app_global(&a);
-	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+	CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK);
 	CHECK(ra_prof_load("PCSB00777", &pf) && !ra_app_set_any(&pf.app));
 	{
 		const int w0 = fake_prof_writes;
 
-		CHECK(vm_stage_app_save() == VM_OK && fake_prof_writes == w0);
+		CHECK(app_save_done() == VM_OK && fake_prof_writes == w0);
 		a.pipe = VM_PIPE_FIXED;
-		CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK &&
+		CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK &&
 		      fake_prof_writes == w0 + 1);
 	}
 	/* system apps have none */
@@ -4616,7 +4638,7 @@ static void test_system_apps(void)
 	ra_app_global(&a);
 	a.ra = VM_RA_ADAPTIVE;
 	a.offload = VM_OFFLOAD_FULL;
-	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+	CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK);
 	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_offload == VM_OFFLOAD_FULL);
 	CHECK(ra_prof_load(HOME_TITLE, &pf) && pf.app.offload == VM_OFFLOAD_FULL);
 	/* a system app: in front as a game is, the global ones until it has its own */
@@ -4627,7 +4649,7 @@ static void test_system_apps(void)
 	CHECK(g_ra_mode == VM_RA_ON && g_offload == VM_OFFLOAD_OFF);
 	ra_app_global(&a);
 	a.pipe = VM_PIPE_FIXED;
-	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK);
+	CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK);
 	CHECK(ra_prof_load("NPXS10015", &pf) && pf.app.pipe == VM_PIPE_FIXED);
 	/* back home: the home screen's again */
 	ra_proc_event(0x47, 4);
@@ -4840,7 +4862,7 @@ static void test_learned_kept_in_file(void)
 		vm_stage_worker_tick();
 	}
 	/* Triangle (reset): the file anew, no app in it */
-	vm_stage_cal_reset();
+	cal_reset_done();
 	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
 	CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(0) && g_tune_n == 0);
 	/* the branch's v2 file on ur0: removed at the next save */
@@ -5775,6 +5797,125 @@ static void test_lowmem_data_right(void)
 	__sync_lock_release(&g_ad_lock);
 }
 
+/* Tuning reset (the overlay's Triangle, twice) while the game reads: the
+ * calibration and what was learned cleared under the reads, tuning.bin
+ * written again each time; nothing breaks, the data stays right. */
+static volatile int rz_stop;
+static void *rz_reader(void *arg)
+{
+	uint8_t *u = user_buf(256);
+	uint32_t at = 0, seed = 99;
+
+	(void)arg;
+	while (!__atomic_load_n(&rz_stop, __ATOMIC_ACQUIRE)) {
+		seed = seed * 1103515245u + 12345u;
+		if ((seed >> 20) % 4) {
+			const uint32_t n = (seed >> 8) % 2 ? 256 : 64;
+
+			if (at + n > DISK_SECTORS)
+				at = 0;
+			if (!rd_ok(u, at, n))
+				__atomic_fetch_add(&lm_bad, 1, __ATOMIC_RELAXED);
+			at += n;
+		} else {
+			for (uint32_t i = 0; i < 12; i++)
+				if (!rd_ok(u, 3000 + i, 1))
+					__atomic_fetch_add(&lm_bad, 1, __ATOMIC_RELAXED);
+		}
+	}
+	free(u);
+	return NULL;
+}
+
+static void test_tuning_reset_under_reads(void)
+{
+	VmSettings s;
+	pthread_t r;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	on_game(&s, 0x44);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	cal_load();
+	lm_bad = 0;
+	__atomic_store_n(&rz_stop, 0, __ATOMIC_RELEASE);
+	CHECK(pthread_create(&r, NULL, rz_reader, NULL) == 0);
+	for (int i = 0; i < 60; i++) {
+		usleep(2000);
+		vm_stage_worker_tick();
+		cal_reset_done();
+		if (i % 7 == 0)
+			cal_set_done(i & 1);
+	}
+	__atomic_store_n(&rz_stop, 1, __ATOMIC_RELEASE);
+	pthread_join(r, NULL);
+	CHECK(lm_bad == 0);
+	CHECK(fake_log_find("calibration and what was learned reset") != NULL);
+	cal_set_done(1);
+	vm_stage_fini();
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ra_adapt_clear();
+	__sync_lock_release(&g_ad_lock);
+}
+
+/* The overlay's asks write no file where they are asked (deep in the
+ * worker's stack: the HUD module's tick); the worker writes them from the
+ * top of its loop (vm_stage_io_tick). A newer ask replaces one not done. */
+static void test_overlay_files_deferred(void)
+{
+	VmSettings s;
+	VmApp a;
+	VmAppNow an;
+	RaProf pf;
+	int tw, pw;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	on_game(&s, 0x44);
+	vm_stage_worker_tick();
+	cal_load();
+	vm_stage_io_tick();                           /* nothing asked: nothing done */
+	/* Tuning reset: asked, nothing written; then done by the worker */
+	tw = fake_tune_writes;
+	vm_stage_cal_reset();
+	CHECK(fake_tune_writes == tw && !fake_log_find("calibration and what was learned reset"));
+	vm_stage_io_tick();
+	CHECK(fake_tune_writes > tw && fake_log_find("calibration and what was learned reset"));
+	/* Tuning off: shown at once, written by the worker */
+	tw = fake_tune_writes;
+	vm_stage_cal_set(0);
+	CHECK(!g_cal_on && fake_tune_writes == tw);
+	vm_stage_io_tick();
+	CHECK(!g_cal_on && fake_tune_writes > tw);
+	vm_stage_cal_set(1);
+	vm_stage_io_tick();
+	CHECK(g_cal_on);
+	/* a profile: asked, not written; two asks, the newer one written */
+	vm_stage_app_now(&an);
+	a = an.cur;
+	a.pipe = VM_PIPE_FIXED;
+	CHECK(vm_stage_app_set(&a) == VM_OK);
+	pw = fake_prof_writes;
+	CHECK(vm_stage_app_save() == VM_OK && fake_prof_writes == pw);
+	a.pipe = VM_PIPE_OFF;
+	CHECK(vm_stage_app_set(&a) == VM_OK && vm_stage_app_save() == VM_OK && fake_prof_writes == pw);
+	vm_stage_io_tick();
+	CHECK(fake_prof_writes > pw);                 /* made (opened for writing) */
+	pw = fake_prof_writes;
+	CHECK(ra_prof_load(g_app_title, &pf) && pf.app.pipe == VM_PIPE_OFF);
+	vm_stage_app_now(&an);
+	CHECK(an.saved.pipe == VM_PIPE_OFF);          /* shown saved once it is */
+	vm_stage_io_tick();
+	CHECK(fake_prof_writes == pw);                /* done once */
+	/* no app in front: not asked */
+	ra_proc_event(0x44, 4);
+	CHECK(vm_stage_app_save() == VM_ERR_NOT_READY);
+	vm_stage_fini();
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -5843,6 +5984,8 @@ int main(void)
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);
+	RUN(test_overlay_files_deferred);
+	RUN(test_tuning_reset_under_reads);
 	RUN(test_log_block);
 	RUN(test_verify_no_learning);
 	RUN(test_bg_no_readahead);

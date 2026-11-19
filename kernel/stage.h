@@ -85,9 +85,10 @@ void vm_stage_app_now(VmAppNow *out);
 /* Worker thread. VM_OK, VM_ERR_NOT_READY (no app in front), VM_ERR_ARG (a
  * value out of range), VM_ERR_IO.
  *   set:     its settings, in effect at once (not saved);
- *   save:    as they are now, into its profile. */
+ *   save:    as they are now, into its profile - asked: the worker writes
+ *            it from the top of its loop (vm_stage_io_tick). */
 int  vm_stage_app_set(const VmApp *a);
-int  vm_stage_app_save(void);
+int  vm_stage_app_save(void);                  /* asks; saved by the worker (io_tick) */
 
 /* Calibration: what read ahead brings, measured on this console, per storage
  * (a read from the pieces against the same read from the card; how long the
@@ -107,8 +108,9 @@ typedef struct VmCal {
 #define VM_CAL_MIN_SERVED  64u
 #define VM_CAL_MIN_WASTE   32u
 void vm_stage_cal(int dev, VmCal *out);        /* dev -1: the fixed figures */
-void vm_stage_cal_set(int on);                 /* worker thread             */
-void vm_stage_cal_reset(void);                 /* worker: all measured gone */
+void vm_stage_cal_set(int on);                 /* asks; the worker does it (io_tick) */
+void vm_stage_cal_reset(void);                 /* asks: all measured gone (io_tick) */
+void vm_stage_io_tick(void);                   /* worker, from the top: what the overlay asked */
 
 /* The overlay's read ahead test. Worker thread, but for _running and _stale. */
 typedef struct VmRaTestPick {

@@ -2749,7 +2749,7 @@ static int cal_read_file(const char *path)
 
 static void tune_forget_learned(void);
 
-void vm_stage_cal_reset(void)
+static void cal_reset_now(void)
 {
 	cal_load();
 	memset(g_cal, 0, sizeof(g_cal));      /* the figures: the fixed ones again */
@@ -2761,7 +2761,7 @@ void vm_stage_cal_reset(void)
 	VM_KLOGI("stage: calibration and what was learned reset");
 }
 
-void vm_stage_cal_set(int on)
+static void cal_set_now(int on)
 {
 	cal_load();
 	ST(g_cal_on, on ? 1 : 0);
@@ -5722,9 +5722,78 @@ void vm_stage_ratest_stop(VmRaTestPick *o)
 	o->offload = p.copy_nc ? VM_OFFLOAD_ALL : VM_OFFLOAD_ALWAYS;
 }
 
-int vm_stage_app_save(void)
+/* `title`'s settings `snap` into its profile (the worker, vm_stage_io_tick). */
+static int app_save_now(const char *title, const VmApp *snap)
 {
 	RaProf pf;
+
+	pf.app = *snap;
+	{
+		RaProf old;
+
+		/* written only if it changes what the file holds (all global too:
+		 * the file stays, no removing and making it again) */
+		if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app))) {
+			ra_prof_save(title, &pf);
+			if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app))) {
+				VM_KLOGW("stage: %s - its settings NOT saved (the card?)", title);
+				return VM_ERR_IO;
+			}
+		}
+	}
+	eff_lock();
+	if (app_in_front() && !strcmp(title, g_app_title))
+		g_app_saved = *snap;
+	__sync_lock_release(&g_eff_lock);
+	VM_KLOGI("stage: %s - its settings saved", title);
+	return VM_OK;
+}
+
+/* ---- what the overlay asks for, done by the worker from the top -----------
+ *
+ * The overlay's keys are handled deep in the worker's stack (the HUD
+ * module's tick, its overlay, the action), and the file written for them -
+ * tuning.bin made again (Tuning reset), a profile made or written - goes
+ * through the file system's deepest path, and our own write hook, on top of
+ * that: Triangle twice restarted the console (the worker has 6 KiB). So the
+ * overlay only asks, and the worker does it from the top of its loop
+ * (vm_stage_io_tick), its stack free, as for its other files. One of each
+ * at a time; a newer ask replaces one not done yet. */
+static volatile int g_rq_lock;
+static int          g_rq_cal_reset;            /* under g_rq_lock          */
+static int          g_rq_cal_set;              /* 0 none, 1 Off, 2 Auto    */
+static int          g_rq_save;                 /* a profile: g_rq_title, g_rq_app */
+static char         g_rq_title[sizeof(g_app_title)];
+static VmApp        g_rq_app;
+
+static void rq_lock(void)
+{
+	while (__sync_lock_test_and_set(&g_rq_lock, 1))
+		;                                      /* a few words, never long */
+}
+
+void vm_stage_cal_reset(void)
+{
+	rq_lock();
+	g_rq_cal_reset = 1;
+	g_rq_cal_set = 0;                          /* the reset keeps the switch */
+	__sync_lock_release(&g_rq_lock);
+	ra_wake();
+}
+
+void vm_stage_cal_set(int on)
+{
+	ST(g_cal_on, on ? 1 : 0);                  /* shown at once; kept by the worker */
+	rq_lock();
+	g_rq_cal_set = on ? 2 : 1;
+	__sync_lock_release(&g_rq_lock);
+	ra_wake();
+}
+
+/* The app in front's settings as they are now, to be saved: VM_OK once asked
+ * (the overlay shows it saved once it is: g_app_saved), or VM_ERR_NOT_READY. */
+int vm_stage_app_save(void)
+{
 	char title[sizeof(g_app_title)];
 	VmApp snap;
 	int ok;
@@ -5734,28 +5803,42 @@ int vm_stage_app_save(void)
 	ok = app_in_front();
 	if (ok) {
 		memcpy(title, g_app_title, sizeof(title));
-		pf.app = snap = g_app_cur;
+		snap = g_app_cur;
 	}
 	__sync_lock_release(&g_eff_lock);
 	if (!ok)
 		return VM_ERR_NOT_READY;
-	{
-		RaProf old;
-
-		/* written only if it changes what the file holds (all global too:
-		 * the file stays, no removing and making it again) */
-		if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app))) {
-			ra_prof_save(title, &pf);
-			if (!ra_prof_load(title, &old) || memcmp(&old.app, &pf.app, sizeof(pf.app)))
-				return VM_ERR_IO;
-		}
-	}
-	eff_lock();
-	if (app_in_front() && !strcmp(title, g_app_title))
-		g_app_saved = snap;
-	__sync_lock_release(&g_eff_lock);
-	VM_KLOGI("stage: %s - its settings saved", title);
+	rq_lock();
+	memcpy(g_rq_title, title, sizeof(g_rq_title));
+	g_rq_app = snap;
+	g_rq_save = 1;
+	__sync_lock_release(&g_rq_lock);
+	ra_wake();
 	return VM_OK;
+}
+
+void vm_stage_io_tick(void)
+{
+	int reset, set, save;
+	char title[sizeof(g_app_title)];
+	VmApp snap;
+
+	rq_lock();
+	reset = g_rq_cal_reset;
+	set = g_rq_cal_set;
+	save = g_rq_save;
+	if (save) {
+		memcpy(title, g_rq_title, sizeof(title));
+		snap = g_rq_app;
+	}
+	g_rq_cal_reset = g_rq_cal_set = g_rq_save = 0;
+	__sync_lock_release(&g_rq_lock);
+	if (reset)
+		cal_reset_now();
+	if (set)
+		cal_set_now(set == 2);
+	if (save)
+		(void)app_save_now(title, &snap);
 }
 
 void vm_stage_on_problem(void (*fn)(void))

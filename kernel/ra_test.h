@@ -357,7 +357,7 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u
-#define RT_EV_MIN_SRV    2048u          /* from read ahead: 1 MiB (tiny: reads)   */
+#define RT_EV_MIN_SRV    1024u          /* from read ahead: 512 KiB (tiny: reads) */
 #define RT_EV_MIN_SRV_T  32u
 
 #define RT_EV_STRIKES_MAX 3u            /* returns from off that make the next off harder */
@@ -503,6 +503,33 @@ static inline int rt_hide_known(const uint32_t *sec)
 	return all >= RT_GAP_MIN_SEC;
 }
 
+/* n / d for the permille figures, without a 64-bit divide (a library call on the
+ * Cortex-A9, ~100+ cycles): exact where both fit 32 bits, else both shifted down
+ * together until n does: for a quotient up to a few thousand (permille: what is
+ * compared with the margins) it is within one of the exact one; a far larger
+ * one is only roughly right, and clamped to 2^31 (enormous either way, and only
+ * compared with a margin of 20). d < 1 is taken as 1. */
+static inline int64_t rt_pm_div(int64_t n, int64_t d)
+{
+	uint64_t un = n < 0 ? 0 - (uint64_t)n : (uint64_t)n;
+	uint64_t ud = d < 1 ? 1u : (uint64_t)d;
+	uint64_t q;
+
+	if (un >> 32) {
+		const int k = 32 - __builtin_clz((uint32_t)(un >> 32));   /* bits over 32 */
+
+		un >>= k;
+		ud >>= k;
+	}
+	if (ud >> 32)
+		q = 0;                               /* n < d: under one */
+	else
+		q = (uint32_t)un / (ud ? (uint32_t)ud : 1u);
+	if (q > 0x7FFFFFFFu)
+		q = 0x7FFFFFFFu;
+	return n < 0 ? -(int64_t)q : (int64_t)q;
+}
+
 /* permille of a piece's read time (piece_us) the pauses cover, over the
  * sectors read after each, sec[step]; 1000 where there are too few. */
 static inline uint32_t rt_hide_pm(const uint32_t *sec, uint32_t piece_us)
@@ -517,7 +544,7 @@ static inline uint32_t rt_hide_pm(const uint32_t *sec, uint32_t piece_us)
 		all += sec[b];
 		cov += (uint64_t)sec[b] * (r < piece_us ? r : piece_us);
 	}
-	return (uint32_t)(cov * 1000u / (all * piece_us));
+	return (uint32_t)rt_pm_div((int64_t)(cov * 1000u), (int64_t)(all * piece_us));
 }
 
 /* Kind k's saving a sector, scaled by the pauses. */

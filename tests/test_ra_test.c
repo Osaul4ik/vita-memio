@@ -154,6 +154,8 @@ static void test_ev(void)
 	RtEv e;
 	RtCost c;
 
+	/* the first off asks for 1 MiB of the standard way and 512 KiB served */
+	CHECK(RT_EV_MIN_STD == 2048u && RT_EV_MIN_SRV == 1024u);
 	/* served 1 MiB in 10 ms, the standard way 50 ms a MiB: on, it brings */
 	memset(&e, 0, sizeof(e));
 	for (int i = 0; i < 20; i++)

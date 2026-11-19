@@ -971,7 +971,12 @@ static void pipe_learn(uint32_t *est, uint32_t us, uint32_t sectors, uint32_t de
 
 	if (!sectors)
 		return;
-	ns = us < 4294967u ? us * 1000u / sectors : (uint32_t)((uint64_t)us * 1000u / sectors);
+	/* Cortex-A9 has no divide instruction (a library call, ~40 cycles): reads come in
+	 * power-of-two sizes nearly always (the same result, a shift) */
+	if (us < 4294967u && !(sectors & (sectors - 1u)))
+		ns = us * 1000u >> __builtin_ctz(sectors);
+	else
+		ns = us < 4294967u ? us * 1000u / sectors : (uint32_t)((uint64_t)us * 1000u / sectors);
 	{
 		uint32_t e = __atomic_load_n(est, __ATOMIC_RELAXED);
 
@@ -4016,7 +4021,7 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 	hu = (uint32_t)a.held_us;
 	g_oo_time[u] += ((int64_t)su + vu) * RA_ADAPT_ONE;
 	t = g_oo_time[u] > 0 ? g_oo_time[u] : 1;
-	pm = gain * 1000 / (t + (g_oo[u].off || gain < 0 ? 0 : gain));
+	pm = rt_pm_div(gain * 1000, t + (g_oo[u].off || gain < 0 ? 0 : gain));
 	moved = rt_ev_round(&g_oo[u], u == OO_TINY, su, a.std_q, vu, a.srv_q, hu, a.waste, pm, &lg->net,
 	                    &lg->time);
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
@@ -4027,6 +4032,37 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 	lg->srv = g_oo[u].srv_rate;
 	lg->held = g_oo[u].held_each;
 	return moved;
+}
+
+/* A stream that goes on while its kind is off: what it read so far is taken into
+ * the counts (as ra_adapt_end does, but no run ended: its length is counted when
+ * it does), and a round is due once a first one's worth is in. So the way back on
+ * does not wait for the end of a stream that may last minutes. Called once the
+ * stream has RA_ADAPT_SECTORS_FIRST (1 MiB) of its own to give, so about once a
+ * MiB read: one try-lock and ten adds on the reader's thread. The lock busy: the
+ * counts are kept and it is tried again with the next read. Only for a kind that
+ * is off - for one that is on, nothing changes. */
+static void ra_adapt_flush(Dev *d, int small, int nc)
+{
+	uint32_t *pos;
+
+	if (!ra_learn_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
+		return;
+	pos = small ? g_ad.spos[nc] : g_ad.pos[nc];
+	for (int i = 0; i < RT_POS; i++)
+		pos[i] += d->ad_pos[small][i];
+	memset(d->ad_pos[small], 0, sizeof(d->ad_pos[small]));
+	g_ad.total_sectors += d->ad_sec[small];
+	g_ad_sec[nc] += d->ad_sec[small];
+	d->ad_sec[small] = 0;
+	if (g_ad_sec[nc] >= RA_ADAPT_SECTORS_FIRST && !LD(g_ad_due[nc])) {
+		ST(g_ad_due[nc], 1);
+		g_ad_dev[nc] = (int)(d - g_dev);
+		__sync_lock_release(&g_ad_lock);
+		ra_wake();
+		return;
+	}
+	__sync_lock_release(&g_ad_lock);
 }
 
 /* A read of `n` sectors, the `at`-th in its stream (`small`: 32 KiB reads):
@@ -4045,6 +4081,14 @@ static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
 		d->ad_pos[0][at < RT_POS ? at : RT_POS - 1] += (n < have ? n : have) * RA_ADAPT_ONE;
 	}
 	d->ad_sec[small] += n;
+	/* a kind that is off: a long stream is the very case where read ahead would pay,
+	 * and it is counted only when it ends - see ra_adapt_flush */
+	if (d->ad_sec[small] >= RA_ADAPT_SECTORS_FIRST) {
+		const int nc = small ? d->rs_nc : d->ra_nc;
+
+		if (nc < 2 && oo_off(nc ? OO_NC : OO_C))
+			ra_adapt_flush(d, small, nc);
+	}
 }
 
 /* A stream of `len` reads has ended: its reads and its length counted; every

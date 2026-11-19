@@ -6578,6 +6578,61 @@ static void test_pauses_do_not_move_thresholds(void)
 		g_ra_moves[k] = g_rs_moves[k] = 0;
 }
 
+/* A stream that goes on while its kind is off is counted as it goes (a first
+ * round's worth, 1 MiB), so the way back on need not wait for its end; for a
+ * kind that is on nothing is taken before the stream ends, as before. */
+static void test_long_stream_counted_while_off(void)
+{
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+	uint32_t base;
+
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	base = g_ad.total_sectors;
+	__sync_lock_release(&g_ad_lock);
+	d->ra_nc = 0;
+	/* on: 5 MiB of one stream, none of it counted before it ends */
+	for (uint32_t i = 1; i <= 40; i++)
+		ra_adapt_read(d, 0, i, 256);
+	CHECK(g_ad.total_sectors == base && d->ad_sec[0] == 40 * 256u && !LD(g_ad_due[0]));
+	memset(d->ad_pos[0], 0, sizeof(d->ad_pos[0]));
+	d->ad_sec[0] = 0;
+	/* off: taken in as it goes, a round due once 1 MiB is in */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	g_oo[OO_C].off = 1;
+	ST(g_oo_off[OO_C], 1);
+	__sync_lock_release(&g_ad_lock);
+	for (uint32_t i = 1; i <= 7; i++)
+		ra_adapt_read(d, 0, i, 256);
+	CHECK(g_ad.total_sectors == base && !LD(g_ad_due[0]));      /* under 1 MiB: not yet */
+	ra_adapt_read(d, 0, 8, 256);
+	CHECK(g_ad.total_sectors == base + 2048u && d->ad_sec[0] == 0);
+	CHECK(LD(g_ad_due[0]) == 1 && !g_ad.ended[0]);               /* due; no run has ended */
+	/* the other kind's stream is not touched by it */
+	d->ra_nc = 1;
+	for (uint32_t i = 1; i <= 16; i++)
+		ra_adapt_read(d, 0, i, 256);
+	CHECK(g_ad.total_sectors == base + 2048u && d->ad_sec[0] == 16 * 256u);
+	memset(d->ad_pos[0], 0, sizeof(d->ad_pos[0]));
+	d->ad_sec[0] = 0;
+	d->ra_nc = 0;
+	ra_adapt_tick();
+	CHECK(!LD(g_ad_due[0]));
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	oo_clear();
+	__sync_lock_release(&g_ad_lock);
+	for (int k = 0; k < 2; k++)
+		g_ra_moves[k] = g_rs_moves[k] = 0;
+}
+
 int main(void)
 {
 	staging = calloc(1, STAGE_BYTES);
@@ -6586,6 +6641,7 @@ int main(void)
 	RUN(test_pauses_of_the_game);
 	RUN(test_pauses_only_for_off_kind);
 	RUN(test_pauses_do_not_move_thresholds);
+	RUN(test_long_stream_counted_while_off);
 	RUN(test_small_goes_stock);
 	RUN(test_small_transfers_switch);
 	RUN(test_statistics_switch);

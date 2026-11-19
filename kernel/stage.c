@@ -3171,7 +3171,7 @@ static void tune_start_agg(const TuneStart *r, TuneSnap *o, int *med)
 			continue;
 		o->ok |= (uint8_t)(1u << u);
 		if (u < 2) {
-			int64_t a[TUNE_START_N], b[TUNE_START_N];
+			int64_t a[TUNE_START_N] = { 0 }, b[TUNE_START_N] = { 0 };
 
 			for (int j = 0; j < k; j++) {
 				a[j] = r->snap[idx[j]].ra_adj[u];
@@ -3180,7 +3180,7 @@ static void tune_start_agg(const TuneStart *r, TuneSnap *o, int *med)
 			o->ra_adj[u] = (int8_t)tune_agg(a, k, TUNE_WIDE_ADJ, 0, med);
 			o->rs_adj[u] = (int8_t)tune_agg(b, k, TUNE_WIDE_SMALL, 0, med);
 		} else {
-			int64_t t[TUNE_START_N], b[TUNE_START_N];
+			int64_t t[TUNE_START_N] = { 0 }, b[TUNE_START_N] = { 0 };
 
 			for (int j = 0; j < k; j++) {
 				t[j] = tune_tab_at(rt_tiny_thr, RT_TINY_T_N, r->snap[idx[j]].tiny_thr);
@@ -3190,7 +3190,7 @@ static void tune_start_agg(const TuneStart *r, TuneSnap *o, int *med)
 			o->tiny_blk = tune_blks[tune_agg(b, k, TUNE_WIDE_TABLE, 0, med)];
 		}
 		for (int w = 0; w < 3; w++) {         /* the costs: standard, served, held */
-			int64_t c[TUNE_START_N];
+			int64_t c[TUNE_START_N] = { 0 };
 			int nc = 0;
 
 			for (int j = 0; j < k; j++) {

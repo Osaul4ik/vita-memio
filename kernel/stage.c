@@ -3914,11 +3914,11 @@ static void oo_waste(int u, uint32_t held_us)
  * threads at most blur a pause (a lost update). */
 static void gap_note(Dev *d, int nc, uint32_t nsec, uint32_t t0, uint32_t us)
 {
-	const uint32_t last = d->gap_end[nc];
+	const uint32_t last = LD(d->gap_end[nc]);
 	uint32_t gap;
 
-	d->gap_end[nc] = t0 + us;
-	if (!last || (d->ra_streak < 2 && d->rs_streak < 2))
+	ST(d->gap_end[nc], t0 + us);          /* a lost update only blurs a pause */
+	if (!last || (LD(d->ra_streak) < 2 && LD(d->rs_streak) < 2))
 		return;                              /* not on a stream: not what read ahead would cover */
 	gap = t0 - last;
 	if ((int32_t)gap < 0)
@@ -4158,7 +4158,7 @@ static void ra_adapt_tick(void)
 				oo_mv[nc] = 1;
 				any = 1;
 				for (int i = 0; i < VM_DEV_COUNT; i++)
-					g_dev[i].gap_end[nc] = 0;    /* its pauses start from the next read */
+					ST(g_dev[i].gap_end[nc], 0);    /* its pauses start from the next read */
 			}
 		}
 		ra_adapt_age(&g_ad, nc);
@@ -4575,10 +4575,10 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 
 		if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc &&
 		    (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
-			d->rs_streak += d->rs_streak < 1000;
+			ST(d->rs_streak, d->rs_streak + (d->rs_streak < 1000));   /* (gap_note reads it unlocked) */
 		} else {
 			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
-			d->rs_streak = 1;
+			ST(d->rs_streak, 1);
 		}
 		d->rs_us = now;
 		ra_adapt_read(d, 1, d->rs_streak, n);
@@ -4614,10 +4614,10 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 
 		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc &&
 		    (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
-			d->ra_streak += d->ra_streak < 1000;
+			ST(d->ra_streak, d->ra_streak + (d->ra_streak < 1000));   /* (gap_note reads it unlocked) */
 		} else {
 			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
-			d->ra_streak = 1;
+			ST(d->ra_streak, 1);
 		}
 		ra_adapt_read(d, 0, d->ra_streak, n);
 		d->ra_us = now;
@@ -5321,10 +5321,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_gpu_cleaned_kib, left / 2);
 	if (write && nsec >= RA_MIN_SECTORS && !bg_req()) {
 		ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
-		d->ra_streak = 0;                     /* a write ends the streams */
+		ST(d->ra_streak, 0);                  /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
 			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
-			d->rs_streak = 0;
+			ST(d->rs_streak, 0);
 			__sync_lock_release(&d->rs_lock);
 		}
 	}

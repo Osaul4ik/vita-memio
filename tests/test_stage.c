@@ -6499,12 +6499,12 @@ static void test_pauses_only_for_off_kind(void)
 	oo_clear();
 	__sync_lock_release(&g_ad_lock);
 	/* every kind on: a stream, with long pauses between its reads - none kept */
-	fake_now_us = 1000;
+	__atomic_store_n(&fake_now_us, 1000, __ATOMIC_RELAXED);   /* (the read ahead thread moves it too) */
 	for (uint32_t at = 0; at < 12 * 256; at += 256) {
 		CHECK(rd_ok(u, at, 256));
-		fake_now_us += 20000;
+		__sync_fetch_and_add(&fake_now_us, 20000);
 	}
-	CHECK(d->ra_streak >= 12 && !d->gap_end[0] && !d->gap_end[1]);
+	CHECK(d->ra_streak >= 12 && !LD(d->gap_end[0]) && !LD(d->gap_end[1]));
 	for (int k = 0; k < 3; k++)
 		for (uint32_t b = 0; b < RT_GAP_B; b++)
 			CHECK(!LD(g_oo_acc[k].gap[b]));
@@ -6516,9 +6516,9 @@ static void test_pauses_only_for_off_kind(void)
 	g_oo[OO_C].off = 1;
 	for (uint32_t at = 0; at < 12 * 256; at += 256) {
 		CHECK(rd_ok(u, at, 256));
-		fake_now_us += 20000;
+		__sync_fetch_and_add(&fake_now_us, 20000);
 	}
-	CHECK(d->gap_end[0] && !d->gap_end[1]);
+	CHECK(LD(d->gap_end[0]) && !LD(d->gap_end[1]));
 	CHECK(LD(g_oo_acc[OO_C].gap[RT_GAP_B - 1]) >= 8 * 256u);       /* pauses over 16 ms */
 	for (uint32_t b = 0; b + 1 < RT_GAP_B; b++)
 		CHECK(!LD(g_oo_acc[OO_C].gap[b]));

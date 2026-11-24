@@ -294,7 +294,7 @@ static void test_ev(void)
 }
 
 /* How many pieces ahead, from how many were read for nothing: one less over
- * a quarter of what was read ahead, all again under a seventh; not on too
+ * a quarter of what was read ahead, all again under a sixteenth; not on too
  * little served, not while off. */
 static void test_pieces(void)
 {
@@ -311,7 +311,9 @@ static void test_pieces(void)
 	CHECK(rt_ev_pieces(&e) && e.fewer);
 	e.waste = 6;                                   /* 6 of 36: a sixth - kept at one less */
 	CHECK(!rt_ev_pieces(&e) && e.fewer);
-	e.waste = 4;                                   /* 4 of 34: under a seventh - all again */
+	e.waste = 2;                                   /* 2 of 32: a sixteenth, not under - kept */
+	CHECK(!rt_ev_pieces(&e) && e.fewer);
+	e.waste = 1;                                   /* 1 of 31: under a sixteenth - all again */
 	CHECK(rt_ev_pieces(&e) && !e.fewer);
 	e.off = 1;
 	e.waste = 100;

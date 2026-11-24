@@ -280,8 +280,9 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 /* How many pieces read ahead keeps ahead for a kind (C, NC), from what it
  * did: many read for nothing - more than a quarter of what it read (pieces
  * for nothing against the sectors it served) - one less, so the game's reads
- * wait less behind pieces no one wants; back to all of them once under a
- * seventh (with one less, a quarter becomes about a sixth: no swinging).
+ * wait less behind pieces no one wants; back to all of them only once under
+ * a sixteenth (one less cuts what is read for nothing by more than half - a
+ * third came down to an eighth in a game - so a looser way back swung).
  * Over enough served (RT_EV_MIN_SRV), and only while on. 1 if it changed. */
 static inline int rt_ev_pieces(RtEv *e)
 {
@@ -294,7 +295,7 @@ static inline int rt_ev_pieces(RtEv *e)
 		e->fewer = 1;
 		return 1;
 	}
-	if (e->fewer && w * 6 < e->srv_q) {
+	if (e->fewer && w * 15 < e->srv_q) {
 		e->fewer = 0;
 		return 1;
 	}

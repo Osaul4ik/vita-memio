@@ -3806,6 +3806,7 @@ static void test_adaptive_rounds(void)
 	/* tiny reads: the first round of 8 runs, then 32 - the first with 64
 	 * reads at least: 8 runs of 2 reads wait */
 	g_tn_ended = 0;
+	d->t_gen = g_ad_gen;                                /* runs of the state in effect */
 	for (int r = 0; r < (int)RA_ADAPT_RUNS_FIRST - 1; r++)
 		ra_tiny_end(d, 2, 2);
 	CHECK(!g_tn_due);
@@ -4612,6 +4613,66 @@ static void test_adaptive_kept_through_home(void)
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5);
 	g_title_fn = NULL;
+	vm_stage_fini();
+}
+
+/* Runs still going when another app comes to the front (or Adaptive starts
+ * afresh) are not counted for the new one when they end: a game's first
+ * round moved on the home screen's stream. And past the first rounds, a move
+ * of one step waits for a second round that wants it; a larger one, and any
+ * in the first rounds, at once. */
+static void test_adaptive_gen_and_settle(void)
+{
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	int pend = 0;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	vm_stage_apply(&s);
+	/* a stream of the app before, still going ... */
+	d->ad_sec[0] = 0;
+	ra_adapt_read(d, 0, 1, 256);
+	ra_adapt_read(d, 0, 2, 256);
+	d->t_gen = g_ad_gen;
+	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);    /* another app: afresh */
+	/* ... ends now: not this one's */
+	ra_adapt_end(d, 0, 0, 2);
+	CHECK(g_ad_sec[0] == 0 && g_ad.run[0][2] == 0 && g_ad.pos[0][2] == 0 && !d->ad_sec[0]);
+	ra_tiny_end(d, 9, 9);
+	CHECK(g_tn_ended == 0 && g_tn_cnt[rt_tiny_bucket(9)] == 0);
+	/* the new app's own: counted */
+	ra_adapt_read(d, 0, 1, 256);
+	ra_adapt_read(d, 0, 2, 256);
+	ra_adapt_end(d, 0, 0, 2);
+	CHECK(g_ad_sec[0] == 512 && g_ad.run[0][2] == RA_ADAPT_ONE);
+	d->t_gen = g_ad_gen;
+	ra_tiny_end(d, 9, 9);
+	CHECK(g_tn_ended == 1);
+	/* settling: one step on the second round that wants it, more at once */
+	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);
+	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);
+	CHECK(ad_settle(2, 3, &pend) == 2 && pend == 3);
+	CHECK(ad_settle(2, 2, &pend) == 2 && pend == 0);       /* not wanted again: dropped */
+	CHECK(ad_settle(2, 3, &pend) == 2 && pend == 3);
+	CHECK(ad_settle(2, 1, &pend) == 2 && pend == 1);       /* the other way: starts over */
+	CHECK(ad_settle(5, 8, &pend) == 8 && pend == 0);       /* three steps: at once */
+	/* in the rounds: back and forth between two near equals no longer moves */
+	{
+		const uint32_t m0 = g_ra_moves[0];
+
+		g_ad_rounds[0] = RA_ADAPT_SETTLE_FROM;
+		g_ad_pend_thr[0] = 0;
+		ST(g_ra_adj[0], 0);                              /* 5 */
+		for (int r = 0; r < 6; r++) {                    /* each round wants the other */
+			g_ad_pend_thr[0] = r & 1 ? 4 : 6;
+			CHECK(ad_settle(5, r & 1 ? 6 : 4, &g_ad_pend_thr[0]) == 5);
+		}
+		CHECK(g_ra_moves[0] == m0 && ra_threshold(0) == 5);
+	}
 	vm_stage_fini();
 }
 
@@ -6112,6 +6173,7 @@ int main(void)
 	RUN(test_tune_v3);
 	RUN(test_nothing_learned_in_file);
 	RUN(test_adaptive_kept_through_home);
+	RUN(test_adaptive_gen_and_settle);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

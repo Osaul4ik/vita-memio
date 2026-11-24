@@ -226,6 +226,8 @@ typedef struct Dev {
 	 * run without the run: that would weigh what read ahead saves without
 	 * the pieces left unread at its end. The stream's own thread only. */
 	uint32_t      ad_pos[2][RT_POS], ad_sec[2];
+	uint32_t      ad_gen[2];              /* the Adaptive state (g_ad_gen) they are for */
+	uint32_t      t_gen;                  /* ... the tiny reads' run's */
 	int           ra_small;               /* atomic: the pieces are for that stream */
 	volatile int  rs_lock;                /* its fields: any thread, a moment only */
 	/* the tiny reads' stream and their block (see RA_TINY_SECTORS), the
@@ -2278,6 +2280,18 @@ static uint32_t          g_tn_cnt[RT_TB], g_tn_reads[RT_TB], g_tn_sec[RT_TB], g_
 /* a round's sectors so far, of each kind; rounds weighed since learning
  * started (0: the first round is the small one), each kind and the tiny reads */
 static uint32_t          g_ad_sec[2], g_ad_rounds[2], g_tn_rounds;
+/* Which Adaptive state the counts are for: moved on each time it starts
+ * afresh (another app in front, a setting), so a stream still going from the
+ * app before - the home screen's, say - is not counted for the one now in
+ * front when it ends (it was: a game's first round moved on it). */
+static volatile uint32_t g_ad_gen;
+/* A move of one step (2 <-> 3, 32 KiB reads 8 <-> 12) waits for a second
+ * round in a row that wants it: where two thresholds weigh much the same,
+ * each round's few new runs swung it back and forth (one kind 21 times in
+ * 150 s). A larger move is taken at once, and so is any in the first
+ * rounds (a loading screen: quick, not settled yet). (0: none pending) */
+#define RA_ADAPT_SETTLE_FROM 2u
+static int               g_ad_pend_thr[2], g_ad_pend_sm[2];
 static volatile uint32_t g_tn_moves;
 /* A round due, for the worker to weigh (under g_ad_lock), and the storage
  * whose figures it takes: the large reads' kinds, the tiny reads. */
@@ -2899,6 +2913,9 @@ static void ra_adapt_clear(void)
 	g_tn_ended = 0;
 	memset(g_ad_sec, 0, sizeof(g_ad_sec));
 	memset(g_ad_rounds, 0, sizeof(g_ad_rounds));
+	memset(g_ad_pend_thr, 0, sizeof(g_ad_pend_thr));
+	memset(g_ad_pend_sm, 0, sizeof(g_ad_pend_sm));
+	ST(g_ad_gen, LD(g_ad_gen) + 1);       /* streams still going: not this state's */
 	g_tn_rounds = 0;
 	ST(g_ad_due[0], 0);
 	ST(g_ad_due[1], 0);
@@ -3295,6 +3312,10 @@ static void ra_tiny_end(const Dev *d, uint32_t reads, uint32_t sectors)
 	if (reads < 2 || LD(g_ra_mode) != VM_RA_ADAPTIVE || LD(g_verify) ||
 	    __sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
+	if (d->t_gen != g_ad_gen) {           /* begun for the app before: not counted */
+		__sync_lock_release(&g_ad_lock);
+		return;
+	}
 	b = rt_tiny_bucket(reads);
 	g_tn_cnt[b] += RA_ADAPT_ONE;
 	g_tn_reads[b] += reads * RA_ADAPT_ONE;
@@ -3521,6 +3542,12 @@ static void ra_adapt_flush(Dev *d, int small, int nc)
 
 	if (!ra_learn_on() || __sync_lock_test_and_set(&g_ad_lock, 1))
 		return;
+	if (d->ad_gen[small] != g_ad_gen) {   /* the app before's: not counted */
+		memset(d->ad_pos[small], 0, sizeof(d->ad_pos[small]));
+		d->ad_sec[small] = 0;
+		__sync_lock_release(&g_ad_lock);
+		return;
+	}
 	pos = small ? g_ad.spos[nc] : g_ad.pos[nc];
 	for (int i = 0; i < RT_POS; i++)
 		pos[i] += d->ad_pos[small][i];
@@ -3544,6 +3571,8 @@ static void ra_adapt_read(Dev *d, int small, uint32_t at, uint32_t n)
 {
 	if (!ra_learn_on())
 		return;
+	if (!d->ad_sec[small])
+		d->ad_gen[small] = LD(g_ad_gen);  /* counted for the state in effect now */
 	if (small) {
 		const uint32_t b = (at - 1) / 4;
 
@@ -3573,9 +3602,11 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	const int ok = len && ra_learn_on() && !__sync_lock_test_and_set(&g_ad_lock, 1);
 	uint32_t *pos;
 
-	if (!ok) {
+	if (!ok || d->ad_gen[small] != g_ad_gen) {   /* (the app before's run: not counted) */
 		memset(d->ad_pos[small], 0, sizeof(d->ad_pos[small]));
 		d->ad_sec[small] = 0;
+		if (ok)
+			__sync_lock_release(&g_ad_lock);
 		return;
 	}
 	nc = !!nc;
@@ -3606,6 +3637,27 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 		return;
 	}
 	__sync_lock_release(&g_ad_lock);
+}
+
+/* What a round's pick `want` leaves in effect from `cur`: a move of one step
+ * only when the round before wanted it too (*pend); a larger one at once; no
+ * move clears what was pending. */
+static int ad_settle(int cur, int want, int *pend)
+{
+	if (want == cur) {
+		*pend = 0;
+		return cur;
+	}
+	if (want - cur == 1 || cur - want == 1) {
+		if (*pend == want) {
+			*pend = 0;
+			return want;
+		}
+		*pend = want;
+		return cur;
+	}
+	*pend = 0;
+	return want;
 }
 
 /* The tiny reads counted for the round (g_ad_lock held). */
@@ -3670,7 +3722,12 @@ static void ra_adapt_tick(void)
 		if (ra_learn_on() && t != RA_THR_NONE) {
 			const int sm0 = sm;
 
-			if (ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost)) {
+			ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost);
+			if (g_ad_rounds[nc] >= RA_ADAPT_SETTLE_FROM) {   /* one step: a second round */
+				thr = ad_settle((int)t, thr, &g_ad_pend_thr[nc]);
+				sm = ad_settle(sm0, sm, &g_ad_pend_sm[nc]);
+			}
+			if (thr != (int)t || sm != sm0) {
 				mv[nc][0] = (int)t;
 				mv[nc][1] = thr;
 				mv[nc][2] = sm0 * RA_SMALL_FACTOR;
@@ -4424,6 +4481,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		ra_tiny_end(d, d->t_streak, d->t_run_sec);   /* Adaptive: the run that ended */
 		d->t_streak = 1;
 		d->t_run_sec = n;
+		d->t_gen = LD(g_ad_gen);              /* the run is the state's now in effect */
 	}
 	d->t_next = sector + n;
 	if (LD(g_log_diag) && DG() && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&

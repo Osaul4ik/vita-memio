@@ -1943,6 +1943,8 @@ static uint32_t g_ra_nc_kib;              /* atomic (defined again with ra_nc_re
 static uint32_t g_ra_tiny_reads;          /* atomic: tiny reads from their block */
 static uint32_t g_ra_bad_why[5];          /* atomics: failed, read during a write, dirty, switched, old */
 static uint32_t g_ra_wskip;               /* atomic: pieces not read, a write running */
+static uint32_t g_ra_over;                /* atomic: reads overlapping the stream's end, their
+                                           * head from the card, the rest from the pieces */
 /* The app in front and how much it reads where (the per-app settings; the HUD). */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_THR_NONE       0xFFFFu         /* an app's threshold: never start   */
@@ -4131,6 +4133,45 @@ static int ra_at(const Dev *d, void *part, io_fn io, uint32_t sector)
 	return 0;
 }
 
+/* A read that overlaps the end of the stream so far: starting inside what
+ * was read last (up to RA_OVER_MAX before the pieces) and going on past it -
+ * a game, or its file system's clusters, reading a stream with each read
+ * taking again the end of the one before (a sixth of PCSB00554's large
+ * reads, 1 s of PCSF00024's). The sectors from its start to where the
+ * pieces go on (0: none such): those come from the card, the rest from the
+ * pieces. A look only, as ra_at. */
+#define RA_OVER_MAX RA_PIECE_SECTORS
+static uint32_t ra_over_head(const Dev *d, void *part, io_fn io, uint32_t sector, uint32_t n)
+{
+	uint32_t front = 0;
+	int any = 0;
+
+	/* the stream's front: where its pieces go on first (what it read last
+	 * ends there) - not a later piece a read happens to reach into */
+	for (int i = 0; i < RA_PIECES; i++) {
+		const RaPiece *pc = &d->ra[i];
+
+		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE && pc->part == part &&
+		    pc->io == io && LD(pc->off) < LD(pc->n)) {
+			const uint32_t at = LD(pc->sector) + LD(pc->off);
+
+			if (!any || at < front)
+				front = at;
+			any = 1;
+		}
+	}
+	if (any && front > sector && front - sector < n && front - sector <= RA_OVER_MAX)
+		return front - sector;
+	return 0;
+}
+
+/* Whether a read [sector, sector + n) goes on from a stream that ends at
+ * `end`: where it ended, or overlapping its end (see ra_over_head). */
+static inline int ra_goes_on(uint32_t sector, uint32_t n, uint32_t end)
+{
+	return sector == end || (sector < end && end - sector < n && end - sector <= RA_OVER_MAX);
+}
+
 /* The buffer's memory type for the copier, read here (see stage_xfer). */
 static void off_memtype(OffMap *om)
 {
@@ -4276,8 +4317,8 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
 
-		if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc &&
-		    (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
+		if (part == d->rs_part && ra_goes_on(sector, n, d->rs_end) && d->rs_streak &&
+		    nc == d->rs_nc && (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
 			ST(d->rs_streak, d->rs_streak + (d->rs_streak < 1000));   /* (gap_note reads it unlocked) */
 		} else {
 			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
@@ -4316,7 +4357,7 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	if (n < RA_MIN_SECTORS) {
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;
-		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak &&
+		if (part == d->ra_last_part && ra_goes_on(sector, n, d->ra_last_end) && d->ra_streak &&
 		    nc == d->ra_nc) {
 			d->ra_last_end = sector + n;      /* the large reads' stream goes on past it */
 			d->ra_noted_small = 0;
@@ -4325,8 +4366,8 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
 
-		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak && nc == d->ra_nc &&
-		    (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
+		if (part == d->ra_last_part && ra_goes_on(sector, n, d->ra_last_end) && d->ra_streak &&
+		    nc == d->ra_nc && (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
 			ST(d->ra_streak, d->ra_streak + (d->ra_streak < 1000));   /* (gap_note reads it unlocked) */
 		} else {
 			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
@@ -4340,7 +4381,8 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		/* ... and the 32 KiB reads' stream past it (lost if another thread
 		 * holds it: the next 32 KiB read then starts afresh) */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
-			if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc)
+			if (part == d->rs_part && ra_goes_on(sector, n, d->rs_end) && d->rs_streak &&
+			    nc == d->rs_nc)
 				d->rs_end = sector + n;
 			__sync_lock_release(&d->rs_lock);
 		}
@@ -4679,7 +4721,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 {
 	/* the caller found it non-cacheable at both ends */
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = -2, .mt = MEMTYPE_NC, .nc = 1 };
-	uint32_t got = 0, own = 0;
+	uint32_t got = 0, own = 0, hd = 0;          /* hd: taken again from the card (overlap) */
 	int ret = 0, stats, off, offload, bad = 0;
 	void *shadow;
 
@@ -4703,25 +4745,41 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	/* a 32 KiB read leaves the large reads' pieces alone (it goes straight
 	 * into its own buffer, they are not in its way) - unless they go on where
 	 * it starts: their stream, read in both sizes */
-	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small) || ra_at(d, part, io, sector))) {
-		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
+	/* overlapping the stream's end: what it takes again from the card first
+	 * (then the read goes on from there, see ra_over_head) */
+	if (ra_any(d) && !ra_at(d, part, io, sector) &&
+	    (hd = ra_over_head(d, part, io, sector, nsec)) != 0) {
+		ADD(g_nc_stock_kib, hd / 2);
+		ret = io(ref, part, sector, p, hd);
+		if (ret < 0) {
+			hd = 0;
+			ra_drop(d);
+		} else {
+			ADD(g_ra_over, 1);
+		}
+	}
+	if (ret >= 0 && ra_any(d) &&
+	    (nsec >= RA_MIN_SECTORS || LD(d->ra_small) || hd || ra_at(d, part, io, sector))) {
+		got = ra_serve(d, part, io, sector + hd, p + (size_t)hd * 512, nsec - hd, 0, stats, off,
+		               &om, nsec - hd, &own);
 		*gotp = got;
-		if (got < nsec)
+		if (hd + got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
 	}
 	if (om.uid >= 0)
 		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
 	if (got && shadow)
-		bad = ra_verify(d, io, ref, part, sector, p, got, 0, shadow);
-	if (got < nsec) {
+		bad = ra_verify(d, io, ref, part, sector + hd, p + (size_t)hd * 512, got, 0, shadow);
+	if (ret >= 0 && hd + got < nsec) {
 		/* the rest: "C + NC" on the system core, else the standard way */
-		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - got);
+		const uint32_t at = hd + got;
+		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - at);
 
 		if (pid == KERNEL_PID ||
-		    !ncd_job(d, io, ref, part, sector + got, p + (size_t)got * 512, nsec - got, pid,
+		    !ncd_job(d, io, ref, part, sector + at, p + (size_t)at * 512, nsec - at, pid,
 		             &ret)) {
-			ret = io(ref, part, sector + got, p + (size_t)got * 512, nsec - got);
-			ADD(g_nc_stock_kib, (nsec - got) / 2);
+			ret = io(ref, part, sector + at, p + (size_t)at * 512, nsec - at);
+			ADD(g_nc_stock_kib, (nsec - at) / 2);
 		}
 	}
 	if (shadow)
@@ -4956,7 +5014,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
 	 * waits for the card either way; a write still makes them unusable). */
 	if (mine && nsec < RA_MIN_SECTORS &&
-	    (nsec < RA_SMALL_SECTORS || (!LD(d->ra_small) && !ra_at(d, part, io, sector))) &&
+	    (nsec < RA_SMALL_SECTORS || (!LD(d->ra_small) && !ra_at(d, part, io, sector) &&
+	                                 !ra_over_head(d, part, io, sector, nsec))) &&
 	    ra_live(d)) {
 		ret = io(ref, part, sector, buf, nsec);
 		if (!write && !bg)
@@ -5026,7 +5085,22 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 			__sync_lock_release(&d->rs_lock);
 		}
 	}
-	if (ra_any(d)) {
+	/* overlapping the stream's end: what it takes again from the card, the
+	 * rest from the pieces (see ra_over_head) */
+	if (ra && ra_any(d) && !ra_at(d, part, io, sector)) {
+		const uint32_t head = ra_over_head(d, part, io, sector, left);
+
+		if (head) {
+			ret = io(ref, part, sector, p, head);
+			if (ret >= 0) {
+				ADD(g_ra_over, 1);
+				p += (size_t)head * 512;
+				sector += head;
+				left -= head;
+			}
+		}
+	}
+	if (ret >= 0 && ra_any(d)) {
 		const uint32_t got = ra ? ra_serve(d, part, io, sector, p, left, clean, stats, off, &om,
 		                                   left, &own)
 		                        : 0;
@@ -6265,10 +6339,11 @@ void vm_stage_worker_tick(void)
 		         (unsigned)__atomic_load_n(&g_pipe_waits, __ATOMIC_RELAXED),
 		         (unsigned)(__atomic_load_n(&g_pipe_wait_us, __ATOMIC_RELAXED) / 1000));
 		if (LD(g_readahead) || LD(g_ra_hits) || LD(g_ra_drops))
-			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable), dropped %u "
-			         "(%u MiB unused), unusable %u, NC copier refused %d (0x%08x)",
+			VM_KLOGI("stage: read ahead %u reads %u MiB (%u MiB non-cacheable, %u overlapping), "
+			         "dropped %u (%u MiB unused), unusable %u, NC copier refused %d (0x%08x)",
 			         (unsigned)LD(g_ra_hits), (unsigned)(LD(g_ra_kib) / 1024),
-			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_drops),
+			         (unsigned)(LD(g_ra_nc_kib) / 1024), (unsigned)LD(g_ra_over),
+			         (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {

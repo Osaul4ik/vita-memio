@@ -2554,7 +2554,7 @@ static void test_readahead(void)
 		if (gpu)
 			CHECK(clean_calls > 0);               /* cleaned as any GPU-safe read */
 		/* elsewhere: the pieces dropped (waiting for the one being read) */
-		CHECK(rd_ok(u, 3000, 300));
+		CHECK(rd_ok(u, 1000, 300));
 		CHECK(g_ra_drops >= 1 && ra_idle(d) && fake_sema_count(d->ra_done) == 0);
 		vm_stage_fini();
 		CHECK(fake_threads_live == 0 && fake_semas_live == 0);
@@ -5248,6 +5248,51 @@ static void test_mixed_sizes(void)
 	free(u);
 }
 
+/* A stream whose reads each take again the end of the one before (128 KiB
+ * reads, 32 KiB back each time: PCSB00554, the home screen): read ahead
+ * follows it, the part read again comes from the card and the rest from the
+ * pieces - the right data, into ordinary and non-cacheable memory; a read
+ * that only reaches into a later piece is not one of these. */
+static void test_overlapping_reads(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+
+	for (int nc = 0; nc < 2; nc++) {
+		uint32_t at = 100, h0, k0, o0;
+
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On: from the 5th */
+		if (nc) {
+			fake_pid = 0x42;
+			fake_memtype = MEMTYPE_NC;
+			fake_meminfo_type = 0x10208006;
+		}
+		h0 = g_ra_hits;
+		k0 = g_ra_kib;
+		o0 = g_ra_over;
+		for (int r = 0; r < 14; r++) {
+			CHECK(rd_ok(u, at, 256));
+			at += 256 - 64;                          /* the next one 32 KiB back */
+		}
+		/* one stream; from the 6th read on (the 5th started it) each read
+		 * takes 64 sectors from the card, 192 from the pieces */
+		CHECK(d->ra_streak >= 12);
+		CHECK(g_ra_over - o0 >= 8 && g_ra_hits - h0 >= 8 &&
+		      (g_ra_kib - k0) * 2 >= 8 * 192);
+		/* a read inside a later piece is not overlapping: dropped, right data */
+		o0 = g_ra_over;
+		CHECK(rd_ok(u, at + 300, 256) && g_ra_over == o0);
+		ra_drop(d);
+		vm_stage_fini();
+		fake_memtype = 0xD000;
+		fake_meminfo_type = 0;
+		fake_pid = 0;
+	}
+	free(u);
+}
+
 /* A stream of 12 large reads from sector 100: the most pieces it had ahead
  * at once (each read's data checked). */
 static int fewer_max_live(uint8_t *u, Dev *d)
@@ -6339,6 +6384,7 @@ int main(void)
 	RUN(test_fewer_pieces);
 	RUN(test_read_order);
 	RUN(test_mixed_sizes);
+	RUN(test_overlapping_reads);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

@@ -93,7 +93,7 @@ In any game, **SELECT + Right** opens the overlay and, pressed again, closes it 
 
 The overlay sets things **for this game only**. Each line is *Global* (as in Settings) until you change it: white is standard, blue changed but not saved, green saved. **Save** keeps them in `ux0:data/vita-memio/ra/`. *Show advanced* adds Overlapped reads and GPU-safe reads.
 
-- **Tuning** (*Auto* by default) measures, for each storage, what read ahead saves on your console and what a read for nothing costs; Adaptive then uses these figures. They are kept in `ux0:data/vita-memio/tuning.bin` (the measured figures only - nothing per game). Adaptive learns every launch of a game from the start, while you play; back in front from the home screen, the same launch goes on where it was. Triangle, twice, forgets the figures.
+- **Tuning** (*Auto* by default) measures, for each storage, what read ahead saves on your console and what a read for nothing costs; Adaptive then uses these figures. They are kept in `ux0:data/vita-memio/tuning.bin` (the measured figures only - nothing per game). Adaptive learns every launch of a game from the start, while you play; back in front from the home screen, the same launch goes on where it was, read ahead switched off where Adaptive had switched it off. Triangle, twice, forgets the figures.
 
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s

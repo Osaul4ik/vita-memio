@@ -154,9 +154,10 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  * what a wrong on does). The sums served by read ahead are cleared on the
  * return: a loss is shown again on fresh reads.
  * The sums are kept over the last rounds (7/8 of each round left); the
- * game's costs stay with it while it runs. The game comes back to the front
- * with every kind on and no strikes, so an off from figures gone wrong is
- * never kept for good. */
+ * game's costs stay with it while it runs. Put away to the home screen and
+ * back, the same launch goes on with each kind on or off as it was; a new
+ * launch starts with every kind on and no strikes, so an off from figures
+ * gone wrong is never kept for good. */
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u

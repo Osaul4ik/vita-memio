@@ -143,8 +143,8 @@ static void reset(void)
 	g_ra_nc_kib = 0;
 	g_ra_mode = VM_RA_OFF;
 	g_ra_fg = 0;
-	memset(&g_ad_out, 0, sizeof(g_ad_out));         /* Adaptive: nothing held */
-	memset(&g_ad_in, 0, sizeof(g_ad_in));
+	memset(&g_ad_game, 0, sizeof(g_ad_game));       /* Adaptive: nothing held */
+	memset(&g_ad_sys, 0, sizeof(g_ad_sys));
 	memset(g_ad_title, 0, sizeof(g_ad_title));
 	g_ad_key = 0;
 	g_ad_restored = 0;
@@ -3858,15 +3858,20 @@ static void test_readahead_adaptive_small(void)
 	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
 	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
 	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
-	/* ... the first back in front: where it was, runs and all; the second's
-	 * kept too */
+	/* ... it put away and back: where it was, runs and all */
+	ra_proc_event(0x46, 4);
+	vm_stage_worker_tick();
+	ra_proc_event(0x46, 5);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == 4 && g_ad_restored == 2);
+	CHECK(g_ad.srun[0][10] > 0 && g_ad_rounds[0] == 1);   /* full rounds */
+	/* one game held at a time (the console runs one): the first, back after
+	 * the second, afresh */
 	as_app(0x44);
 	vm_stage_worker_tick();
-	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12 && g_ad_restored == 2);
-	CHECK(g_ad.run[0][10] > 0 && g_ad_rounds[0] == 1);   /* full rounds */
+	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
 	as_app(0x46);
 	vm_stage_worker_tick();
-	CHECK(ra_threshold(0) == 5 && ra_small_threshold(0, ra_threshold(0)) == 4);
 	/* the home screen (the global settings): not kept, learned afresh */
 	ra_proc_event(0x46, 4);
 	vm_stage_worker_tick();
@@ -3875,7 +3880,7 @@ static void test_readahead_adaptive_small(void)
 
 	/* kept only under what it was learned under: the game's own threshold
 	 * changed - afresh; and one app at a time in memory: the one in front,
-	 * the one before and the one before that */
+	 * the last game and the last system app */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
@@ -3902,8 +3907,8 @@ static void test_readahead_adaptive_small(void)
 		snprintf(t, sizeof(t), "PCSB%05d", i);
 		ra_adapt_switch(t, VM_RA_ADAPTIVE);
 	}
-	CHECK(tune_title_is(&g_ad_out.app, "PCSB00012") && !strcmp(g_ad_title, "PCSB00013"));
-	CHECK(sizeof(g_ad_out) + sizeof(g_ad_in) < 1100);    /* what memory holds of them */
+	CHECK(tune_title_is(&g_ad_game.app, "PCSB00012") && !strcmp(g_ad_title, "PCSB00013"));
+	CHECK(sizeof(g_ad_game) + sizeof(g_ad_sys) < 1200);  /* what memory holds of them */
 	vm_stage_fini();
 
 	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
@@ -4429,14 +4434,23 @@ static void test_onoff_measured(void)
 		CHECK(!g_oo_acc[OO_NC].std_q);            /* taken */
 	}
 	__sync_lock_release(&g_ad_lock);
-	/* the costs kept with the app, off not: away and back, on again (a loss
-	 * shown again first, on fresh reads) */
-	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
-	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777"));
-	CHECK(g_ad_out.app.oo_held[OO_NC] == 5000);
-	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
-	CHECK(g_oo_off[OO_NC] == 0 && !g_oo[OO_NC].off && !g_oo[OO_NC].strikes &&
-	      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
+	/* the same launch away (the home screen) and back: off as it was, its
+	 * costs too */
+	{
+		const uint32_t key = g_ad_key;
+		const SceUID pid = g_ad_pid;
+
+		ra_adapt_switch_pid(HOME_TITLE, VM_RA_ADAPTIVE, 0);
+		CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_game.app, "PCSB00777"));
+		CHECK(g_ad_game.app.oo[OO_NC].off && g_ad_game.app.oo[OO_NC].held_each == 5000);
+		ra_adapt_switch_pid("PCSB00777", key, pid);
+		CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && oo_off(OO_NC) &&
+		      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
+		/* another launch of it: afresh, on */
+		ra_adapt_switch_pid(HOME_TITLE, VM_RA_ADAPTIVE, 0);
+		ra_adapt_switch_pid("PCSB00777", key, pid + 1);
+		CHECK(!g_oo_off[OO_NC] && !g_oo[OO_NC].off && !g_oo[OO_NC].held_each);
+	}
 	vm_stage_fini();
 }
 
@@ -4501,6 +4515,66 @@ static void test_tune_v3(void)
 	vm_stage_fini();
 }
 
+/* System apps with settings of their own (VM_KEY_SYSAPPS on), Adaptive: a
+ * game put away to the home screen and back - also through a system app or
+ * two meanwhile - goes on from where it was, not afresh. */
+static void test_adaptive_kept_through_home(void)
+{
+	VmSettings s;
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	s.sysapps = 1;
+	vm_stage_apply(&s);
+	g_title_fn = fake_title;
+	vm_stage_worker_tick();
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, "PCSB00777"));
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	adapt_runs(0, 20, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* the home screen, and back */
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, HOME_TITLE) && ra_threshold(0) == 5);
+	fake_pid = 0x44;
+	ra_proc_event(0x44, 5);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, "PCSB00777"));
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* the home screen, two system apps, the home screen, and back */
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	as_app(0x47);
+	vm_stage_worker_tick();
+	ra_proc_event(0x47, 4);
+	vm_stage_worker_tick();
+	as_app(0x49);
+	vm_stage_worker_tick();
+	ra_proc_event(0x49, 4);
+	vm_stage_worker_tick();
+	fake_pid = 0x44;
+	ra_proc_event(0x44, 5);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, "PCSB00777"));
+	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* the game ended and started again: afresh */
+	ra_proc_event(0x44, 3);
+	vm_stage_worker_tick();
+	as_app(0x4A);
+	vm_stage_worker_tick();
+	CHECK(ra_threshold(0) == 5);
+	g_title_fn = NULL;
+	vm_stage_fini();
+}
+
 /* Adaptive keeps nothing of a game in tuning.bin: games coming and going
  * write nothing to it, the file stays the header and the calibration; a game
  * starts afresh at every launch, and only the same launch, back in front,
@@ -4525,8 +4599,8 @@ static void test_nothing_learned_in_file(void)
 	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
 	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
 	w0 = fake_tune_writes;
-	for (int k = 0; k < 4; k++) {                 /* games in front in turn */
-		as_app(k & 1 ? 0x4A : 0x46);
+	for (int k = 0; k < 4; k++) {                 /* put away and back, in turn */
+		ra_proc_event(0x4A, k & 1 ? 5 : 4);
 		vm_stage_worker_tick();
 	}
 	CHECK(fake_tune_writes == w0);                /* nothing learned is written */
@@ -5927,6 +6001,7 @@ int main(void)
 	RUN(test_onoff_measured);
 	RUN(test_tune_v3);
 	RUN(test_nothing_learned_in_file);
+	RUN(test_adaptive_kept_through_home);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

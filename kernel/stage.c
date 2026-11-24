@@ -2819,7 +2819,9 @@ typedef struct {
 	uint8_t  tiny_thr, tiny_blk, sh_ad, sh_tn;
 	uint16_t pos[2][RT_POS], run[2][RT_RUN], spos[2][RT_POS], srun[2][RT_RUN];
 	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
-	uint32_t oo_std[3], oo_srv[3], oo_held[3];   /* this game's costs */
+	RtEv     oo[3];                      /* on or off, from what it did: as it was */
+	int64_t  oo_time[3];
+	uint32_t oo_gap[2][RT_GAP_B];        /* the game's pauses */
 } TuneApp;
 
 typedef struct {
@@ -2849,8 +2851,11 @@ typedef struct {
 
 static char              g_ad_title[16];      /* whose g_ad is (under g_ad_lock) */
 static uint32_t          g_ad_key;
-static AdHeld            g_ad_out;            /* the one before                  */
-static AdHeld            g_ad_in;             /* the one before that             */
+/* Held, one of each: the last game (only one is suspended at a time) and the
+ * last of the home screen and the system apps - so a game put away to the
+ * home screen, through system apps or not, is not pushed out by them. */
+static AdHeld            g_ad_game;
+static AdHeld            g_ad_sys;
 static SceUID            g_ad_pid;            /* the launch g_ad is of           */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
@@ -2961,11 +2966,9 @@ static void tune_pack(TuneApp *t)
 	tune_put(t->tn_cnt, g_tn_cnt, RT_TB, s);
 	tune_put(t->tn_reads, g_tn_reads, RT_TB, s);
 	tune_put(t->tn_sec, g_tn_sec, RT_TB, s);
-	for (int u = 0; u < 3; u++) {        /* off lasts the time in front (RtEv) */
-		t->oo_std[u] = g_oo[u].std_rate;
-		t->oo_srv[u] = g_oo[u].srv_rate;
-		t->oo_held[u] = g_oo[u].held_each;
-	}
+	memcpy(t->oo, g_oo, sizeof(t->oo));  /* off stays off for the same launch */
+	memcpy(t->oo_time, g_oo_time, sizeof(t->oo_time));
+	memcpy(t->oo_gap, g_oo_gap, sizeof(t->oo_gap));
 }
 
 /* g_ad_lock held, after ra_adapt_clear: what t holds, in effect. */
@@ -2986,22 +2989,27 @@ static void tune_restore(const TuneApp *t)
 	tune_get(g_tn_sec, t->tn_sec, RT_TB, t->sh_tn);
 	g_tn_ended = 0;
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
-	for (int u = 0; u < 3; u++) {
-		g_oo[u].off = g_oo[u].strikes = 0;   /* back in front: on, to be shown again */
-		g_oo[u].std_rate = t->oo_std[u];
-		g_oo[u].srv_rate = t->oo_srv[u];
-		g_oo[u].held_each = t->oo_held[u];
-		ST(g_oo_off[u], 0);
-	}
+	memcpy(g_oo, t->oo, sizeof(g_oo));   /* on or off as it was: an off stays off */
+	memcpy(g_oo_time, t->oo_time, sizeof(g_oo_time));
+	memcpy(g_oo_gap, t->oo_gap, sizeof(g_oo_gap));
+	for (int u = 0; u < 3; u++)
+		ST(g_oo_off[u], g_oo[u].off);
 	ADD(g_ad_restored, 1);
+}
+
+/* Where an app is held: a game's place, or the home screen's and the system
+ * apps' (ra_title_system: NPXS*). */
+static AdHeld *ad_held_for(const char *title)
+{
+	return !strcmp(title, HOME_TITLE) || ra_title_system(title) ? &g_ad_sys : &g_ad_game;
 }
 
 /* What is in effect is `title`'s (""; none: the home screen with no
  * settings of its own, the global settings) under `key`. The same as
- * before: Adaptive goes on learning. Else what it learned is held for the
- * one before (g_ad_out; the one before that moves to g_ad_in), and the same
- * launch held under the same key goes on from there; anything else starts
- * afresh. */
+ * before: Adaptive goes on learning. Else what it learned is held (in its
+ * place, ad_held_for), and the same launch held under the same key goes on
+ * from there - its thresholds, and read ahead on or off for each kind as it
+ * was; anything else starts afresh. */
 static void ra_adapt_switch_pid(const char *title, uint32_t key, SceUID pid_in)
 {
 	const AdHeld *h = NULL;
@@ -3014,15 +3022,14 @@ static void ra_adapt_switch_pid(const char *title, uint32_t key, SceUID pid_in)
 		return;
 	}
 	if (g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE) {
-		if (!tune_title_is(&g_ad_out.app, g_ad_title))
-			g_ad_in = g_ad_out;           /* the one before that: may be the one coming */
-		tune_pack(&g_ad_out.app);
-		g_ad_out.pid = g_ad_pid;
+		AdHeld *const o = ad_held_for(g_ad_title);
+
+		tune_pack(&o->app);
+		o->pid = g_ad_pid;
 	}
 	ra_adapt_clear();
-	if (title[0])
-		h = tune_title_is(&g_ad_out.app, title) ? &g_ad_out
-		  : tune_title_is(&g_ad_in.app, title)  ? &g_ad_in : NULL;
+	if (title[0] && tune_title_is(&ad_held_for(title)->app, title))
+		h = ad_held_for(title);
 	if (h && h->app.key == key && pid && h->pid == pid)
 		tune_restore(&h->app);            /* the same launch back in front: where it was */
 	g_ad_pid = pid;
@@ -3058,8 +3065,8 @@ static void tune_forget_learned(void)
 {
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
-	memset(&g_ad_out, 0, sizeof(g_ad_out));
-	memset(&g_ad_in, 0, sizeof(g_ad_in));
+	memset(&g_ad_game, 0, sizeof(g_ad_game));
+	memset(&g_ad_sys, 0, sizeof(g_ad_sys));
 	ra_adapt_clear();
 	__sync_lock_release(&g_ad_lock);
 	g_tune_ok = 0;

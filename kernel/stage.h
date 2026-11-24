@@ -66,15 +66,7 @@ typedef struct VmRaNow {
 	                         * (VM_BUFMAP_*), since it was started             */
 	uint32_t off;           /* Adaptive, off as measured now: bit 0 C, 1 NC,
 	                         * 2 tiny reads                                    */
-	int      tune;          /* the app in front's start (VM_TUNE_*)           */
 } VmRaNow;
-
-/* VmRaNow.tune: no start (no app, not Adaptive); learning (the launch in front
- * is still being counted); partial (the launch in front is counted, but the
- * start has fewer than all its launches: 1 of 3, 2 of 3); done (all counted,
- * the start is complete - mean or median); the launch in front could not be
- * counted (too little read, or too few runs to weigh). */
-enum { VM_TUNE_NONE, VM_TUNE_LEARNING, VM_TUNE_PARTIAL, VM_TUNE_DONE, VM_TUNE_FAILED };
 
 /* VmRaNow.bufmap: copy on the system core off or nothing mapped yet; every
  * buffer mapped; some mapped from their 2nd page (their first in no block:
@@ -101,9 +93,8 @@ int  vm_stage_app_save(void);                  /* asks; saved by the worker (io_
 /* Calibration: what read ahead brings, measured on this console, per storage
  * (a read from the pieces against the same read from the card; how long the
  * game's reads waited for a piece read for nothing). Measured only while on;
- * what was measured is kept (ur0:data/vita-memio/calib.bin) and used by
- * Adaptive and the R/A Test once there is enough of it, else the fixed
- * figures. */
+ * what was measured is kept (ux0:data/vita-memio/tuning.bin) and used by
+ * Adaptive once there is enough of it, else the fixed figures. */
 typedef struct VmCal {
 	int      on;            /* measuring                                      */
 	int      have[2];       /* C, NC: enough measured, in use                 */
@@ -119,20 +110,6 @@ void vm_stage_cal(int dev, VmCal *out);        /* dev -1: the fixed figures */
 void vm_stage_cal_set(int on);                 /* asks; the worker does it (io_tick) */
 void vm_stage_cal_reset(void);                 /* asks: all measured gone (io_tick) */
 void vm_stage_io_tick(void);                   /* worker, from the top: what the overlay asked */
-
-/* The overlay's read ahead test. Worker thread, but for _running and _stale. */
-typedef struct VmRaTestPick {
-	int      little;        /* too little was read to tell: nothing picked    */
-	int      ra;            /* VM_RA_*                                        */
-	uint32_t thr[2];        /* C, NC: 2..8, 0 the fixed, VM_RA_NEVER: a loss  */
-	int      offload;       /* VM_OFFLOAD_*                                   */
-	uint32_t mib;           /* read during it                                 */
-} VmRaTestPick;
-int  vm_stage_ratest_start(void);              /* VM_OK, VM_ERR_NOT_READY */
-int  vm_stage_ratest_running(uint32_t *mib);
-int  vm_stage_ratest_stale(void);              /* another app came to the front */
-void vm_stage_ratest_cancel(void);
-void vm_stage_ratest_stop(VmRaTestPick *out);
 
 /* The app in front (process events) and the storage it reads from most
  * since it came to the front (-1: none in front, or too little read yet;

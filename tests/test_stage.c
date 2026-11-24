@@ -145,7 +145,6 @@ static void reset(void)
 	g_ra_fg = 0;
 	memset(&g_ad_out, 0, sizeof(g_ad_out));         /* Adaptive: nothing held */
 	memset(&g_ad_in, 0, sizeof(g_ad_in));
-	g_ad_fslot = g_ad_fsig = 0;
 	memset(g_ad_title, 0, sizeof(g_ad_title));
 	g_ad_key = 0;
 	g_ad_restored = 0;
@@ -3669,17 +3668,6 @@ static void test_readahead_adaptive(void)
 	adapt_runs(0, 5, 2 * RA_ADAPT_RUNS);
 	adapt_runs(1, 20, 2 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 6 && ra_threshold(1) == VM_RA_NEVER);
-	/* while the R/A Test runs: the standard 5 and 5, nothing followed */
-	CHECK(vm_stage_ratest_start() == VM_OK);
-	CHECK(ra_threshold(0) == 5 && ra_threshold(1) == 5);
-	{
-		const uint32_t before = g_ad.total_sectors;
-
-		CHECK(rd(u, 0, 256) == 0);
-		CHECK(g_ad.total_sectors == before);
-	}
-	vm_stage_ratest_cancel();
-	CHECK(ra_threshold(0) == 6 && ra_threshold(1) == VM_RA_NEVER);   /* back as it was */
 	as_app(0x42);                                        /* another in front: afresh */
 	vm_stage_worker_tick();
 	CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0);
@@ -3820,8 +3808,7 @@ static void test_adaptive_rounds(void)
 
 /* Adaptive: the 32 KiB reads' stream has a threshold of its own (4..32 reads,
  * from On's 16), moved by their own runs both ways, the large reads' left as
- * they are; afresh when what is in effect changes, 16 with On and while the
- * R/A Test runs. Then from reads: from 4, read ahead begins after the 4th. */
+ * they are; afresh when what is in effect changes, 16 with On. Then from reads: from 4, read ahead begins after the 4th. */
 static void test_readahead_adaptive_small(void)
 {
 	static uint8_t u[256 * 512];
@@ -3849,11 +3836,6 @@ static void test_readahead_adaptive_small(void)
 	/* the large reads' threshold moving leaves this one where it is */
 	adapt_runs(0, 20, 2 * RA_ADAPT_RUNS);
 	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 12);
-	/* while the R/A Test runs: On's 16 */
-	CHECK(vm_stage_ratest_start() == VM_OK);
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
-	vm_stage_ratest_cancel();
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == 12);
 	/* the HUD sees all three, both kinds */
 	{
 		VmRaNow rn;
@@ -3888,12 +3870,12 @@ static void test_readahead_adaptive_small(void)
 	/* the home screen (the global settings): not kept, learned afresh */
 	ra_proc_event(0x46, 4);
 	vm_stage_worker_tick();
-	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK && g_tune_n == 0);   /* no start taken: nothing kept */
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
 	vm_stage_fini();
 
 	/* kept only under what it was learned under: the game's own threshold
 	 * changed - afresh; and one app at a time in memory: the one in front,
-	 * the one before (until written) and the one coming */
+	 * the one before and the one before that */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
@@ -4450,518 +4432,117 @@ static void test_onoff_measured(void)
 	/* the costs kept with the app, off not: away and back, on again (a loss
 	 * shown again first, on fresh reads) */
 	ra_adapt_switch("PCSB00001", VM_RA_ADAPTIVE);
-	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777") && g_ad_out.app.oo_off[OO_NC] == 0);
-	CHECK(tune_valid(&g_ad_out.app) && g_ad_out.app.oo_held[OO_NC] == 5000);
+	CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_out.app, "PCSB00777"));
+	CHECK(g_ad_out.app.oo_held[OO_NC] == 5000);
 	ra_adapt_switch("PCSB00777", g_ad_out.app.key);
 	CHECK(g_oo_off[OO_NC] == 0 && !g_oo[OO_NC].off && !g_oo[OO_NC].strikes &&
 	      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
-	/* an app is worth a slot once it has a start (a snapshot) to keep */
-	{
-		TuneApp t;
-
-		memset(&t, 0, sizeof(t));
-		memcpy(t.title, "PCSB00777", 10);
-		t.tiny_thr = RA_TINY_STREAK;
-		t.tiny_blk = RA_TINY_SECTORS;
-		t.oo_held[OO_TINY] = 900;                  /* the live costs alone: not kept */
-		CHECK(!tune_learned(&t));
-		t.st.n = 1;
-		t.st.snap[0].tiny_thr = RA_TINY_STREAK;
-		t.st.snap[0].tiny_blk = RA_TINY_SECTORS;
-		CHECK(tune_learned(&t) && tune_valid(&t));
-		t.st.snap[0].tiny_blk = 48;                /* not one this build takes */
-		CHECK(!tune_valid(&t));
-		t.st.snap[0].tiny_blk = RA_TINY_SECTORS;
-		t.st.n = TUNE_START_N + 1;
-		CHECK(!tune_valid(&t));
-		t.st.n = 0;
-		t.oo_off[OO_TINY] = 2;
-		CHECK(!tune_valid(&t));
-	}
 	vm_stage_fini();
 }
 
-/* A version 3 tuning.bin: its calibration kept, its apps not this layout
- * (learned anew), the file written as version 4 at the next save. */
-static void test_tune_v3(void)
+/* An older tuning.bin (versions 3 to 7, apps' slots after the calibration):
+ * its calibration kept, the file written anew as this layout - the header
+ * and the calibration alone - at the next save. */
+static void tune_old_file(const char *path, uint32_t version, uint32_t slot, int apps, uint32_t n)
 {
-	VmSettings s;
-	char path[256];
 	TuneHead h;
 	uint32_t on = 1, c;
-	FILE *f;
+	FILE *f = fopen(path, "wb");
 
-	on_game(&s, 0x44);
-	memset(g_cal, 0, sizeof(g_cal));
-	g_cal[M].waste_us = 77 * 10;
-	g_cal[M].waste_n = 10;
-	snprintf(path, sizeof(path), "%s/ux0", fakes_tmpdir());
-	mkdir(path, 0777);
-	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", fakes_tmpdir());
-	f = fopen(path, "wb");
 	CHECK(f != NULL);
 	if (!f)
 		return;
-	tune_head_of(&h, 3u, TUNE_SLOT_V3);
+	g_cal[M].waste_us = 77 * n;
+	g_cal[M].waste_n = n;
+	tune_head_of(&h, version, slot);
 	fwrite(&h, sizeof(h), 1, f);
 	fwrite(&on, sizeof(on), 1, f);
 	fwrite(g_cal, sizeof(g_cal), 1, f);
 	c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
 	fwrite(&c, sizeof(c), 1, f);
-	for (int i = 0; i < 3 * (int)TUNE_SLOT_V3; i++)
-		fputc(0x4A, f);                   /* three old apps */
+	for (int i = 0; i < apps * (int)slot; i++)
+		fputc(0x4A, f);                       /* old apps */
 	fclose(f);
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = 0;
 	g_cal_loaded = 0;
 	cal_load();
-	CHECK(!g_tune_ok && g_tune_n == 0 && g_cal_on && g_cal[M].waste_n == 10 && g_cal[M].waste_us == 770);
-	g_tune_cal_due = 1;
-	cal_save_locked();
-	{
-		struct stat st;
+}
 
-		CHECK(g_tune_ok && stat(path, &st) == 0 && st.st_size == (off_t)TUNE_SLOT_OFF(0));
-	}
-	g_cal_loaded = 0;
+static void test_tune_v3(void)
+{
+	static const struct { uint32_t v, slot; int apps; } k_old[] = {
+		{ 3u, TUNE_SLOT_V3, 3 }, { 4u, TUNE_SLOT_V4, 0 }, { 5u, TUNE_SLOT_V5, 2 },
+		{ 6u, TUNE_SLOT_V6, 2 }, { 7u, TUNE_SLOT_V6, 4 },
+	};
+	VmSettings s;
+	char path[256];
+	struct stat st;
+
+	on_game(&s, 0x44);
 	memset(g_cal, 0, sizeof(g_cal));
-	cal_load();
-	CHECK(g_tune_ok && g_cal[M].waste_n == 10);
-	/* version 4 the same */
-	f = fopen(path, "wb");
-	CHECK(f != NULL);
-	if (f) {
-		g_cal[M].waste_n = 11;
-		tune_head_of(&h, 4u, TUNE_SLOT_V4);
-		fwrite(&h, sizeof(h), 1, f);
-		fwrite(&on, sizeof(on), 1, f);
-		fwrite(g_cal, sizeof(g_cal), 1, f);
-		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
-		fwrite(&c, sizeof(c), 1, f);
-		fclose(f);
-		memset(g_cal, 0, sizeof(g_cal));
+	snprintf(path, sizeof(path), "%s/ux0", fakes_tmpdir());
+	mkdir(path, 0777);
+	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", fakes_tmpdir());
+	for (uint32_t i = 0; i < sizeof(k_old) / sizeof(k_old[0]); i++) {
+		const uint32_t n = 10 + i;
+
+		tune_old_file(path, k_old[i].v, k_old[i].slot, k_old[i].apps, n);
+		CHECK(!g_tune_ok && g_cal_on && g_cal[M].waste_n == n && g_cal[M].waste_us == 77 * n);
+		CHECK(g_tune_cal_due);                    /* to be written anew */
+		cal_save_locked();
+		CHECK(g_tune_ok && !g_tune_cal_due && stat(path, &st) == 0 &&
+		      st.st_size == (off_t)(TUNE_CAL_OFF + TUNE_CAL_SIZE));   /* the old apps cut off */
 		g_cal_loaded = 0;
-		cal_load();
-		CHECK(!g_tune_ok && g_cal[M].waste_n == 11);
-	}
-	/* version 5 (its last state kept) the same: the calibration only */
-	f = fopen(path, "wb");
-	CHECK(f != NULL);
-	if (f) {
-		g_cal[M].waste_n = 12;
-		tune_head_of(&h, 5u, TUNE_SLOT_V5);
-		fwrite(&h, sizeof(h), 1, f);
-		fwrite(&on, sizeof(on), 1, f);
-		fwrite(g_cal, sizeof(g_cal), 1, f);
-		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
-		fwrite(&c, sizeof(c), 1, f);
-		for (int i = 0; i < 2 * (int)TUNE_SLOT_V5; i++)
-			fputc(0x4A, f);               /* two old apps */
-		fclose(f);
 		memset(g_cal, 0, sizeof(g_cal));
-		g_cal_loaded = 0;
 		cal_load();
-		CHECK(!g_tune_ok && g_tune_n == 0 && g_cal[M].waste_n == 12);
-	}
-	/* version 6 (the start as the mean alone) the same: its calibration, its apps learned anew */
-	f = fopen(path, "wb");
-	CHECK(f != NULL);
-	if (f) {
-		g_cal[M].waste_n = 13;
-		tune_head_of(&h, 6u, TUNE_SLOT_V6);
-		fwrite(&h, sizeof(h), 1, f);
-		fwrite(&on, sizeof(on), 1, f);
-		fwrite(g_cal, sizeof(g_cal), 1, f);
-		c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
-		fwrite(&c, sizeof(c), 1, f);
-		for (int i = 0; i < 2 * (int)TUNE_SLOT_V6; i++)
-			fputc(0x4A, f);               /* two old apps */
-		fclose(f);
-		memset(g_cal, 0, sizeof(g_cal));
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(!g_tune_ok && g_tune_n == 0 && g_cal[M].waste_n == 13);
-		CHECK(TUNE_SLOT_V6 == (uint32_t)sizeof(TuneSlot));   /* the layout did not change */
+		CHECK(g_tune_ok && !g_tune_cal_due && g_cal[M].waste_n == n);
 	}
 	vm_stage_fini();
 }
 
-/* What a game's start snapshots agree on (tune_start_agg): their mean where
- * they are close, their median where they are far apart; each kind only from
- * the launches it was reliable in; the tiny reads' ones by their places in
- * the tables; the costs of those measured only. */
-static void test_start_agg(void)
-{
-	TuneStart r;
-	TuneSnap o;
-	int med;
-
-	CHECK(tune_mean(-3, 3) == -1 && tune_mean(2, 3) == 1 && tune_mean(-5, 3) == -2 && tune_mean(0, 3) == 0);
-	memset(&r, 0, sizeof(r));
-	r.n = 3;
-	for (int i = 0; i < 3; i++) {
-		r.snap[i].tiny_thr = RA_TINY_STREAK;
-		r.snap[i].tiny_blk = RA_TINY_SECTORS;
-		r.snap[i].ok = 7;
-	}
-	r.snap[0].ra_adj[0] = 1;   r.snap[1].ra_adj[0] = 2;  r.snap[2].ra_adj[0] = 2;   /* spread 1: mean 5/3: 2 */
-	r.snap[0].ra_adj[1] = -4;  r.snap[1].ra_adj[1] = -4; r.snap[2].ra_adj[1] = 1;   /* spread 5: median -4 (mean -2) */
-	r.snap[0].rs_adj[0] = 8;   r.snap[1].rs_adj[0] = 12; r.snap[2].rs_adj[0] = 4;   /* spread 8: still the mean, 8 */
-	r.snap[0].tiny_thr = 2;    r.snap[1].tiny_thr = 16;  r.snap[2].tiny_thr = 3;    /* places 0, 6, 1: median, 3 */
-	r.snap[0].tiny_blk = 16;   r.snap[1].tiny_blk = 64;  r.snap[2].tiny_blk = 64;   /* places 0, 2, 2: median, 64 */
-	r.snap[0].oo_std[OO_NC] = 50000; r.snap[2].oo_std[OO_NC] = 60000;               /* 2 measured: their mean */
-	r.snap[1].oo_held[OO_C] = 1000;                                                 /* 1 measured */
-	r.snap[0].oo_std[OO_C] = 10000; r.snap[1].oo_std[OO_C] = 11000; r.snap[2].oo_std[OO_C] = 30000;   /* far: median */
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ra_adj[0] == 2 && o.ra_adj[1] == -4 && o.rs_adj[0] == 8 && o.rs_adj[1] == 0);
-	CHECK(o.tiny_thr == 3 && o.tiny_blk == 64 && o.ok == 7 && tune_snap_ok(&o));
-	CHECK(o.oo_std[OO_NC] == 55000 && o.oo_held[OO_C] == 1000 && o.oo_srv[OO_C] == 0 && o.oo_std[OO_C] == 11000);
-	CHECK(med == 4);                                    /* ra_adj NC, both tiny ones, the cost */
-	CHECK(r.n == 3 && r.snap[1].tiny_thr == 16 && r.snap[2].ra_adj[1] == 1);   /* the launches stay as they were */
-
-	/* the same numbers, close together: no median */
-	for (int i = 0; i < 3; i++) {
-		r.snap[i].ra_adj[1] = (int8_t)(-4 + i);        /* -4 -3 -2 */
-		r.snap[i].tiny_thr = RA_TINY_STREAK;
-		r.snap[i].tiny_blk = RA_TINY_SECTORS;
-		r.snap[i].oo_std[OO_C] = (uint32_t)(10000 + 500 * i);
-	}
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ra_adj[1] == -3 && o.tiny_thr == RA_TINY_STREAK && o.tiny_blk == RA_TINY_SECTORS &&
-	      o.oo_std[OO_C] == 10500 && med == 0);
-
-	/* a kind not reliable in a launch is left out of that kind's figures */
-	r.snap[1].ok = 1u << OO_C;
-	r.snap[1].ra_adj[1] = -8;                          /* what too few runs left there */
-	r.snap[0].ra_adj[1] = 2;
-	r.snap[2].ra_adj[1] = 3;
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ra_adj[1] == 3 && o.ok == 7);              /* of 2 and 3 alone: 5/2 up */
-	/* two launches: the mean (their median) whatever the spread */
-	r.snap[0].ra_adj[1] = -8;
-	r.snap[2].ra_adj[1] = 8;
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ra_adj[1] == 0 && med == 0);
-	/* a kind none was reliable in: as a fresh game's, whatever the launches hold */
-	for (int i = 0; i < 3; i++) {
-		r.snap[i].ok = (uint8_t)(1u << OO_C);
-		r.snap[i].oo_std[OO_TINY] = 5555;
-		r.snap[i].tiny_thr = 12;
-	}
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ok == 1u << OO_C && o.tiny_thr == RA_TINY_STREAK && o.tiny_blk == RA_TINY_SECTORS &&
-	      o.oo_std[OO_TINY] == 0 && o.ra_adj[1] == 0 && o.oo_std[OO_NC] == 0);
-	/* fewer launches than the three: what there is */
-	r.n = 2;
-	r.snap[0].ra_adj[0] = 4;
-	r.snap[1].ra_adj[0] = 1;
-	r.snap[2].ra_adj[0] = -8;                          /* not one of them */
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ra_adj[0] == 3);                           /* 5/2 */
-	r.n = 0;
-	tune_start_agg(&r, &o, &med);
-	CHECK(o.ok == 0 && o.ra_adj[0] == 0 && o.tiny_thr == RA_TINY_STREAK);
-}
-
-static void st_reach3(uint32_t sec, uint32_t c, uint32_t nc, uint32_t tiny);   /* (below) */
-static int st_slot(const char *dir, uint32_t i, TuneSlot *t);
-
-/* What Adaptive learns from is counted for a launch's start: a run of each
- * kind counted by Adaptive, in the app in front, on the cards - not tiny
- * ones of a single read, not the internal storage, not while Verify is on. */
-static void test_start_runs_counted(void)
+/* Adaptive keeps nothing of a game in tuning.bin: games coming and going
+ * write nothing to it, the file stays the header and the calibration; a game
+ * starts afresh at every launch, and only the same launch, back in front,
+ * goes on from where it was. */
+static void test_nothing_learned_in_file(void)
 {
 	VmSettings s;
+	char path[256];
+	struct stat st;
+	int w0;
 
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
-	g_st_pid = 0;                                       /* no launch before this test's */
-	g_st_taken = 0;
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
 	vm_stage_apply(&s);
 	g_title_fn = fake_title;
+	vm_stage_worker_tick();                       /* the file read: none yet */
+	as_app(0x4A);                                 /* PCSE00001 */
 	vm_stage_worker_tick();
-	as_app(0x44);
-	vm_stage_worker_tick();
-	CHECK(g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 && g_st_runs[OO_TINY] == 0);
-	adapt_runs_raw(0, 20, 5);
-	adapt_runs_raw(1, 20, 3);
-	CHECK(g_st_runs[OO_C] == 5 && g_st_runs[OO_NC] == 3 && g_st_runs[OO_TINY] == 0);
-	ra_tiny_end(&g_dev[M], 4, 16);
-	ra_tiny_end(&g_dev[M], 6, 24);
-	ra_tiny_end(&g_dev[M], 1, 4);                       /* one read: not a run to learn from */
-	CHECK(g_st_runs[OO_TINY] == 2);
-	/* the internal storage is never read ahead: nothing to learn from */
-	for (uint32_t i = 1; i <= 20; i++)
-		ra_adapt_read(&g_dev[VM_DEV_INTERNAL], 0, i, 256);
-	ra_adapt_end(&g_dev[VM_DEV_INTERNAL], 0, 0, 20);
-	CHECK(g_st_runs[OO_C] == 5);
-	/* Verify on: Adaptive learns nothing, and so nothing is counted */
-	g_verify = 1;
-	adapt_runs_raw(0, 20, 4);
-	ra_tiny_end(&g_dev[M], 4, 16);
-	CHECK(g_st_runs[OO_C] == 5 && g_st_runs[OO_TINY] == 2);
-	g_verify = 0;
-	/* another launch: from nothing */
-	ra_proc_event(0x44, 4);
-	vm_stage_worker_tick();
-	as_app(0x4A);
-	vm_stage_worker_tick();
-	CHECK(g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 && g_st_runs[OO_TINY] == 0);
-	vm_stage_fini();
-}
-
-/* What a launch has read and the runs counted for its start go with the
- * Adaptive state they were learned into: a state not carried on (another key)
- * begins them again; the same launch back from the home screen goes on; the
- * pid is the one given with the title, not whatever g_ra_fg is by then. */
-static void test_start_counts_follow_state(void)
-{
-	VmSettings s;
-	char title[16];
-	uint32_t key;
-	SceUID pid;
-
-	fakes_tmpdir_remove();
-	fakes_tmpdir_new();
-	reset();
-	g_st_pid = 0;
-	g_st_taken = 0;
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	s.readahead = VM_RA_ADAPTIVE;
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
-	vm_stage_worker_tick();
-	as_app(0x44);
-	vm_stage_worker_tick();
-	CHECK(g_st_pid == 0x44 && g_ad_title[0] && g_ad_pid == 0x44);
-	memcpy(title, g_ad_title, sizeof(title));
-	key = g_ad_key;
-	pid = g_st_pid;
-
-	/* the home screen and back (the same launch, whatever g_ra_fg says by then): counting goes on */
-	__atomic_store_n(&g_st_sec, 1000, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_runs[OO_C], 10, __ATOMIC_RELAXED);
-	ra_adapt_switch_pid("", 0, 0);
-	__atomic_store_n(&g_ra_fg, 0, __ATOMIC_RELAXED);
-	ra_adapt_switch_pid(title, key, pid);
-	CHECK(g_ad_pid == pid && g_st_sec == 1000 && g_st_runs[OO_C] == 10);
-
-	/* another key (the thresholds set by hand): its state is not carried on, nor are the counts */
-	ra_adapt_switch_pid(title, key ^ (1u << 4), pid);
-	CHECK(g_st_sec == 0 && g_st_reads == 0 && g_st_runs[OO_C] == 0 && g_st_runs[OO_NC] == 0 &&
-	      g_st_runs[OO_TINY] == 0);
-
-	/* no pid in effect (none given with the title): nothing of another launch is reset */
-	__atomic_store_n(&g_st_sec, 77, __ATOMIC_RELAXED);
-	ra_adapt_switch_pid("", 0, 0);
-	CHECK(g_st_sec == 77);
-	vm_stage_fini();
-}
-
-/* An app's start is its own: with its thresholds set by hand those are used
- * and the start stays (in memory and in the file); with them off again the
- * start is in effect. */
-static void test_start_kept_through_manual(void)
-{
-	const uint32_t KA = VM_RA_ADAPTIVE;                    /* Adaptive, no thresholds of its own */
-	const uint32_t KM = VM_RA_ADAPTIVE | (4u << 4);        /* ... the C threshold set by hand    */
-	TuneApp a, stripped;
-
-	reset();
-	memset(&a, 0, sizeof(a));
-	memcpy(a.title, "PCSE00001", 9);
-	a.key = KA;
-	a.tiny_thr = RA_TINY_STREAK;
-	a.tiny_blk = RA_TINY_SECTORS;
-	a.st.n = TUNE_START_N;
-	for (int i = 0; i < (int)TUNE_START_N; i++) {
-		a.st.snap[i].tiny_thr = RA_TINY_STREAK;
-		a.st.snap[i].tiny_blk = RA_TINY_SECTORS;
-		a.st.snap[i].ra_adj[0] = 2;
-		a.st.snap[i].ok = 1;
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	w0 = fake_tune_writes;
+	for (int k = 0; k < 4; k++) {                 /* games in front in turn */
+		as_app(k & 1 ? 0x4A : 0x46);
+		vm_stage_worker_tick();
 	}
-	stripped = a;
-	tune_strip(&stripped);
-	CHECK(tune_valid(&stripped));
-	memset(&g_ad_in, 0, sizeof(g_ad_in));
-	g_ad_in.app = stripped;
-	g_ad_in.fslot = 1;
-	g_ad_in.fsig = tune_sig(&stripped);
-
-	ra_adapt_switch_pid("PCSE00001", KA, 0x50);            /* a launch: from its start */
-	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 2);
-	ra_adapt_switch_pid("PCSE00001", KM, 0x50);            /* set by hand: those are used */
-	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
-	ra_adapt_switch_pid("", 0, 0);
-	CHECK(g_ad_out.app.st.n == TUNE_START_N && !ad_unsaved(&g_ad_out));   /* nothing to write over it */
-	ra_adapt_switch_pid("PCSE00001", KM, 0x51);            /* another launch, still by hand */
-	CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
-	ra_adapt_switch_pid("PCSE00001", KA, 0x51);            /* off again: the start is in effect */
-	CHECK(g_ra_adj[0] == 2);
-	ra_adapt_switch_pid("", 0, 0);
-	CHECK(g_ad_out.app.st.n == TUNE_START_N && !ad_unsaved(&g_ad_out));
-	/* no snapshot is taken with thresholds set by hand */
-	CHECK(ad_key_auto(KA) && !ad_key_auto(KM) && !ad_key_auto(VM_RA_ON));
-}
-
-/* The window of a launch's start, the same for every launch: 50 MiB if every
- * kind seen has runs enough by then, else on to 100 MiB (the number of reads
- * does not decide); a kind still short at the end is left out of that
- * launch's snapshot; a launch with no kind enough is not counted and the
- * next one tries again; three valid launches complete the start, each kept. */
-static int tune_now(void)
-{
-	VmRaNow rn;
-
-	vm_stage_ra_now(&rn);
-	return rn.tune;
-}
-
-static void test_start_window(void)
-{
-	VmSettings s;
-	const char *dir;
-	TuneSlot t;
-	TuneSnap ag;
-	int med;
-
-	fakes_tmpdir_remove();
-	dir = fakes_tmpdir_new();
-	reset();
-	g_st_pid = 0;                                       /* no launch before this test's */
-	g_st_taken = 0;
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	s.readahead = VM_RA_ADAPTIVE;
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
+	CHECK(fake_tune_writes == w0);                /* nothing learned is written */
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);   /* the same launch: where it was */
+	/* a new launch of the same game (PCSE00001 again): afresh */
+	ra_proc_event(0x4A, 3);
 	vm_stage_worker_tick();
-
-	/* 1: 50 MiB, the ordinary kind enough, however many reads (a read is not a run) */
-	as_app(0x4A);
-	vm_stage_worker_tick();
-	CHECK(tune_now() == VM_TUNE_LEARNING);               /* the HUD's L: blue */
-	__atomic_store_n(&g_st_runs[OO_C], TUNE_START_MIN_RUNS, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_reads, 100000, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC - 1, __ATOMIC_RELAXED);
-	vm_stage_worker_tick();
-	CHECK(g_st_rec.n == 0);
-	__atomic_store_n(&g_st_sec, TUNE_START_FEW_SEC, __ATOMIC_RELAXED);
-	vm_stage_worker_tick();
-	CHECK(g_st_rec.n == 1 && g_st_taken == 0x4A && g_st_rec.snap[0].ok == 1u << OO_C);
-	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* this launch counted, 1 of 3: yellow */
-	/* in tuning.bin as soon as it is taken, the app still in front */
-	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 1 && tune_valid(&t.app) && t.app.st.snap[0].ok == 1u << OO_C);
-	CHECK(g_ad_fsig == tune_sig(&t.app) && !g_tune_live_due);
-	ra_proc_event(0x4A, 4);
-	vm_stage_worker_tick();
-
-	/* 2: at 50 MiB the NC kind is seen but short: on to 100 MiB, where it is left out */
 	as_app(0x4B);
 	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
-	CHECK(g_st_rec.n == 1 && g_st_taken != 0x4B);
-	st_reach3(TUNE_START_MANY_SEC - 1, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
-	CHECK(g_st_rec.n == 1);
-	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS + 50, TUNE_START_MIN_RUNS - 1, 0);
-	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4B && g_st_rec.snap[1].ok == 1u << OO_C);
-	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* 2 of 3: yellow */
-	CHECK(st_slot(dir, 0, &t) && t.app.st.n == 2);
-	ra_proc_event(0x4B, 4);
-	vm_stage_worker_tick();
-
-	/* 3: too few of every kind even at 100 MiB: not counted, and not counted later either */
-	as_app(0x4C);
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_MANY_SEC, 5, 5, 5);
-	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4C);
-	CHECK(tune_now() == VM_TUNE_FAILED);                 /* this launch not counted: red */
-	st_reach3(TUNE_START_MANY_SEC * 2, 500, 500, 500);    /* judged once: this launch is out */
-	CHECK(g_st_rec.n == 2);
-	ra_proc_event(0x4C, 4);
-	vm_stage_worker_tick();
-
-	/* 4: nothing to learn from seen at all: waits to 100 MiB, then not counted */
-	as_app(0x4D);
-	vm_stage_worker_tick();
-	CHECK(tune_now() == VM_TUNE_LEARNING);               /* a new launch: counting again, blue */
-	st_reach3(TUNE_START_FEW_SEC, 0, 0, 0);
-	CHECK(g_st_rec.n == 2 && g_st_taken != 0x4D);
-	st_reach3(TUNE_START_MANY_SEC, 0, 0, 0);
-	CHECK(g_st_rec.n == 2 && g_st_taken == 0x4D);
-	CHECK(tune_now() == VM_TUNE_FAILED);                 /* nothing to count: red, not yellow */
-	ra_proc_event(0x4D, 4);
-	vm_stage_worker_tick();
-
-	/* 5: all three kinds enough at 50 MiB: the third valid launch completes the start */
-	as_app(0x4E);
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
-	CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[2].ok == 7);
-	CHECK(tune_now() == VM_TUNE_DONE);                   /* all three: green */
-	CHECK(g_st_rec.snap[0].ok == 1u << OO_C && g_st_rec.snap[1].ok == 1u << OO_C);   /* as taken */
-	CHECK(st_slot(dir, 0, &t) && t.app.st.n == TUNE_START_N);                      /* already in the file */
-	tune_start_agg(&g_st_rec, &ag, &med);
-	CHECK(ag.ok == 7);
-	ra_proc_event(0x4E, 4);
-	vm_stage_worker_tick();
-	CHECK(st_slot(dir, 0, &t) && t.app.st.n == TUNE_START_N && tune_valid(&t.app) &&
-	      t.app.st.snap[0].ok == 1u << OO_C && t.app.st.snap[1].ok == 1u << OO_C && t.app.st.snap[2].ok == 7);
-
-	/* the start is complete: a further launch changes nothing, whatever it read */
-	as_app(0x4F);
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, 500, 500, 500);
-	CHECK(g_st_rec.n == TUNE_START_N && g_st_taken == 0x4F);
-	CHECK(tune_now() == VM_TUNE_DONE);                   /* a complete start stays green */
-	vm_stage_fini();
-}
-
-/* A launch is judged once: back in front after another launch (its reads
- * counted from 0 again) it is not counted a second time - the start would
- * hold the same launch twice and turn green after two real ones. */
-static void test_start_back_in_front(void)
-{
-	VmSettings s;
-
-	fakes_tmpdir_remove();
-	fakes_tmpdir_new();
-	reset();
-	g_st_pid = 0;
-	g_st_taken = 0;
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	s.readahead = VM_RA_ADAPTIVE;
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
-	vm_stage_worker_tick();
-
-	as_app(0x4A);                                        /* A: counted */
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
-	CHECK(g_st_rec.n == 1 && tune_now() == VM_TUNE_PARTIAL);
-	ra_proc_event(0x4A, 4);
-	vm_stage_worker_tick();
-	as_app(0x4B);                                        /* B: counted */
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
-	CHECK(g_st_rec.n == 2 && tune_now() == VM_TUNE_PARTIAL);
-	ra_proc_event(0x4B, 4);
-	vm_stage_worker_tick();
-	fake_pid = 0x4A;
-	ra_proc_event(0x4A, 5);                              /* A back in front */
-	vm_stage_worker_tick();
-	vm_stage_worker_tick();                              /* the worker follows: the app, then its verdict */
-	CHECK(tune_now() == VM_TUNE_PARTIAL);                /* still yellow, not blue */
-	st_reach3(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS, TUNE_START_MIN_RUNS);
-	CHECK(g_st_rec.n == 2 && tune_now() == VM_TUNE_PARTIAL);   /* not counted again */
-	ra_proc_event(0x4A, 4);
-	vm_stage_worker_tick();
-	as_app(0x4C);                                        /* C: the third, now complete */
-	vm_stage_worker_tick();
-	st_reach3(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS, 0, 0);
-	CHECK(g_st_rec.n == TUNE_START_N && tune_now() == VM_TUNE_DONE);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	/* the file, when there is one: the header and the calibration only */
+	g_tune_cal_due = 1;
+	cal_save_locked();
+	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", fakes_tmpdir());
+	CHECK(stat(path, &st) == 0 && st.st_size == (off_t)(TUNE_CAL_OFF + TUNE_CAL_SIZE));
+	g_title_fn = NULL;
 	vm_stage_fini();
 }
 
@@ -5120,348 +4701,6 @@ static void test_system_apps(void)
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
 	CHECK(!strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_FULL);
-	vm_stage_fini();
-}
-
-/* The launch's reads so far, and the runs Adaptive learned from in them, by
- * kind (what the hooks counted), and the worker's look. */
-static void st_reach3(uint32_t sec, uint32_t c, uint32_t nc, uint32_t tiny)
-{
-	__atomic_store_n(&g_st_sec, sec, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_reads, c + nc + tiny, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_runs[OO_C], c, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_runs[OO_NC], nc, __ATOMIC_RELAXED);
-	__atomic_store_n(&g_st_runs[OO_TINY], tiny, __ATOMIC_RELAXED);
-	vm_stage_worker_tick();
-}
-
-/* ... of the ordinary kind alone */
-static void st_reach(uint32_t sec, uint32_t runs)
-{
-	st_reach3(sec, runs, 0, 0);
-}
-
-/* What three launches agree on, worked out here the plain way: their mean,
- * or the one between if the lowest and the highest are more than `wide` apart. */
-static int expect3(int a, int b, int c, int wide)
-{
-	const int lo = a < b ? (a < c ? a : c) : (b < c ? b : c);
-	const int hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
-
-	return hi - lo > wide ? a + b + c - lo - hi : tune_mean(a + b + c, 3);
-}
-
-/* A slot of tuning.bin as it lies (0: not there). */
-static int st_slot(const char *dir, uint32_t i, TuneSlot *t)
-{
-	char path[256];
-	FILE *f;
-	int ok;
-
-	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
-	f = fopen(path, "rb");
-	if (!f)
-		return 0;
-	ok = !fseek(f, (long)TUNE_SLOT_OFF(i), SEEK_SET) && fread(t, sizeof(*t), 1, f) == 1 &&
-	     t->check == tune_slot_check(t);
-	fclose(f);
-	return ok;
-}
-
-/* What a game starts from (tuning.bin): not where Adaptive ended, but what it
- * held after the first 50 MiB of a launch (100 if a kind it learns from was
- * still short of runs) - one snapshot from each of the first three valid
- * launches, every one kept, what they agree on worked out from them. */
-static void test_learned_kept_in_file(void)
-{
-	static uint8_t u[256 * 512];
-	VmSettings s;
-	const char *dir;
-	char path[256];
-	struct stat st0, st1;
-	int a[3] = { 0, 0, 0 };
-	TuneSlot t;
-
-	fakes_tmpdir_remove();
-	dir = fakes_tmpdir_new();
-	reset();
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	s.readahead = VM_RA_ADAPTIVE;
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
-	vm_stage_worker_tick();                         /* the file read: none yet */
-
-	/* the reads are counted: the app in front's, on the card, while Adaptive learns */
-	as_app(0x44);
-	vm_stage_worker_tick();
-	CHECK(g_st_sec == 0 && g_st_reads == 0);
-	for (uint32_t at = 0; at < 4 * 256; at += 256)
-		CHECK(rd_ok(u, at, 256));
-	CHECK(g_st_sec == 4 * 256 && g_st_reads == 4);
-	CHECK(rd_ok(u, 3000, 1) && g_st_sec == 4 * 256 + 1 && g_st_reads == 5);
-	/* 50 MiB with the runs enough: the start is taken; with a kind seen but short
-	 * of runs the window goes on to 100 MiB (not the number of reads decides) */
-	st_reach(TUNE_START_FEW_SEC - 1, 100);
-	CHECK(g_st_rec.n == 0);
-	st_reach(TUNE_START_FEW_SEC, TUNE_START_MIN_RUNS - 1);
-	CHECK(g_st_rec.n == 0 && g_st_taken != 0x44);
-	st_reach(TUNE_START_MANY_SEC - 1, TUNE_START_MIN_RUNS - 1);
-	CHECK(g_st_rec.n == 0);
-	st_reach(TUNE_START_MANY_SEC, TUNE_START_MIN_RUNS);     /* enough by 100 MiB */
-	CHECK(g_st_rec.n == 1 && g_st_taken == 0x44 && g_st_rec.snap[0].ok == 1u << OO_C);
-	st_reach(TUNE_START_MANY_SEC * 2, 100);         /* once a launch */
-	CHECK(g_st_rec.n == 1);
-	ra_proc_event(0x44, 4);
-	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 2);                   /* the new file, then its slot */
-	/* on ux0, not the internal flash */
-	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
-	CHECK(stat(path, &st0) == 0 && st0.st_size == (off_t)TUNE_SLOT_OFF(1));
-	snprintf(path, sizeof(path), "%s/tuning.bin", dir);
-	CHECK(stat(path, &st1) != 0);
-	/* the home screen, and a game that reads too little: no start */
-	as_app(0x46);
-	vm_stage_worker_tick();
-	st_reach(TUNE_START_FEW_SEC - 1, 1);
-	CHECK(g_st_rec.n == 0);
-	ra_proc_event(0x46, 4);
-	vm_stage_worker_tick();
-	CHECK(g_tune_n == 1 && fake_tune_writes == 2);
-
-	/* Three launches of a game: each leaves its snapshot; the third, their mean */
-	as_app(0x42);
-	vm_stage_worker_tick();
-	CHECK(ra_threshold(0) == 5 && g_ad_restored == 0);     /* nothing to start from yet */
-	adapt_runs(0, 20, 3);                           /* it learns: from the 2nd read */
-	CHECK(ra_threshold(0) == 2 && g_ra_adj[0] == -3);
-	st_reach(TUNE_START_FEW_SEC, 100);
-	CHECK(g_st_rec.n == 1 && g_st_rec.snap[0].ra_adj[0] == -3);
-	a[0] = g_st_rec.snap[0].ra_adj[0];
-	adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);            /* it moves on, in play ... */
-	CHECK(g_ra_adj[0] != -3);
-	ra_proc_event(0x42, 4);                         /* ... and what it ended in is not kept */
-	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 3 && g_tune_n == 2);  /* each launch's result written at once */
-	CHECK(st_slot(dir, 1, &t) && tune_title_is(&t.app, "PCSE00001") && tune_valid(&t.app) &&
-	      t.app.st.n == 1 && t.app.st.snap[0].ra_adj[0] == -3 && t.app.ra_adj[0] == 0 &&
-	      t.app.pos[0][5] == 0 && t.app.run[0][10] == 0);
-	/* the same launch back in front: where it was, not from the start */
-	as_app(0x42);
-	vm_stage_worker_tick();
-	CHECK(g_ra_adj[0] != -3 && g_st_rec.n == 1);
-	st_reach(TUNE_START_FEW_SEC * 2, 100);          /* ... and no second snapshot of it */
-	CHECK(g_st_rec.n == 1);
-	ra_proc_event(0x42, 4);
-	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 3);
-
-	{
-		const uint32_t r0 = g_ad_restored;
-
-		as_app(0x43);                               /* the 2nd launch: from nothing again */
-		vm_stage_worker_tick();
-		CHECK(ra_threshold(0) == 5 && g_ra_adj[0] == 0 && g_st_rec.n == 1 && g_ad_restored == r0);
-	}
-	adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);
-	a[1] = g_ra_adj[0];
-	CHECK(a[1] != a[0]);
-	st_reach(TUNE_START_FEW_SEC, 100);
-	CHECK(g_st_rec.n == 2 && g_st_rec.snap[1].ra_adj[0] == a[1]);
-	ra_proc_event(0x43, 4);
-	vm_stage_worker_tick();
-	CHECK(fake_tune_writes == 4 && g_tune_n == 2);  /* its slot, where it lies */
-	CHECK(st_slot(dir, 1, &t) && t.app.st.n == 2);
-
-	as_app(0x4A);
-	vm_stage_worker_tick();
-	CHECK(ra_threshold(0) == 5 && g_st_rec.n == 2);
-	adapt_runs(0, 20, 3);
-	a[2] = g_ra_adj[0];
-	CHECK(a[2] == -3);
-	st_reach(TUNE_START_FEW_SEC, 100);
-	{
-		TuneSnap ag;
-		int med, mean;
-
-		/* every launch's own result kept - none replaced by a number made of them */
-		CHECK(g_st_rec.n == TUNE_START_N);
-		CHECK(g_st_rec.snap[0].ra_adj[0] == a[0] && g_st_rec.snap[1].ra_adj[0] == a[1] &&
-		      g_st_rec.snap[2].ra_adj[0] == a[2]);
-		CHECK(tune_snap_ok(&g_st_rec.snap[0]) && tune_snap_ok(&g_st_rec.snap[1]) &&
-		      tune_snap_ok(&g_st_rec.snap[2]));
-		tune_start_agg(&g_st_rec, &ag, &med);
-		mean = ag.ra_adj[0];
-		CHECK(mean == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
-		ra_proc_event(0x4A, 4);
-		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == 5 && g_tune_n == 2);
-		CHECK(st_slot(dir, 1, &t) && t.app.st.n == TUNE_START_N && tune_valid(&t.app) &&
-		      t.app.st.snap[0].ra_adj[0] == a[0] && t.app.st.snap[1].ra_adj[0] == a[1] &&
-		      t.app.st.snap[2].ra_adj[0] == a[2]);
-
-		/* the 4th launch and on: from the start values - not where an earlier one ended */
-		as_app(0x4B);
-		vm_stage_worker_tick();
-		CHECK(g_ra_adj[0] == mean && g_ad_restored >= 1 && g_ad_rounds[0] == 1);
-		CHECK(g_ad.run[0][10] == 0 && g_ad.pos[0][5] == 0);       /* no runs of an earlier game */
-		CHECK(g_st_rec.n == TUNE_START_N);
-		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);                      /* Adaptive goes on by itself */
-		CHECK(g_ra_adj[0] != mean || g_ad_rounds[0] > 1);
-		st_reach(TUNE_START_FEW_SEC * 3, 100);
-		CHECK(g_st_rec.n == TUNE_START_N && g_st_rec.snap[0].ra_adj[0] == a[0] &&
-		      g_st_rec.snap[2].ra_adj[0] == a[2]);                /* never touched */
-		ra_proc_event(0x4B, 4);
-		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == 5);                             /* nothing to write */
-
-		/* a restart: nothing in memory, the file read; the app's slot when it comes
-		 * to the front - its start, whatever a launch before ended in */
-		while (__sync_lock_test_and_set(&g_ad_lock, 1))
-			;
-		memset(&g_ad_out, 0, sizeof(g_ad_out));
-		memset(&g_ad_in, 0, sizeof(g_ad_in));
-		ra_adapt_clear();
-		__sync_lock_release(&g_ad_lock);
-		g_ad_title[0] = 0;
-		g_ad_key = 0;
-		g_app_pid = 0;
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(g_tune_ok && g_tune_n == 2 && !g_ad_in.app.title[0]);
-		as_app(0x4C);
-		vm_stage_worker_tick();
-		CHECK(tune_title_is(&g_ad_in.app, "PCSE00001") && g_ad_in.fslot == 2 &&
-		      g_ad_in.app.st.n == TUNE_START_N && g_ad_in.fsig == tune_sig(&g_ad_in.app));
-		CHECK(g_ra_adj[0] == mean && g_ad_fslot == 2);
-		ra_proc_event(0x4C, 4);
-		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == 5);
-	}
-
-	/* every app's start kept, no limit; one at a time in memory */
-	{
-		const int w0 = fake_tune_writes;
-
-		for (int i = 0; i < 20; i++) {
-			as_app(0x100 + i);
-			vm_stage_worker_tick();
-			adapt_runs(0, 20, 3);
-			st_reach(TUNE_START_FEW_SEC, 100);
-			ra_proc_event(0x100 + i, 4);
-			vm_stage_worker_tick();
-		}
-		CHECK(g_tune_n == 22u);
-		CHECK(fake_tune_writes == w0 + 20);           /* one slot an app */
-		snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
-		CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(g_tune_n));
-		/* the first of them comes back from the file: its 2nd launch, nothing to start from */
-		CHECK(!tune_title_is(&g_ad_out.app, "PCSG00000") && !tune_title_is(&g_ad_in.app, "PCSG00000"));
-		as_app(0x100);
-		vm_stage_worker_tick();
-		CHECK(tune_title_is(&g_ad_in.app, "PCSG00000") && g_ad_in.fslot == 3 && g_ad_fslot == 3 &&
-		      g_st_rec.n == 1 && ra_threshold(0) == 5);
-		ra_proc_event(0x100, 4);
-		vm_stage_worker_tick();
-		CHECK(fake_tune_writes == w0 + 20);           /* nothing taken: no write */
-	}
-	/* the game's own threshold set by hand: that is used, the start stays (and is
-	 * in effect again when the threshold is off) */
-	{
-		VmApp ap;
-
-		as_app(0x4D);
-		vm_stage_worker_tick();
-		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
-		ra_app_global(&ap);
-		ap.ra = VM_RA_ADAPTIVE;
-		ap.thr[0] = 3;
-		CHECK(vm_stage_app_set(&ap) == VM_OK);
-		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == 0);
-		ra_proc_event(0x4D, 4);
-		vm_stage_worker_tick();
-		CHECK(!ad_unsaved(&g_ad_out));                /* nothing to write over the start */
-		as_app(0x4D);
-		vm_stage_worker_tick();                       /* by hand still (its profile) */
-		ap.thr[0] = 0;
-		CHECK(vm_stage_app_set(&ap) == VM_OK);        /* off: the start is in effect */
-		CHECK(g_st_rec.n == TUNE_START_N && g_ra_adj[0] == expect3(a[0], a[1], a[2], TUNE_WIDE_ADJ));
-		ra_proc_event(0x4D, 4);
-		vm_stage_worker_tick();
-	}
-	/* a write cut short: that slot is lost, the others kept; the start is taken again */
-	{
-		const uint32_t n0 = g_tune_n;
-
-		as_app(0x46);
-		vm_stage_worker_tick();
-		adapt_runs(0, 3, 3 * RA_ADAPT_RUNS);
-		st_reach(TUNE_START_FEW_SEC, 100);
-		fake_write_short = 1;
-		ra_proc_event(0x46, 4);
-		vm_stage_worker_tick();
-		fake_write_short = 0;
-		while (__sync_lock_test_and_set(&g_ad_lock, 1))
-			;
-		memset(&g_ad_out, 0, sizeof(g_ad_out));
-		memset(&g_ad_in, 0, sizeof(g_ad_in));
-		__sync_lock_release(&g_ad_lock);
-		g_ad_title[0] = 0;
-		g_app_pid = 0;
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(g_tune_n == n0 + 1u || g_tune_n == n0);
-		as_app(0x101);
-		vm_stage_worker_tick();
-		CHECK(g_st_rec.n == 1);                       /* another app's start: whole */
-		ra_proc_event(0x101, 4);
-		vm_stage_worker_tick();
-	}
-	/* Triangle (reset): the file anew, no app in it */
-	cal_reset_done();
-	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", dir);
-	CHECK(stat(path, &st1) == 0 && st1.st_size == (off_t)TUNE_SLOT_OFF(0) && g_tune_n == 0);
-	/* the branch's v2 file on ur0: removed at the next save */
-	{
-		FILE *f;
-
-		snprintf(path, sizeof(path), "%s/tuning.bin", dir);
-		f = fopen(path, "wb");
-		CHECK(f != NULL);
-		if (f) {
-			fputs("old", f);
-			fclose(f);
-		}
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(g_tune_legacy & 2);
-		g_tune_cal_due = 1;
-		cal_save_locked();
-		CHECK(stat(path, &st1) != 0 && !g_tune_legacy);
-	}
-	/* packing: counts up to any size come back to the shift */
-	{
-		TuneApp ta;
-
-		while (__sync_lock_test_and_set(&g_ad_lock, 1))
-			;
-		ra_adapt_clear();
-		memcpy(g_ad_title, "PCSB00777", 10);
-		g_ad.pos[0][9] = 5000000u;
-		g_ad.pos[1][3] = 1234u;
-		g_tn_cnt[4] = 70000u;
-		tune_pack(&ta);
-		ra_adapt_clear();
-		CHECK(tune_valid(&ta));
-		tune_restore(&ta);
-		CHECK(g_ad.pos[1][3] >> ta.sh_ad == 1234u >> ta.sh_ad &&
-		      g_ad.pos[0][9] >> ta.sh_ad == 5000000u >> ta.sh_ad && g_tn_cnt[4] >> ta.sh_tn == 70000u >> ta.sh_tn);
-		CHECK(ta.sh_ad > 0 && sizeof(TuneApp) <= 512);
-		ta.tiny_blk = 48;                              /* not one this build writes */
-		CHECK(!tune_valid(&ta));
-		ra_adapt_clear();
-		g_ad_title[0] = 0;
-		__sync_lock_release(&g_ad_lock);
-	}
 	vm_stage_fini();
 }
 
@@ -5688,58 +4927,6 @@ static void test_review_fixes(void)
 	vm_stage_worker_tick();
 	CHECK(g_shadow != NULL && take_shadow() != NULL);
 	g_shadow_busy = 0;
-	vm_stage_fini();
-}
-
-/* The overlay's read ahead test: only the app it was started for, nothing
- * changed by it; a stream gets read ahead picked whatever read ahead is set to. */
-static void test_ra_test_hook(void)
-{
-	static uint8_t u[256 * 512];
-	VmSettings s;
-	VmRaTestPick p;
-	Dev *const d = &g_dev[M];
-	uint32_t mib = 0;
-
-	reset();
-	memset(&s, 0, sizeof(s));
-	s.memcard = 1;
-	vm_stage_apply(&s);
-	g_title_fn = fake_title;
-	/* no app in front: not started */
-	CHECK(vm_stage_ratest_start() == VM_ERR_NOT_READY && !vm_stage_ratest_running(NULL));
-	as_app(0x42);
-	vm_stage_worker_tick();
-	CHECK(vm_stage_ratest_start() == VM_OK && vm_stage_ratest_running(&mib) && mib == 0);
-	/* read ahead Off for it, reads as ever: a long stream, cached */
-	for (uint32_t i = 0; i < 12; i++)
-		CHECK(rd(u, i * 256, 256) == 0);
-	CHECK(!d->ra_made);
-	CHECK(vm_stage_ratest_running(&mib) && mib > 0);
-	CHECK(!vm_stage_ratest_stale());
-	vm_stage_ratest_stop(&p);
-	CHECK(!vm_stage_ratest_running(NULL));
-	CHECK(p.little && p.mib == mib);                  /* too little to tell */
-	vm_stage_ratest_start();
-	for (uint32_t k = 0; k < 60; k++)
-		for (uint32_t i = 0; i < 12; i++) {
-			__sync_fetch_and_add(&fake_now_us, 1000);
-			CHECK(rd(u, k * 7 + i * 256, 256) == 0);
-		}
-	vm_stage_ratest_stop(&p);
-	CHECK(!p.little && p.ra == VM_RA_ON && p.thr[0] >= 2 && p.thr[0] <= 8 && p.offload == VM_OFFLOAD_ALWAYS);
-	/* another app in front: its reads do not count, and the test is stale */
-	vm_stage_ratest_start();
-	as_app(0x44);
-	vm_stage_worker_tick();
-	CHECK(vm_stage_ratest_stale());
-	CHECK(rd(u, 0, 256) == 0);
-	CHECK(g_rt.total_sectors == 0);
-	vm_stage_ratest_cancel();
-	CHECK(!vm_stage_ratest_running(NULL) && !vm_stage_ratest_stale());
-	/* off: its look costs nothing, and counts nothing */
-	CHECK(rd(u, 0, 256) == 0 && g_rt.total_sectors == 0);
-	g_title_fn = NULL;
 	vm_stage_fini();
 }
 
@@ -6726,7 +5913,6 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
 	RUN(test_ra_slow_stream);
-	RUN(test_ra_test_hook);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);
@@ -6736,17 +5922,11 @@ int main(void)
 	RUN(test_bufmap_state);
 	RUN(test_app_settings);
 	RUN(test_system_apps);
-	RUN(test_learned_kept_in_file);
 	RUN(test_fg_events_together);
 	RUN(test_session_log);
 	RUN(test_onoff_measured);
 	RUN(test_tune_v3);
-	RUN(test_start_agg);
-	RUN(test_start_runs_counted);
-	RUN(test_start_counts_follow_state);
-	RUN(test_start_kept_through_manual);
-	RUN(test_start_window);
-	RUN(test_start_back_in_front);
+	RUN(test_nothing_learned_in_file);
 	RUN(test_profiles);
 	RUN(test_review_fixes);
 	RUN(test_pipeline_modes);

@@ -50,8 +50,7 @@
  * then the actions. Which are shown is the worker's (a mask of 1 << item): the
  * thresholds only with read ahead On, nothing but Close with no app in front. */
 enum {
-	OV_ITEM_TEST = 0,    /* the read ahead test: start / stop                 */
-	OV_ITEM_RA,          /* read ahead: Global / Off / On                     */
+	OV_ITEM_RA = 0,      /* read ahead: Global / Off / On                     */
 	OV_ITEM_C,           /* ... On: reads in a row before it starts, cached   */
 	OV_ITEM_NC,          /* ... non-cacheable                                 */
 	OV_ITEM_OFFLOAD,     /* copy on core 3                                    */
@@ -69,7 +68,7 @@ enum {
 /* Items done with Cross only (an action, not a value). */
 static inline int ov_item_action(int i)
 {
-	return i == OV_ITEM_TEST || i == OV_ITEM_ADV || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
+	return i == OV_ITEM_ADV || i == OV_ITEM_SAVE || i == OV_ITEM_CLOSE;
 }
 
 /* The next item shown from `i`, `dir` -1 / +1 (wrapping); `i` itself if
@@ -127,7 +126,7 @@ static inline int ov_combo(int state, uint32_t arrow)
 	return state;
 }
 
-/* The menu just opened on a line not shown (the R/A Test with Adaptive):
+/* The menu just opened on a line not shown (no app in front: settings hidden):
  * the cursor on the first line shown below it. Nothing acts by it. 0 always. */
 static inline int ov_opened(OvLogic *o, int was_state, uint32_t mask)
 {

@@ -1,45 +1,31 @@
 /*
- * ra_test.h - the overlay's read ahead test, kept free of kernel calls so the
+ * ra_test.h - read ahead Adaptive's model, kept free of kernel calls so the
  * host tests can drive it (tests/test_ra_test.c). Included by stage.c only.
  *
- * While it runs, every read of the app is followed as read ahead follows it:
- * one stream of large reads, one of 32 KiB reads, one of tiny reads, broken by
- * a read elsewhere, a large write or a pause too long for what was read early
- * to be used. It works out what read ahead would have given whatever read ahead
- * is set to. What brings nothing and costs nothing is left as it is; what would
- * only cost is switched off, for that kind of read or altogether.
- *
- * For each threshold it adds up time saved and time lost. Times are from the
- * console's measurements: a 128 KiB read in a stream 7.5 -> 4.6 ms, into
- * non-cacheable memory 6.5 -> 2.7 ms; a one-sector read 395 -> 46 us. A piece
- * read for nothing takes about 7.5 ms of the card on the system core, but only
- * holds up a read that comes meanwhile, so it counts for less.
+ * stage.c counts the app's reads as read ahead follows them: runs of large
+ * reads and of 32 KiB reads, by length and by place in the run. From those
+ * counts this works out what each threshold would have given, adding up time
+ * saved and time lost. Times are from the console's measurements: a 128 KiB
+ * read in a stream 7.5 -> 4.6 ms, into non-cacheable memory 6.5 -> 2.7 ms; a
+ * one-sector read 395 -> 46 us. A piece read for nothing takes about 7.5 ms
+ * of the card on the system core, but only holds up a read that comes
+ * meanwhile, so it counts for less.
  */
 #ifndef VITAMEMIO_RA_TEST_H
 #define VITAMEMIO_RA_TEST_H
 
 #include <stdint.h>
 
-#define RT_MIN_SECTORS     128u          /* large reads: as RA_MIN_SECTORS      */
-#define RT_SMALL_SECTORS   64u           /* 32 KiB reads: as RA_SMALL_SECTORS   */
 #define RT_PIECE_SECTORS   256u
 #define RT_PIECES          3u
-#define RT_TINY_STREAK     8u
-#define RT_MAX_AGE_US      5000000u      /* as RA_MAX_AGE_US                    */
 #define RT_POS             10            /* positions 0..9, the last: 9 and on  */
 #define RT_RUN             11            /* run lengths 0..10, the last: 10 and on */
 #define RT_THR_MIN         2
 #define RT_THR_MAX         8
-#define RT_THR_FIXED       5             /* as RA_STREAK                        */
-#define RT_SMALL_MIN_BUCKET 4            /* 16 reads, in fours                  */
-#define RT_NEVER           0xFFFFu       /* as VM_RA_NEVER                      */
 
 #define RT_GAIN_C_US       11            /* per sector from the pieces, cached  */
 #define RT_GAIN_NC_US      15            /* ... non-cacheable                   */
 #define RT_WASTE_US        3000          /* a piece read for nothing            */
-#define RT_TINY_GAIN_US    350           /* a tiny read from its block          */
-#define RT_TINY_WASTE_US   1400          /* half a block left when a run ends   */
-#define RT_MIN_TOTAL_SECTORS (16u * 2048u)   /* below 16 MiB: too little to tell */
 
 /* What a sector from the pieces saves (sixteenths of a us: C, NC) and a
  * piece read for nothing costs (us): the figures above, or this console's
@@ -52,107 +38,13 @@ typedef struct {
 static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US };
 
 typedef struct {
-	const void *key;                     /* the storage                         */
-	uint32_t    end, len, us;
-	int         nc;
-} RtStream;
-
-typedef struct {
 	uint32_t pos[2][RT_POS];             /* sectors of large reads, by place in the run */
 	uint32_t run[2][RT_RUN];             /* runs of large reads, by length      */
 	uint32_t spos[2][RT_POS];            /* 32 KiB reads, in fours              */
 	uint32_t srun[2][RT_RUN];
-	uint32_t total_sectors;              /* every read                          */
-	uint32_t tiny_hits, tiny_runs;
+	uint32_t total_sectors;              /* every read counted                  */
 	uint32_t ended[2];                   /* runs ended, both sizes (Adaptive's rounds) */
-	RtStream large, small;
-	const void *tiny_key;
-	uint32_t tiny_end, tiny_len;
 } RaTest;
-
-typedef struct {
-	int      little;                     /* too little was read to tell         */
-	int      ra;                         /* 1 on                                */
-	uint32_t thr[2];                     /* C, NC: 2..8; 0 the fixed: no gain, no loss;
-	                                      * RT_NEVER: the fixed one would lose  */
-	int      copy_nc;                    /* what read ahead holds for NC is worth copying */
-	uint32_t pct;                        /* of what was read, from read ahead   */
-} RaPick;
-
-static inline void rt_end_large(RaTest *t)
-{
-	RtStream *s = &t->large;
-
-	if (s->len) {
-		t->run[s->nc][s->len < RT_RUN ? s->len : RT_RUN - 1]++;
-		t->ended[s->nc]++;
-	}
-	s->len = 0;
-}
-
-static inline void rt_end_small(RaTest *t)
-{
-	RtStream *s = &t->small;
-
-	if (s->len) {
-		const uint32_t b = s->len / 4;
-
-		t->srun[s->nc][b < RT_RUN ? b : RT_RUN - 1]++;
-		t->ended[s->nc]++;
-	}
-	s->len = 0;
-}
-
-/* One transfer: `key` tells the storage apart, `nc` its buffer is non-cacheable. */
-static inline void ra_test_note(RaTest *t, const void *key, uint32_t sector, uint32_t n, int nc,
-                                int write, uint32_t now)
-{
-	if (write) {
-		if (n >= RT_MIN_SECTORS) {       /* as read ahead: a large write ends the streams */
-			rt_end_large(t);
-			rt_end_small(t);
-		}
-		return;
-	}
-	t->total_sectors += n;
-	if (n < RT_SMALL_SECTORS) {
-		t->tiny_len = key == t->tiny_key && sector == t->tiny_end && t->tiny_len ? t->tiny_len + 1 : 1;
-		t->tiny_key = key;
-		t->tiny_end = sector + n;
-		if (t->tiny_len == RT_TINY_STREAK)
-			t->tiny_runs++;
-		else if (t->tiny_len > RT_TINY_STREAK)
-			t->tiny_hits++;
-		return;
-	}
-	nc = !!nc;
-	{
-		const int large = n >= RT_MIN_SECTORS;
-		RtStream *s = large ? &t->large : &t->small;
-
-		if (!s->len || key != s->key || sector != s->end || nc != s->nc ||
-		    now - s->us >= RT_MAX_AGE_US) {
-			if (large)
-				rt_end_large(t);
-			else
-				rt_end_small(t);
-		}
-		s->len++;
-		s->key = key;
-		s->end = sector + n;
-		s->nc = nc;
-		s->us = now;
-		if (large) {
-			const uint32_t have = RT_PIECES * RT_PIECE_SECTORS;
-
-			t->pos[nc][s->len < RT_POS ? s->len : RT_POS - 1] += n < have ? n : have;
-		} else {
-			const uint32_t b = (s->len - 1) / 4;
-
-			t->spos[nc][b < RT_POS ? b : RT_POS - 1] += n;
-		}
-	}
-}
 
 /* What each threshold m would bring a stream (pos: sectors read by place in
  * the run, run: runs by length), all in one pass from the end: sect[m] the
@@ -187,95 +79,6 @@ static inline void rt_kind_scores(const RaTest *t, int k, const RtCost *cost, Rt
 {
 	rt_scores(t->pos[k], t->run[k], cost->gain16[k], cost->waste_us, large);
 	rt_scores(t->spos[k], t->srun[k], cost->gain16[k], cost->waste_us, small);
-}
-
-/* On's 32 KiB reads' threshold (in fours) for a threshold thr: 16 reads at
- * the standard one, else four times it - never under 16. */
-static inline int rt_small_bucket(int thr)
-{
-	return thr == RT_THR_FIXED || thr < RT_SMALL_MIN_BUCKET ? RT_SMALL_MIN_BUCKET : thr;
-}
-
-/* What threshold thr would bring for kind k with On, both sizes. */
-static inline int64_t rt_kind_score(const RaTest *t, int k, int thr, const RtCost *cost,
-                                    uint64_t *sectors)
-{
-	RtScores l, s;
-	const int sm = rt_small_bucket(thr);
-
-	rt_kind_scores(t, k, cost, &l, &s);
-	*sectors += l.sect[thr] + s.sect[sm];
-	return l.sc[thr] + s.sc[sm];
-}
-
-/* The answer; the runs still open count as ended. */
-static inline void ra_test_pick_cost(RaTest *t, RaPick *p, const RtCost *cost)
-{
-	int64_t total = 0, nc_best = 0;
-	int loss = 0;
-	uint64_t from = 0;
-
-	rt_end_large(t);
-	rt_end_small(t);
-	p->little = t->total_sectors < RT_MIN_TOTAL_SECTORS;
-	p->ra = 0;
-	p->thr[0] = p->thr[1] = 0;
-	p->copy_nc = 0;
-	p->pct = 0;
-	if (p->little)
-		return;
-	for (int k = 0; k < 2; k++) {
-		RtScores l, sm;
-		int best_t = RT_THR_FIXED;
-		const int fs = rt_small_bucket(RT_THR_FIXED);
-		uint64_t best_s;
-		int64_t fixed, best;
-
-		rt_kind_scores(t, k, cost, &l, &sm);
-		fixed = best = l.sc[RT_THR_FIXED] + sm.sc[fs];
-		best_s = l.sect[RT_THR_FIXED] + sm.sect[fs];
-		for (int i = RT_THR_MIN; i <= RT_THR_MAX; i++) {
-			const int b = rt_small_bucket(i);
-			const int64_t sc = l.sc[i] + sm.sc[b];
-
-			if (sc > best) {
-				best = sc;
-				best_t = i;
-				best_s = l.sect[i] + sm.sect[b];
-			}
-		}
-		if (best > 0) {
-			p->thr[k] = (uint32_t)best_t;
-			total += best;
-			from += best_s;
-			if (k)
-				nc_best = best;
-		} else if (fixed < 0) {
-			p->thr[k] = RT_NEVER;        /* it would only cost */
-			loss = 1;
-		}                                /* else nothing either way: left as it is */
-	}
-	if (t->tiny_hits) {
-		const int64_t tiny = (int64_t)t->tiny_hits * RT_TINY_GAIN_US -
-		                     (int64_t)t->tiny_runs * RT_TINY_WASTE_US;
-
-		if (tiny > 0) {
-			total += tiny;
-			from += t->tiny_hits;
-		} else if (tiny < 0) {
-			loss = 1;
-		}
-	}
-	p->ra = total > 0 || !loss;          /* off only if it would cost and bring nothing */
-	p->copy_nc = p->ra && nc_best > 0;
-	p->pct = t->total_sectors ? (uint32_t)(from * 100u / t->total_sectors) : 0;
-	if (!p->ra)
-		p->thr[0] = p->thr[1] = 0;
-}
-
-static inline void ra_test_pick(RaTest *t, RaPick *p)
-{
-	ra_test_pick_cost(t, p, &rt_cost_fixed);
 }
 
 /* Adaptive's 32 KiB reads' thresholds: in fours, 4..32 reads. */
@@ -351,7 +154,7 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  * what a wrong on does). The sums served by read ahead are cleared on the
  * return: a loss is shown again on fresh reads.
  * The sums are kept over the last rounds (7/8 of each round left); the
- * game's costs stay with it (tuning.bin). The game comes back to the front
+ * game's costs stay with it while it runs. The game comes back to the front
  * with every kind on and no strikes, so an off from figures gone wrong is
  * never kept for good. */
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */

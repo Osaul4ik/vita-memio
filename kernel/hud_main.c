@@ -1,6 +1,6 @@
 /*
  * hud_main.c - vitamemio_hud.skprx, the HUD module: the HUD, the SELECT +
- * arrows overlay and its read ahead test menu.
+ * arrows overlay.
  *
  * Not in config.txt: the kernel module (vitamemio_kernel.skprx) loads it at
  * the start when the overlay is on, and calls it from its worker
@@ -59,11 +59,6 @@ void vm_stage_count_hud(int on)                 { g_core->count_hud(on); }
 void vm_stage_app_now(VmAppNow *out)            { g_core->app_now(out); }
 int  vm_stage_app_set(const VmApp *a)           { return g_core->app_set(a); }
 int  vm_stage_app_save(void)                    { return g_core->app_save(); }
-int  vm_stage_ratest_start(void)                { return g_core->ratest_start(); }
-int  vm_stage_ratest_running(uint32_t *mib)     { return g_core->ratest_running(mib); }
-int  vm_stage_ratest_stale(void)                { return g_core->ratest_stale(); }
-void vm_stage_ratest_cancel(void)               { g_core->ratest_cancel(); }
-void vm_stage_ratest_stop(VmRaTestPick *out)    { g_core->ratest_stop(out); }
 void vm_stage_cal(int dev, VmCal *out)          { g_core->cal(dev, out); }
 void vm_stage_cal_set(int on)                   { g_core->cal_set(on); }
 void vm_stage_cal_reset(void)                   { g_core->cal_reset(); }
@@ -156,25 +151,9 @@ static const char *hud_bufmap(int b)
 	     : b == VM_BUFMAP_REFUSED ? HUD_C_BAD "B" : HUD_C_DIM "B";
 }
 
-/* The colour of the L after Auto (VmRaNow.tune). */
-static const char *hud_tune_color(int tune)
-{
-	switch (tune) {
-	case VM_TUNE_LEARNING: return HUD_C_ACCENT;   /* this launch is being counted */
-	case VM_TUNE_PARTIAL:  return HUD_C_WARN;     /* counted, the start not complete: 1 or 2 of 3 */
-	case VM_TUNE_DONE:     return HUD_C_GOOD;     /* all counted, the result worked out */
-	case VM_TUNE_FAILED:   return HUD_C_BAD;      /* this launch could not be counted */
-	default:               return HUD_C_DIM;
-	}
-}
-
 /* Read ahead in the HUD, for the app in front:
  *   R/A: On  TitleID: PCSB00777          (On, Adaptive or Off)
- *   C:5:2/16/8 NC:never Auto L           (L: the start learned - blue: counting this
- *                                         launch, yellow: counted, 1 or 2 of 3, green:
- *                                         all 3, worked out, red: this launch not
- *                                         counted, grey: none (hud_tune_color);
- *                                         reads in a row before it starts:
+ *   C:5:2/16/8 NC:never Auto             (reads in a row before it starts:
  *                                         as set : now for large / 32 KiB /
  *                                         tiny reads; hud_streak_kind)
  *   Core 3 B C: 98%  NC: 100%            (since the HUD came up; B: hud_bufmap)
@@ -213,11 +192,8 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 		VmCal cal;
 
 		vm_stage_cal(-1, &cal);             /* tuning: green measuring, grey off */
-		/* L: the app's start (what its first launches left Adaptive): blue this launch
-		 * is being counted, yellow it is counted (1 or 2 of 3), green all counted and
-		 * the result worked out, red this launch not counted, grey none */
-		snprintf(L[n++], VM_HUD_LINE_MAX, "%.20s %.20s %sAuto %sL", c, nc,
-		         cal.on ? HUD_C_GOOD : HUD_C_DIM, hud_tune_color(now.tune));
+		snprintf(L[n++], VM_HUD_LINE_MAX, "%.20s %.20s %sAuto", c, nc,
+		         cal.on ? HUD_C_GOOD : HUD_C_DIM);
 	}
 	if (n < room) {
 		uint32_t core[4], ncs, nco, other = 0;
@@ -233,8 +209,6 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	}
 	return n;
 }
-
-static int rt_line(char *o);
 
 /* The lines the HUD's and the overlay's text are built in, one after the
  * other on the worker (each built afresh; vm_hud_set_* copy them). */
@@ -317,8 +291,6 @@ static void hud_feed(const VmDevState *now)
 		         s.verify ? " " : "", HUD_C_WARN, s.verify ? "VERIFY" : "");
 	}
 	n += hud_ra_lines(&L[n], VM_HUD_LINES - n, &fg, shown);
-	if (shown && n < VM_HUD_LINES)
-		n += rt_line(L[n]);
 	if (vm_hud_installed())
 		vm_hud_set_text(L, shown ? n : 0);
 }
@@ -331,52 +303,6 @@ static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A",
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 /* GPU-safe reads, by value (VM_GPUSAFE_*) */
 static const char *const k_ov_gs[] = { "Off", "All", "Non-DMA" };
-
-/* The read ahead test's line in the HUD, while it runs. */
-static int rt_line(char *o)
-{
-	uint32_t mib = 0;
-
-	if (!vm_stage_ratest_running(&mib))
-		return 0;
-	snprintf(o, VM_HUD_LINE_MAX, HUD_C_ACCENT "R/A Test: " HUD_C_TEXT "%u MiB", (unsigned)mib);
-	return 1;
-}
-
-/* Start (copy on core 3 goes to C + NC R/A meanwhile), or stop and put in what it
- * found, saved in the app's profile. `ra` the read ahead in effect: Adaptive
- * stays Adaptive (from the thresholds found) when the test keeps it on.
- * *save: to be saved once in effect. */
-static int rt_toggle(VmApp *a, int ra, char *msg, int cap, int *save)
-{
-	static int before;                    /* the copy setting it started from */
-	VmRaTestPick p;
-
-	if (!vm_stage_ratest_running(NULL)) {
-		const int r = vm_stage_ratest_start();
-
-		if (r == VM_OK) {
-			before = a->offload;
-			a->offload = VM_OFFLOAD_ALL;      /* C + NC R/A: All only costs time */
-			snprintf(msg, cap, HUD_C_GOOD "Test on: play, SEL+> shows the HUD");
-		}
-		return r;
-	}
-	vm_stage_ratest_stop(&p);
-	if (p.little) {
-		if (a->offload == VM_OFFLOAD_ALL)     /* as the test set it, not changed since */
-			a->offload = before;
-		snprintf(msg, cap, HUD_C_WARN "R/A Test: %u MiB is too little, play more",
-		         (unsigned)(p.mib % 100000u));
-		return VM_OK;
-	}
-	a->ra = p.ra == VM_RA_ON && ra == VM_RA_ADAPTIVE ? VM_RA_ADAPTIVE : p.ra;
-	a->offload = p.offload;
-	a->thr[0] = p.ra == VM_RA_ON ? p.thr[0] : 0;
-	a->thr[1] = p.ra == VM_RA_ON ? p.thr[1] : 0;
-	*save = 1;
-	return VM_OK;
-}
 
 /* Overlapped reads and GPU-safe reads: shown on asking. */
 static int g_ov_adv;
@@ -396,7 +322,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	const int dir = OV_OP_DIR(op), item = OV_OP_ITEM(op);
 	VmAppNow an;
 	VmApp a;
-	int r = VM_OK, save = 0;
+	int r = VM_OK;
 
 	msg[0] = 0;
 	if (item == OV_ITEM_ADV) {
@@ -448,9 +374,6 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	case OV_ITEM_GPUSAFE:
 		a.gpusafe = ov_step(gs, 4, a.gpusafe, dir);
 		break;
-	case OV_ITEM_TEST:
-		r = rt_toggle(&a, a.ra == VM_APP_GLOBAL ? an.global.ra : a.ra, msg, cap, &save);
-		break;
 	case OV_ITEM_SAVE:
 		r = vm_stage_app_save();
 		if (r == VM_OK)
@@ -461,11 +384,6 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 	}
 	if (item != OV_ITEM_SAVE)
 		r = vm_stage_app_set(&a);
-	if (r == VM_OK && save) {
-		r = vm_stage_app_save();
-		if (r == VM_OK)
-			snprintf(msg, cap, HUD_C_GOOD "%.15s: picked and saved", ov_name(an.title));
-	}
 	if (r == VM_ERR_NOT_READY)
 		snprintf(msg, cap, HUD_C_WARN "No app in front");
 	else if (r == VM_ERR_IO)
@@ -566,11 +484,6 @@ static void overlay_feed(void)
 		overlay_op(op, msg, sizeof(msg));
 		msg_us = ksceKernelGetSystemTimeLow();
 	}
-	if (vm_stage_ratest_stale()) {            /* it was for another app */
-		vm_stage_ratest_cancel();
-		snprintf(msg, sizeof(msg), HUD_C_WARN "R/A Test: another app, stopped");
-		msg_us = ksceKernelGetSystemTimeLow();
-	}
 	if (vm_overlay_state() != OV_MENU) {
 		if (shown) {
 			count_cores_want(&g_cnt_ov, 0);
@@ -623,20 +536,6 @@ static void overlay_feed(void)
 			mask = (1u << OV_ITEM_RA) | (1u << OV_ITEM_OFFLOAD) |
 			       (1u << OV_ITEM_SAVE) | (1u << OV_ITEM_CLOSE);
 			snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "-- Settings (this app) --");
-			{
-				uint32_t mib = 0;
-				const int run = vm_stage_ratest_running(&mib);
-
-				/* with Adaptive in effect it works this out as the game
-				 * plays: the test only while it runs (to be stopped) */
-				if (run || ra != VM_RA_ADAPTIVE) {
-					if (run)
-						snprintf(v, sizeof(v), "(X) %u MiB", (unsigned)mib);
-					ov_line(L[n++], cur, OV_ITEM_TEST, 0, run ? "Stop R/A Test" : "Start R/A Test",
-					        HUD_C_TEXT, run ? v : "(X)");
-					mask |= 1u << OV_ITEM_TEST;
-				}
-			}
 			ov_val(v, sizeof(v), an.cur.ra, an.global.ra, k_ov_ra, 3);
 			ov_line(L[n++], cur, OV_ITEM_RA, 0, "Read ahead",
 			        ov_color(an.cur.ra, an.saved.ra, an.global.ra), v);

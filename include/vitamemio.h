@@ -137,7 +137,7 @@ static inline int vm_offload_direct(int v)
 #define VM_STATS_ON        1
 
 /* Read ahead: off; on (it starts after a fixed number of reads in a row: the
- * app's, from the R/A Test, or the standard one); adaptive (from that number,
+ * app's own, or the standard one); adaptive (from that number,
  * moved by what it brings: started sooner while what it reads is used, later
  * while much is read for nothing; never off). */
 #define VM_RA_OFF          0

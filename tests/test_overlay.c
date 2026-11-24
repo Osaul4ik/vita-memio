@@ -105,24 +105,23 @@ static void test_menu(void)
 	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_CROSS);
 	CHECK(o.cursor == 0 && !o.op);
-	/* the top line not shown (the test with Adaptive): opened on the next */
-	g_mask = OV_MASK_ALL & ~(1u << OV_ITEM_TEST);
+	/* the line it was on not shown: opened on the next */
+	g_mask = OV_MASK_ALL & ~(1u << OV_ITEM_RA);
 	hold(&o, OV_BTN_RIGHT, 500);
-	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_RA && !o.op);
+	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_C && !o.op);
 	hold(&o, OV_BTN_UP, 50);                           /* closed again */
 	CHECK(o.state == OV_CLOSED);
 	o.cursor = 0;
 	g_mask = OV_MASK_ALL;
 	tap(&o, 0, 0);
 	hold(&o, OV_BTN_RIGHT, 500);
-	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_TEST);   /* the top line */
-	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_RA);
+	CHECK(o.state == OV_MENU && o.cursor == OV_ITEM_RA);   /* the top line */
 	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_C);
+	CHECK(tap(&o, 0, OV_BTN_DOWN) && o.cursor == OV_ITEM_NC);
 	tap(&o, 0, OV_BTN_UP);
 	tap(&o, 0, OV_BTN_UP);
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_CLOSE);                 /* wraps */
-	tap(&o, 0, OV_BTN_DOWN);
 	tap(&o, 0, OV_BTN_DOWN);
 	CHECK(o.cursor == OV_ITEM_RA);
 	/* a value: left for the worker, one at a time */
@@ -158,12 +157,12 @@ static void test_menu(void)
 	CHECK(o.cursor == OV_ITEM_OFFLOAD);
 	tap(&o, 0, OV_BTN_UP);
 	CHECK(o.cursor == OV_ITEM_RA);
-	o.cursor = OV_ITEM_TEST;
-	/* the test: an action, Cross only */
+	o.cursor = OV_ITEM_ADV;
+	/* an action: Cross only */
 	tap(&o, 0, OV_BTN_LEFT);
 	CHECK(!o.op);
 	tap(&o, 0, OV_BTN_CROSS);
-	CHECK(o.op == OV_OP(OV_ITEM_TEST, 0));
+	CHECK(o.op == OV_OP(OV_ITEM_ADV, 0));
 	o.op = 0;
 	o.cursor = OV_ITEM_OFFLOAD;
 	tap(&o, 0, OV_BTN_DOWN);

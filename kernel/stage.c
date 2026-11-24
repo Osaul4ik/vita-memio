@@ -609,27 +609,33 @@ typedef struct {
  * last few reads of its storage - what read ahead could follow of it. Read
  * ahead follows one stream of each size (tiny, 32 KiB, large), each read
  * starting exactly where the last of its size ended; a game that reads two
- * files in turn, skips a little, or reads again what it just read shows up
- * as reads it never gets. By size (PT_*), how many and how long they took:
+ * files in turn, mixes sizes, overlaps, skips a little, or reads again what
+ * it just read shows up as reads it never gets. By size, how many and how
+ * long they took, the first that fits of:
  *   PT_OWN    where the last read of its size ended (what read ahead follows)
- *   PT_OTHER  where another of the last PT_HIST ended (a stream read ahead
- *             loses to another)
- *   PT_AGAIN  in, or up to 256 KiB before, one of them (read again)
- *   PT_SKIP32 / PT_SKIP256  a little after one ended: up to 32 / 256 KiB
+ *   PT_SAME   where another of the last PT_HIST of its size ended (two
+ *             streams of one size in turn)
+ *   PT_MIX    where one of another size ended (one stream, sizes mixed)
+ *   PT_OVER   from inside one of them on past its end (a stream that
+ *             overlaps: the file system's clusters)
+ *   PT_IN     wholly inside one of them (read again)
+ *   PT_BACK   up to 256 KiB before one of them
+ *   PT_SKIP   up to 256 KiB after one ended
  *   PT_FAR    none of these
- * the first that fits, in this order.
  * The last reads are a ring that racing threads may blur (a lost update or a
  * start and end of two reads): it only counts. */
 #define PT_HIST     8
 #define PT_OWN      0
-#define PT_OTHER    1
-#define PT_AGAIN    2
-#define PT_SKIP32   3
-#define PT_SKIP256  4
-#define PT_FAR      5
-#define PT_N        6
+#define PT_SAME     1
+#define PT_MIX      2
+#define PT_OVER     3
+#define PT_IN       4
+#define PT_BACK     5
+#define PT_SKIP     6
+#define PT_FAR      7
+#define PT_N        8
 typedef struct {
-	uint32_t start, end, part;
+	uint32_t start, end, part, size;       /* size: LG_*                       */
 } PtRead;
 typedef struct {
 	PtRead   h[PT_HIST];                   /* the last reads (a ring)          */
@@ -5214,6 +5220,8 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 	if (LD(t->own_part[k]) == pt && LD(t->own_end[k]) == sector && sector) {
 		c = PT_OWN;
 	} else {
+		const uint32_t e0 = sector + nsec;
+
 		for (int j = 0; j < PT_HIST; j++) {
 			const PtRead *h = &t->h[j];
 			const uint32_t a = LD(h->start), e = LD(h->end);
@@ -5222,13 +5230,13 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 			if (LD(h->part) != pt || a == e)
 				continue;
 			if (sector == e)
-				w = PT_OTHER;
-			else if (sector > e && sector - e <= RA_SMALL_SECTORS)
-				w = PT_SKIP32;
+				w = (int)LD(h->size) == k ? PT_SAME : PT_MIX;
+			else if (sector >= a && sector < e)
+				w = e0 > e ? PT_OVER : PT_IN;
+			else if (sector < a && sector + 2 * RA_PIECE_SECTORS >= a)
+				w = PT_BACK;
 			else if (sector > e && sector - e <= 2 * RA_PIECE_SECTORS)
-				w = PT_SKIP256;
-			else if (sector < e && sector + 2 * RA_PIECE_SECTORS >= a)
-				w = PT_AGAIN;
+				w = PT_SKIP;
 			else
 				continue;
 			if (w < c)
@@ -5241,6 +5249,7 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 		PtRead *h = &t->h[__atomic_fetch_add(&t->i, 1, __ATOMIC_RELAXED) % PT_HIST];
 
 		ST(h->part, pt);
+		ST(h->size, (uint32_t)k);
 		ST(h->start, sector);
 		ST(h->end, sector + nsec);
 	}
@@ -5271,13 +5280,15 @@ static void pt_session(Diag *dg, int print)
 		}
 		if (all < 16)
 			continue;
-		VM_KLOGI("session order %s: %u reads - its own stream %u%% (%u ms), another %u%% (%u ms), "
-		         "again %u%% (%u ms), 32K on %u%% (%u ms), 256K on %u%% (%u ms), elsewhere %u%% "
-		         "(%u ms)", what[k], (unsigned)all,
+		/* per cent / ms each: under the log's 192 characters */
+		VM_KLOGI("session order %s %u: own %u/%u same %u/%u mix %u/%u over %u/%u in %u/%u "
+		         "back %u/%u skip %u/%u far %u/%u", what[k], (unsigned)all,
 		         (unsigned)(n[0] * 100u / all), (unsigned)ms[0], (unsigned)(n[1] * 100u / all),
 		         (unsigned)ms[1], (unsigned)(n[2] * 100u / all), (unsigned)ms[2],
 		         (unsigned)(n[3] * 100u / all), (unsigned)ms[3], (unsigned)(n[4] * 100u / all),
-		         (unsigned)ms[4], (unsigned)(n[5] * 100u / all), (unsigned)ms[5]);
+		         (unsigned)ms[4], (unsigned)(n[5] * 100u / all), (unsigned)ms[5],
+		         (unsigned)(n[6] * 100u / all), (unsigned)ms[6], (unsigned)(n[7] * 100u / all),
+		         (unsigned)ms[7]);
 	}
 	dg->pc_at = now;
 }

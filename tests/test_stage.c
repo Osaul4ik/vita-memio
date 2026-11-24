@@ -5130,8 +5130,9 @@ static void test_review_fixes(void)
 }
 
 /* With the log on: where the app's reads lie against the last few of their
- * storage (pt_note) - its own stream, another one read in turn, a little
- * skipped, read again, elsewhere - by size. */
+ * storage (pt_note) - its own stream, another of its size or of another
+ * size, overlapping one, inside one, just before, a little skipped,
+ * elsewhere - by size. */
 static void test_read_order(void)
 {
 	VmSettings s;
@@ -5153,31 +5154,46 @@ static void test_read_order(void)
 	pt_note(d, pa, 1256, 256, 10);                   /* on from it: its own */
 	pt_note(d, pa, 1512, 256, 10);
 	CHECK(PT_DELTA(LG_LARGE, PT_FAR) == 1 && PT_DELTA(LG_LARGE, PT_OWN) == 2);
-	/* two 32 KiB streams read in turn: the second loses the first, which
-	 * then goes on where it was - another stream */
+	/* two 32 KiB streams in turn: the same size, another stream */
 	PT_MARK();
 	pt_note(d, pa, 5000, 64, 10);                    /* A: elsewhere */
 	pt_note(d, pa, 5064, 64, 10);                    /* A: its own */
 	pt_note(d, pa, 9000, 64, 10);                    /* B: elsewhere */
-	pt_note(d, pa, 5128, 64, 10);                    /* A again: another */
-	pt_note(d, pa, 9064, 64, 10);                    /* B: another */
+	pt_note(d, pa, 5128, 64, 10);                    /* A again: the same size's other */
+	pt_note(d, pa, 9064, 64, 10);                    /* B */
 	CHECK(PT_DELTA(LG_SMALL, PT_FAR) == 2 && PT_DELTA(LG_SMALL, PT_OWN) == 1 &&
-	      PT_DELTA(LG_SMALL, PT_OTHER) == 2);
-	/* a little skipped: up to 32 KiB, up to 256 KiB on */
+	      PT_DELTA(LG_SMALL, PT_SAME) == 2);
+	/* one stream, sizes mixed: a large read where a 32 KiB one ended */
 	PT_MARK();
-	pt_note(d, pa, 9128 + 16, 64, 10);               /* 8 KiB on from B */
-	pt_note(d, pa, 9208 + 300, 64, 10);              /* 150 KiB on */
-	CHECK(PT_DELTA(LG_SMALL, PT_SKIP32) == 1 && PT_DELTA(LG_SMALL, PT_SKIP256) == 1);
-	/* read again, or just before: again; another partition: elsewhere */
+	pt_note(d, pa, 9128, 256, 10);
+	CHECK(PT_DELTA(LG_LARGE, PT_MIX) == 1);
+	/* overlapping on past one's end; wholly inside one; just before one */
 	PT_MARK();
-	pt_note(d, pa, 9508, 8, 10);                     /* in the last one */
-	pt_note(d, pa, 9400, 8, 10);                     /* a little before it */
-	pt_note(d, pb, 9516, 8, 10);                     /* the same sector, another partition */
-	CHECK(PT_DELTA(LG_TINY, PT_AGAIN) == 2 && PT_DELTA(LG_TINY, PT_FAR) == 1);
+	pt_note(d, pa, 9384 - 32, 64, 10);               /* the last 16 KiB again, then on */
+	pt_note(d, pa, 9200, 64, 10);                    /* inside the large one */
+	pt_note(d, pa, 4900, 64, 10);                    /* 50 KiB before A's start */
+	CHECK(PT_DELTA(LG_SMALL, PT_OVER) == 1 && PT_DELTA(LG_SMALL, PT_IN) == 1 &&
+	      PT_DELTA(LG_SMALL, PT_BACK) == 1);
+	/* a little skipped; another partition: elsewhere */
+	PT_MARK();
+	pt_note(d, pa, 9416 + 300, 8, 10);               /* 150 KiB on */
+	pt_note(d, pb, 9416 + 300, 8, 10);
+	CHECK(PT_DELTA(LG_TINY, PT_SKIP) == 1 && PT_DELTA(LG_TINY, PT_FAR) == 1);
 	/* the times go with them; the session's counts start afresh */
-	CHECK(dg->pc.us[LG_TINY][PT_AGAIN] >= 20);
+	CHECK(dg->pc.us[LG_SMALL][PT_OVER] >= 10);
 	pt_session(dg, 1);
 	CHECK(!memcmp(&dg->pc_at, &dg->pc, sizeof(dg->pc)));
+	/* its line, at the most, fits the log's 192 characters (prefix and all) */
+	{
+		char b[256];
+		const int n = snprintf(b, sizeof(b), "[vita-memio] [99999.999999] INFO session order "
+		                       "large %u: own %u/%u same %u/%u mix %u/%u over %u/%u in %u/%u "
+		                       "back %u/%u skip %u/%u far %u/%u", 99999u, 100u, 99999u, 100u,
+		                       99999u, 100u, 99999u, 100u, 99999u, 100u, 99999u, 100u, 99999u,
+		                       100u, 99999u, 100u, 99999u);
+
+		CHECK(n < 192);
+	}
 #undef PT_DELTA
 #undef PT_MARK
 	vm_stage_fini();

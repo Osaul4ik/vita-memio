@@ -143,9 +143,11 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  * weighs alike on both - comparing one stretch on with another off did not
  * work: the game's own swings (10-20 % a round) were larger than what read
  * ahead changes (2-6 %).
- *   on:  off once that net is below -RT_EV_MARGIN of the kind's time, over
- *        enough reads of both ways (RT_EV_MIN_*: 2 MiB from read ahead), in
- *        RT_EV_LOSSES rounds in a row;
+ *   on:  off once that net is under RT_EV_PROFIT of the kind's time - no
+ *        real profit: what little it brings is not worth the game's reads
+ *        waiting behind its pieces - over enough reads of both ways
+ *        (RT_EV_MIN_*: 2 MiB from read ahead), in RT_EV_LOSSES rounds in a
+ *        row; too little read to tell (net 0) decides nothing;
  *   off: read ahead serves nothing, so nothing of the game's is measured of
  *        it - the model alone, with the DEVICE's costs (calibration: what a
  *        sector from the pieces saves, what a piece for nothing holds up) over
@@ -153,18 +155,19 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  *        again, at once - no waiting, no clock. What the game showed while it
  *        was on (srv_rate, held_each) is of that stretch only and is not used
  *        for off.
- * Going off again after such a return needs more: each return (a "strike",
- * up to RT_EV_STRIKES_MAX) doubles the margin and the reads it takes to show a
- * loss, so a kind that is wrong both ways settles on, with a loss too small to
- * matter against a gain that could be large (a wrong off costs a multiple of
- * what a wrong on does). The sums served by read ahead are cleared on the
- * return: a loss is shown again on fresh reads.
+ * Going off again after such a return needs more: a loss of RT_EV_MARGIN
+ * doubled at each return (a "strike", up to RT_EV_STRIKES_MAX), and twice the
+ * reads to show it, so a kind that is wrong both ways settles on, with a
+ * loss too small to matter against a gain that could be large (a wrong off
+ * costs a multiple of what a wrong on does). The sums served by read ahead
+ * are cleared on the return: a loss is shown again on fresh reads.
  * The sums are kept over the last rounds (7/8 of each round left); the
  * game's costs stay with it while it runs. Put away to the home screen and
  * back, the same launch goes on with each kind on or off as it was; a new
  * launch starts with every kind on and no strikes, so an off from figures
  * gone wrong is never kept for good. */
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
+#define RT_EV_PROFIT     10u            /* ... a gain under it is no real profit    */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u
 #define RT_EV_MIN_SRV    4096u          /* from read ahead: 2 MiB (tiny: reads)   */
@@ -251,9 +254,12 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 	if (!e->off) {
 		const uint32_t k = e->strikes < RT_EV_STRIKES_MAX ? e->strikes : RT_EV_STRIKES_MAX;
 
-		/* a loss in RT_EV_LOSSES rounds in a row: one round alone (a burst
-		 * of reads that waited for the card) is not enough */
-		if (net && net * 1000 < -(int64_t)(RT_EV_MARGIN << k) * time) {
+		/* under the bar in RT_EV_LOSSES rounds in a row: one round alone (a
+		 * burst of reads that waited for the card) is not enough. The bar: a
+		 * real profit; after a return from off, a loss (see above) */
+		const int64_t bar = k ? -(int64_t)(RT_EV_MARGIN << k) : (int64_t)RT_EV_PROFIT;
+
+		if (net && net * 1000 < bar * time) {
 			if (++e->losses >= RT_EV_LOSSES) {
 				e->off = 1;
 				e->losses = 0;

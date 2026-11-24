@@ -148,6 +148,8 @@ typedef struct RaPiece {
 	uint32_t       wait_from;         /* calibration: atomic, when a request first
 	                                   * came while it was read (0: none)    */
 	uint32_t       held_us;           /* ... how long it held that one up      */
+	int            skipped;           /* RA_FAILED as not read: a write was running
+	                                   * (not an error of the card)            */
 } RaPiece;
 
 typedef struct Dev {
@@ -1883,6 +1885,7 @@ static int offload_run(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_
 #define RA_RETIRE_MS    50
 
 static volatile int g_readahead;          /* the setting                      */
+static volatile int g_ra_own;             /* its value is the app's own (log)  */
 /* The app in front first (stage_xfer_one): another app's reads are sped up
  * as before, but read ahead is the app's alone - they neither use nor start
  * nor break its streams, nor drop its pieces (while they are live such a
@@ -2285,11 +2288,16 @@ static uint32_t          g_ad_sec[2], g_ad_rounds[2], g_tn_rounds;
  * app before - the home screen's, say - is not counted for the one now in
  * front when it ends (it was: a game's first round moved on it). */
 static volatile uint32_t g_ad_gen;
-/* A move of one step (2 <-> 3, 32 KiB reads 8 <-> 12) waits for a second
- * round in a row that wants it: where two thresholds weigh much the same,
- * each round's few new runs swung it back and forth (one kind 21 times in
- * 150 s). A larger move is taken at once, and so is any in the first
- * rounds (a loading screen: quick, not settled yet). (0: none pending) */
+/* The game's reads first: a move to a lower threshold (read ahead sooner,
+ * more pieces they can wait behind) waits for a second round that wants
+ * lower, of any size, with none wanting higher between, and takes the
+ * smaller of the two moves; a move to a higher one is taken at once
+ * (ad_settle). Where thresholds weigh much the same (the model near nothing)
+ * each round's few new runs swung it back and forth - NC 2 -> 4 -> 2 -> 5 ->
+ * 3 in a few minutes, large moves passing the old one-step check; now it
+ * settles on the side of less read ahead. Any move in the first rounds is
+ * taken at once (a loading screen: quick, not settled yet). (0: none
+ * pending) */
 #define RA_ADAPT_SETTLE_FROM 2u
 static int               g_ad_pend_thr[2], g_ad_pend_sm[2];
 static volatile uint32_t g_tn_moves;
@@ -3639,25 +3647,29 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* What a round's pick `want` leaves in effect from `cur`: a move of one step
- * only when the round before wanted it too (*pend); a larger one at once; no
- * move clears what was pending. */
+/* What a round's pick `want` leaves in effect from `cur`. A higher
+ * threshold (read ahead later, fewer pieces the game's reads can wait
+ * behind) is taken at once and clears what was pending; a lower one only
+ * once a second round has wanted lower with no round wanting higher between
+ * (*pend) - and then the smaller of the two moves. A round that keeps it as
+ * it is leaves what is pending: a game whose rounds alternate (a long run in
+ * every other one) still gets its lower threshold. */
 static int ad_settle(int cur, int want, int *pend)
 {
-	if (want == cur) {
+	if (want > cur) {
 		*pend = 0;
-		return cur;
+		return want;
 	}
-	if (want - cur == 1 || cur - want == 1) {
-		if (*pend == want) {
-			*pend = 0;
-			return want;
-		}
-		*pend = want;
+	if (want == cur)
 		return cur;
+	if (*pend && *pend < cur) {
+		const int w = want > *pend ? want : *pend;
+
+		*pend = 0;
+		return w;
 	}
-	*pend = 0;
-	return want;
+	*pend = want;
+	return cur;
 }
 
 /* The tiny reads counted for the round (g_ad_lock held). */
@@ -3891,6 +3903,7 @@ static int ra_thread(SceSize args, void *argp)
 			 * nothing is read, the card is left to the write and to the reads
 			 * that wait for it (a game saving) */
 			pc->ok = 0;
+			pc->skipped = 1;
 			pc->held_us = 0;
 			__atomic_store_n(&pc->wait_from, 0, __ATOMIC_RELAXED);
 			ADD(g_ra_wskip, 1);
@@ -3899,6 +3912,7 @@ static int ra_thread(SceSize args, void *argp)
 				ksceKernelSignalSema(d->ra_done, 1);
 			continue;
 		}
+		pc->skipped = 0;
 		r = pc->io(pc->ref, pc->part, LD(pc->sector), ra_ptr(d, best), LD(pc->n));
 		pc->ok = r >= 0 && !wr;
 		pc->t_done = ksceKernelGetSystemTimeLow();
@@ -4129,7 +4143,10 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	for (int j = 0; j < cnt; j++)
 		if (ra_wait(d, idx[j]) != RA_READY || !ra_valid(d, idx[j])) {
 			const RaPiece *const pc = &d->ra[idx[j]];
-			const int why = LD(pc->state) != RA_READY ? 0 : !pc->ok ? 1 : LD(pc->dirty) ? 2 :
+			/* failed: the card's error; during a write: not read, the game was
+			 * writing (ra_thread leaves the card to it) */
+			const int why = LD(pc->state) != RA_READY ? (pc->skipped ? 1 : 0) :
+			                !pc->ok ? 1 : LD(pc->dirty) ? 2 :
 			                pc->epoch != LD(d->ra_epoch) ? 3 : 4;
 
 			ADD(g_ra_bad_why[why], 1);
@@ -5498,6 +5515,7 @@ static void eff_update(void)
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			ST(g_dev[i].ra_failed, 0);    /* a fresh try at its thread */
 	ST(g_ra_mode, ra);
+	ST(g_ra_own, a.ra >= 0 ? 1 : 0);
 	ST(g_readahead, ra != VM_RA_OFF ? 1 : 0);
 	/* adaptive: whose settings these are, and what it learns under (the
 	 * mode, the game's own thresholds - 0 none, 15 never) */
@@ -6393,7 +6411,10 @@ void vm_stage_worker_tick(void)
 		 * (just made above: in this same tick, the worker may sleep after it) */
 		if (!ra_wanted && d->ra_made) {
 			if (ra_retire(d))
-				VM_KLOGI("stage: dev %d read ahead off", i);
+				VM_KLOGI("stage: dev %d read ahead off (%s)", i,
+				         !wanted ? "the device or the plugin off" :
+				         LD(d->fallback) ? "a difference found: the standard way" :
+				         LD(g_ra_own) ? "set Off for the app in front" : "set Off");
 		} else if (ra_wanted && d->ra_made && !__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);   /* wanted again */
 		} else if (ra_wanted && !d->ra_made && !LD(d->ra_failed) && d->pipe_made &&

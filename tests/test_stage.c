@@ -2791,7 +2791,13 @@ static void test_readahead(void)
 		CHECK(g_ra_wskip > sk && __atomic_load_n(&io_calls, __ATOMIC_RELAXED) == calls);
 	}
 	__atomic_store_n(&d->ra_wbusy, 0, __ATOMIC_SEQ_CST);
-	CHECK(rd_ok(u, 5 * 256, 256));                    /* the card's, not a piece */
+	{
+		const uint32_t f0 = g_ra_bad_why[0], w0 = g_ra_bad_why[1];
+
+		CHECK(rd_ok(u, 5 * 256, 256));                /* the card's, not a piece */
+		/* counted as not read for a write, not as the card failing */
+		CHECK(g_ra_bad_why[0] == f0 && g_ra_bad_why[1] == w0 + 1);
+	}
 	for (uint32_t i = 6; i < 12; i++)
 		CHECK(rd_ok(u, i * 256, 256));
 	CHECK(g_ra_hits >= 2);                            /* and read ahead again after */
@@ -4652,24 +4658,49 @@ static void test_adaptive_gen_and_settle(void)
 	d->t_gen = g_ad_gen;
 	ra_tiny_end(d, 9, 9);
 	CHECK(g_tn_ended == 1);
-	/* settling: one step on the second round that wants it, more at once */
-	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);
-	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);
-	CHECK(ad_settle(2, 3, &pend) == 2 && pend == 3);
-	CHECK(ad_settle(2, 2, &pend) == 2 && pend == 0);       /* not wanted again: dropped */
-	CHECK(ad_settle(2, 3, &pend) == 2 && pend == 3);
-	CHECK(ad_settle(2, 1, &pend) == 2 && pend == 1);       /* the other way: starts over */
-	CHECK(ad_settle(5, 8, &pend) == 8 && pend == 0);       /* three steps: at once */
-	/* in the rounds: back and forth between two near equals no longer moves */
+	/* settling: higher (less read ahead) at once; lower only on a second
+	 * round that wants lower with none wanting higher between, of any size,
+	 * the smaller of the two moves */
+	pend = 0;
+	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);       /* up one: at once */
+	CHECK(ad_settle(2, 5, &pend) == 5 && pend == 0);       /* up three: at once */
+	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);       /* down: waits */
+	CHECK(ad_settle(5, 4, &pend) == 4 && pend == 0);       /* ... wanted again: taken */
+	CHECK(ad_settle(5, 2, &pend) == 5 && pend == 2);       /* down three: waits too */
+	CHECK(ad_settle(5, 3, &pend) == 3 && pend == 0);       /* ... the smaller of 2 and 3 */
+	CHECK(ad_settle(5, 3, &pend) == 5 && pend == 3);
+	CHECK(ad_settle(5, 5, &pend) == 5 && pend == 3);       /* kept as it is: still pending */
+	CHECK(ad_settle(5, 2, &pend) == 3 && pend == 0);       /* ... the smaller of 3 and 2 */
+	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);
+	CHECK(ad_settle(5, 7, &pend) == 7 && pend == 0);       /* higher between: dropped */
+	CHECK(ad_settle(7, 4, &pend) == 7 && pend == 4);       /* ... lower starts over */
+	/* in the rounds: PCSF00007's NC as logged (each round's pick, from 2: 18
+	 * moves in 390 s) - half the moves, and it rests higher, never back at 2 */
+	{
+		static const int want[] = { 4, 2, 5, 2, 3, 2, 4, 2, 4, 2, 5, 3, 2, 3, 2, 4, 2, 3 };
+		int cur = 2, moves = 0, low = 8;
+
+		pend = 0;
+		for (size_t r = 0; r < sizeof(want) / sizeof(want[0]); r++) {
+			const int was = cur;
+
+			cur = ad_settle(cur, want[r], &pend);
+			moves += cur != was;
+			if (r > 0 && cur < low)
+				low = cur;
+		}
+		CHECK(moves <= 9 && low >= 2 && cur >= 3);
+	}
 	{
 		const uint32_t m0 = g_ra_moves[0];
 
 		g_ad_rounds[0] = RA_ADAPT_SETTLE_FROM;
 		g_ad_pend_thr[0] = 0;
 		ST(g_ra_adj[0], 0);                              /* 5 */
-		for (int r = 0; r < 6; r++) {                    /* each round wants the other */
-			g_ad_pend_thr[0] = r & 1 ? 4 : 6;
-			CHECK(ad_settle(5, r & 1 ? 6 : 4, &g_ad_pend_thr[0]) == 5);
+		for (int r = 0; r < 6; r++) {                    /* lower, higher, lower ...: never lower */
+			const int cur = r & 1 ? 6 : 5;
+
+			CHECK(ad_settle(cur, r & 1 ? 4 : 6, &g_ad_pend_thr[0]) >= 5);
 		}
 		CHECK(g_ra_moves[0] == m0 && ra_threshold(0) == 5);
 	}

@@ -246,6 +246,22 @@ static void test_ev(void)
 		}
 		CHECK(offs == 2 && e.strikes == 2 && !e.off);
 	}
+	/* no real profit: a gain under RT_EV_PROFIT (here 0.5 %) - off in two rounds */
+	CHECK(RT_EV_PROFIT == 10u);
+	memset(&e, 0, sizeof(e));
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 109450, 4096, 0, 0, 0, NULL, NULL) && !e.off &&
+	      e.losses == 1);
+	CHECK(rt_ev_round(&e, 0, 55000, 2048, 109450, 4096, 0, 0, 0, NULL, NULL) && e.off);
+	/* ... a real one (3 %): on, however long */
+	memset(&e, 0, sizeof(e));
+	for (int i = 0; i < 40; i++)
+		CHECK(!rt_ev_round(&e, 0, 55000, 2048, 106700, 4096, 0, 0, 0, NULL, NULL) && !e.off &&
+		      !e.losses);
+	/* ... after a return, that small a gain keeps it on: only a loss counts then */
+	memset(&e, 0, sizeof(e));
+	e.strikes = 1;
+	for (int i = 0; i < 40; i++)
+		CHECK(!rt_ev_round(&e, 0, 55000, 2048, 109450, 4096, 0, 0, 0, NULL, NULL) && !e.off);
 	/* too little read either way: never off from it */
 	memset(&e, 0, sizeof(e));
 	for (int i = 0; i < 40; i++)

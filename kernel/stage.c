@@ -3718,16 +3718,33 @@ static void ra_adapt_tick(void)
 		if (g_oo[nc].off)
 			rt_hide_apply(&ocost, nc, hide[nc]);
 		sm = (int)(ra_small_threshold(nc, t) / RA_SMALL_FACTOR);
-		/* both sizes' thresholds, each on its own, in one pass */
+		/* both sizes' thresholds, each on its own, in one pass: those to use on,
+		 * or - for a kind that is off - those it would come back with, weighed
+		 * only for whether it should (nothing moved while it is off) */
 		if (ra_learn_on() && t != RA_THR_NONE) {
-			const int sm0 = sm;
+			const int sm0 = sm, was_off = g_oo[nc].off;
 
 			ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost);
-			if (g_ad_rounds[nc] >= RA_ADAPT_SETTLE_FROM) {   /* one step: a second round */
+			if (was_off) {
+				g_ad_pend_thr[nc] = g_ad_pend_sm[nc] = 0;
+			} else if (g_ad_rounds[nc] >= RA_ADAPT_SETTLE_FROM) {   /* one step: a second round */
 				thr = ad_settle((int)t, thr, &g_ad_pend_thr[nc]);
 				sm = ad_settle(sm0, sm, &g_ad_pend_sm[nc]);
 			}
-			if (thr != (int)t || sm != sm0) {
+			/* then on or off, from what it did (the model's say for off) */
+			ol_on[nc] = 1;
+			ol[nc].hide = hide_known[nc] ? hide[nc] : 0xFFFFFFFFu;     /* not measured: on, or too little */
+			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &ocost), &ol[nc])) {
+				oo_mv[nc] = 1;
+				any = 1;
+				for (int i = 0; i < VM_DEV_COUNT; i++)
+					ST(g_dev[i].gap_end[nc], 0);    /* its pauses start from the next read */
+			}
+			if (ol[nc].fewer_moved)
+				any = 1;
+			/* the thresholds: in effect only for a kind that is on (back on: what
+			 * this round found) */
+			if (!g_oo[nc].off && (thr != (int)t || sm != sm0)) {
 				mv[nc][0] = (int)t;
 				mv[nc][1] = thr;
 				mv[nc][2] = sm0 * RA_SMALL_FACTOR;
@@ -3742,17 +3759,6 @@ static void ra_adapt_tick(void)
 					ADD(g_rs_moves[nc], 1);
 				}
 			}
-			/* then on or off, from what it did (the model's say for off) */
-			ol_on[nc] = 1;
-			ol[nc].hide = hide_known[nc] ? hide[nc] : 0xFFFFFFFFu;     /* not measured: on, or too little */
-			if (oo_round(nc, ra_adapt_gain(&g_ad, nc, thr, sm, &ocost), &ol[nc])) {
-				oo_mv[nc] = 1;
-				any = 1;
-				for (int i = 0; i < VM_DEV_COUNT; i++)
-					ST(g_dev[i].gap_end[nc], 0);    /* its pauses start from the next read */
-			}
-			if (ol[nc].fewer_moved)
-				any = 1;
 		}
 		ra_adapt_age(&g_ad, nc);
 		g_ad_sec[nc] = 0;
@@ -3769,22 +3775,25 @@ static void ra_adapt_tick(void)
 		cal_tiny_cost(g_tn_dev, &c);
 		tmv[0] = t;
 		tmv[1] = blk;
-		if (ra_learn_on() &&
-		    rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
-		                 (int64_t)RA_ADAPT_ONE * 3 * (rt_tiny_card(&c, (uint32_t)blk) -
-		                                              rt_tiny_card(&c, 1)), &c)) {
-			ST(g_tiny_thr, (uint32_t)t);
-			ST(g_tiny_blk, (uint32_t)blk);
-			ADD(g_tn_moves, 1);
-			tmv[2] = t;
-			tmv[3] = blk;
-			any = 1;
-		}
+		/* as the large reads: (T, B) to use on, or to come back with - moved
+		 * only while on */
 		if (ra_learn_on()) {
+			const int picked = rt_tiny_pick(g_tn_cnt, g_tn_reads, g_tn_sec, &t, &blk,
+			                                (int64_t)RA_ADAPT_ONE * 3 *
+			                                (rt_tiny_card(&c, (uint32_t)blk) - rt_tiny_card(&c, 1)), &c);
+
 			ol_on[OO_TINY] = 1;
 			if (oo_round(OO_TINY, rt_tiny_score(g_tn_cnt, g_tn_reads, g_tn_sec, t, blk, &c),
 			             &ol[OO_TINY])) {
 				oo_mv[OO_TINY] = 1;
+				any = 1;
+			}
+			if (picked && !g_oo[OO_TINY].off) {
+				ST(g_tiny_thr, (uint32_t)t);
+				ST(g_tiny_blk, (uint32_t)blk);
+				ADD(g_tn_moves, 1);
+				tmv[2] = t;
+				tmv[3] = blk;
 				any = 1;
 			}
 		}

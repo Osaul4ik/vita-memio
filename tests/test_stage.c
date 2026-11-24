@@ -6027,9 +6027,11 @@ static void test_pauses_only_for_off_kind(void)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* Thresholds are learned the same whether a kind is on or off (what the pauses
- * say goes to the on/off say alone), and a kind off with its pauses unknown
- * stays off, with them seen as covering a piece it may come back on. */
+/* A kind that is off keeps its thresholds (nothing moved, nothing logged):
+ * the rounds only weigh whether it should come back on, with the thresholds
+ * it would use - those it gets when it does. What the pauses say goes to the
+ * on/off say alone: off with its pauses unknown it stays off, with them seen
+ * as covering a piece it may come back on. */
 static void test_pauses_do_not_move_thresholds(void)
 {
 	VmSettings s;
@@ -6052,15 +6054,38 @@ static void test_pauses_do_not_move_thresholds(void)
 	g_oo[OO_C].off = 1;
 	ST(g_oo_off[OO_C], 1);
 	__sync_lock_release(&g_ad_lock);
+	fake_log_clear();
+	g_ra_moves[0] = 0;
 	adapt_runs(0, 20, 3);
-	CHECK(ra_threshold(0) == 2);                                     /* learned as ever */
+	CHECK(ra_threshold(0) == 5 && g_ra_moves[0] == 0);               /* off: not moved */
+	CHECK(!fake_log_find("adaptive: C from"));
 	CHECK(g_oo[OO_C].off);                                           /* too little seen to say: off */
-	/* pauses seen that cover a piece: the model says on again */
+	/* pauses seen that cover a piece: the model says on again - with what it found */
 	for (int i = 0; i < 6 && g_oo[OO_C].off; i++) {
 		ST(g_oo_acc[OO_C].gap[RT_GAP_B - 1], 4096);
 		adapt_runs(0, 20, 1);
 	}
 	CHECK(!g_oo[OO_C].off && !LD(g_oo_off[OO_C]));
+	CHECK(ra_threshold(0) == 2 && g_ra_moves[0] == 1);              /* as on all along */
+	/* tiny reads off: (T, B) moved only on the way back on */
+	{
+		Dev *d = &g_dev[M];
+
+		while (__sync_lock_test_and_set(&g_ad_lock, 1))
+			;
+		g_oo[OO_TINY].off = 1;
+		ST(g_oo_off[OO_TINY], 1);
+		__sync_lock_release(&g_ad_lock);
+		g_tn_moves = 0;
+		d->t_gen = g_ad_gen;
+		for (uint32_t r = 0; r <= RA_ADAPT_RUNS; r++) {
+			ra_tiny_end(d, 40, 40);
+			ra_adapt_tick();
+		}
+		/* long runs of them: back on at the first round, and only then (T, B)
+		 * moved - once, to what that round found */
+		CHECK(!g_oo[OO_TINY].off && g_tn_moves == 1 && g_tiny_thr == 2);
+	}
 	CHECK(g_oo[OO_C].strikes == 1);
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		;

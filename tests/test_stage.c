@@ -144,10 +144,11 @@ static void reset(void)
 	g_ra_mode = VM_RA_OFF;
 	g_ra_fg = 0;
 	memset(&g_ad_game, 0, sizeof(g_ad_game));       /* Adaptive: nothing held */
-	memset(&g_ad_sys, 0, sizeof(g_ad_sys));
+	memset(&g_ad_home, 0, sizeof(g_ad_home));
 	memset(g_ad_title, 0, sizeof(g_ad_title));
 	g_ad_key = 0;
 	g_ad_restored = 0;
+	g_tn_moves = 0;
 	ra_adapt_reset();
 	g_count_cores = 0;
 	g_title_fn = NULL;
@@ -3735,8 +3736,10 @@ static void adapt_small_runs(int nc, uint32_t len, int count)
 }
 
 /* Adaptive's rounds: the first of 8 runs or 1 MiB, then of 32 runs or 3 MiB,
- * whichever comes first, each kind on its own; what was kept for a game is
- * taken up with full rounds. A run's reads count only once it has ended. */
+ * whichever comes first, each kind on its own - but a first round reads 1 MiB
+ * at least (tiny reads: 64 reads), else it waits for more; what was kept for
+ * a game is taken up with full rounds. A run's reads count only once it has
+ * ended. */
 static void test_adaptive_rounds(void)
 {
 	VmSettings s;
@@ -3753,6 +3756,15 @@ static void test_adaptive_rounds(void)
 	CHECK(!g_ad_due[0]);
 	adapt_small_runs_raw(0, 1, 1);
 	CHECK(g_ad_due[0] && !g_ad_due[1]);                     /* NC on its own */
+	vm_stage_worker_tick();
+	/* ... 32 KiB read in them: too little for a first round - it waits */
+	CHECK(!g_ad_due[0] && g_ad_rounds[0] == 0 && g_ad_sec[0] == 8 * 64 && g_ad.ended[0] == 0);
+	adapt_small_runs_raw(0, 1, RA_ADAPT_RUNS_FIRST - 1);
+	adapt_small_runs_raw(0, 1, 1);
+	vm_stage_worker_tick();
+	CHECK(g_ad_rounds[0] == 0 && g_ad_sec[0] == 16 * 64);
+	adapt_runs_raw(0, 4, 1);                                /* 1 MiB in all: the first round */
+	CHECK(g_ad_due[0] && g_ad_sec[0] == 16 * 64 + 4 * 256);
 	vm_stage_worker_tick();
 	CHECK(!g_ad_due[0] && g_ad_rounds[0] == 1 && g_ad_sec[0] == 0);
 	/* then 32 of them */
@@ -3791,12 +3803,18 @@ static void test_adaptive_rounds(void)
 	/* afresh: the small first round again */
 	adapt_afresh(&s);
 	CHECK(g_ad_rounds[0] == 0 && g_ad_sec[0] == 0);
-	/* tiny reads: the first round of 8 runs, then 32 */
+	/* tiny reads: the first round of 8 runs, then 32 - the first with 64
+	 * reads at least: 8 runs of 2 reads wait */
 	g_tn_ended = 0;
 	for (int r = 0; r < (int)RA_ADAPT_RUNS_FIRST - 1; r++)
 		ra_tiny_end(d, 2, 2);
 	CHECK(!g_tn_due);
 	ra_tiny_end(d, 2, 2);
+	CHECK(g_tn_due);
+	vm_stage_worker_tick();
+	CHECK(!g_tn_due && g_tn_rounds == 0 && g_tn_ended == 0);
+	for (int r = 0; r < (int)RA_ADAPT_RUNS_FIRST; r++)
+		ra_tiny_end(d, 6, 6);                           /* 16 + 48 = 64 reads */
 	CHECK(g_tn_due);
 	vm_stage_worker_tick();
 	CHECK(g_tn_rounds == 1);
@@ -3880,7 +3898,7 @@ static void test_readahead_adaptive_small(void)
 
 	/* kept only under what it was learned under: the game's own threshold
 	 * changed - afresh; and one app at a time in memory: the one in front,
-	 * the last game and the last system app */
+	 * the last game and the home screen */
 	reset();
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	s.readahead = VM_RA_ADAPTIVE;
@@ -3908,7 +3926,7 @@ static void test_readahead_adaptive_small(void)
 		ra_adapt_switch(t, VM_RA_ADAPTIVE);
 	}
 	CHECK(tune_title_is(&g_ad_game.app, "PCSB00012") && !strcmp(g_ad_title, "PCSB00013"));
-	CHECK(sizeof(g_ad_game) + sizeof(g_ad_sys) < 1200);  /* what memory holds of them */
+	CHECK(sizeof(g_ad_game) + sizeof(g_ad_home) < 1300);  /* what memory holds of them */
 	vm_stage_fini();
 
 	/* from reads: lowered to 4, read ahead begins after the 4th 32 KiB read
@@ -4437,15 +4455,16 @@ static void test_onoff_measured(void)
 	/* the same launch away (the home screen) and back: off as it was, its
 	 * costs too */
 	{
-		const uint32_t key = g_ad_key;
+		const uint32_t key = g_ad_key, held = g_oo[OO_NC].held_each;
 		const SceUID pid = g_ad_pid;
 
+		CHECK(held > 4800 && held <= 5000);
 		ra_adapt_switch_pid(HOME_TITLE, VM_RA_ADAPTIVE, 0);
 		CHECK(!g_oo_off[OO_NC] && tune_title_is(&g_ad_game.app, "PCSB00777"));
-		CHECK(g_ad_game.app.oo[OO_NC].off && g_ad_game.app.oo[OO_NC].held_each == 5000);
+		CHECK(g_ad_game.app.oo[OO_NC].off && g_ad_game.app.oo[OO_NC].held_each == held);
 		ra_adapt_switch_pid("PCSB00777", key, pid);
 		CHECK(g_oo_off[OO_NC] == 1 && g_oo[OO_NC].off && oo_off(OO_NC) &&
-		      g_oo[OO_NC].held_each == 5000 && g_oo[OO_NC].std_rate > 49000);
+		      g_oo[OO_NC].held_each == held && g_oo[OO_NC].std_rate > 49000);
 		/* another launch of it: afresh, on */
 		ra_adapt_switch_pid(HOME_TITLE, VM_RA_ADAPTIVE, 0);
 		ra_adapt_switch_pid("PCSB00777", key, pid + 1);
@@ -4565,6 +4584,27 @@ static void test_adaptive_kept_through_home(void)
 	vm_stage_worker_tick();
 	CHECK(!strcmp(g_ad_title, "PCSB00777"));
 	CHECK(ra_threshold(0) == 2 && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* the home screen learns too, and goes on from where it was each time
+	 * (its pid is always 0) */
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, HOME_TITLE) && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	adapt_small_runs(0, 40, RA_ADAPT_RUNS);
+	CHECK(ra_small_threshold(0, ra_threshold(0)) == 4);
+	fake_pid = 0x44;
+	ra_proc_event(0x44, 5);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, "PCSB00777") && ra_threshold(0) == 2);
+	ra_proc_event(0x44, 4);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, HOME_TITLE) && ra_small_threshold(0, ra_threshold(0)) == 4);
+	/* ... a system app between does not push it out, and learns afresh itself */
+	as_app(0x47);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, "NPXS10015") && ra_small_threshold(0, ra_threshold(0)) == RA_SMALL_STREAK);
+	ra_proc_event(0x47, 4);
+	vm_stage_worker_tick();
+	CHECK(!strcmp(g_ad_title, HOME_TITLE) && ra_small_threshold(0, ra_threshold(0)) == 4);
 	/* the game ended and started again: afresh */
 	ra_proc_event(0x44, 3);
 	vm_stage_worker_tick();
@@ -4681,7 +4721,11 @@ static void test_session_log(void)
 	fake_log_clear();
 	adapt_runs(0, 20, 3);
 	CHECK(fake_log_find("adaptive: C from read 5 -> 2"));
-	CHECK(fake_log_find("round C: model "));   /* each round, how it ran */
+	CHECK(fake_log_find("round C: model "));   /* a round that moved something: how it ran */
+	/* rounds that change nothing: no lines (the log is on the internal storage) */
+	fake_log_clear();
+	adapt_runs(0, 20, 2 * RA_ADAPT_RUNS);
+	CHECK(ra_threshold(0) == 2 && !fake_log_find("round C:") && !fake_log_find("adaptive:"));
 	vm_stage_fini();
 }
 
@@ -5002,6 +5046,71 @@ static void test_review_fixes(void)
 	CHECK(g_shadow != NULL && take_shadow() != NULL);
 	g_shadow_busy = 0;
 	vm_stage_fini();
+}
+
+/* A stream of 12 large reads from sector 100: the most pieces it had ahead
+ * at once (each read's data checked). */
+static int fewer_max_live(uint8_t *u, Dev *d)
+{
+	int most = 0;
+
+	for (uint32_t i = 0; i < 12; i++) {
+		int live = 0;
+
+		CHECK(rd_ok(u, 100 + i * 256, 256));
+		for (int k = 0; k < RA_PIECES; k++)
+			live += __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) != RA_FREE;
+		if (live > most)
+			most = live;
+	}
+	return most;
+}
+
+/* Adaptive, many pieces read for nothing: one piece less ahead for that kind
+ * (2, not 3) - the round decides it, logs it, and read ahead keeps to it with
+ * the right data; On keeps all three; afresh, all three again. */
+static void test_fewer_pieces(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	OoLog ol;
+
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_ALWAYS, VM_PIPE_AUTO);
+	s.readahead = VM_RA_ADAPTIVE;
+	s.log = 1;
+	vm_stage_apply(&s);
+	fake_pid = 0x42;
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	/* a round of NC reads (the stream below reads into non-cacheable memory):
+	 * 4 MiB served, 12 pieces (1.5 MiB) for nothing - over a quarter */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ST(g_oo_acc[OO_NC].std_us, 50000);
+	ST(g_oo_acc[OO_NC].std_q, 2048);
+	ST(g_oo_acc[OO_NC].srv_us, 40000);
+	ST(g_oo_acc[OO_NC].srv_q, 8192);
+	ST(g_oo_acc[OO_NC].waste, 12);
+	oo_round(OO_NC, 1000, &ol);
+	__sync_lock_release(&g_ad_lock);
+	CHECK(ol.fewer_moved && g_oo[OO_NC].fewer && g_ra_fewer[1] == 1 && !g_ra_fewer[0] && !g_oo[OO_NC].off);
+	/* the stream: up to two pieces ahead - never three - and the right data */
+	CHECK(fewer_max_live(u, d) == 2);
+	ra_drop(d);
+	/* On: all three, whatever Adaptive decided */
+	s.readahead = VM_RA_ON;
+	vm_stage_apply(&s);
+	ST(g_ra_fewer[1], 1);
+	CHECK(fewer_max_live(u, d) == 3);
+	ra_drop(d);
+	/* Adaptive afresh: all three */
+	s.readahead = VM_RA_ADAPTIVE;
+	adapt_afresh(&s);
+	CHECK(g_ra_mode == VM_RA_ADAPTIVE && !g_ra_fewer[1] && !g_oo[OO_NC].fewer);
+	vm_stage_fini();
+	free(u);
 }
 
 /* A slow stream: a read every second gets what was read for it, nothing is
@@ -5987,6 +6096,7 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
 	RUN(test_ra_slow_stream);
+	RUN(test_fewer_pieces);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

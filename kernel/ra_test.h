@@ -29,13 +29,15 @@
 
 /* What a sector from the pieces saves (sixteenths of a us: C, NC) and a
  * piece read for nothing costs (us): the figures above, or this console's
- * own measured ones (stage.c: calibration). */
+ * own measured ones (stage.c: calibration); and how many pieces read ahead
+ * keeps ahead (0: RT_PIECES; see rt_ev_pieces). */
 typedef struct {
 	int32_t gain16[2];
 	int32_t waste_us;
+	int32_t pieces;
 } RtCost;
 
-static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US };
+static const RtCost rt_cost_fixed = { { RT_GAIN_C_US * 16, RT_GAIN_NC_US * 16 }, RT_WASTE_US, 0 };
 
 typedef struct {
 	uint32_t pos[2][RT_POS];             /* sectors of large reads, by place in the run */
@@ -50,14 +52,15 @@ typedef struct {
  * the run, run: runs by length), all in one pass from the end: sect[m] the
  * sectors after the m-th read (from the pieces), sc[m] what they save less the
  * pieces read for nothing - a run of length l >= m leaves min(l - m + 1, 3)
- * unread, which is R(m) + R(m+1) + R(m+2) with R(j) the runs of j or more. */
+ * unread, which is R(m) + R(m+1) + R(m+2) with R(j) the runs of j or more;
+ * with two pieces ahead (`two`), min(l - m + 1, 2): R(m) + R(m+1). */
 typedef struct {
 	int64_t  sc[RT_RUN];
 	uint64_t sect[RT_RUN];
 } RtScores;
 
 static inline void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t gain16,
-                             int32_t waste_us, RtScores *o)
+                             int32_t waste_us, int two, RtScores *o)
 {
 	uint64_t sect = 0, r0 = 0, r1 = 0, r2 = 0;   /* R(m+1), R(m+2), R(m+3) */
 
@@ -66,7 +69,7 @@ static inline void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t g
 		r1 = r0;
 		r0 += run[m];
 		o->sect[m] = sect;
-		o->sc[m] = (int64_t)sect * gain16 / 16 - (int64_t)(r0 + r1 + r2) * waste_us;
+		o->sc[m] = (int64_t)sect * gain16 / 16 - (int64_t)(r0 + r1 + (two ? 0 : r2)) * waste_us;
 		if (m < RT_POS)
 			sect += pos[m];
 	}
@@ -77,8 +80,10 @@ static inline void rt_scores(const uint32_t *pos, const uint32_t *run, int32_t g
 static inline void rt_kind_scores(const RaTest *t, int k, const RtCost *cost, RtScores *large,
                                   RtScores *small)
 {
-	rt_scores(t->pos[k], t->run[k], cost->gain16[k], cost->waste_us, large);
-	rt_scores(t->spos[k], t->srun[k], cost->gain16[k], cost->waste_us, small);
+	const int two = cost->pieces == 2;
+
+	rt_scores(t->pos[k], t->run[k], cost->gain16[k], cost->waste_us, two, large);
+	rt_scores(t->spos[k], t->srun[k], cost->gain16[k], cost->waste_us, two, small);
 }
 
 /* Adaptive's 32 KiB reads' thresholds: in fours, 4..32 reads. */
@@ -139,7 +144,8 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
  * work: the game's own swings (10-20 % a round) were larger than what read
  * ahead changes (2-6 %).
  *   on:  off once that net is below -RT_EV_MARGIN of the kind's time, over
- *        enough reads of both ways (RT_EV_MIN_*);
+ *        enough reads of both ways (RT_EV_MIN_*: 2 MiB from read ahead), in
+ *        RT_EV_LOSSES rounds in a row;
  *   off: read ahead serves nothing, so nothing of the game's is measured of
  *        it - the model alone, with the DEVICE's costs (calibration: what a
  *        sector from the pieces saves, what a piece for nothing holds up) over
@@ -161,13 +167,16 @@ static inline int64_t ra_adapt_gain(const RaTest *t, int k, int thr, int sm, con
 #define RT_EV_MARGIN     20u            /* permille of the kind's time             */
 #define RT_EV_MIN_STD    2048u          /* the standard way: 1 MiB (tiny: reads)  */
 #define RT_EV_MIN_STD_T  64u
-#define RT_EV_MIN_SRV    1024u          /* from read ahead: 512 KiB (tiny: reads) */
-#define RT_EV_MIN_SRV_T  32u
+#define RT_EV_MIN_SRV    4096u          /* from read ahead: 2 MiB (tiny: reads)   */
+#define RT_EV_MIN_SRV_T  128u
+#define RT_EV_LOSSES     2u             /* rounds in a row showing a loss: off    */
 
 #define RT_EV_STRIKES_MAX 3u            /* returns from off that make the next off harder */
 
 typedef struct {
-	uint8_t  off, strikes, pad[2];   /* strikes: returns from off, this stay in front */
+	uint8_t  off, strikes;           /* strikes: returns from off, this stay in front */
+	uint8_t  losses;                 /* rounds in a row the reads showed a loss */
+	uint8_t  fewer;                  /* C, NC: one piece less ahead (rt_ev_pieces) */
 	/* this stretch (kept RT_EV_KEEP a round) */
 	uint32_t std_us, std_q;             /* the standard way: time, sectors (tiny: reads) */
 	uint32_t srv_us, srv_q;             /* served all or partly (tiny: and the reads
@@ -242,8 +251,16 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 	if (!e->off) {
 		const uint32_t k = e->strikes < RT_EV_STRIKES_MAX ? e->strikes : RT_EV_STRIKES_MAX;
 
-		if (net && net * 1000 < -(int64_t)(RT_EV_MARGIN << k) * time)
-			e->off = 1;
+		/* a loss in RT_EV_LOSSES rounds in a row: one round alone (a burst
+		 * of reads that waited for the card) is not enough */
+		if (net && net * 1000 < -(int64_t)(RT_EV_MARGIN << k) * time) {
+			if (++e->losses >= RT_EV_LOSSES) {
+				e->off = 1;
+				e->losses = 0;
+			}
+		} else {
+			e->losses = 0;
+		}
 	} else if (pm > (int64_t)RT_EV_MARGIN) {
 		e->off = 0;                      /* back on, at once: no round to wait out */
 		if (e->strikes < RT_EV_STRIKES_MAX)
@@ -258,6 +275,30 @@ static inline int rt_ev_round(RtEv *e, int tiny, uint32_t std_us, uint32_t std_q
 	e->held_us -= e->held_us / 8;
 	e->waste -= e->waste / 8;
 	return e->off != was;
+}
+
+/* How many pieces read ahead keeps ahead for a kind (C, NC), from what it
+ * did: many read for nothing - more than a quarter of what it read (pieces
+ * for nothing against the sectors it served) - one less, so the game's reads
+ * wait less behind pieces no one wants; back to all of them once under a
+ * seventh (with one less, a quarter becomes about a sixth: no swinging).
+ * Over enough served (RT_EV_MIN_SRV), and only while on. 1 if it changed. */
+static inline int rt_ev_pieces(RtEv *e)
+{
+	uint64_t w;
+
+	if (e->off || e->srv_q < RT_EV_MIN_SRV)
+		return 0;
+	w = (uint64_t)e->waste * RT_PIECE_SECTORS;
+	if (!e->fewer && w * 3 > e->srv_q) {
+		e->fewer = 1;
+		return 1;
+	}
+	if (e->fewer && w * 6 < e->srv_q) {
+		e->fewer = 0;
+		return 1;
+	}
+	return 0;
 }
 
 /* ---- the game's pauses: what of a piece's read time can be overlapped ------
@@ -332,6 +373,31 @@ static inline int64_t rt_pm_div(int64_t n, int64_t d)
 	if (q > 0x7FFFFFFFu)
 		q = 0x7FFFFFFFu;
 	return n < 0 ? -(int64_t)q : (int64_t)q;
+}
+
+/* The model's say over the same stretch as what the reads showed (RtEv: 7/8
+ * of each round kept), not over the counts alone: those are halved each round
+ * (the thresholds follow what the game reads now), so in a long stretch of
+ * play the model's figure fell to nothing while the reads still showed read
+ * ahead saving much. Each round's own part of the gain is what is new in the
+ * counts - the gain now, less half of the last (the counts were halved
+ * since) - kept as the reads are, against the kind's time kept the same way.
+ * Started afresh when the kind goes on or off. Returns permille. */
+typedef struct {
+	int64_t last;                        /* the counts' gain at the last round */
+	int64_t gain, time;                  /* the stretch's: 7/8 kept a round   */
+} RtModelStretch;
+
+static inline int64_t rt_model_stretch(RtModelStretch *m, int64_t gain_now, int64_t time_round, int off)
+{
+	const int64_t fresh = gain_now - m->last / 2;
+
+	m->last = gain_now;
+	m->gain -= m->gain / 8;
+	m->gain += fresh;
+	m->time -= m->time / 8;
+	m->time += time_round;
+	return rt_pm_div(m->gain * 1000, (m->time > 0 ? m->time : 1) + (off || m->gain < 0 ? 0 : m->gain));
 }
 
 /* permille of a piece's read time (piece_us) the pauses cover, over the

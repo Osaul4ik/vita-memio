@@ -2257,7 +2257,8 @@ static int ra_proc_event_hook(int pid, int ev, int a3, int a4, int *a5, int a6)
 #define RA_ADAPT_RUNS       32u
 #define RA_ADAPT_SECTORS    6144u  /* 3 MiB                                    */
 #define RA_ADAPT_RUNS_FIRST 8u     /* the first round, with nothing learned yet */
-#define RA_ADAPT_SECTORS_FIRST 2048u   /* 1 MiB                                */
+#define RA_ADAPT_SECTORS_FIRST 2048u   /* 1 MiB; a first round reads that at least */
+#define RA_ADAPT_TINY_FIRST 64u    /* tiny reads a first round of them counts at least */
 #define RA_ADAPT_ONE        16u    /* a run or a sector counts 16: halving keeps a rare one */
 /* three pieces read for nothing, at what one costs here (measured, or the fixed) */
 #define RA_ADAPT_MARGIN(cost) ((int64_t)RA_ADAPT_ONE * 3 * (cost)->waste_us)
@@ -2821,6 +2822,7 @@ typedef struct {
 	uint16_t tn_cnt[RT_TB], tn_reads[RT_TB], tn_sec[RT_TB];
 	RtEv     oo[3];                      /* on or off, from what it did: as it was */
 	int64_t  oo_time[3];
+	RtModelStretch oo_ms[3];             /* the model's say over the reads' stretch */
 	uint32_t oo_gap[2][RT_GAP_B];        /* the game's pauses */
 } TuneApp;
 
@@ -2852,10 +2854,12 @@ typedef struct {
 static char              g_ad_title[16];      /* whose g_ad is (under g_ad_lock) */
 static uint32_t          g_ad_key;
 /* Held, one of each: the last game (only one is suspended at a time) and the
- * last of the home screen and the system apps - so a game put away to the
- * home screen, through system apps or not, is not pushed out by them. */
+ * home screen (always there, pid 0) - so a game put away to the home screen,
+ * through system apps or not, is not pushed out, and the home screen goes on
+ * from where it was each time. The system apps (NPXS*) are not held: they
+ * learn afresh each time in front. */
 static AdHeld            g_ad_game;
-static AdHeld            g_ad_sys;
+static AdHeld            g_ad_home;
 static SceUID            g_ad_pid;            /* the launch g_ad is of           */
 static volatile uint32_t g_ad_restored;       /* taken up again (log)            */
 
@@ -2867,6 +2871,7 @@ static volatile uint32_t g_ad_restored;       /* taken up again (log)           
 #define OO_MIN_SEC_TINY 16u              /* ... tiny ones: 16 sectors              */
 static RtEv         g_oo[3];
 static volatile int g_oo_off[3];
+static volatile int g_ra_fewer[2];       /* C, NC: one piece less ahead (rt_ev_pieces) */
 /* the kind's reads since its last round (the hooks add, the worker takes):
  * the standard way and served (as RtEv), its pieces for nothing */
 typedef struct {
@@ -2876,6 +2881,7 @@ typedef struct {
 } OoAcc;
 static OoAcc        g_oo_acc[3];         /* atomics */
 static int64_t      g_oo_time[3];        /* the reads' time, aged as the counts */
+static RtModelStretch g_oo_ms[3];        /* the model over the reads' stretch (rt_model_stretch) */
 static uint32_t     g_oo_gap[2][RT_GAP_B];   /* the pauses kept (worker's), aged as the counts */
 static void oo_clear(void);
 
@@ -2968,6 +2974,7 @@ static void tune_pack(TuneApp *t)
 	tune_put(t->tn_sec, g_tn_sec, RT_TB, s);
 	memcpy(t->oo, g_oo, sizeof(t->oo));  /* off stays off for the same launch */
 	memcpy(t->oo_time, g_oo_time, sizeof(t->oo_time));
+	memcpy(t->oo_ms, g_oo_ms, sizeof(t->oo_ms));
 	memcpy(t->oo_gap, g_oo_gap, sizeof(t->oo_gap));
 }
 
@@ -2991,17 +2998,22 @@ static void tune_restore(const TuneApp *t)
 	g_ad_rounds[0] = g_ad_rounds[1] = g_tn_rounds = 1;   /* learned: full rounds */
 	memcpy(g_oo, t->oo, sizeof(g_oo));   /* on or off as it was: an off stays off */
 	memcpy(g_oo_time, t->oo_time, sizeof(g_oo_time));
+	memcpy(g_oo_ms, t->oo_ms, sizeof(g_oo_ms));
 	memcpy(g_oo_gap, t->oo_gap, sizeof(g_oo_gap));
 	for (int u = 0; u < 3; u++)
 		ST(g_oo_off[u], g_oo[u].off);
+	for (int k = 0; k < 2; k++)
+		ST(g_ra_fewer[k], g_oo[k].fewer);
 	ADD(g_ad_restored, 1);
 }
 
-/* Where an app is held: a game's place, or the home screen's and the system
- * apps' (ra_title_system: NPXS*). */
+/* Where an app is held: the home screen's place, a game's, or none (a
+ * system app: NPXS*). */
 static AdHeld *ad_held_for(const char *title)
 {
-	return !strcmp(title, HOME_TITLE) || ra_title_system(title) ? &g_ad_sys : &g_ad_game;
+	if (!strcmp(title, HOME_TITLE))
+		return &g_ad_home;
+	return ra_title_system(title) ? NULL : &g_ad_game;
 }
 
 /* What is in effect is `title`'s (""; none: the home screen with no
@@ -3024,13 +3036,16 @@ static void ra_adapt_switch_pid(const char *title, uint32_t key, SceUID pid_in)
 	if (g_ad_title[0] && (g_ad_key & 0xFu) == VM_RA_ADAPTIVE) {
 		AdHeld *const o = ad_held_for(g_ad_title);
 
-		tune_pack(&o->app);
-		o->pid = g_ad_pid;
+		if (o) {
+			tune_pack(&o->app);
+			o->pid = g_ad_pid;
+		}
 	}
 	ra_adapt_clear();
-	if (title[0] && tune_title_is(&ad_held_for(title)->app, title))
+	if (title[0] && ad_held_for(title) && tune_title_is(&ad_held_for(title)->app, title))
 		h = ad_held_for(title);
-	if (h && h->app.key == key && pid && h->pid == pid)
+	/* the same launch: its pid (the home screen's is always 0, and always the same) */
+	if (h && h->app.key == key && h->pid == pid && (pid || !strcmp(title, HOME_TITLE)))
 		tune_restore(&h->app);            /* the same launch back in front: where it was */
 	g_ad_pid = pid;
 	{
@@ -3066,7 +3081,7 @@ static void tune_forget_learned(void)
 	while (__sync_lock_test_and_set(&g_ad_lock, 1))
 		ksceKernelDelayThread(10);
 	memset(&g_ad_game, 0, sizeof(g_ad_game));
-	memset(&g_ad_sys, 0, sizeof(g_ad_sys));
+	memset(&g_ad_home, 0, sizeof(g_ad_home));
 	ra_adapt_clear();
 	__sync_lock_release(&g_ad_lock);
 	g_tune_ok = 0;
@@ -3408,6 +3423,9 @@ static void oo_clear(void)
 {
 	memset(g_oo, 0, sizeof(g_oo));
 	memset(g_oo_time, 0, sizeof(g_oo_time));
+	memset(g_oo_ms, 0, sizeof(g_oo_ms));
+	ST(g_ra_fewer[0], 0);
+	ST(g_ra_fewer[1], 0);
 	for (int u = 0; u < 3; u++) {
 		ST(g_oo_off[u], 0);
 		ST(g_oo_acc[u].std_us, 0);
@@ -3424,7 +3442,11 @@ static void oo_clear(void)
 
 /* For the log: a round's look - the model's permille, what the reads said
  * (net, us, over the kind's time), the game's costs, the way now. */
-typedef struct { int pm, now; int64_t net, time; uint32_t std, srv, held, hide; } OoLog;
+typedef struct {
+	int pm, pm_now, now, fewer, fewer_moved;
+	int64_t net, time;
+	uint32_t std, srv, held, hide, waste_pm;
+} OoLog;
 
 /* The worker, a round of kind u over (g_ad_lock held): `gain` what the model
  * (with this game's costs) says read ahead brings, the counts' scale. 1 if
@@ -3433,7 +3455,7 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 {
 	OoAcc a;
 	int moved;
-	int64_t pm, t;
+	int64_t pm, pml, t;
 	uint32_t su, vu, hu;
 
 	a.std_us = __atomic_exchange_n(&g_oo_acc[u].std_us, 0, __ATOMIC_RELAXED);
@@ -3458,11 +3480,26 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 	g_oo_time[u] += ((int64_t)su + vu) * RA_ADAPT_ONE;
 	t = g_oo_time[u] > 0 ? g_oo_time[u] : 1;
 	pm = rt_pm_div(gain * 1000, t + (g_oo[u].off || gain < 0 ? 0 : gain));
-	moved = rt_ev_round(&g_oo[u], u == OO_TINY, su, a.std_q, vu, a.srv_q, hu, a.waste, pm, &lg->net,
-	                    &lg->time);
+	pml = rt_model_stretch(&g_oo_ms[u], gain, ((int64_t)su + vu) * RA_ADAPT_ONE, g_oo[u].off);
+	/* back on if either says it brings (now, or over the stretch while off):
+	 * a wrong off costs more than a wrong on */
+	moved = rt_ev_round(&g_oo[u], u == OO_TINY, su, a.std_q, vu, a.srv_q, hu, a.waste,
+	                    pm > pml ? pm : pml, &lg->net, &lg->time);
+	if (moved)
+		g_oo_ms[u].gain = g_oo_ms[u].time = 0;   /* the stretch from the change */
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
 	ST(g_oo_off[u], g_oo[u].off);
-	lg->pm = (int)pm;
+	/* C, NC: how many pieces ahead, from how many it read for nothing */
+	lg->fewer_moved = u != OO_TINY && rt_ev_pieces(&g_oo[u]);
+	if (u != OO_TINY) {
+		const uint64_t w = (uint64_t)g_oo[u].waste * RA_PIECE_SECTORS;
+
+		ST(g_ra_fewer[u], g_oo[u].fewer);
+		lg->waste_pm = w + g_oo[u].srv_q ? (uint32_t)(w * 1000 / (w + g_oo[u].srv_q)) : 0;
+	}
+	lg->fewer = g_oo[u].fewer;
+	lg->pm = (int)pml;
+	lg->pm_now = (int)pm;
 	lg->now = g_oo[u].off;
 	lg->std = g_oo[u].std_rate;
 	lg->srv = g_oo[u].srv_rate;
@@ -3571,6 +3608,16 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	__sync_lock_release(&g_ad_lock);
 }
 
+/* The tiny reads counted for the round (g_ad_lock held). */
+static uint32_t tn_reads_counted(void)
+{
+	uint32_t reads = 0;
+
+	for (int i = 0; i < RT_TB; i++)
+		reads += g_tn_reads[i] / RA_ADAPT_ONE;
+	return reads;
+}
+
 /* Worker thread: the rounds that are due weighed - the threshold of each
  * kind of the large reads, (T, B) of the tiny ones - so a request only counts. */
 static void ra_adapt_tick(void)
@@ -3596,11 +3643,19 @@ static void ra_adapt_tick(void)
 		if (!LD(g_ad_due[nc]))
 			continue;
 		ST(g_ad_due[nc], 0);
+		/* the first round, from runs alone that read too little (a few short
+		 * runs: a menu, not a game's reading): nothing moved on so little -
+		 * the runs kept, the round waits for more */
+		if (!g_ad_rounds[nc] && g_ad_sec[nc] < RA_ADAPT_SECTORS_FIRST) {
+			g_ad.ended[nc] = 0;
+			continue;
+		}
 		cal_cost(g_ad_dev[nc], &cost, NULL);   /* that storage's, if measured */
 		{
 			RtCost con = cost;
 
 			rt_ev_cost(&g_oo[nc], nc, &con, &cost);   /* ... and this game's, where measured */
+			cost.pieces = g_oo[nc].fewer ? RA_PIECES - 1 : 0;   /* as many ahead as read ahead keeps */
 		}
 		/* what the game's pauses let a piece save, for a kind that is off only (for one
 		 * that is on nothing is measured or looked up: oo_hide just drops what is kept).
@@ -3639,12 +3694,17 @@ static void ra_adapt_tick(void)
 				for (int i = 0; i < VM_DEV_COUNT; i++)
 					ST(g_dev[i].gap_end[nc], 0);    /* its pauses start from the next read */
 			}
+			if (ol[nc].fewer_moved)
+				any = 1;
 		}
 		ra_adapt_age(&g_ad, nc);
 		g_ad_sec[nc] = 0;
 		g_ad_rounds[nc]++;
 	}
-	if (LD(g_tn_due)) {
+	if (LD(g_tn_due) && !g_tn_rounds && tn_reads_counted() < RA_ADAPT_TINY_FIRST) {
+		ST(g_tn_due, 0);                  /* the first round: too few reads yet - wait for more */
+		g_tn_ended = 0;
+	} else if (LD(g_tn_due)) {
 		RtTinyCost c;
 		int t = (int)LD(g_tiny_thr), blk = (int)LD(g_tiny_blk);
 
@@ -3680,16 +3740,21 @@ static void ra_adapt_tick(void)
 		g_tn_rounds++;
 	}
 	__sync_lock_release(&g_ad_lock);
+	/* a round's line only when it changed something of its kind (the log is
+	 * on the internal storage: as few lines as can be); the minute's summary
+	 * has where things stand */
 	if (LD(g_log_diag))
 		for (int u = 0; u < 3; u++)
-			if (ol_on[u]) {
+			if (ol_on[u] && (oo_mv[u] || ol[u].fewer_moved ||
+			                 (u == OO_TINY ? tmv[2] != 0
+			                               : mv[u][0] != mv[u][1] || mv[u][2] != mv[u][3]))) {
 				char hb[40] = "";
 
 				if (u != OO_TINY && ol[u].hide != 0xFFFFFFFFu)
 					snprintf(hb, sizeof(hb), ", pauses cover %u permille", (unsigned)ol[u].hide);
-				VM_KLOGI("round %s: model %d permille; reads net %d ms of %u ms (standard %u, "
+				VM_KLOGI("round %s: model %d permille (now %d); reads net %d ms of %u ms (standard %u, "
 				         "R/A %u %s, piece for nothing %u us%s); %s",
-				         u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm,
+				         u == OO_TINY ? "tiny" : u ? "NC" : "C", ol[u].pm, ol[u].pm_now,
 				         (int)(ol[u].net / 1000), (unsigned)(ol[u].time / 1000),
 				         (unsigned)ol[u].std, (unsigned)ol[u].srv,
 				         u == OO_TINY ? "us a read" : "us/MiB", (unsigned)ol[u].held, hb,
@@ -3703,6 +3768,11 @@ static void ra_adapt_tick(void)
 		if (tmv[2])
 			VM_KLOGI("adaptive: tiny from read %d -> %d, block %d -> %d KiB", tmv[0], tmv[2],
 			         tmv[1] / 2, tmv[3] / 2);
+		for (int u = 0; u < 2; u++)
+			if (ol_on[u] && ol[u].fewer_moved)
+				VM_KLOGI("adaptive: %s read ahead %d pieces ahead (read for nothing %u permille)",
+				         u ? "NC" : "C", ol[u].fewer ? RA_PIECES - 1 : RA_PIECES,
+				         (unsigned)ol[u].waste_pm);
 		for (int u = 0; u < 3; u++)
 			if (oo_mv[u])
 				VM_KLOGI("adaptive: %s read ahead %s (reads net %d ms of %u ms, model %d permille)",
@@ -4141,11 +4211,13 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	/* the pieces are the large reads' stream's while it has any */
 	if (small && !LD(d->ra_small) && ra_any(d))
 		return;
-	/* step by step (a stream may end at any time) */
+	/* step by step (a stream may end at any time); Adaptive: one piece less
+	 * ahead where many were read for nothing (rt_ev_pieces) */
 	{
 		const uint32_t ahead = (streak - thr) / (small ? RA_SMALL_FACTOR : 1) + 1;
+		const int cap = RA_PIECES - (ra_adapt_on() && LD(g_ra_fewer[nc]) ? 1 : 0);
 
-		want = ahead < RA_PIECES ? (int)ahead : RA_PIECES;
+		want = ahead < (uint32_t)cap ? (int)ahead : cap;
 	}
 	ST(d->ra_small, small);
 	for (int i = 0; i < RA_PIECES; i++) {
@@ -5937,10 +6009,11 @@ void vm_stage_worker_tick(void)
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
 			const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
 
-			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u, 32 KiB reads C %u NC %u now; "
-			         "moved %u / %u and %u / %u times; taken up again %u",
+			VM_KLOGI("stage: read ahead adaptive: streak C %u NC %u, 32 KiB reads C %u NC %u now, "
+			         "pieces ahead C %d NC %d; moved %u / %u and %u / %u times; taken up again %u",
 			         (unsigned)t0, (unsigned)t1, (unsigned)ra_small_threshold(0, t0),
 			         (unsigned)ra_small_threshold(1, t1),
+			         RA_PIECES - LD(g_ra_fewer[0]), RA_PIECES - LD(g_ra_fewer[1]),
 			         (unsigned)LD(g_ra_moves[0]), (unsigned)LD(g_ra_moves[1]),
 			         (unsigned)LD(g_rs_moves[0]), (unsigned)LD(g_rs_moves[1]),
 			         (unsigned)LD(g_ad_restored));

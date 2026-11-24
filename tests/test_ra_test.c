@@ -102,7 +102,8 @@ static void test_tiny_model(void)
 }
 
 /* The one-pass sums (rt_scores) against the sums written out as they read:
- * the sectors after the m-th read, less min(l - m + 1, 3) pieces a run of l. */
+ * the sectors after the m-th read, less min(l - m + 1, 3) pieces a run of l
+ * (two pieces ahead: min(l - m + 1, 2)). */
 static void test_scores_one_pass(void)
 {
 	srand(7);
@@ -115,16 +116,20 @@ static void test_scores_one_pass(void)
 			pos[i] = (uint32_t)(rand() % 100000);
 		for (int i = 0; i < RT_RUN; i++)
 			run[i] = (uint32_t)(rand() % 3000);
-		rt_scores(pos, run, g, w, &o);
-		for (int m = 0; m < RT_RUN; m++) {
-			uint64_t sect = 0;
-			int64_t waste = 0;
+		for (int two = 0; two < 2; two++) {
+			const int ahead = two ? 2 : 3;
 
-			for (int i = m + 1; i < RT_POS; i++)
-				sect += pos[i];
-			for (int l = m; l < RT_RUN; l++)
-				waste += (int64_t)run[l] * (l - m + 1 < 3 ? l - m + 1 : 3);
-			CHECK(o.sect[m] == sect && o.sc[m] == (int64_t)sect * g / 16 - waste * w);
+			rt_scores(pos, run, g, w, two, &o);
+			for (int m = 0; m < RT_RUN; m++) {
+				uint64_t sect = 0;
+				int64_t waste = 0;
+
+				for (int i = m + 1; i < RT_POS; i++)
+					sect += pos[i];
+				for (int l = m; l < RT_RUN; l++)
+					waste += (int64_t)run[l] * (l - m + 1 < ahead ? l - m + 1 : ahead);
+				CHECK(o.sect[m] == sect && o.sc[m] == (int64_t)sect * g / 16 - waste * w);
+			}
 		}
 	}
 }
@@ -164,8 +169,9 @@ static void test_ev(void)
 	RtEv e;
 	RtCost c;
 
-	/* the first off asks for 1 MiB of the standard way and 512 KiB served */
-	CHECK(RT_EV_MIN_STD == 2048u && RT_EV_MIN_SRV == 1024u);
+	/* the first off asks for 1 MiB of the standard way and 2 MiB served, a
+	 * loss in two rounds in a row */
+	CHECK(RT_EV_MIN_STD == 2048u && RT_EV_MIN_SRV == 4096u && RT_EV_LOSSES == 2u);
 	/* served 1 MiB in 10 ms, the standard way 50 ms a MiB: on, it brings */
 	memset(&e, 0, sizeof(e));
 	for (int i = 0; i < 20; i++)
@@ -179,7 +185,7 @@ static void test_ev(void)
 
 		for (; r < 20 && !moved; r++)
 			moved = rt_ev_round(&e, 0, 50000, 2048, 10000, 2048, 50000, 10, 0, NULL, NULL);
-		CHECK(moved && e.off && e.strikes == 0 && e.held_each == 5000);
+		CHECK(moved && e.off && e.strikes == 0 && e.held_each > 4800 && e.held_each <= 5000);
 	}
 	/* off: the model's say alone, and it is enough at once - no round to wait out */
 	CHECK(!rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 10, NULL, NULL) && e.off);   /* below the margin */
@@ -203,13 +209,25 @@ static void test_ev(void)
 	for (int i = 0; i < 40; i++)
 		CHECK(!rt_ev_round(&e, 0, 50000, 2048, 53100, 2048, 0, 0, 0, NULL, NULL) && !e.off);
 	/* a handful of served reads (a round of 600 sectors), pieces for nothing:
-	 * too little to turn it off */
+	 * too little to turn it off; so is 1 MiB served */
 	memset(&e, 0, sizeof(e));
 	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 2000, 600, 24000, 4, 0, NULL, NULL) && !e.off);
 	CHECK(rt_ev_net(&e, 0) == 0);
-	/* the same loss over a MiB served: off */
 	memset(&e, 0, sizeof(e));
-	CHECK(rt_ev_round(&e, 0, 55000, 2048, 56000, 2048, 5000, 4, 0, NULL, NULL) && e.off);
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 56000, 2048, 5000, 4, 0, NULL, NULL) && !e.off);
+	CHECK(rt_ev_net(&e, 0) == 0);
+	/* the same loss over 2 MiB served: a loss shown, off at the second round in a row */
+	memset(&e, 0, sizeof(e));
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 112000, 4096, 10000, 8, 0, NULL, NULL) && !e.off &&
+	      e.losses == 1);
+	CHECK(rt_ev_round(&e, 0, 55000, 2048, 112000, 4096, 10000, 8, 0, NULL, NULL) && e.off &&
+	      e.losses == 0);
+	/* ... a round without a loss between: the count starts again */
+	memset(&e, 0, sizeof(e));
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 112000, 4096, 10000, 8, 0, NULL, NULL) && e.losses == 1);
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 20000, 4096, 0, 0, 0, NULL, NULL) && !e.off &&
+	      e.losses == 0);
+	CHECK(!rt_ev_round(&e, 0, 55000, 2048, 112000, 4096, 10000, 8, 0, NULL, NULL) && !e.off);
 	/* off, on, off, on ...: each return makes the loss to show larger (here
 	 * 5 %: off at strikes 0 and 1, not at 2) - it settles on */
 	{
@@ -275,6 +293,74 @@ static void test_ev(void)
 	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1] && c.waste_us == rt_cost_fixed.waste_us);
 }
 
+/* How many pieces ahead, from how many were read for nothing: one less over
+ * a quarter of what was read ahead, all again under a seventh; not on too
+ * little served, not while off. */
+static void test_pieces(void)
+{
+	RtEv e;
+
+	memset(&e, 0, sizeof(e));
+	e.srv_q = RT_EV_MIN_SRV - 1;
+	e.waste = 100;                                 /* far over, but too little served */
+	CHECK(!rt_ev_pieces(&e) && !e.fewer);
+	e.srv_q = 30 * RT_PIECE_SECTORS;               /* 10 of 40 for nothing: a quarter, not over */
+	e.waste = 10;
+	CHECK(!rt_ev_pieces(&e) && !e.fewer);
+	e.waste = 11;                                  /* over: one less */
+	CHECK(rt_ev_pieces(&e) && e.fewer);
+	e.waste = 6;                                   /* 6 of 36: a sixth - kept at one less */
+	CHECK(!rt_ev_pieces(&e) && e.fewer);
+	e.waste = 4;                                   /* 4 of 34: under a seventh - all again */
+	CHECK(rt_ev_pieces(&e) && !e.fewer);
+	e.off = 1;
+	e.waste = 100;
+	CHECK(!rt_ev_pieces(&e) && !e.fewer);          /* off: nothing served to judge */
+	/* the model with two ahead: fewer pieces for nothing at a run's end */
+	{
+		uint32_t pos[RT_POS] = { 0 }, run[RT_RUN] = { 0 };
+		RtScores a, b;
+
+		run[6] = 10;
+		pos[6] = 2560;
+		rt_scores(pos, run, 176, 3000, 0, &a);
+		rt_scores(pos, run, 176, 3000, 1, &b);
+		CHECK(a.sect[4] == b.sect[4] && b.sc[4] - a.sc[4] == 10 * 3000);   /* m 4: 3 left, 2 read */
+		CHECK(a.sc[5] == b.sc[5]);                               /* m 5: 2 left either way */
+	}
+}
+
+/* The model over the reads' stretch: each round's own part of the gain (the
+ * counts' gain less half the last: they were halved), kept 7/8 a round as
+ * the reads are. A loading screen, then quiet play: the counts' figure falls
+ * to nothing within a few rounds, the stretch's falls as the reads' does. */
+static void test_model_stretch(void)
+{
+	RtModelStretch m;
+	int64_t counts = 0, time = 0, pm = 0, pm_counts = 0;
+
+	memset(&m, 0, sizeof(m));
+	/* steady: 1000 of gain a round over 4000 of time - the stretch says 200 permille */
+	for (int r = 0; r < 60; r++) {
+		counts = counts / 2 + 1000;       /* the counts, halved each round */
+		time = time / 2 + 4000;
+		pm = rt_model_stretch(&m, counts, 4000, 0);
+	}
+	CHECK(pm >= 195 && pm <= 205 && m.gain > 7900 && m.gain <= 8000);
+	/* quiet: no new gain, the reads' time goes on */
+	for (int r = 0; r < 6; r++) {
+		counts /= 2;
+		time = time / 2 + 4000;
+		pm = rt_model_stretch(&m, counts, 4000, 0);
+		pm_counts = rt_pm_div(counts * 1000, time + counts);
+	}
+	CHECK(pm_counts < 20);                /* the counts' figure: next to nothing */
+	CHECK(pm > 80);                       /* the stretch's: still much of it (as the reads) */
+	/* off: no gain added on top of the time */
+	memset(&m, 0, sizeof(m));
+	CHECK(rt_model_stretch(&m, 1000, 1000, 1) == 1000 && rt_model_stretch(&m, 500, 0, 0) < 1000);
+}
+
 /* The game's pauses: what of a piece's read time they cover. */
 static void test_hide(void)
 {
@@ -326,6 +412,8 @@ static void test_hide(void)
 int main(void)
 {
 	test_ev();
+	test_pieces();
+	test_model_stretch();
 	test_hide();
 	test_scores_one_pass();
 	test_small_pick();

@@ -4084,10 +4084,26 @@ static int ra_valid(const Dev *d, int i)
 	       ksceKernelGetSystemTimeLow() - pc->t_done < RA_MAX_AGE_US;
 }
 
-/* The pieces that continue the stream at `sector`, oldest first (idx), and
- * how many sectors of the n asked for they hold. 0: they do not continue it. */
+/* Whether piece pc holds `at` for a read: where it goes on (its front), or -
+ * read and handed out already - in the part before that, which stays in its
+ * buffer until the piece is used up (a stream whose reads overlap the end of
+ * the one before, or read again what they just read). */
+static int ra_holds(const RaPiece *pc, uint32_t at)
+{
+	const uint32_t s0 = LD(pc->sector), o = LD(pc->off), n = LD(pc->n);
+
+	if (at < s0 || o >= n)
+		return 0;
+	if (at == s0 + o)
+		return 1;
+	return at < s0 + o && __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY;
+}
+
+/* The pieces that hold [sector, sector + n) from its start on, in turn
+ * (idx), each from st[] sectors into it: how many sectors of the n asked
+ * for they hold. 0: they do not hold its start. */
 static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, uint32_t n,
-                         int idx[RA_PIECES], int *cnt)
+                         int idx[RA_PIECES], uint32_t st[RA_PIECES], int *cnt)
 {
 	uint32_t at = sector, cov = 0;
 
@@ -4099,17 +4115,18 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 			const RaPiece *pc = &d->ra[i];
 
 			if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE &&
-			    pc->part == part && pc->io == io && pc->sector + pc->off == at &&
-			    pc->off < pc->n)
+			    pc->part == part && pc->io == io && ra_holds(pc, at))
 				found = i;
 		}
 		if (found < 0)
 			break;
-		idx[(*cnt)++] = found;
 		{
-			const uint32_t have = d->ra[found].n - d->ra[found].off;
+			const RaPiece *pc = &d->ra[found];
+			const uint32_t from = at - pc->sector, have = pc->n - from;
 			const uint32_t take_n = have < n - cov ? have : n - cov;
 
+			idx[*cnt] = found;
+			st[(*cnt)++] = from;
 			cov += take_n;
 			at += take_n;
 		}
@@ -4117,17 +4134,17 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 	return cov;
 }
 
-/* Whether the pieces go on at `sector`: a read there continues their
+/* Whether the pieces hold `sector` (ra_holds): a read there continues their
  * stream, whatever its size (a game reading one file in large and 32 KiB
- * reads in turn). A look only, from any thread - the request that takes the
- * device decides (ra_cover). */
+ * reads in turn), or takes again what it just had from them. A look only,
+ * from any thread - the request that takes the device decides (ra_cover). */
 static int ra_at(const Dev *d, void *part, io_fn io, uint32_t sector)
 {
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE && pc->part == part &&
-		    pc->io == io && LD(pc->sector) + LD(pc->off) == sector && LD(pc->off) < LD(pc->n))
+		    pc->io == io && ra_holds(pc, sector))
 			return 1;
 	}
 	return 0;
@@ -4246,8 +4263,8 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 {
 	int idx[RA_PIECES], cnt;
 	const void *src[RA_PIECES];
-	uint32_t sz[RA_PIECES], cov = ra_cover(d, part, io, sector, n, idx, &cnt), w0, wait_us,
-	         cp_us = 0, at = 0;
+	uint32_t st[RA_PIECES], sz[RA_PIECES], cov = ra_cover(d, part, io, sector, n, idx, st, &cnt),
+	         w0, wait_us, cp_us = 0, at = 0;
 
 	if (!cov)
 		return 0;
@@ -4268,10 +4285,10 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	wait_us = stats ? ksceKernelGetSystemTimeLow() - w0 : 0;
 	for (int j = 0; j < cnt; j++) {
 		const RaPiece *pc = &d->ra[idx[j]];
-		const uint32_t have = pc->n - pc->off;
+		const uint32_t have = pc->n - st[j];
 
 		sz[j] = have < cov - at ? have : cov - at;
-		src[j] = ra_ptr(d, idx[j]) + (size_t)pc->off * 512;
+		src[j] = ra_ptr(d, idx[j]) + (size_t)st[j] * 512;
 		at += sz[j];
 	}
 	if (off) {
@@ -4293,7 +4310,9 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	for (int j = 0; j < cnt; j++) {
 		RaPiece *pc = &d->ra[idx[j]];
 
-		ST(pc->off, pc->off + sz[j]);         /* (ra_at looks at it unlocked) */
+		/* handed out up to here (a read of what it had already moves nothing) */
+		if (st[j] + sz[j] > pc->off)
+			ST(pc->off, st[j] + sz[j]);       /* (ra_at looks at it unlocked) */
 		if (pc->off >= pc->n)
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 	}
@@ -4354,6 +4373,11 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	d->ra_noted_small = 0;
 	if (n < RA_SMALL_SECTORS)
 		return 0;                           /* neither part of a stream nor a break */
+	/* wholly inside what the large reads' stream just read (read again, from
+	 * the pieces if they still hold it): neither part of it nor a break */
+	if (part == d->ra_last_part && d->ra_streak && nc == d->ra_nc && sector < d->ra_last_end &&
+	    n <= d->ra_last_end - sector && d->ra_last_end - sector <= 2 * RA_PIECE_SECTORS)
+		return 0;
 	if (n < RA_MIN_SECTORS) {
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;

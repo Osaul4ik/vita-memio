@@ -5276,12 +5276,25 @@ static void test_overlapping_reads(void)
 			CHECK(rd_ok(u, at, 256));
 			at += 256 - 64;                          /* the next one 32 KiB back */
 		}
-		/* one stream; from the 6th read on (the 5th started it) each read
-		 * takes 64 sectors from the card, 192 from the pieces */
+		/* one stream; from the 6th read on (the 5th started it) every read
+		 * from the pieces: the part it takes again too, while the piece
+		 * that had it is not used up (then that part from the card) - of
+		 * the 9 (2304 sectors), at least 2000 from the pieces and most
+		 * without the card (before: 192 of each, the card every time) */
 		CHECK(d->ra_streak >= 12);
-		CHECK(g_ra_over - o0 >= 8 && g_ra_hits - h0 >= 8 &&
-		      (g_ra_kib - k0) * 2 >= 8 * 192);
-		/* a read inside a later piece is not overlapping: dropped, right data */
+		CHECK(g_ra_hits - h0 >= 9 && (g_ra_kib - k0) * 2 >= 2000 && g_ra_over - o0 <= 4);
+		/* read again, wholly inside what it just had: from the piece, and
+		 * the stream goes on as it was */
+		{
+			const uint32_t streak = d->ra_streak;
+
+			h0 = g_ra_hits;
+			CHECK(rd_ok(u, at, 64));                 /* the last 32 KiB again */
+			CHECK(g_ra_hits == h0 + 1 && d->ra_streak == streak);
+			CHECK(rd_ok(u, at, 256) && g_ra_hits == h0 + 2 && d->ra_streak == streak + 1);
+			at += 256;
+		}
+		/* a read further on is not overlapping: right data */
 		o0 = g_ra_over;
 		CHECK(rd_ok(u, at + 300, 256) && g_ra_over == o0);
 		ra_drop(d);

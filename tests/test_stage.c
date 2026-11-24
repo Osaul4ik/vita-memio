@@ -5277,12 +5277,21 @@ static void test_overlapping_reads(void)
 			at += 256 - 64;                          /* the next one 32 KiB back */
 		}
 		/* one stream; from the 6th read on (the 5th started it) every read
-		 * from the pieces: the part it takes again too, while the piece
-		 * that had it is not used up (then that part from the card) - of
-		 * the 9 (2304 sectors), at least 2000 from the pieces and most
-		 * without the card (before: 192 of each, the card every time) */
+		 * from the pieces, the part it takes again too (kept in the piece
+		 * the read before used up): of the 9 (2304 sectors) only the first
+		 * one's head from the card - read before there were pieces (before:
+		 * 192 of each from the pieces, the card every time) */
 		CHECK(d->ra_streak >= 12);
-		CHECK(g_ra_hits - h0 >= 9 && (g_ra_kib - k0) * 2 >= 2000 && g_ra_over - o0 <= 4);
+		CHECK(g_ra_hits - h0 == 9 && (g_ra_kib - k0) * 2 == 2304 - 64 && g_ra_over - o0 == 1);
+		/* ... and two pieces ahead at least all the while */
+		{
+			int ahead = 0;
+
+			for (int k = 0; k < RA_PIECES; k++)
+				ahead += __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) != RA_FREE &&
+				         !ra_spent(&d->ra[k]);
+			CHECK(ahead >= 2);
+		}
 		/* read again, wholly inside what it just had: from the piece, and
 		 * the stream goes on as it was */
 		{
@@ -5316,8 +5325,9 @@ static int fewer_max_live(uint8_t *u, Dev *d)
 		int live = 0;
 
 		CHECK(rd_ok(u, 100 + i * 256, 256));
-		for (int k = 0; k < RA_PIECES; k++)
-			live += __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) != RA_FREE;
+		for (int k = 0; k < RA_PIECES; k++)               /* ahead: not used up */
+			live += __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) != RA_FREE &&
+			        !ra_spent(&d->ra[k]);
 		if (live > most)
 			most = live;
 	}

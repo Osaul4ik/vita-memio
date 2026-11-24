@@ -215,11 +215,12 @@ typedef struct Dev {
 	RaPiece       ra[RA_PIECES];
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
+	int           ra_overlap;             /* its last read overlapped its end  */
 	uint32_t      gap_end[2];             /* when the last read of each memory kind ended (us) */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
 	/* the stream of 32 KiB reads, kept apart (see RA_SMALL_SECTORS) */
 	uint32_t      rs_end, rs_streak;
-	int           rs_nc;
+	int           rs_nc, rs_overlap;
 	void         *rs_part;
 	int           ra_noted_small;         /* the last read noted was one of those */
 	/* Adaptive: the reads of each stream (0 large, 1 32 KiB) still going, by
@@ -4006,10 +4007,31 @@ static int ra_wait(Dev *d, int i)
 	}
 }
 
+/* Whether d's staging buffers hold pieces at all (used up ones too: they
+ * are dropped before the buffers are used for anything else). */
 static int ra_any(const Dev *d)
 {
 	for (int i = 0; i < RA_PIECES; i++)
 		if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE)
+			return 1;
+	return 0;
+}
+
+/* A piece read and handed out to its end: kept, so a read that takes part
+ * of it again (overlapping the stream's end, or read twice) still finds it,
+ * until its slot is wanted for a new piece (ra_refill) or the pieces are
+ * dropped. Not "ahead" of anything: it counts nowhere a piece in reserve
+ * does (ra_ahead, ra_refill, ra_drop's figures). */
+static int ra_spent(const RaPiece *pc)
+{
+	return __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY && LD(pc->off) >= LD(pc->n);
+}
+
+/* Whether d has pieces still to hand out (queued, being read or read). */
+static int ra_ahead(const Dev *d)
+{
+	for (int i = 0; i < RA_PIECES; i++)
+		if (__atomic_load_n(&d->ra[i].state, __ATOMIC_ACQUIRE) != RA_FREE && !ra_spent(&d->ra[i]))
 			return 1;
 	return 0;
 }
@@ -4023,7 +4045,7 @@ static int ra_live(const Dev *d)
 
 	if (!o)
 		return 0;
-	return ra_any(o) &&
+	return ra_ahead(o) &&
 	       ksceKernelGetSystemTimeLow() - __atomic_load_n(&o->ra_last_us, __ATOMIC_RELAXED) <
 	       RA_LIVE_US;
 }
@@ -4046,7 +4068,8 @@ static void ra_drop(Dev *d)
 		const int st = ra_wait(d, i);
 
 		if (st != RA_FREE) {
-			any = 1;
+			if (st != RA_READY || d->ra[i].off < d->ra[i].n)
+				any = 1;                    /* (a used up one: nothing dropped) */
 			if (st == RA_READY) {
 				waste += d->ra[i].n - d->ra[i].off;
 				if (!d->ra[i].off) {
@@ -4088,15 +4111,23 @@ static int ra_valid(const Dev *d, int i)
  * read and handed out already - in the part before that, which stays in its
  * buffer until the piece is used up (a stream whose reads overlap the end of
  * the one before, or read again what they just read). */
-static int ra_holds(const RaPiece *pc, uint32_t at)
+static int ra_holds(const Dev *d, int i, uint32_t at, int full)
 {
+	const RaPiece *pc = &d->ra[i];
 	const uint32_t s0 = LD(pc->sector), o = LD(pc->off), n = LD(pc->n);
 
-	if (at < s0 || o >= n)
+	if (at < s0 || at - s0 >= n)
 		return 0;
-	if (at == s0 + o)
-		return 1;
-	return at < s0 + o && __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY;
+	if (at - s0 == o)
+		return 1;                             /* (the front: checked when served) */
+	/* the part handed out: only from a piece that can be (a write since, or
+	 * too old - no use dropping the stream for it); a look from any thread
+	 * sees what it can without the request's fields */
+	if (at - s0 > o)
+		return 0;
+	return full ? ra_valid(d, i)
+	            : __atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) == RA_READY &&
+	              !__atomic_load_n(&pc->dirty, __ATOMIC_ACQUIRE);
 }
 
 /* The pieces that hold [sector, sector + n) from its start on, in turn
@@ -4115,7 +4146,7 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 			const RaPiece *pc = &d->ra[i];
 
 			if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE &&
-			    pc->part == part && pc->io == io && ra_holds(pc, at))
+			    pc->part == part && pc->io == io && ra_holds(d, i, at, 1))
 				found = i;
 		}
 		if (found < 0)
@@ -4144,7 +4175,7 @@ static int ra_at(const Dev *d, void *part, io_fn io, uint32_t sector)
 		const RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE && pc->part == part &&
-		    pc->io == io && ra_holds(pc, sector))
+		    pc->io == io && ra_holds(d, i, sector, 0))
 			return 1;
 	}
 	return 0;
@@ -4313,8 +4344,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 		/* handed out up to here (a read of what it had already moves nothing) */
 		if (st[j] + sz[j] > pc->off)
 			ST(pc->off, st[j] + sz[j]);       /* (ra_at looks at it unlocked) */
-		if (pc->off >= pc->n)
-			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
+		/* used up: kept READY for a read of it again (ra_spent) */
 	}
 	ADD(g_ra_hits, 1);
 	ADD(g_ra_kib, cov / 2);
@@ -4339,9 +4369,11 @@ static void ra_note_small(Dev *d, void *part, uint32_t sector, uint32_t n, int n
 		if (part == d->rs_part && ra_goes_on(sector, n, d->rs_end) && d->rs_streak &&
 		    nc == d->rs_nc && (!ready || now - d->rs_us < RA_MAX_AGE_US)) {
 			ST(d->rs_streak, d->rs_streak + (d->rs_streak < 1000));   /* (gap_note reads it unlocked) */
+			d->rs_overlap = sector != d->rs_end;
 		} else {
 			ra_adapt_end(d, 1, d->rs_nc, d->rs_streak);
 			ST(d->rs_streak, 1);
+			d->rs_overlap = 0;
 		}
 		d->rs_us = now;
 		ra_adapt_read(d, 1, d->rs_streak, n);
@@ -4393,9 +4425,11 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		if (part == d->ra_last_part && ra_goes_on(sector, n, d->ra_last_end) && d->ra_streak &&
 		    nc == d->ra_nc && (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
 			ST(d->ra_streak, d->ra_streak + (d->ra_streak < 1000));   /* (gap_note reads it unlocked) */
+			d->ra_overlap = sector != d->ra_last_end;
 		} else {
 			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 			ST(d->ra_streak, 1);
+			d->ra_overlap = 0;
 		}
 		ra_adapt_read(d, 0, d->ra_streak, n);
 		d->ra_us = now;
@@ -4422,8 +4456,8 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 {
 	const int small = d->ra_noted_small;
 	int nc;
-	uint32_t streak, thr, next;
-	int want, live = 0;
+	uint32_t streak, thr, next, end;
+	int want, live = 0, over;
 
 	if (small) {
 		/* the 32 KiB stream's fields: a read the standard way on another
@@ -4433,11 +4467,13 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		nc = d->rs_nc;
 		streak = d->rs_streak;
 		next = d->rs_end;
+		over = d->rs_overlap;
 		__sync_lock_release(&d->rs_lock);
 	} else {
 		nc = d->ra_nc;
 		streak = d->ra_streak;
 		next = d->ra_last_end;
+		over = d->ra_overlap;
 	}
 	thr = ra_threshold(nc);
 
@@ -4446,7 +4482,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	if (streak < thr || oo_off(nc ? OO_NC : OO_C))
 		return;                           /* (off as measured: the runs still counted) */
 	/* the pieces are the large reads' stream's while it has any */
-	if (small && !LD(d->ra_small) && ra_any(d))
+	if (small && !LD(d->ra_small) && ra_ahead(d))
 		return;
 	/* step by step (a stream may end at any time); Adaptive: a piece or two
 	 * less ahead where many were read for nothing (rt_ev_pieces) */
@@ -4457,27 +4493,47 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		want = ahead < (uint32_t)cap ? (int)ahead : cap;
 	}
 	ST(d->ra_small, small);
+	end = over ? next : 0;          /* (0: no piece ends there - see below) */
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE) {
-			live++;
+			if (!ra_spent(pc))
+				live++;
 			if (pc->sector + pc->n > next)
 				next = pc->sector + pc->n;
 		}
 	}
-	for (int i = 0; i < RA_PIECES; i++) {
-		RaPiece *pc = &d->ra[i];
+	while (live < want && next <= 0xFFFFFFFFu - RA_PIECE_SECTORS) {
+		RaPiece *pc = NULL;
 
-		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE)
-			continue;
-		if (live >= want || next > 0xFFFFFFFFu - RA_PIECE_SECTORS)
+		/* a free slot, else the oldest used up piece's - in a stream whose
+		 * reads overlap, not the one its last read ended with (its end where
+		 * the stream is): the next read takes part of it again. That one's
+		 * slot is taken on the next read (one piece less ahead till then,
+		 * only with all three wanted - the card still has two to read). A
+		 * stream read end to end (most) keeps all three ahead as before. */
+		for (int i = 0; i < RA_PIECES; i++) {
+			RaPiece *c = &d->ra[i];
+
+			if (__atomic_load_n(&c->state, __ATOMIC_ACQUIRE) == RA_FREE) {
+				pc = c;
+				break;
+			}
+			if (ra_spent(c) && c->sector + c->n != end &&
+			    (!pc || (int32_t)(c->seq - pc->seq) < 0))
+				pc = c;
+		}
+		if (!pc)
 			return;
+		/* free first: a look at it (ra_at) never sees the old state with
+		 * the new piece's place */
+		__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 		live++;
 		pc->seq = ++d->ra_seq;
 		ST(pc->sector, next);
 		ST(pc->n, (uint32_t)RA_PIECE_SECTORS);
-		pc->off = 0;
+		ST(pc->off, 0);                   /* (ra_spent looks at it unlocked) */
 		__atomic_store_n(&pc->dirty, 0, __ATOMIC_RELAXED);
 		pc->io = io;
 		pc->ref = ref;
@@ -5049,7 +5105,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* ... and another app's transfer of any size while the app has pieces
 	 * (a slow stream of its own may still use them, see RA_MAX_AGE_US): a
 	 * write the standard way still marks the ones it touches */
-	if (bg && ra_any(d)) {
+	if (bg && ra_ahead(d)) {
 		if (!write)
 			ADD(g_bg_kept, 1);
 		return io(ref, part, sector, buf, nsec);

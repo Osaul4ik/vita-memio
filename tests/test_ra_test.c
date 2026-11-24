@@ -102,8 +102,8 @@ static void test_tiny_model(void)
 }
 
 /* The one-pass sums (rt_scores) against the sums written out as they read:
- * the sectors after the m-th read, less min(l - m + 1, 3) pieces a run of l
- * (two pieces ahead: min(l - m + 1, 2)). */
+ * the sectors after the m-th read, less min(l - m + 1, A) pieces a run of l
+ * with A pieces ahead (3, 2 or 1). */
 static void test_scores_one_pass(void)
 {
 	srand(7);
@@ -116,10 +116,8 @@ static void test_scores_one_pass(void)
 			pos[i] = (uint32_t)(rand() % 100000);
 		for (int i = 0; i < RT_RUN; i++)
 			run[i] = (uint32_t)(rand() % 3000);
-		for (int two = 0; two < 2; two++) {
-			const int ahead = two ? 2 : 3;
-
-			rt_scores(pos, run, g, w, two, &o);
+		for (int ahead = 1; ahead <= 3; ahead++) {
+			rt_scores(pos, run, g, w, ahead, &o);
 			for (int m = 0; m < RT_RUN; m++) {
 				uint64_t sect = 0;
 				int64_t waste = 0;
@@ -143,19 +141,47 @@ static void test_small_pick(void)
 
 	go();
 	runs(32, 40, 64, 0);
-	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == 1 && thr == 5);
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, NULL) && sm == 1 && thr == 5);
 	go();
 	runs(32, 9, 64, 0);
-	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == 3 && thr == 5);
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, NULL) && sm == 3 && thr == 5);
 	sm = SMALL_FIXED;                     /* from 16: nothing either way */
-	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && sm == SMALL_FIXED);
+	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, NULL) && sm == SMALL_FIXED);
 	go();
 	runs(32, 40, 64, 0);
-	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, INT64_MAX / 2, &rt_cost_fixed) && sm == SMALL_FIXED);
+	CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, INT64_MAX / 2, &rt_cost_fixed, NULL) && sm == SMALL_FIXED);
+	/* the band: a share of the reads counted - 1 % of 64 runs of 40 reads
+	 * of 64 sectors (163840) at 6400 us a piece is 40960; the margin if more */
+	{
+		uint32_t pos[RT_POS] = { 0 };
+		RtCost big = rt_cost_fixed;
+		int lose = -1;
+
+		pos[1] = 163840;
+		CHECK(RT_ADAPT_BAND_PM == 10u);
+		CHECK(rt_band(pos, 6400, 0) == 40960 && rt_band(pos, 6400, 50000) == 50000 &&
+		      rt_band(pos, 0, 7) == 7);
+		/* a gain under it moves nothing, the same over a small band does */
+		go();
+		runs(32, 40, 64, 0);
+		sm = SMALL_FIXED;
+		big.piece_us[0] = 100000000;
+		CHECK(!ra_adapt_pick(&T, 0, &thr, &sm, 0, &big, &lose) && sm == SMALL_FIXED && lose == 0);
+		CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, &lose) && sm == 1);
+		/* where the one in effect costs more than it saves: told (runs of
+		 * 4 small reads with read ahead from the 4th: all its pieces for
+		 * nothing) - and not for the large reads' (nothing counted there) */
+		go();
+		runs(32, 4, 64, 0);
+		sm = 1;
+		ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, &lose);
+		CHECK(lose == 2);
+		sm = SMALL_FIXED;
+	}
 	/* the large reads' on their own: long runs of them move only theirs */
 	go();
 	runs(32, 20, 256, 0);
-	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed) && thr == RT_THR_MIN &&
+	CHECK(ra_adapt_pick(&T, 0, &thr, &sm, 0, &rt_cost_fixed, NULL) && thr == RT_THR_MIN &&
 	      sm == SMALL_FIXED);
 }
 
@@ -329,31 +355,64 @@ static void test_ev(void)
 	CHECK(c.gain16[1] == rt_cost_fixed.gain16[1] && c.waste_us == rt_cost_fixed.waste_us);
 }
 
-/* How many pieces ahead, from how many were read for nothing: one less over
- * a quarter of what was read ahead, all again under a sixteenth; not on too
- * little served, not while off. */
+/* How many pieces ahead, from how many were read for nothing since the last
+ * change: one less over a quarter, one alone over 45 % with two, back to two
+ * under a fifth, to three under a sixteenth; each change starts the counts
+ * afresh; not on too little served, not while off. */
 static void test_pieces(void)
 {
 	RtEv e;
 
 	memset(&e, 0, sizeof(e));
-	e.srv_q = RT_EV_MIN_SRV - 1;
-	e.waste = 100;                                 /* far over, but too little served */
+	e.ps = RT_EV_MIN_SRV - 1;
+	e.pw = 100;                                    /* far over, but too little served */
 	CHECK(!rt_ev_pieces(&e) && !e.fewer);
-	e.srv_q = 30 * RT_PIECE_SECTORS;               /* 10 of 40 for nothing: a quarter, not over */
-	e.waste = 10;
+	e.ps = 30 * RT_PIECE_SECTORS;                  /* 10 of 40 for nothing: a quarter, not over */
+	e.pw = 10;
 	CHECK(!rt_ev_pieces(&e) && !e.fewer);
-	e.waste = 11;                                  /* over: one less */
-	CHECK(rt_ev_pieces(&e) && e.fewer);
-	e.waste = 6;                                   /* 6 of 36: a sixth - kept at one less */
-	CHECK(!rt_ev_pieces(&e) && e.fewer);
-	e.waste = 2;                                   /* 2 of 32: a sixteenth, not under - kept */
-	CHECK(!rt_ev_pieces(&e) && e.fewer);
-	e.waste = 1;                                   /* 1 of 31: under a sixteenth - all again */
+	e.pw = 11;                                     /* over: one less (two ahead) */
+	CHECK(rt_ev_pieces(&e) && e.fewer == 1 && !e.pw && !e.ps);   /* counted afresh */
+	e.ps = 30 * RT_PIECE_SECTORS;                  /* two ahead, 20 of 50: under 45 % - kept */
+	e.pw = 20;
+	CHECK(!rt_ev_pieces(&e) && e.fewer == 1);
+	e.pw = 25;                                     /* 25 of 55: over 45 % - one alone */
+	CHECK(rt_ev_pieces(&e) && e.fewer == 2 && !e.pw && !e.ps);
+	CHECK(RT_FEWER_MAX == 2u);
+	e.ps = 30 * RT_PIECE_SECTORS;                  /* one ahead, 30 for nothing: still there */
+	e.pw = 30;
+	CHECK(!rt_ev_pieces(&e) && e.fewer == 2);      /* never fewer than one */
+	e.pw = 8;                                      /* 8 of 38: over a fifth - kept */
+	CHECK(!rt_ev_pieces(&e) && e.fewer == 2);
+	e.pw = 7;                                      /* 7 of 37: under a fifth - two again */
+	CHECK(rt_ev_pieces(&e) && e.fewer == 1);
+	e.ps = 30 * RT_PIECE_SECTORS;
+	e.pw = 2;                                      /* 2 of 32: a sixteenth, not under - kept */
+	CHECK(!rt_ev_pieces(&e) && e.fewer == 1);
+	e.pw = 1;                                      /* 1 of 31: under a sixteenth - all again */
 	CHECK(rt_ev_pieces(&e) && !e.fewer);
 	e.off = 1;
-	e.waste = 100;
+	e.ps = 30 * RT_PIECE_SECTORS;
+	e.pw = 100;
 	CHECK(!rt_ev_pieces(&e) && !e.fewer);          /* off: nothing served to judge */
+	/* the rounds add to these counts, aged as the others; a return from off
+	 * clears them */
+	memset(&e, 0, sizeof(e));
+	rt_ev_round(&e, 0, 50000, 2048, 10000, 2048, 0, 3, 0, NULL, NULL);
+	CHECK(e.pw == 3 && e.ps == 2048 - 2048 / 8);
+	e.off = 1;
+	rt_ev_round(&e, 0, 50000, 2048, 0, 0, 0, 0, 500, NULL, NULL);
+	CHECK(!e.off && !e.pw && !e.ps);
+	/* the model with one ahead: a run's end leaves one piece for nothing */
+	{
+		uint32_t pos[RT_POS] = { 0 }, run[RT_RUN] = { 0 };
+		RtScores a, b;
+
+		run[6] = 10;
+		pos[6] = 2560;
+		rt_scores(pos, run, 176, 3000, 3, &a);
+		rt_scores(pos, run, 176, 3000, 1, &b);
+		CHECK(a.sect[4] == b.sect[4] && b.sc[4] - a.sc[4] == 2 * 10 * 3000);   /* m 4: 3 left, 1 read */
+	}
 	/* the model with two ahead: fewer pieces for nothing at a run's end */
 	{
 		uint32_t pos[RT_POS] = { 0 }, run[RT_RUN] = { 0 };
@@ -361,8 +420,8 @@ static void test_pieces(void)
 
 		run[6] = 10;
 		pos[6] = 2560;
-		rt_scores(pos, run, 176, 3000, 0, &a);
-		rt_scores(pos, run, 176, 3000, 1, &b);
+		rt_scores(pos, run, 176, 3000, 3, &a);
+		rt_scores(pos, run, 176, 3000, 2, &b);
 		CHECK(a.sect[4] == b.sect[4] && b.sc[4] - a.sc[4] == 10 * 3000);   /* m 4: 3 left, 2 read */
 		CHECK(a.sc[5] == b.sc[5]);                               /* m 5: 2 left either way */
 	}

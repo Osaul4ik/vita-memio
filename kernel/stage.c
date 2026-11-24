@@ -2288,12 +2288,12 @@ static uint32_t          g_ad_sec[2], g_ad_rounds[2], g_tn_rounds;
  * app before - the home screen's, say - is not counted for the one now in
  * front when it ends (it was: a game's first round moved on it). */
 static volatile uint32_t g_ad_gen;
-/* A move waits for a second round in a row that wants it the same way
- * (ad_settle): down of any size, up by one step; up by more is taken at
- * once (the game's reads first). Where thresholds weigh much the same (the model near
- * nothing) each round's few new runs swung it back and forth - NC 2 -> 4 ->
- * 2 -> 5 -> 3, large moves passing a one-step check, and 2 <-> 3 with up at
- * once. Rounds cut short by their sectors also age the counts less
+/* A move is taken only if it brings more than its band (rt_band: a share of
+ * the reads counted), and waits for a second round in a row that wants it
+ * the same way (ad_settle) - up at once only where the one in effect loses.
+ * Where thresholds weigh much the same (the model near nothing) each round's
+ * few new runs swung it back and forth: NC 2 -> 4 -> 2 -> 5 -> 3, 2 <-> 3,
+ * 2 <-> 8. Rounds cut short by their sectors also age the counts less
  * (ra_adapt_age), so a round weighs more than the last second. Any move in
  * the first rounds is taken at once (a loading screen: quick, not settled
  * yet). (0: none pending) */
@@ -2552,6 +2552,8 @@ static void cal_cost(int dev, RtCost *cost, VmCal *o)
 				cost->gain16[k] = diff > 0 ? diff / 16 : 0;
 				v.have[k] = 1;
 			}
+			if (v.n_plain[k] >= VM_CAL_MIN_PLAIN)   /* the band's scale (rt_band) */
+				cost->piece_us[k] = (int32_t)cal_median(c->plain[k], v.n_plain[k]);
 		}
 		v.n_waste = LD(c->waste_n);
 		if (v.n_waste >= VM_CAL_MIN_WASTE) {
@@ -3517,13 +3519,16 @@ static int oo_round(int u, int64_t gain, OoLog *lg)
 		g_oo_ms[u].gain = g_oo_ms[u].time = 0;   /* the stretch from the change */
 	g_oo_time[u] /= 2;                   /* aged as the counts are */
 	ST(g_oo_off[u], g_oo[u].off);
-	/* C, NC: how many pieces ahead, from how many it read for nothing */
-	lg->fewer_moved = u != OO_TINY && rt_ev_pieces(&g_oo[u]);
+	/* C, NC: how many pieces ahead, from how many it read for nothing (the
+	 * share logged is what it was judged on: the counts restart at a change) */
+	lg->fewer_moved = 0;
+	lg->waste_pm = 0;
 	if (u != OO_TINY) {
-		const uint64_t w = (uint64_t)g_oo[u].waste * RA_PIECE_SECTORS;
+		const uint64_t w = (uint64_t)g_oo[u].pw * RA_PIECE_SECTORS;
 
+		lg->waste_pm = w + g_oo[u].ps ? (uint32_t)(w * 1000 / (w + g_oo[u].ps)) : 0;
+		lg->fewer_moved = rt_ev_pieces(&g_oo[u]);
 		ST(g_ra_fewer[u], g_oo[u].fewer);
-		lg->waste_pm = w + g_oo[u].srv_q ? (uint32_t)(w * 1000 / (w + g_oo[u].srv_q)) : 0;
 	}
 	lg->fewer = g_oo[u].fewer;
 	lg->pm = (int)pml;
@@ -3647,15 +3652,14 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 }
 
 /* What a round's pick `want` leaves in effect from `cur` (*pend: what a
- * round before wanted, 0 none). A move waits for a second round in a row
- * that wants it the same way, and then takes
- * the smaller of the two moves - down (read ahead sooner, more pieces the
- * game's reads can wait behind) of any size, up by one step; up by more is
- * taken at once (the game's reads first). A round that keeps it as it is
- * clears what is pending: two rounds in a row, as the counts now age by
- * what a round brought (ra_adapt_age), so a game whose rounds alternate (a
- * long run in every other one) still wants the same each round. */
-static int ad_settle(int cur, int want, int *pend)
+ * round before wanted, 0 none; `lose`: the one in effect costs more than it
+ * saves over the counts). Higher where it loses is taken at once - the
+ * game's reads first. Any other move waits for a second round in a row that
+ * wants it the same way, and then takes the smaller of the two: a large jump
+ * up on a round's say alone went 2 -> 8 -> 2 where the model said nearly
+ * nothing either way (PCSF00024, PCSF00007, GTA at +131 permille). A round
+ * that keeps it as it is clears what is pending. */
+static int ad_settle(int cur, int want, int *pend, int lose)
 {
 	const int up = want > cur, was = *pend ? (*pend > cur ? 1 : -1) : 0;
 
@@ -3663,7 +3667,7 @@ static int ad_settle(int cur, int want, int *pend)
 		*pend = 0;
 		return cur;
 	}
-	if (up && want - cur > 1) {
+	if (up && lose) {
 		*pend = 0;
 		return want;
 	}
@@ -3724,7 +3728,7 @@ static void ra_adapt_tick(void)
 			RtCost con = cost;
 
 			rt_ev_cost(&g_oo[nc], nc, &con, &cost);   /* ... and this game's, where measured */
-			cost.pieces = g_oo[nc].fewer ? RA_PIECES - 1 : 0;   /* as many ahead as read ahead keeps */
+			cost.pieces = g_oo[nc].fewer ? RA_PIECES - g_oo[nc].fewer : 0;   /* as many ahead as it keeps */
 		}
 		/* what the game's pauses let a piece save, for a kind that is off only (for one
 		 * that is on nothing is measured or looked up: oo_hide just drops what is kept).
@@ -3740,13 +3744,14 @@ static void ra_adapt_tick(void)
 		 * only for whether it should (nothing moved while it is off) */
 		if (ra_learn_on() && t != RA_THR_NONE) {
 			const int sm0 = sm, was_off = g_oo[nc].off;
+			int lose = 0;
 
-			ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost);
+			ra_adapt_pick(&g_ad, nc, &thr, &sm, RA_ADAPT_MARGIN(&cost), &cost, &lose);
 			if (was_off) {
 				g_ad_pend_thr[nc] = g_ad_pend_sm[nc] = 0;
-			} else if (g_ad_rounds[nc] >= RA_ADAPT_SETTLE_FROM) {   /* one step: a second round */
-				thr = ad_settle((int)t, thr, &g_ad_pend_thr[nc]);
-				sm = ad_settle(sm0, sm, &g_ad_pend_sm[nc]);
+			} else if (g_ad_rounds[nc] >= RA_ADAPT_SETTLE_FROM) {   /* a second round */
+				thr = ad_settle((int)t, thr, &g_ad_pend_thr[nc], lose & 1);
+				sm = ad_settle(sm0, sm, &g_ad_pend_sm[nc], lose & 2);
 			}
 			/* then on or off, from what it did (the model's say for off) */
 			ol_on[nc] = 1;
@@ -3854,7 +3859,7 @@ static void ra_adapt_tick(void)
 		for (int u = 0; u < 2; u++)
 			if (ol_on[u] && ol[u].fewer_moved)
 				VM_KLOGI("adaptive: %s read ahead %d pieces ahead (read for nothing %u permille)",
-				         u ? "NC" : "C", ol[u].fewer ? RA_PIECES - 1 : RA_PIECES,
+				         u ? "NC" : "C", RA_PIECES - ol[u].fewer,
 				         (unsigned)ol[u].waste_pm);
 		for (int u = 0; u < 3; u++)
 			if (oo_mv[u])
@@ -4299,11 +4304,11 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	/* the pieces are the large reads' stream's while it has any */
 	if (small && !LD(d->ra_small) && ra_any(d))
 		return;
-	/* step by step (a stream may end at any time); Adaptive: one piece less
-	 * ahead where many were read for nothing (rt_ev_pieces) */
+	/* step by step (a stream may end at any time); Adaptive: a piece or two
+	 * less ahead where many were read for nothing (rt_ev_pieces) */
 	{
 		const uint32_t ahead = (streak - thr) / (small ? RA_SMALL_FACTOR : 1) + 1;
-		const int cap = RA_PIECES - (ra_adapt_on() && LD(g_ra_fewer[nc]) ? 1 : 0);
+		const int cap = RA_PIECES - (ra_adapt_on() ? LD(g_ra_fewer[nc]) : 0);
 
 		want = ahead < (uint32_t)cap ? (int)ahead : cap;
 	}

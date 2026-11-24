@@ -4659,49 +4659,39 @@ static void test_adaptive_gen_and_settle(void)
 	ra_tiny_end(d, 9, 9);
 	CHECK(g_tn_ended == 1);
 	/* settling: a move waits for a second round in a row that wants it the
-	 * same way - down of any size, up by one - and takes the smaller of the
-	 * two; up by more at once (the game's reads first) */
+	 * same way and takes the smaller of the two; up at once only where the
+	 * one in effect loses (the game's reads first) */
 	pend = 0;
-	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);       /* up one: waits */
-	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);       /* ... wanted again: taken */
-	CHECK(ad_settle(2, 5, &pend) == 5 && pend == 0);       /* up three: at once */
-	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);       /* down: waits */
-	CHECK(ad_settle(5, 4, &pend) == 4 && pend == 0);       /* ... wanted again: taken */
-	CHECK(ad_settle(5, 2, &pend) == 5 && pend == 2);       /* down three: waits too */
-	CHECK(ad_settle(5, 3, &pend) == 3 && pend == 0);       /* ... the smaller of 2 and 3 */
-	CHECK(ad_settle(5, 3, &pend) == 5 && pend == 3);
-	CHECK(ad_settle(5, 5, &pend) == 5 && pend == 0);       /* kept as it is: dropped */
-	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);
-	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);       /* the other way: starts over */
-	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);
-	CHECK(ad_settle(5, 8, &pend) == 8 && pend == 0);       /* up three: at once, clears */
-	/* in the rounds: a near tie, each round's pick 2 or 3 as it falls (the
-	 * PCSF00024 of the log: 13 moves in 160 s) - a move needs two in a row */
+	CHECK(ad_settle(5, 6, &pend, 0) == 5 && pend == 6);    /* up one: waits */
+	CHECK(ad_settle(5, 6, &pend, 0) == 6 && pend == 0);    /* ... wanted again: taken */
+	CHECK(ad_settle(2, 8, &pend, 0) == 2 && pend == 8);    /* up six, not losing: waits too */
+	CHECK(ad_settle(2, 2, &pend, 0) == 2 && pend == 0);    /* ... the next round keeps it: dropped */
+	CHECK(ad_settle(2, 8, &pend, 1) == 8 && pend == 0);    /* losing: up at once */
+	CHECK(ad_settle(2, 3, &pend, 1) == 3 && pend == 0);    /* ... by one too */
+	CHECK(ad_settle(5, 4, &pend, 1) == 5 && pend == 4);    /* down: always waits */
+	CHECK(ad_settle(5, 4, &pend, 0) == 4 && pend == 0);
+	CHECK(ad_settle(5, 2, &pend, 0) == 5 && pend == 2);
+	CHECK(ad_settle(5, 3, &pend, 0) == 3 && pend == 0);    /* the smaller of 2 and 3 */
+	CHECK(ad_settle(2, 8, &pend, 0) == 2 && pend == 8);
+	CHECK(ad_settle(2, 5, &pend, 0) == 5 && pend == 0);    /* the smaller of 8 and 5 */
+	CHECK(ad_settle(5, 4, &pend, 0) == 5 && pend == 4);
+	CHECK(ad_settle(5, 6, &pend, 0) == 5 && pend == 6);    /* the other way: starts over */
+	/* PCSF00024 as logged with 83ba21b, each round's pick from 2 (a jump to 8
+	 * at once, back two rounds later): with no loss in effect, the jumps
+	 * wait, and a pick that comes once is gone the next round */
 	{
-		static const int want[] = { 3, 2, 3, 2, 2, 3, 2, 3, 3, 2, 3, 2, 3, 2, 2, 3, 2, 3 };
-		int cur = 2, moves = 0;
+		static const int want[] = { 3, 3, 2, 2, 8, 2, 8, 2, 3, 2, 3, 2 };
+		int cur = 2, moves = 0, top = 2;
 
 		pend = 0;
 		for (size_t r = 0; r < sizeof(want) / sizeof(want[0]); r++) {
 			const int was = cur;
 
-			cur = ad_settle(cur, want[r], &pend);
+			cur = ad_settle(cur, want[r], &pend, 0);
 			moves += cur != was;
+			top = cur > top ? cur : top;
 		}
-		CHECK(moves == 2);                               /* taking each: 15 */
-	}
-	{
-		const uint32_t m0 = g_ra_moves[0];
-
-		g_ad_rounds[0] = RA_ADAPT_SETTLE_FROM;
-		g_ad_pend_thr[0] = 0;
-		ST(g_ra_adj[0], 0);                              /* 5 */
-		for (int r = 0; r < 6; r++) {                    /* lower, higher, lower ...: never lower */
-			const int cur = r & 1 ? 6 : 5;
-
-			CHECK(ad_settle(cur, r & 1 ? 4 : 6, &g_ad_pend_thr[0]) >= 5);
-		}
-		CHECK(g_ra_moves[0] == m0 && ra_threshold(0) == 5);
+		CHECK(moves == 2 && top == 3);                   /* 2 -> 3 -> 2; never 8 */
 	}
 	vm_stage_fini();
 }
@@ -5189,6 +5179,21 @@ static void test_fewer_pieces(void)
 	CHECK(ol.fewer_moved && g_oo[OO_NC].fewer && g_ra_fewer[1] == 1 && !g_ra_fewer[0] && !g_oo[OO_NC].off);
 	/* the stream: up to two pieces ahead - never three - and the right data */
 	CHECK(fewer_max_live(u, d) == 2);
+	ra_drop(d);
+	/* with two, most still for nothing (30 pieces to 4 MiB served, the
+	 * counts afresh since the change): one alone */
+	while (__sync_lock_test_and_set(&g_ad_lock, 1))
+		;
+	ST(g_oo_acc[OO_NC].std_us, 50000);
+	ST(g_oo_acc[OO_NC].std_q, 2048);
+	ST(g_oo_acc[OO_NC].srv_us, 40000);
+	ST(g_oo_acc[OO_NC].srv_q, 8192);
+	ST(g_oo_acc[OO_NC].waste, 30);
+	oo_round(OO_NC, 1000, &ol);
+	__sync_lock_release(&g_ad_lock);
+	CHECK(ol.fewer_moved && g_oo[OO_NC].fewer == 2 && g_ra_fewer[1] == 2 && !g_oo[OO_NC].off &&
+	      ol.waste_pm > 450);
+	CHECK(fewer_max_live(u, d) == 1);                /* one ahead, the right data */
 	ra_drop(d);
 	/* On: all three, whatever Adaptive decided */
 	s.readahead = VM_RA_ON;

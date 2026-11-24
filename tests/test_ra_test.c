@@ -246,6 +246,26 @@ static void test_ev(void)
 		}
 		CHECK(offs == 2 && e.strikes == 2 && !e.off);
 	}
+	/* ageing by what a round brought: a full round halves, a round of 16
+	 * runs takes a quarter off, 2 runs a sixteenth (the least) */
+	{
+		RaTest t;
+
+		memset(&t, 0, sizeof(t));
+		t.pos[0][1] = t.run[0][3] = t.spos[1][2] = t.srun[1][4] = 1024;
+		t.ended[0] = 32;
+		ra_adapt_age(&t, 0, 32);
+		CHECK(t.pos[0][1] == 512 && t.run[0][3] == 512 && !t.ended[0]);
+		t.ended[0] = 16;
+		ra_adapt_age(&t, 0, 32);
+		CHECK(t.pos[0][1] == 384 && t.run[0][3] == 384);
+		t.ended[1] = 2;
+		ra_adapt_age(&t, 1, 32);
+		CHECK(t.spos[1][2] == 960 && t.srun[1][4] == 960);
+		t.ended[1] = 99;                                 /* more than a round: as a round */
+		ra_adapt_age(&t, 1, 32);
+		CHECK(t.spos[1][2] == 480);
+	}
 	/* no real profit: a gain under RT_EV_PROFIT (here 0.5 %) - off in two rounds */
 	CHECK(RT_EV_PROFIT == 10u);
 	memset(&e, 0, sizeof(e));

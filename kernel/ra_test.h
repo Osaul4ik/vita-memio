@@ -450,15 +450,30 @@ static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *
 
 /* Kind k's counts halved: what was read long ago weighs less (a game's
  * loading and its play differ). */
-static inline void ra_adapt_age(RaTest *t, int k)
+static inline uint32_t rt_age_one(uint32_t v, uint32_t e, uint32_t full)
 {
+	const uint32_t cut = (uint32_t)((uint64_t)v * e / (2u * full));
+
+	return v - (cut > v / 16 ? cut : v / 16);
+}
+
+/* A round of kind k is over: what was counted ages by how much the round
+ * brought - a full round of `full` runs ended halves it, a round cut short
+ * by its sectors (a game streaming: 3 MiB in half a second, a few runs)
+ * takes off as much less, down to a sixteenth. Halved each time, such
+ * rounds left a second of play to weigh, and two near-equal thresholds took
+ * turns (NC 2 <-> 3 13 times in 160 s). */
+static inline void ra_adapt_age(RaTest *t, int k, uint32_t full)
+{
+	const uint32_t e = t->ended[k] < full ? t->ended[k] : full;
+
 	for (int i = 0; i < RT_POS; i++) {
-		t->pos[k][i] >>= 1;
-		t->spos[k][i] >>= 1;
+		t->pos[k][i] = rt_age_one(t->pos[k][i], e, full);
+		t->spos[k][i] = rt_age_one(t->spos[k][i], e, full);
 	}
 	for (int i = 0; i < RT_RUN; i++) {
-		t->run[k][i] >>= 1;
-		t->srun[k][i] >>= 1;
+		t->run[k][i] = rt_age_one(t->run[k][i], e, full);
+		t->srun[k][i] = rt_age_one(t->srun[k][i], e, full);
 	}
 	t->ended[k] = 0;
 }

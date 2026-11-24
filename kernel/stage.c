@@ -2288,16 +2288,15 @@ static uint32_t          g_ad_sec[2], g_ad_rounds[2], g_tn_rounds;
  * app before - the home screen's, say - is not counted for the one now in
  * front when it ends (it was: a game's first round moved on it). */
 static volatile uint32_t g_ad_gen;
-/* The game's reads first: a move to a lower threshold (read ahead sooner,
- * more pieces they can wait behind) waits for a second round that wants
- * lower, of any size, with none wanting higher between, and takes the
- * smaller of the two moves; a move to a higher one is taken at once
- * (ad_settle). Where thresholds weigh much the same (the model near nothing)
- * each round's few new runs swung it back and forth - NC 2 -> 4 -> 2 -> 5 ->
- * 3 in a few minutes, large moves passing the old one-step check; now it
- * settles on the side of less read ahead. Any move in the first rounds is
- * taken at once (a loading screen: quick, not settled yet). (0: none
- * pending) */
+/* A move waits for a second round in a row that wants it the same way
+ * (ad_settle): down of any size, up by one step; up by more is taken at
+ * once (the game's reads first). Where thresholds weigh much the same (the model near
+ * nothing) each round's few new runs swung it back and forth - NC 2 -> 4 ->
+ * 2 -> 5 -> 3, large moves passing a one-step check, and 2 <-> 3 with up at
+ * once. Rounds cut short by their sectors also age the counts less
+ * (ra_adapt_age), so a round weighs more than the last second. Any move in
+ * the first rounds is taken at once (a loading screen: quick, not settled
+ * yet). (0: none pending) */
 #define RA_ADAPT_SETTLE_FROM 2u
 static int               g_ad_pend_thr[2], g_ad_pend_sm[2];
 static volatile uint32_t g_tn_moves;
@@ -3647,23 +3646,29 @@ static void ra_adapt_end(Dev *d, int small, int nc, uint32_t len)
 	__sync_lock_release(&g_ad_lock);
 }
 
-/* What a round's pick `want` leaves in effect from `cur`. A higher
- * threshold (read ahead later, fewer pieces the game's reads can wait
- * behind) is taken at once and clears what was pending; a lower one only
- * once a second round has wanted lower with no round wanting higher between
- * (*pend) - and then the smaller of the two moves. A round that keeps it as
- * it is leaves what is pending: a game whose rounds alternate (a long run in
- * every other one) still gets its lower threshold. */
+/* What a round's pick `want` leaves in effect from `cur` (*pend: what a
+ * round before wanted, 0 none). A move waits for a second round in a row
+ * that wants it the same way, and then takes
+ * the smaller of the two moves - down (read ahead sooner, more pieces the
+ * game's reads can wait behind) of any size, up by one step; up by more is
+ * taken at once (the game's reads first). A round that keeps it as it is
+ * clears what is pending: two rounds in a row, as the counts now age by
+ * what a round brought (ra_adapt_age), so a game whose rounds alternate (a
+ * long run in every other one) still wants the same each round. */
 static int ad_settle(int cur, int want, int *pend)
 {
-	if (want > cur) {
+	const int up = want > cur, was = *pend ? (*pend > cur ? 1 : -1) : 0;
+
+	if (want == cur) {
+		*pend = 0;
+		return cur;
+	}
+	if (up && want - cur > 1) {
 		*pend = 0;
 		return want;
 	}
-	if (want == cur)
-		return cur;
-	if (*pend && *pend < cur) {
-		const int w = want > *pend ? want : *pend;
+	if (was == (up ? 1 : -1)) {
+		const int w = up ? (want < *pend ? want : *pend) : (want > *pend ? want : *pend);
 
 		*pend = 0;
 		return w;
@@ -3772,7 +3777,7 @@ static void ra_adapt_tick(void)
 				}
 			}
 		}
-		ra_adapt_age(&g_ad, nc);
+		ra_adapt_age(&g_ad, nc, RA_ADAPT_RUNS);
 		g_ad_sec[nc] = 0;
 		g_ad_rounds[nc]++;
 	}

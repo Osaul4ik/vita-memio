@@ -4658,27 +4658,28 @@ static void test_adaptive_gen_and_settle(void)
 	d->t_gen = g_ad_gen;
 	ra_tiny_end(d, 9, 9);
 	CHECK(g_tn_ended == 1);
-	/* settling: higher (less read ahead) at once; lower only on a second
-	 * round that wants lower with none wanting higher between, of any size,
-	 * the smaller of the two moves */
+	/* settling: a move waits for a second round in a row that wants it the
+	 * same way - down of any size, up by one - and takes the smaller of the
+	 * two; up by more at once (the game's reads first) */
 	pend = 0;
-	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);       /* up one: at once */
+	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);       /* up one: waits */
+	CHECK(ad_settle(5, 6, &pend) == 6 && pend == 0);       /* ... wanted again: taken */
 	CHECK(ad_settle(2, 5, &pend) == 5 && pend == 0);       /* up three: at once */
 	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);       /* down: waits */
 	CHECK(ad_settle(5, 4, &pend) == 4 && pend == 0);       /* ... wanted again: taken */
 	CHECK(ad_settle(5, 2, &pend) == 5 && pend == 2);       /* down three: waits too */
 	CHECK(ad_settle(5, 3, &pend) == 3 && pend == 0);       /* ... the smaller of 2 and 3 */
 	CHECK(ad_settle(5, 3, &pend) == 5 && pend == 3);
-	CHECK(ad_settle(5, 5, &pend) == 5 && pend == 3);       /* kept as it is: still pending */
-	CHECK(ad_settle(5, 2, &pend) == 3 && pend == 0);       /* ... the smaller of 3 and 2 */
+	CHECK(ad_settle(5, 5, &pend) == 5 && pend == 0);       /* kept as it is: dropped */
 	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);
-	CHECK(ad_settle(5, 7, &pend) == 7 && pend == 0);       /* higher between: dropped */
-	CHECK(ad_settle(7, 4, &pend) == 7 && pend == 4);       /* ... lower starts over */
-	/* in the rounds: PCSF00007's NC as logged (each round's pick, from 2: 18
-	 * moves in 390 s) - half the moves, and it rests higher, never back at 2 */
+	CHECK(ad_settle(5, 6, &pend) == 5 && pend == 6);       /* the other way: starts over */
+	CHECK(ad_settle(5, 4, &pend) == 5 && pend == 4);
+	CHECK(ad_settle(5, 8, &pend) == 8 && pend == 0);       /* up three: at once, clears */
+	/* in the rounds: a near tie, each round's pick 2 or 3 as it falls (the
+	 * PCSF00024 of the log: 13 moves in 160 s) - a move needs two in a row */
 	{
-		static const int want[] = { 4, 2, 5, 2, 3, 2, 4, 2, 4, 2, 5, 3, 2, 3, 2, 4, 2, 3 };
-		int cur = 2, moves = 0, low = 8;
+		static const int want[] = { 3, 2, 3, 2, 2, 3, 2, 3, 3, 2, 3, 2, 3, 2, 2, 3, 2, 3 };
+		int cur = 2, moves = 0;
 
 		pend = 0;
 		for (size_t r = 0; r < sizeof(want) / sizeof(want[0]); r++) {
@@ -4686,10 +4687,8 @@ static void test_adaptive_gen_and_settle(void)
 
 			cur = ad_settle(cur, want[r], &pend);
 			moves += cur != was;
-			if (r > 0 && cur < low)
-				low = cur;
 		}
-		CHECK(moves <= 9 && low >= 2 && cur >= 3);
+		CHECK(moves == 2);                               /* taking each: 15 */
 	}
 	{
 		const uint32_t m0 = g_ra_moves[0];

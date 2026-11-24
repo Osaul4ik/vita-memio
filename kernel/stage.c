@@ -605,6 +605,42 @@ typedef struct {
 	uint32_t n[3], sec[3], col_n, col_max, waste, spoilt;
 } LgKind;
 
+/* With the log on: where each read of the app in front lies against the
+ * last few reads of its storage - what read ahead could follow of it. Read
+ * ahead follows one stream of each size (tiny, 32 KiB, large), each read
+ * starting exactly where the last of its size ended; a game that reads two
+ * files in turn, skips a little, or reads again what it just read shows up
+ * as reads it never gets. By size (PT_*), how many and how long they took:
+ *   PT_OWN    where the last read of its size ended (what read ahead follows)
+ *   PT_OTHER  where another of the last PT_HIST ended (a stream read ahead
+ *             loses to another)
+ *   PT_AGAIN  in, or up to 256 KiB before, one of them (read again)
+ *   PT_SKIP32 / PT_SKIP256  a little after one ended: up to 32 / 256 KiB
+ *   PT_FAR    none of these
+ * the first that fits, in this order.
+ * The last reads are a ring that racing threads may blur (a lost update or a
+ * start and end of two reads): it only counts. */
+#define PT_HIST     8
+#define PT_OWN      0
+#define PT_OTHER    1
+#define PT_AGAIN    2
+#define PT_SKIP32   3
+#define PT_SKIP256  4
+#define PT_FAR      5
+#define PT_N        6
+typedef struct {
+	uint32_t start, end, part;
+} PtRead;
+typedef struct {
+	PtRead   h[PT_HIST];                   /* the last reads (a ring)          */
+	uint32_t i;                            /* atomic: the next slot            */
+	uint32_t own_end[3], own_part[3];      /* the last read's end, by size     */
+} PtDev;
+typedef struct {
+	uint32_t n[3][PT_N];
+	uint64_t us[3][PT_N];
+} PtCount;
+
 /* What a read did, for the log (stage_xfer_one, ra_nc_read, ra_tiny_read). */
 typedef struct {
 	int      nc;                           /* 0 ordinary, 1 non-cacheable, 2 device memory */
@@ -751,6 +787,9 @@ typedef struct {
 	LgKind   lk[3];                    /* atomics                             */
 	MapFail  mapfail[MAPFAIL_LOG];
 	LgSnap   at;                       /* the worker's                        */
+	PtDev    pt[3];                    /* VM_DEV_COUNT (pt_note)              */
+	PtCount  pc;                       /* atomics                             */
+	PtCount  pc_at;                    /* the worker's: at the session's start */
 } Diag;
 static Diag *volatile g_diag;                  /* atomic; published once      */
 static SceUID         g_diag_uid = -1;
@@ -5160,6 +5199,89 @@ static void lk_note(int k, uint32_t nsec, uint32_t us, int col, int how)
 	}
 }
 
+/* With the log on: where a read of the app in front lies (see PT_*). */
+static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t us)
+{
+	Diag *const dg = DG();
+	const int k = nsec < RA_SMALL_SECTORS ? LG_TINY : nsec < RA_MIN_SECTORS ? LG_SMALL : LG_LARGE;
+	const uint32_t pt = (uint32_t)(uintptr_t)part;
+	PtDev *t;
+	int c = PT_FAR;
+
+	if (!dg)
+		return;
+	t = &dg->pt[d - g_dev];
+	if (LD(t->own_part[k]) == pt && LD(t->own_end[k]) == sector && sector) {
+		c = PT_OWN;
+	} else {
+		for (int j = 0; j < PT_HIST; j++) {
+			const PtRead *h = &t->h[j];
+			const uint32_t a = LD(h->start), e = LD(h->end);
+			int w;
+
+			if (LD(h->part) != pt || a == e)
+				continue;
+			if (sector == e)
+				w = PT_OTHER;
+			else if (sector > e && sector - e <= RA_SMALL_SECTORS)
+				w = PT_SKIP32;
+			else if (sector > e && sector - e <= 2 * RA_PIECE_SECTORS)
+				w = PT_SKIP256;
+			else if (sector < e && sector + 2 * RA_PIECE_SECTORS >= a)
+				w = PT_AGAIN;
+			else
+				continue;
+			if (w < c)
+				c = w;
+		}
+	}
+	ADD(dg->pc.n[k][c], 1);
+	ADD(dg->pc.us[k][c], (uint64_t)us);
+	{
+		PtRead *h = &t->h[__atomic_fetch_add(&t->i, 1, __ATOMIC_RELAXED) % PT_HIST];
+
+		ST(h->part, pt);
+		ST(h->start, sector);
+		ST(h->end, sector + nsec);
+	}
+	ST(t->own_part[k], pt);
+	ST(t->own_end[k], sector + nsec);
+}
+
+/* The session's lines for where its reads lay (pt_note; `print` 0: none,
+ * the first), then counted from here. The worker. */
+static void pt_session(Diag *dg, int print)
+{
+	static const char *const what[3] = { "tiny", "32K", "large" };
+	PtCount now;
+
+	for (int k = 0; k < 3; k++)
+		for (int c = 0; c < PT_N; c++) {
+			now.n[k][c] = LD(dg->pc.n[k][c]);
+			now.us[k][c] = LD(dg->pc.us[k][c]);
+		}
+	for (int k = 0; print && k < 3; k++) {
+		uint32_t n[PT_N], all = 0;
+		uint32_t ms[PT_N];
+
+		for (int c = 0; c < PT_N; c++) {
+			n[c] = now.n[k][c] - dg->pc_at.n[k][c];
+			ms[c] = (uint32_t)((now.us[k][c] - dg->pc_at.us[k][c]) / 1000u);
+			all += n[c];
+		}
+		if (all < 16)
+			continue;
+		VM_KLOGI("session order %s: %u reads - its own stream %u%% (%u ms), another %u%% (%u ms), "
+		         "again %u%% (%u ms), 32K on %u%% (%u ms), 256K on %u%% (%u ms), elsewhere %u%% "
+		         "(%u ms)", what[k], (unsigned)all,
+		         (unsigned)(n[0] * 100u / all), (unsigned)ms[0], (unsigned)(n[1] * 100u / all),
+		         (unsigned)ms[1], (unsigned)(n[2] * 100u / all), (unsigned)ms[2],
+		         (unsigned)(n[3] * 100u / all), (unsigned)ms[3], (unsigned)(n[4] * 100u / all),
+		         (unsigned)ms[4], (unsigned)(n[5] * 100u / all), (unsigned)ms[5]);
+	}
+	dg->pc_at = now;
+}
+
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
@@ -5182,6 +5304,8 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	us = ksceKernelGetSystemTimeLow() - t0;
 	if (lg) {
 		lg_note(d, write, nsec, us, col);
+		if (!write && r >= 0 && !bg_req())
+			pt_note(d, part, sector, nsec, us);   /* where it lay */
 		if (!write && r >= 0)
 			lk_note(nsec < RA_SMALL_SECTORS ? LK_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us, col,
 			        nsec < RA_SMALL_SECTORS ? xi.tiny : !xi.got ? 0 : xi.got >= nsec ? 1 : 2);
@@ -6286,6 +6410,7 @@ void vm_stage_worker_tick(void)
 				if (since_us)
 					lg_session(who[0] ? who : "the home screen",
 					           (uint32_t)((wide_us - since_us) / 1000u), &dg->at, &cur);
+				pt_session(dg, since_us != 0);   /* where its reads lay */
 				dg->at = cur;
 				since_us = wide_us;
 			} else {

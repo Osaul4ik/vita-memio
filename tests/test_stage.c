@@ -5129,6 +5129,60 @@ static void test_review_fixes(void)
 	vm_stage_fini();
 }
 
+/* With the log on: where the app's reads lie against the last few of their
+ * storage (pt_note) - its own stream, another one read in turn, a little
+ * skipped, read again, elsewhere - by size. */
+static void test_read_order(void)
+{
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	void *const pa = (void *)(uintptr_t)0x1000, *const pb = (void *)(uintptr_t)0x2000;
+	Diag *dg;
+	uint32_t was[3][PT_N];
+
+#define PT_DELTA(k, c) (dg->pc.n[k][c] - was[k][c])
+#define PT_MARK() memcpy(was, dg->pc.n, sizeof(was))
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	s.log = 1;
+	vm_stage_apply(&s);
+	dg = DG();
+	CHECK(dg != NULL);
+	PT_MARK();
+	pt_note(d, pa, 1000, 256, 10);                   /* the first: elsewhere */
+	pt_note(d, pa, 1256, 256, 10);                   /* on from it: its own */
+	pt_note(d, pa, 1512, 256, 10);
+	CHECK(PT_DELTA(LG_LARGE, PT_FAR) == 1 && PT_DELTA(LG_LARGE, PT_OWN) == 2);
+	/* two 32 KiB streams read in turn: the second loses the first, which
+	 * then goes on where it was - another stream */
+	PT_MARK();
+	pt_note(d, pa, 5000, 64, 10);                    /* A: elsewhere */
+	pt_note(d, pa, 5064, 64, 10);                    /* A: its own */
+	pt_note(d, pa, 9000, 64, 10);                    /* B: elsewhere */
+	pt_note(d, pa, 5128, 64, 10);                    /* A again: another */
+	pt_note(d, pa, 9064, 64, 10);                    /* B: another */
+	CHECK(PT_DELTA(LG_SMALL, PT_FAR) == 2 && PT_DELTA(LG_SMALL, PT_OWN) == 1 &&
+	      PT_DELTA(LG_SMALL, PT_OTHER) == 2);
+	/* a little skipped: up to 32 KiB, up to 256 KiB on */
+	PT_MARK();
+	pt_note(d, pa, 9128 + 16, 64, 10);               /* 8 KiB on from B */
+	pt_note(d, pa, 9208 + 300, 64, 10);              /* 150 KiB on */
+	CHECK(PT_DELTA(LG_SMALL, PT_SKIP32) == 1 && PT_DELTA(LG_SMALL, PT_SKIP256) == 1);
+	/* read again, or just before: again; another partition: elsewhere */
+	PT_MARK();
+	pt_note(d, pa, 9508, 8, 10);                     /* in the last one */
+	pt_note(d, pa, 9400, 8, 10);                     /* a little before it */
+	pt_note(d, pb, 9516, 8, 10);                     /* the same sector, another partition */
+	CHECK(PT_DELTA(LG_TINY, PT_AGAIN) == 2 && PT_DELTA(LG_TINY, PT_FAR) == 1);
+	/* the times go with them; the session's counts start afresh */
+	CHECK(dg->pc.us[LG_TINY][PT_AGAIN] >= 20);
+	pt_session(dg, 1);
+	CHECK(!memcmp(&dg->pc_at, &dg->pc, sizeof(dg->pc)));
+#undef PT_DELTA
+#undef PT_MARK
+	vm_stage_fini();
+}
+
 /* A stream of 12 large reads from sector 100: the most pieces it had ahead
  * at once (each read's data checked). */
 static int fewer_max_live(uint8_t *u, Dev *d)
@@ -6218,6 +6272,7 @@ int main(void)
 	RUN(test_readahead);
 	RUN(test_ra_slow_stream);
 	RUN(test_fewer_pieces);
+	RUN(test_read_order);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

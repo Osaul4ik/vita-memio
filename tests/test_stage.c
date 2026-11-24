@@ -5199,6 +5199,55 @@ static void test_read_order(void)
 	vm_stage_fini();
 }
 
+/* One stream read in large and 32 KiB reads in turn (128, 32, 128, 32 KiB
+ * ...: PCSF00007, PCSG01179): read ahead follows it whichever size comes,
+ * a 32 KiB read where the pieces go on is served from them, and each read
+ * gets the right data - into ordinary and into non-cacheable memory. */
+static void test_mixed_sizes(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+
+	for (int nc = 0; nc < 2; nc++) {
+		uint32_t at = 100, h0, k0;                       /* 3520 sectors in all */
+
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On: from the 5th */
+		if (nc) {
+			fake_pid = 0x42;
+			fake_memtype = MEMTYPE_NC;
+			fake_meminfo_type = 0x10208006;
+		}
+		h0 = g_ra_hits;
+		k0 = g_ra_kib;
+		for (int r = 0; r < 22; r++) {
+			const uint32_t n = r & 1 ? 64 : 256;
+
+			CHECK(rd_ok(u, at, n));
+			at += n;
+		}
+		/* from the 5th large read on (the 9th read), every read from the pieces:
+		 * of the 13 after it (7 x 32 KiB + 6 x 128 KiB, 1984 sectors) at least
+		 * 95 % served (before: none - the stream broke at every change of size) */
+		CHECK(g_ra_hits - h0 >= 12 && (g_ra_kib - k0) * 2 >= 1890);
+		CHECK(d->ra_streak >= 10);                   /* one stream throughout */
+		/* a 32 KiB read elsewhere still goes the standard way past the
+		 * pieces, which stay for the stream (right data, nothing served) */
+		CHECK(ra_any(d));
+		h0 = g_ra_hits;
+		CHECK(rd_ok(u, 4000, 64));
+		CHECK(g_ra_hits == h0 && ra_any(d));
+		CHECK(rd_ok(u, at, 256) && g_ra_hits > h0);  /* the stream goes on from them */
+		ra_drop(d);
+		vm_stage_fini();
+		fake_memtype = 0xD000;
+		fake_meminfo_type = 0;
+		fake_pid = 0;
+	}
+	free(u);
+}
+
 /* A stream of 12 large reads from sector 100: the most pieces it had ahead
  * at once (each read's data checked). */
 static int fewer_max_live(uint8_t *u, Dev *d)
@@ -6289,6 +6338,7 @@ int main(void)
 	RUN(test_ra_slow_stream);
 	RUN(test_fewer_pieces);
 	RUN(test_read_order);
+	RUN(test_mixed_sizes);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

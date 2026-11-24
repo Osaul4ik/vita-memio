@@ -4115,6 +4115,22 @@ static uint32_t ra_cover(const Dev *d, void *part, io_fn io, uint32_t sector, ui
 	return cov;
 }
 
+/* Whether the pieces go on at `sector`: a read there continues their
+ * stream, whatever its size (a game reading one file in large and 32 KiB
+ * reads in turn). A look only, from any thread - the request that takes the
+ * device decides (ra_cover). */
+static int ra_at(const Dev *d, void *part, io_fn io, uint32_t sector)
+{
+	for (int i = 0; i < RA_PIECES; i++) {
+		const RaPiece *pc = &d->ra[i];
+
+		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE && pc->part == part &&
+		    pc->io == io && LD(pc->sector) + LD(pc->off) == sector && LD(pc->off) < LD(pc->n))
+			return 1;
+	}
+	return 0;
+}
+
 /* The buffer's memory type for the copier, read here (see stage_xfer). */
 static void off_memtype(OffMap *om)
 {
@@ -4236,7 +4252,7 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	for (int j = 0; j < cnt; j++) {
 		RaPiece *pc = &d->ra[idx[j]];
 
-		pc->off += sz[j];
+		ST(pc->off, pc->off + sz[j]);         /* (ra_at looks at it unlocked) */
 		if (pc->off >= pc->n)
 			__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 	}
@@ -4286,7 +4302,12 @@ static inline void ra_note_small_stock(Dev *d, void *part, uint32_t sector, uint
 }
 
 /* A read [sector, sector + n) has completed: the stream so far. 1 if it
- * counts (then the pieces may be refilled after it). */
+ * counts (then the pieces may be refilled after it). A read of one size that
+ * goes on where the other size's stream is carries that stream on too - a
+ * game reads one file in large and 32 KiB reads in turn (PCSF00007,
+ * PCSG01179: a quarter of their reads' time), which broke both streams at
+ * every change of size. A 32 KiB read that carries the large reads' stream
+ * is that stream's for the refill. */
 static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 {
 	d->ra_noted_small = 0;
@@ -4295,6 +4316,11 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	if (n < RA_MIN_SECTORS) {
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;
+		if (part == d->ra_last_part && sector == d->ra_last_end && d->ra_streak &&
+		    nc == d->ra_nc) {
+			d->ra_last_end = sector + n;      /* the large reads' stream goes on past it */
+			d->ra_noted_small = 0;
+		}
 	} else {
 		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
@@ -4311,6 +4337,13 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		d->ra_nc = nc;
 		d->ra_last_part = part;
 		d->ra_last_end = sector + n;
+		/* ... and the 32 KiB reads' stream past it (lost if another thread
+		 * holds it: the next 32 KiB read then starts afresh) */
+		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
+			if (part == d->rs_part && sector == d->rs_end && d->rs_streak && nc == d->rs_nc)
+				d->rs_end = sector + n;
+			__sync_lock_release(&d->rs_lock);
+		}
 	}
 	if (__atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE))     /* no clock read otherwise */
 		__atomic_store_n(&d->ra_last_us, ksceKernelGetSystemTimeLow(), __ATOMIC_RELAXED);
@@ -4667,9 +4700,10 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
 	      vm_offload_nc(offload) && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
-	/* a 32 KiB read leaves the large reads' pieces alone: it goes straight
-	 * into its own buffer, they are not in its way */
-	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small))) {
+	/* a 32 KiB read leaves the large reads' pieces alone (it goes straight
+	 * into its own buffer, they are not in its way) - unless they go on where
+	 * it starts: their stream, read in both sizes */
+	if (ra_any(d) && (nsec >= RA_MIN_SECTORS || LD(d->ra_small) || ra_at(d, part, io, sector))) {
 		got = ra_serve(d, part, io, sector, p, nsec, 0, stats, off, &om, nsec, &own);
 		*gotp = got;
 		if (got < nsec)
@@ -4921,7 +4955,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	/* Read ahead keeps pieces in the staging buffers: a small transfer goes
 	 * the standard way meanwhile, instead of dropping them (a read elsewhere
 	 * waits for the card either way; a write still makes them unusable). */
-	if (mine && nsec < RA_MIN_SECTORS && (nsec < RA_SMALL_SECTORS || !LD(d->ra_small)) &&
+	if (mine && nsec < RA_MIN_SECTORS &&
+	    (nsec < RA_SMALL_SECTORS || (!LD(d->ra_small) && !ra_at(d, part, io, sector))) &&
 	    ra_live(d)) {
 		ret = io(ref, part, sector, buf, nsec);
 		if (!write && !bg)

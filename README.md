@@ -52,7 +52,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 |---|---|---|
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
-| Low kernel memory | Shown while both storages are on. They share one set of buffers, so the plugin needs 384 KiB less memory. The game in front comes first; copying between the two cards gains less. Takes effect after a restart | Off |
+| Low kernel memory | Shown while both storages are on. They share one set of buffers, so the plugin needs 384 KiB less memory, but part of read ahead is lost. See below. Takes effect after a restart | Off |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
@@ -76,6 +76,17 @@ A memory card is slowest when it has to wait for the next request. While a game 
 **Adaptive** (the default) learns while you play, separately for each kind of read, when reading ahead saves time in that game. Where it doesn't, it switches read ahead off for that kind of read, and back on when it would help again. Every launch starts learning afresh; if you go to the home screen and come back, the game goes on where it was.
 
 **On** always reads ahead after a fixed number of reads in a row; **Off** never does.
+
+### Low kernel memory
+
+Turn this on only if you get error C1-2569-2 or other plugins run out of memory. With both storages on, the SD2Vita and the memory card then share one set of buffers instead of having one each, and the plugin needs 384 KiB less. The price is speed:
+
+- **Read ahead works for one storage at a time.** Data read early for one card sits in the shared buffers, so it is thrown away as soon as the other card is used. While a game streams from one card, small transfers on the other go the normal, slower way.
+- **Reading again from memory is off,** because there are no spare buffers to keep data in.
+- **Only the game in front is sped up.** Other apps' reads, such as the system's or music in the background, go the normal way.
+- **Copying between the two cards** (for example in VitaShell) gains less.
+
+If you play from one card only, it is better to switch the other storage off instead: that saves the same memory and keeps all of read ahead.
 
 ### Reading again from memory
 

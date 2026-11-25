@@ -53,6 +53,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
 | Low kernel memory | Shown while both storages are on. They share one set of buffers, so the plugin needs 384 KiB less memory, but part of read ahead is lost. See below. Takes effect after a restart | Off |
+| Keep memory for reading again | For when only one storage is on: the 384 KiB that *reading again from memory* (see below) needs are set aside at once and kept, so they are always there. With both storages on it changes nothing until you switch one off. Not shown with *Low kernel memory* | Off |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
@@ -82,7 +83,7 @@ A memory card is slowest when it has to wait for the next request. While a game 
 Turn this on only if you get error C1-2569-2 or other plugins run out of memory. With both storages on, the SD2Vita and the memory card then share one set of buffers instead of having one each, and the plugin needs 384 KiB less. The price is speed:
 
 - **Read ahead works for one storage at a time.** Data read early for one card sits in the shared buffers, so it is thrown away as soon as the other card is used. While a game streams from one card, small transfers on the other go the normal, slower way.
-- **Reading again from memory is off,** because there are no spare buffers to keep data in.
+- **Reading again from memory is off,** because there are no spare buffers to keep data in, and *Keep memory for reading again* is hidden.
 - **Only the game in front is sped up.** Other apps' reads, such as the system's or music in the background, go the normal way.
 - **Copying between the two cards** (for example in VitaShell) gains less.
 
@@ -92,7 +93,8 @@ If you play from one card only, you can switch the other storage off instead: th
 
 Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of from the card. There is nothing to set:
 
-- It uses the buffers of the storage you are not using at that moment (the SD2Vita's while you play from the memory card, or the other way round). If only one storage is on, it sets aside 384 KiB of its own while a game needs it, and gives it back as soon as you quit the game or go to the home screen.
+- It uses the buffers of the storage you are not using at that moment (the SD2Vita's while you play from the memory card, or the other way round).
+- If only one storage is on, it needs 384 KiB of its own. Normally it takes them while a game needs them and gives them back as soon as you quit the game or go to the home screen; if the console has no room for them at that moment, the game simply reads without it. With **Keep memory for reading again** on, they are set aside as soon as only one storage is on and kept.
 - It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
 - It switches itself off in a game where it does not pay off.
 - It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A or C + NC All, and is not used with *Low kernel memory*.
@@ -162,7 +164,7 @@ The console is out of kernel memory (it can also show as a crash right after swi
 ## Good to know
 
 - Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
-- Memory: 256 KiB per storage (with *Low kernel memory*, one set for both), 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. With only one storage on, reading again from memory takes 384 KiB more while a game is in front.
+- Memory: 256 KiB per storage (with *Low kernel memory*, one set for both), 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. With only one storage on, reading again from memory takes 384 KiB more while a game is in front, or all the time with *Keep memory for reading again*.
 - While the console starts, everything goes the normal way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
 - On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

@@ -60,6 +60,7 @@ static void s_cpy(char *d, const char *s, int n){ for(int i=0;i<n;i++) d[i]=s[i]
 static const char *const g_keys[VM_KEY_COUNT] = {
 	"sd2vita", NULL, "verify", NULL, NULL, "log", "memcard", "small", "stats", "gpusafe",
 	"pipeline", "offload", "readahead", "overlay", "dmacopy", "driver", "sysapps", "lowmem",
+	"rckeep",
 };
 
 #define ROW_LIST(k) \
@@ -91,6 +92,10 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 /* only while both storages are on: with one, it changes nothing */
 #define X_LOWMEM \
 	ROW_TOGGLE("lowmem")
+/* unless Low kernel memory is on (then it has no say): it is for when only
+ * one storage is on, and stays set while both are */
+#define X_RCKEEP \
+	ROW_TOGGLE("rckeep")
 #define X_REST \
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">" \
 		ROW_LIST("gpusafe") \
@@ -124,6 +129,7 @@ static const char X_PAGE_OPEN[] = X_OPEN;
 static const char X_PAGE_SAFE[] = X_SAFE;
 static const char X_PAGE_STORAGES[] = X_STORAGES;
 static const char X_PAGE_LOWMEM[] = X_LOWMEM;
+static const char X_PAGE_RCKEEP[] = X_RCKEEP;
 static const char X_PAGE_REST[] = X_REST;
 #define X_LEN(x)  ((int)sizeof(x) - 1)
 
@@ -385,6 +391,7 @@ static const signed char k_row[VM_KEY_COUNT] = {
 	[VM_KEY_READAHEAD] = VM_I18N_ROW_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_ROW_OVERLAY,
 	[VM_KEY_DMACOPY] = VM_I18N_ROW_DMACOPY, [VM_KEY_DRIVER] = VM_I18N_ROW_DRIVER,
 	[VM_KEY_SYSAPPS] = VM_I18N_ROW_SYSAPPS, [VM_KEY_LOWMEM] = VM_I18N_ROW_LOWMEM,
+	[VM_KEY_RCKEEP] = VM_I18N_ROW_RCKEEP,
 };
 static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_SD2VITA] = VM_I18N_HINT_SD2VITA,
@@ -396,6 +403,7 @@ static const signed char k_hint[VM_KEY_COUNT] = {
 	[VM_KEY_READAHEAD] = VM_I18N_HINT_READAHEAD, [VM_KEY_OVERLAY] = VM_I18N_HINT_OVERLAY,
 	[VM_KEY_DMACOPY] = VM_I18N_HINT_DMACOPY, [VM_KEY_DRIVER] = VM_I18N_HINT_DRIVER,
 	[VM_KEY_SYSAPPS] = VM_I18N_HINT_SYSAPPS, [VM_KEY_LOWMEM] = VM_I18N_HINT_LOWMEM,
+	[VM_KEY_RCKEEP] = VM_I18N_HINT_RCKEEP,
 };
 
 /* The safe-mode row's help: whether this start is in safe mode. */
@@ -535,9 +543,10 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 		const int up = get_state(&st);
 		const int safe = up && st.disabled == VM_DIS_SAFE;
 		const int both = up && vmGetSetting(VM_KEY_SD2VITA) == 1 && vmGetSetting(VM_KEY_MEMCARD) == 1;
+		const int keep_row = up && vmGetSetting(VM_KEY_LOWMEM) != 1;
 		const int hl = X_LEN(X_PAGE_OPEN) + (safe ? X_LEN(X_PAGE_SAFE) : 0) +
 		               X_LEN(X_PAGE_STORAGES) + (both ? X_LEN(X_PAGE_LOWMEM) : 0) +
-		               X_LEN(X_PAGE_REST);
+		               (keep_row ? X_LEN(X_PAGE_RCKEEP) : 0) + X_LEN(X_PAGE_REST);
 		if (!ins)
 			VM_LOGI("[SET] devices page (size=%d): insert point not found - page not added",
 			        size);
@@ -560,6 +569,10 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 			if (both) {
 				s_cpy(at, X_PAGE_LOWMEM, X_LEN(X_PAGE_LOWMEM));
 				at += X_LEN(X_PAGE_LOWMEM);
+			}
+			if (keep_row) {
+				s_cpy(at, X_PAGE_RCKEEP, X_LEN(X_PAGE_RCKEEP));
+				at += X_LEN(X_PAGE_RCKEEP);
 			}
 			s_cpy(at, X_PAGE_REST, X_LEN(X_PAGE_REST));
 			s_cpy(pb + head + hl, ins, size - head);

@@ -277,6 +277,7 @@ static struct {
 	uint32_t     yielded;              /* atomic: not the app in front's       */
 } g_sh = { .uid = -1, .uid2 = -1 };
 static volatile int g_lowmem_set;          /* the setting                      */
+static volatile int g_rc_keep;             /* VM_KEY_RCKEEP                    */
 static int          g_share_on;            /* in effect for this start         */
 
 static inline volatile int *dbusy(Dev *d)
@@ -6638,6 +6639,10 @@ void vm_stage_apply(const VmSettings *s)
 		ra_wake();
 	}
 	ST(g_lowmem_set, s->lowmem ? 1 : 0);   /* used at the start only */
+	if ((s->rckeep ? 1 : 0) != LD(g_rc_keep)) {
+		ST(g_rc_keep, s->rckeep ? 1 : 0);
+		ra_wake();                        /* the worker: its own blocks made or given back */
+	}
 	if (s->log)
 		diag_make();
 	ST(g_log_diag, s->log && DG() ? 1 : 0);
@@ -7031,17 +7036,82 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
-/* The again cache's own block back to the system once nothing uses it:
+/* The worker makes the again cache's own blocks when asked (want_own): 1 if
+ * it made them now. */
+static int rc_own_make(void)
+{
+	int made = 0;
+
+	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
+	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
+		/* two blocks, as a storage's buffers (one contiguous 384 KiB is
+		 * often not there once games run) */
+		const uint32_t b0 = RC_UNITS0 * RC_UNIT * 512, b1 = (RC_UNITS - RC_UNITS0) * RC_UNIT * 512;
+		void *a = NULL, *b = NULL;
+		int r;
+
+		__atomic_store_n(&g_rc.want_own, 0, __ATOMIC_RELAXED);
+		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b0, &g_rc.uid, &a);
+		if (r >= 0) {
+			r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b1, &g_rc.uid2, &b);
+			if (r < 0) {
+				ksceKernelFreeMemBlock(g_rc.uid);
+				g_rc.uid2 = -1;
+			}
+		}
+		if (r >= 0) {
+			g_rc.own2 = b;
+			__atomic_store_n(&g_rc.own, a, __ATOMIC_RELEASE);   /* published last */
+			mem_report_one("again cache", -1, g_rc.uid, b0);
+			mem_report_one("again cache 2nd", -1, g_rc.uid2, b1);
+			made = 1;
+		} else {
+			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+			g_rc.uid = -1;
+			/* not asked again for this app: it reads as without the cache */
+			__atomic_store_n(&g_rc.own_fail, fg, __ATOMIC_RELAXED);
+			ADD(g_rc.own_errs, 1);
+			VM_KLOGW("stage: again cache: no memory for its own blocks (0x%08x) - not "
+			         "asked again for this app", (unsigned)r);
+		}
+	}
+	return made;
+}
+
+/* Whether the again cache keeps its own blocks whatever is in front
+ * (VM_KEY_RCKEEP): the setting on and exactly one storage on, with buffers
+ * of its own (Low kernel memory: no cache at all) - none to borrow from. */
+static int rc_keep_now(void)
+{
+	int on = 0;
+
+	if (!LD(g_rc_keep) || LD(g_lowmem_set))   /* Low kernel memory: the setting has no say */
+		return 0;
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const Dev *d = &g_dev[i];
+
+		if (LD(d->enabled) && !LD(d->fallback)) {
+			if (d->shared)
+				return 0;
+			on++;
+		}
+	}
+	return on == 1;
+}
+
+/* The again cache's own block back to the system once nothing uses it
+ * (unless kept: rc_keep_now):
  * the game it was made for left the front (it quit, or went to the home
  * screen - suspended, ev 4) or another storage lends its buffers now. Made
  * again when a game in front needs it (rc_hold). What it held is dropped (a
  * new block has none of it). A request in the cache: the next tick. Worker. */
-static void rc_own_idle(void)
+static void rc_own_idle(int keep)
 {
 	SceUID uid, uid2;
 	int lent;
 
-	if (!__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE) ||
+	if (keep || !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE) ||
 	    __atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) ||
 	    __sync_lock_test_and_set(&g_rc.lock, 1))
 		return;
@@ -7072,40 +7142,22 @@ void vm_stage_worker_tick(void)
 
 	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
-	rc_own_idle();
-	/* the again cache's own block, with no other storage to lend it buffers */
-	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
-	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
-		/* two blocks, as a storage's buffers (one contiguous 384 KiB is
-		 * often not there once games run) */
-		const uint32_t b0 = RC_UNITS0 * RC_UNIT * 512, b1 = (RC_UNITS - RC_UNITS0) * RC_UNIT * 512;
-		void *a = NULL, *b = NULL;
-		int r;
+	/* the again cache's own blocks: kept while the setting says so and one
+	 * storage is on (made at once, a failure not tried again till that
+	 * changes); else made for a game that needs them, given back after */
+	{
+		static int keep_failed;
+		const int keep = rc_keep_now();
 
-		__atomic_store_n(&g_rc.want_own, 0, __ATOMIC_RELAXED);
-		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b0, &g_rc.uid, &a);
-		if (r >= 0) {
-			r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b1, &g_rc.uid2, &b);
-			if (r < 0) {
-				ksceKernelFreeMemBlock(g_rc.uid);
-				g_rc.uid2 = -1;
-			}
+		if (!keep)
+			keep_failed = 0;
+		rc_own_idle(keep);
+		if (keep && !keep_failed && LD(g_live) && !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
+			__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);
+			keep_failed = 1;                  /* cleared below when made */
 		}
-		if (r >= 0) {
-			g_rc.own2 = b;
-			__atomic_store_n(&g_rc.own, a, __ATOMIC_RELEASE);   /* published last */
-			mem_report_one("again cache", -1, g_rc.uid, b0);
-			mem_report_one("again cache 2nd", -1, g_rc.uid2, b1);
-		} else {
-			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
-
-			g_rc.uid = -1;
-			/* not asked again for this app: it reads as without the cache */
-			__atomic_store_n(&g_rc.own_fail, fg, __ATOMIC_RELAXED);
-			ADD(g_rc.own_errs, 1);
-			VM_KLOGW("stage: again cache: no memory for its own blocks (0x%08x) - off for "
-			         "this launch", (unsigned)r);
-		}
+		if (rc_own_make() && keep)
+			keep_failed = 0;
 	}
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {

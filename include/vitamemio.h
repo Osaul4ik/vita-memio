@@ -86,6 +86,7 @@ enum vm_key {
 	VM_KEY_DRIVER,         /* 0/1: the kernel plugin starts with the console (at the next start) */
 	VM_KEY_SYSAPPS,        /* 0/1: the home screen and system apps have settings of their own */
 	VM_KEY_LOWMEM,         /* 0/1: one buffer for both storages (at the next start) */
+	VM_KEY_RCKEEP,         /* 0/1: the again cache's own memory kept while one storage is on */
 	VM_KEY_COUNT
 };
 
@@ -172,6 +173,7 @@ static inline int vm_offload_direct(int v)
 #define VM_DEF_DRIVER    1   /* on; off: the next start installs nothing       */
 #define VM_DEF_SYSAPPS   1   /* on: LiveArea, Settings, ... as games: profiles, Adaptive kept */
 #define VM_DEF_LOWMEM    0   /* off: each storage its own buffers               */
+#define VM_DEF_RCKEEP    0   /* off: taken only while a game in front needs it */
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -193,6 +195,7 @@ typedef struct VmSettings {
 	int32_t driver;
 	int32_t sysapps;
 	int32_t lowmem;
+	int32_t rckeep;
 } VmSettings;
 
 /* The first seven keys, as VmState carries them (VmState is frozen, so keys
@@ -224,6 +227,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_DRIVER:
 	case VM_KEY_SYSAPPS:
 	case VM_KEY_LOWMEM:
+	case VM_KEY_RCKEEP:
 		return v == 0 || v == 1;
 	case VM_KEY_GPUSAFE:
 		return v >= VM_GPUSAFE_OFF && v <= VM_GPUSAFE_NODMA;

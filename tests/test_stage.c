@@ -6344,6 +6344,110 @@ static void test_bg_no_readahead(void)
 
 /* ---- Low kernel memory: one buffer for both storages ---------------------- */
 
+/* Keep memory for reading again (VM_KEY_RCKEEP): with one storage on, the
+ * again cache's own blocks are made at once and kept whatever is in front;
+ * another storage on: given back, its buffers borrowed; the setting off:
+ * as before (made for a game, given back after); Low kernel memory: no say. */
+static void test_rc_keep(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(0);
+	CHECK(!g_rc.own);
+	s.rckeep = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();                           /* no game: made all the same */
+	CHECK(g_rc.own && g_rc.own2 && g_rc.uid >= 0 && g_rc.uid2 >= 0 && !g_rc.want_own);
+	{
+		const uint32_t fr0 = g_rc.own_freed;
+		uint32_t h0;
+
+		/* a game reads again from them */
+		as_app(0x42);
+		fake_memtype = MEMTYPE_NC;
+		fake_meminfo_type = 0x10208006;
+		h0 = g_rc.hits;
+		rc_rounds(u, 0, 80);
+		rc_rounds(u, 7, 40);
+		CHECK(g_rc.hits - h0 >= 39 && g_rc.host == NULL);
+		/* to the home screen, and it quits: kept */
+		ra_proc_event(0x42, 4);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own && g_rc.own_freed == fr0);
+		ra_proc_event(0x42, 3);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own && g_rc.own_freed == fr0);
+		/* the setting off, nothing in front: given back */
+		s.rckeep = 0;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.uid < 0 && g_rc.uid2 < 0 && g_rc.own_freed == fr0 + 1);
+		/* on again: made again */
+		s.rckeep = 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own && g_rc.uid >= 0);
+		/* Low kernel memory set: the setting has no say (given back) */
+		s.lowmem = 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.own_freed == fr0 + 2);
+		s.lowmem = 0;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own);
+		/* another storage on: given back, its buffers lent to the game */
+		rc_host(1);
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.uid < 0 && g_rc.own_freed == fr0 + 3);
+		as_app(0x4A);
+		h0 = g_rc.hits;
+		rc_rounds(u, 0, 80);
+		rc_rounds(u, 7, 40);
+		CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA] && g_rc.hits - h0 >= 39 && !g_rc.own);
+	}
+	vm_stage_fini();
+	rc_host(0);
+	/* no memory for them: logged once, not tried again till the setting
+	 * changes; a game still asks for them on its own */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(0);
+	fake_alloc_max = 200 * 1024;
+	s.rckeep = 1;
+	vm_stage_apply(&s);
+	{
+		const uint32_t e0 = g_rc.own_errs;
+		int a0;
+
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.own_errs == e0 + 1);
+		a0 = fake_alloc_calls;
+		vm_stage_worker_tick();
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.own_errs == e0 + 1 && fake_alloc_calls == a0);
+		fake_alloc_max = 0;
+		s.rckeep = 0;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		s.rckeep = 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own && g_rc.own_errs == e0 + 1);
+	}
+	vm_stage_fini();
+	fake_alloc_max = 0;
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0;
+	fake_pid = 0;
+	free(u);
+}
+
 /* At the start, with both storages on: one staging buffer and one second
  * buffer for the two, each its own tiny reads' block; with one storage on,
  * or the switch off, each its own; all freed at the end. */
@@ -7151,6 +7255,7 @@ int main(void)
 	RUN(test_log_block);
 	RUN(test_verify_no_learning);
 	RUN(test_bg_no_readahead);
+	RUN(test_rc_keep);
 	RUN(test_lowmem_init);
 	RUN(test_lowmem_handover);
 	RUN(test_lowmem_data_right);

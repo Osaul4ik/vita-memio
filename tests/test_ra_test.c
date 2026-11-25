@@ -337,13 +337,21 @@ static void test_ev(void)
 		      e.std_rate < want + want / 100 && e.srv_rate < e.std_rate);
 	}
 	/* the model's cost, from this game's: 40 ms a MiB saved is 312/16 us a
-	 * sector; a piece for nothing what it held up here */
+	 * sector; a piece for nothing the device's, whatever it held up here */
 	memset(&e, 0, sizeof(e));
 	e.std_rate = 50000;
 	e.srv_rate = 10000;
 	e.held_each = 2500;
 	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);
-	CHECK(c.gain16[1] == 312 && c.gain16[0] == rt_cost_fixed.gain16[0] && c.waste_us == 2500);
+	CHECK(c.gain16[1] == 312 && c.gain16[0] == rt_cost_fixed.gain16[0] &&
+	      c.waste_us == rt_cost_fixed.waste_us);
+	e.held_each = 140;                           /* a round's swing: the same cost */
+	{
+		RtCost c2;
+
+		rt_ev_cost(&e, 1, &rt_cost_fixed, &c2);
+		CHECK(memcmp(&c, &c2, sizeof(c)) == 0);
+	}
 	/* off: nothing of the game's read ahead is measured now - the device's costs alone */
 	e.off = 1;
 	rt_ev_cost(&e, 1, &rt_cost_fixed, &c);

@@ -484,8 +484,13 @@ static inline void rt_hide_apply(RtCost *c, int k, uint32_t hide_pm)
 
 /* The model's cost with this game's measures where there are and read ahead
  * is on (`base`: the device's, calibrated; it alone while off): a sector from
- * the pieces saves what the standard way takes less what a served one did, a
- * piece for nothing what it held up here. */
+ * the pieces saves what the standard way takes less what a served one did.
+ * A piece for nothing stays the device's (calibrated over thousands of them):
+ * what one held up in this game swings tenfold from round to round (a few
+ * pieces, each held up by whatever the game read meanwhile - 142 to 1412 us
+ * in PCSF00024 with the rest the same), and the thresholds took turns with
+ * it (NC 2 <-> 3 <-> 8 every few seconds). On or off still goes by what they
+ * really held up (rt_ev_net); held_each is the log's. */
 static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *o)
 {
 	*o = *base;
@@ -498,8 +503,6 @@ static inline void rt_ev_cost(const RtEv *e, int k, const RtCost *base, RtCost *
 	}
 	if (e->std_rate)
 		o->piece_us[k] = (int32_t)(e->std_rate / 8);   /* a MiB -> 128 KiB */
-	if (e->held_each)
-		o->waste_us = (int32_t)e->held_each;
 }
 
 /* Kind k's counts halved: what was read long ago weighs less (a game's

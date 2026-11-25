@@ -4887,7 +4887,8 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
  *     to RC_HOLD_MAX; back to RC_HOLD once a yield pays). The yield decides,
  *     not the share read again: PCSF00024 reads again 23 % of its 32 KiB
  *     reads, each from the cache, more than one per kept read; PCSF00007 6 %,
- *     a fifth of them. A read read again counts for the size of the read it
+ *     a fifth of them; large reads need 25 % (WipEout 2048 kept them at 28 %,
+ *     about even). A read read again counts for the size of the read it
  *     lies in (a 32 KiB read inside a 128 KiB one: for the 128 KiB reads), the
  *     size whose reads are kept. A kept read costs more than
  *     its copy: the copier woken, the game's buffer mapped, then the DMA
@@ -4897,9 +4898,12 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
  *     for RA_MAX_AGE_US, of the same storage switch (epoch) only. */
 static const uint32_t rc_on_pm[2] = { 100u, 100u };    /* 32 KiB, large  */
 static const uint32_t rc_off_pm[2] = { 50u, 50u };
-static const uint32_t rc_yield_pm[2] = { 300u, 150u };
+static const uint32_t rc_yield_pm[2] = { 300u, 250u };
 #define RC_ROUND   128u                    /* reads of a size between two looks  */
-#define RC_YIELD_N 64u                     /* kept between two looks at the yield */
+/* kept between two looks at the yield: long enough for a game's spells
+ * of reading nothing again (Gravity Rush: 76 % read again over the
+ * session, yet off 8 times with 64) */
+#define RC_YIELD_N 128u
 #define RC_HOLD    4u                      /* looks off for a poor yield, doubled */
 #define RC_HOLD_MAX 32u                    /* ... each time in a row, up to this  */
 

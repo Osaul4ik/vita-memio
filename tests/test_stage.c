@@ -5432,7 +5432,7 @@ static void test_again_cache(void)
 		const uint32_t y0 = g_rc.yoff_k[0], h0 = g_rc.hits;
 		int was_on = 0;
 
-		for (int i = 0; i < 200 && g_rc.yoff_k[0] == y0; i++) {
+		for (int i = 0; i < 400 && g_rc.yoff_k[0] == y0; i++) {
 			const uint32_t at = (uint32_t)i * 200u % 3800u;
 
 			CHECK(rd_ok(u, at, 64));
@@ -5468,7 +5468,7 @@ static void test_again_cache(void)
 		const uint32_t k0 = g_rc.kept_k[1], h0 = g_rc.hits_k[1], s0 = g_rc.kept_k[0];
 		const uint32_t y0 = g_rc.yoff_k[1];
 
-		for (int i = 0; i < 300; i++) {
+		for (int i = 0; i < 600; i++) {
 			const uint32_t at = (uint32_t)i * 384u % 3700u;
 
 			CHECK(rd_ok(u, at, 256));
@@ -5478,6 +5478,32 @@ static void test_again_cache(void)
 		/* past several looks at its yield, which the 32 KiB parts pay */
 		CHECK(g_rc.kept_k[1] - k0 >= 2 * RC_YIELD_N && g_rc.hits_k[1] - h0 >= 2 * RC_YIELD_N);
 		CHECK(g_rc.yoff_k[1] == y0);
+	}
+	vm_stage_fini();
+	rc_host(0);
+	/* the same, but only every fifth 128 KiB read has a 32 KiB part read
+	 * again: enough to come on (10 %), too little to pay (25 %) - off */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(1);
+	as_app(0x42);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t y0 = g_rc.yoff_k[1];
+		int was_on = 0;
+
+		for (int i = 0; i < 1500 && g_rc.yoff_k[1] == y0; i++) {
+			const uint32_t at = (uint32_t)i * 384u % 3700u;
+
+			CHECK(rd_ok(u, at, 256));
+			if (i % 5 == 0)
+				CHECK(rd_ok(u, at + 64, 64));
+			__atomic_fetch_add(&fake_now_us, RA_MAX_AGE_US, __ATOMIC_RELAXED);  /* (no older hits) */
+			was_on |= g_rc.on[1];
+		}
+		CHECK(was_on && g_rc.yoff_k[1] == y0 + 1 && !g_rc.on[1]);
 	}
 	vm_stage_fini();
 	rc_host(0);

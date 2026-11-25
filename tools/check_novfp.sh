@@ -17,7 +17,7 @@ for f in "$@"; do
 	test -s "$f" || { echo "check-novfp: missing $f"; exit 1; }
 	set -- $("$od" -d "$f" | awk '
 		/^[0-9a-f]+ <.*>:$/ { fn = $2 }
-		/^ +[0-9a-f]+:\t/ {
+		/^ *[0-9a-f]+:\t/ {
 			n = split($0, a, "\t")
 			if (n < 3) next
 			all++

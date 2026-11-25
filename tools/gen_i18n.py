@@ -85,7 +85,7 @@ T = [
     ("VM_I18N_ROW_RCKEEP",
      "Keep memory for reading again"),
     ("VM_I18N_HINT_RCKEEP",
-     "For when only one storage is on. Commercial games often read the same graphics data again; the plugin gives it to them from memory, which needs 384 KiB (with both storages on, the other one's buffers). On: kept, so it is always there - a storage you switch off leaves its buffers for it, or it is set aside at once. Off: taken while a game needs it, if there is room then, and given back when you leave the game. Not shown with Low kernel memory."),
+     "For when only one storage is on. Commercial games often read the same graphics data again; the plugin gives it to them from memory, which needs 384 KiB (with both storages on, the other one's buffers). On: kept, so it is always there - a storage you switch off leaves its buffers for it, or it is set aside at once. Off: taken while a game needs it, if there is room then, and given back when you leave the game. Not shown with Low kernel memory on and both storages."),
     ("VM_I18N_HINT_STATUS_NO_KERNEL",
      "vitamemio_kernel.skprx is not running. Check that it is in ur0:tai/ and listed under *KERNEL in ur0:tai/config.txt, then restart the console."),
     ("VM_I18N_ROW_SMALL",

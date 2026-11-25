@@ -52,8 +52,8 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 |---|---|---|
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
-| Low kernel memory | Shown while both storages are on. They share one set of buffers, so the plugin needs 384 KiB less memory, but part of read ahead is lost. See below. Takes effect after a restart | Off |
-| Keep memory for reading again | For when only one storage is on: the 384 KiB that *reading again from memory* (see below) needs are kept, so they are always there. If you switch a storage off, its buffers stay for this; if only one storage was on from the start, the memory is set aside at once. With both storages on it changes nothing. Not shown with *Low kernel memory* | Off |
+| Low kernel memory | Shown only while both storages are on (with one storage there is nothing to share, so it does nothing). They share one set of buffers, so the plugin needs 384 KiB less memory, but part of read ahead is lost. See below. Takes effect after a restart | Off |
+| Keep memory for reading again | For when only one storage is on: the 384 KiB that *reading again from memory* (see below) needs are kept, so they are always there. If you switch a storage off, its buffers stay for this; if only one storage was on from the start, the memory is set aside at once. With both storages on it changes nothing. Not shown while *Low kernel memory* is on with both storages | Off |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |

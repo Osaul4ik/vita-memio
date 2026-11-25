@@ -543,7 +543,9 @@ static int xml_hook(void *out, void *buf, int size, void *a4)
 		const int up = get_state(&st);
 		const int safe = up && st.disabled == VM_DIS_SAFE;
 		const int both = up && vmGetSetting(VM_KEY_SD2VITA) == 1 && vmGetSetting(VM_KEY_MEMCARD) == 1;
-		const int keep_row = up && vmGetSetting(VM_KEY_LOWMEM) != 1;
+		/* Low kernel memory decides only with both storages on: set with
+		 * one, the again cache's own memory is still this row's */
+		const int keep_row = up && !(both && vmGetSetting(VM_KEY_LOWMEM) == 1);
 		const int hl = X_LEN(X_PAGE_OPEN) + (safe ? X_LEN(X_PAGE_SAFE) : 0) +
 		               X_LEN(X_PAGE_STORAGES) + (both ? X_LEN(X_PAGE_LOWMEM) : 0) +
 		               (keep_row ? X_LEN(X_PAGE_RCKEEP) : 0) + X_LEN(X_PAGE_REST);

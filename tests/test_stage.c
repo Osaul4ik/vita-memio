@@ -3087,6 +3087,7 @@ static void test_readahead(void)
 	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
 	for (uint32_t i = 0; i < 6; i++)
 		CHECK(rd_ok(u, i * 256, 256));
+	ra_settled(d);                            /* (a piece still being read: a later tick) */
 	s.readahead = 0;
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
@@ -6439,13 +6440,19 @@ static void test_rc_keep(void)
 		vm_stage_apply(&s);
 		vm_stage_worker_tick();
 		CHECK(g_rc.own && g_rc.uid >= 0);
-		/* Low kernel memory set: the setting has no say (given back) */
+		/* Low kernel memory set with one storage: not in effect, kept */
 		s.lowmem = 1;
 		vm_stage_apply(&s);
 		vm_stage_worker_tick();
-		CHECK(!g_rc.own && g_rc.own_freed == fr0 + 2);
+		CHECK(g_rc.own && g_rc.own_freed == fr0 + 1);
 		s.lowmem = 0;
 		vm_stage_apply(&s);
+		/* in effect (both storages shared their buffers at the start): the
+		 * setting has no say, given back */
+		ST(g_share_on, 1);
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.own_freed == fr0 + 2);
+		ST(g_share_on, 0);
 		vm_stage_worker_tick();
 		CHECK(g_rc.own);
 		/* another storage on: given back, its buffers lent to the game */

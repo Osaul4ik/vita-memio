@@ -277,15 +277,16 @@ static struct {
 } g_sh = { .uid = -1, .uid2 = -1 };
 static volatile int g_lowmem_set;          /* the setting                      */
 static volatile int g_rc_keep;             /* VM_KEY_RCKEEP                    */
+static int          g_share_on;            /* in effect for this start         */
 /* The again cache keeps memory (VM_KEY_RCKEEP), unless Low kernel memory is
- * set (then it has no say): a storage switched off leaves its buffers to
- * the cache (rc_lends), and with one storage alone the cache has blocks of
- * its own (rc_keep_now). */
+ * in effect (both storages on at the start; then it has no say - set with
+ * one storage, it changes nothing): a storage switched off leaves its
+ * buffers to the cache (rc_lends), and with one storage alone the cache has
+ * blocks of its own (rc_keep_now). */
 static int rc_keep_on(void)
 {
-	return LD(g_rc_keep) && !LD(g_lowmem_set);
+	return LD(g_rc_keep) && !LD(g_share_on);
 }
-static int          g_share_on;            /* in effect for this start         */
 
 static inline volatile int *dbusy(Dev *d)
 {

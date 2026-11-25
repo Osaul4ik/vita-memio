@@ -7235,8 +7235,8 @@ void vm_stage_worker_tick(void)
 			__atomic_store_n(&d->pipe_ready, 1, __ATOMIC_RELEASE);
 		} else if (!wanted && d->pipe_made) {
 			if (pipe_retire(d))
-				VM_KLOGI("stage: dev %d overlapped reads off - helper, copier and buffer "
-				         "released", i);
+				VM_KLOGI("stage: dev %d overlapped reads off - helper and copier released "
+				         "(buffers kept)", i);
 		}
 
 		/* read ahead: its thread, once the helper and buffers are there

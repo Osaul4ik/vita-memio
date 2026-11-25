@@ -936,8 +936,8 @@ static uint32_t pipe_cap(int i)
 /* The parts for k and a last part of x sectors, each earlier one as large as
  * it may be; s[0] takes the rest. 1 if that covers n exactly with every part
  * within its bounds. */
-static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint32_t inv,
-                    uint64_t cmd, uint32_t s[PIPE_MAX_PARTS])
+static int pipe_fit_min(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint32_t inv,
+                        uint64_t cmd, uint32_t s[PIPE_MAX_PARTS], uint32_t mint)
 {
 	uint32_t sum = x;
 
@@ -950,12 +950,12 @@ static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uin
 		if (m > pipe_cap(i))
 			m = pipe_cap(i);
 		if (i == 0) {
-			if (sum >= n || n - sum > m || n - sum < PIPE_MIN_TAIL)
+			if (sum >= n || n - sum > m || n - sum < mint)
 				return 0;
 			s[0] = n - sum;
 			return 1;
 		}
-		if (m < PIPE_MIN_TAIL)
+		if (m < mint)
 			return 0;
 		s[i] = (uint32_t)m;
 		sum += s[i];
@@ -963,9 +963,16 @@ static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uin
 	return 0;
 }
 
-/* The plan for k in [kmin, kmax] and the given costs. */
-static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, int kmin, int kmax,
-                           uint32_t out[PIPE_MAX_PARTS])
+static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint32_t inv,
+                    uint64_t cmd, uint32_t s[PIPE_MAX_PARTS])
+{
+	return pipe_fit_min(n, k, x, io, cp, inv, cmd, s, PIPE_MIN_TAIL);
+}
+
+/* The plan for k in [kmin, kmax] and the given costs, every part at least
+ * mint sectors. */
+static int pipe_plan_costs_min(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, int kmin,
+                               int kmax, uint32_t out[PIPE_MAX_PARTS], uint32_t mint)
 {
 	uint64_t best = ~(uint64_t)0;
 	const uint32_t inv = recip(cp);
@@ -973,7 +980,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 
 	for (int k = kmin; k <= kmax; k++) {
 		/* k is 2 or 3: constant divisors, which the compiler multiplies */
-		uint32_t s[PIPE_MAX_PARTS], lo = PIPE_MIN_TAIL, hi = k == 2 ? n / 2 : k == 3 ? n / 3 : n / k;
+		uint32_t s[PIPE_MAX_PARTS], lo = mint, hi = k == 2 ? n / 2 : k == 3 ? n / 3 : n / k;
 		uint32_t x = 0;
 
 		/* The earlier parts only grow with x, so the x that fit form one
@@ -982,7 +989,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 		while (lo <= hi) {
 			uint32_t mid = lo + (hi - lo) / 2, t[PIPE_MAX_PARTS], sum = mid;
 
-			if (pipe_fit(n, k, mid, io, cp, inv, cmd, s)) {
+			if (pipe_fit_min(n, k, mid, io, cp, inv, cmd, s, mint)) {
 				x = mid;
 				hi = mid - 1;
 				continue;
@@ -998,12 +1005,12 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 				t[i] = (uint32_t)(m > pipe_cap(i) ? pipe_cap(i) : m);
 				sum += t[i];
 			}
-			if (sum + PIPE_MIN_TAIL > n)
+			if (sum + mint > n)
 				hi = mid - 1;               /* part 0 left too small */
 			else
 				lo = mid + 1;               /* the parts do not reach n */
 		}
-		if (x && pipe_fit(n, k, x, io, cp, inv, cmd, s)) {
+		if (x && pipe_fit_min(n, k, x, io, cp, inv, cmd, s, mint)) {
 			uint64_t cost = (uint64_t)k * cmd + (uint64_t)x * cp;
 
 			if (cost < best) {
@@ -1014,7 +1021,7 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 			}
 		}
 	}
-	if (!best_k && kmin <= 2 && n >= 2 * PIPE_MIN_TAIL) {
+	if (!best_k && kmin <= 2 && n >= 2 * mint) {
 		/* no part can be hidden (a copy slower than the card): halves */
 		out[1] = n / 2 > PIPE_TAIL_SECTORS ? PIPE_TAIL_SECTORS : n / 2;
 		out[0] = n - out[1];
@@ -1023,20 +1030,28 @@ static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, i
 	return best_k;
 }
 
+static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, int kmin, int kmax,
+                           uint32_t out[PIPE_MAX_PARTS])
+{
+	return pipe_plan_costs_min(n, io, cp, cmd, kmin, kmax, out, PIPE_MIN_TAIL);
+}
+
 /* Auto: the learnt costs (built-in ones until measured), 2 or 3 parts, or
  * none when one piece is as fast (small reads, a cheap copy).
  * Fixed: the built-in costs, 2 parts, or 3 with GPU-safe reads (2 if 3 do
  * not fit this size). */
-static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+/* ... every part at least mint sectors (a shortest last part: PIPE_MIN_TAIL) */
+static int pipe_plan_min(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS],
+                         uint32_t mint)
 {
 	const uint64_t def_cp = clean ? PIPE_DEF_CPCL_NS : PIPE_DEF_CP_NS;
 	int k;
 
 	if (LD(g_pipeline) == VM_PIPE_FIXED) {
-		k = pipe_plan_costs(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, clean ? 3 : 2,
-		                    clean ? 3 : 2, out);
+		k = pipe_plan_costs_min(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, clean ? 3 : 2,
+		                        clean ? 3 : 2, out, mint);
 		if (!k && clean)
-			k = pipe_plan_costs(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, 2, 2, out);
+			k = pipe_plan_costs_min(n, PIPE_DEF_IO_NS, def_cp, PIPE_DEF_CMD_NS, 2, 2, out, mint);
 		return k;
 	}
 	{
@@ -1049,15 +1064,20 @@ static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_
 		/* any split costs at least one more command and a shortest last
 		 * part: when that already loses to one piece, no plan is worked
 		 * out (it takes 64-bit divisions, on every small read) */
-		if ((uint64_t)n * cp <= cmd + (uint64_t)PIPE_MIN_TAIL * cp + PIPE_HANDOFF_NS)
+		if ((uint64_t)n * cp <= cmd + (uint64_t)mint * cp + PIPE_HANDOFF_NS)
 			return 0;
-		k = pipe_plan_costs(n, io, cp, cmd, 2, PIPE_MAX_PARTS, out);
+		k = pipe_plan_costs_min(n, io, cp, cmd, 2, PIPE_MAX_PARTS, out, mint);
 		/* in one piece: one command and the whole copy, nothing to hand off */
 		if (k >= 2 && (uint64_t)k * cmd + (uint64_t)out[k - 1] * cp + PIPE_HANDOFF_NS >=
 		              cmd + (uint64_t)n * cp)
 			k = 0;
 		return k;
 	}
+}
+
+static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+{
+	return pipe_plan_min(d, n, clean, out, PIPE_MIN_TAIL);
 }
 
 /* From one split read, the card's cost per sector and per command: the head
@@ -1234,6 +1254,8 @@ static volatile int32_t  g_dma_last_err;
 /* read ahead's and the again cache's copies the DMA controller makes whole,
  * done in the request's own thread, not on the copier (ra_copy_off) */
 static volatile uint32_t g_dma_here, g_dma_here_kib;
+/* ... and staged reads' (stage_xfer_one) */
+static volatile uint32_t g_dma_here_st, g_dma_here_st_kib;
 
 static int dma_state(void)
 {
@@ -4322,13 +4344,15 @@ static void off_memtype(OffMap *om)
 }
 
 /* Whether the DMA controller would take each of k parts (src, sz sectors)
- * into p whole, as dma_try decides: then this thread only waits for it, as it
- * would wait for the copier. */
-static int dma_whole(const uint8_t *p, const void *const *src, const uint32_t *sz, uint32_t k)
+ * into p whole, as dma_try decides, and nothing is left for the CPU after it
+ * (GPU-safe reads clean the cache after a DMA copy unless "Non-DMA"): then
+ * this thread only waits for the controller, as the copier would. */
+static int dma_whole(const uint8_t *p, const void *const *src, const uint32_t *sz, uint32_t k,
+                     int clean)
 {
 	uint32_t at = 0;
 
-	if (!k || dma_state() != VM_DMA_ON)
+	if (!k || dma_state() != VM_DMA_ON || (clean && LD(g_gpu_safe) != VM_GPUSAFE_NODMA))
 		return 0;
 	for (uint32_t i = 0; i < k; i++) {
 		const uint32_t b = sz[i] * 512;
@@ -4353,7 +4377,7 @@ static void ra_copy_off(Dev *d, uint8_t *p, const void *const *src, const uint32
 	uint32_t done = 0, n = 0;
 	int nomap = 1;
 
-	if (dma_whole(p, src, sz, k)) {
+	if (dma_whole(p, src, sz, k, clean)) {
 		const uint32_t c0 = ksceKernelGetSystemTimeLow();
 
 		for (uint32_t i = 0; i < k; i++) {
@@ -5745,64 +5769,77 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 				ADD(d->tm.wr_copy_us, t2 - t1);
 				ADD(d->tm.wr_io_us, t3 - t2);
 			}
-		} else if (off) {
-			/* Copied on the system core, in parts as pipe_plan says (one
-			 * without overlapped reads). */
-			uint32_t done = 0, mine_n = 0;
+		} else {
+			/* Copy on the system core, unless the DMA controller can take
+			 * every part whole: then this thread only waits for it, as the
+			 * copier would - without the mapping and two hand-overs - and the
+			 * card still reads the next part meanwhile (pipe_run). For that
+			 * the split keeps every part a DMA copy (VM_DMA_MIN_BYTES up:
+			 * a shorter last part would be the CPU's, on this core). */
+			const int try_here = off && dma_state() == VM_DMA_ON &&
+			                     !(clean && LD(g_gpu_safe) != VM_GPUSAFE_NODMA) &&
+			                     !((uintptr_t)p & (VM_DMA_ALIGN - 1u));
+			uint32_t done = 0;
+			int here = 0;
 
+			/* the parts: as pipe_plan says, else one */
 			if (!(pipe &&
 			      n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
-			      (k = pipe_plan(d, n, plan_clean, sz)) >= 2)) {
+			      (k = pipe_plan_min(d, n, plan_clean, sz,
+			                         try_here ? VM_DMA_MIN_BYTES / 512 : PIPE_MIN_TAIL)) >= 2)) {
 				k = 1;
 				sz[0] = n;
 			}
-			/* the buffer's memory type, read here: the copier, which maps
-			 * it, is not in this process */
-			off_memtype(&om);
-			ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &om,
-			                  left == n, &done, &mine_n);
-			own += mine_n;
+			if (try_here) {
+				const void *src[PIPE_MAX_PARTS] = { 0 };
+
+				for (int i = 0; i < k; i++)
+					src[i] = (i & 1) ? d->buf2 : d->buf;
+				here = dma_whole(p, src, sz, (uint32_t)k, clean);
+			}
+			if (off && !here) {
+				uint32_t mine_n = 0;
+
+				/* the buffer's memory type, read here: the copier, which
+				 * maps it, is not in this process */
+				off_memtype(&om);
+				ret = offload_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats,
+				                  &om, left == n, &done, &mine_n);
+				own += mine_n;
+			} else if (k >= 2) {
+				/* Overlapped, this chunk in 2-3 parts (see pipe_run). */
+				ret = pipe_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats,
+				               &done);
+				own += done;
+			} else {
+				ret = io(ref, part, sector, d->buf, n);
+				if (ret >= 0) {
+					if (stats)
+						t2 = ksceKernelGetSystemTimeLow();
+					copy_out(p, d->buf, bytes, clean);   /* the clean counted as copy time */
+					own += n;
+					if (stats) {
+						t3 = ksceKernelGetSystemTimeLow();
+						ADD(d->tm.rd_sectors, n);
+						ADD(d->tm.rd_io_us, t2 - t1);
+						ADD(d->tm.rd_copy_us, t3 - t2);
+					}
+				}
+			}
 			if (ret < 0) {
 				p += (size_t)done * 512;    /* the parts already copied stay */
 				sector += done;
 				left -= done;
 				break;
+			}
+			if (here) {
+				ADD(g_dma_here_st, 1);
+				ADD(g_dma_here_st_kib, n / 2);
 			}
 			if (k >= 2)
 				ADD(g_pipe_reads, 1);
 			if (k > 2)
 				ADD(g_pipe_reads3, 1);
-		} else if (pipe &&
-		           n >= (mode == VM_PIPE_AUTO ? PIPE_MIN_AUTO : PIPE_MIN_SECTORS) &&
-		           (k = pipe_plan(d, n, plan_clean, sz)) >= 2) {
-			/* Overlapped, this chunk in 2-3 parts (see pipe_run). */
-			uint32_t done = 0;
-
-			ret = pipe_run(d, io, ref, part, sector, p, sz, (uint32_t)k, clean, stats, &done);
-			own += done;
-			if (ret < 0) {
-				p += (size_t)done * 512;    /* the parts already copied stay */
-				sector += done;
-				left -= done;
-				break;
-			}
-			ADD(g_pipe_reads, 1);
-			if (k > 2)
-				ADD(g_pipe_reads3, 1);
-		} else {
-			ret = io(ref, part, sector, d->buf, n);
-			if (ret < 0)
-				break;
-			if (stats)
-				t2 = ksceKernelGetSystemTimeLow();
-			copy_out(p, d->buf, bytes, clean);   /* the clean counted as copy time */
-			own += n;
-			if (stats) {
-				t3 = ksceKernelGetSystemTimeLow();
-				ADD(d->tm.rd_sectors, n);
-				ADD(d->tm.rd_io_us, t2 - t1);
-				ADD(d->tm.rd_copy_us, t3 - t2);
-			}
 		}
 		if (verify && io(rd_ref, part, sector, shadow, n) >= 0) {
 			ADD(d->st.verified, 1);
@@ -7016,11 +7053,12 @@ void vm_stage_worker_tick(void)
 		         (unsigned)last_cleaned, (unsigned)LD(g_gpu_dma_kib), (unsigned)(last_max / 2));
 		if (LD(g_dma_want)) {
 			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms; %u of 16-32 KiB in %u ms), "
-			         "refused %u; in the request thread %u reads %u MiB",
+			         "refused %u; in the request thread: R/A %u (%u MiB), staged %u (%u MiB)",
 			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
 			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_mid),
 			         (unsigned)(LD(g_dma_mid_us) / 1000), (unsigned)LD(g_dma_errors),
-			         (unsigned)LD(g_dma_here), (unsigned)(LD(g_dma_here_kib) / 1024));
+			         (unsigned)LD(g_dma_here), (unsigned)(LD(g_dma_here_kib) / 1024),
+			         (unsigned)LD(g_dma_here_st), (unsigned)(LD(g_dma_here_st_kib) / 1024));
 		}
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
 		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),

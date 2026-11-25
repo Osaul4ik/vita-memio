@@ -175,7 +175,7 @@ static void reset(void)
 	g_stats = 1;                              /* most tests look at the figures */
 	g_gpu_safe = 0;
 	g_dcache_clean = NULL;
-	g_gpu_cleaned_kib = g_nc_stock_kib = 0;
+	g_gpu_cleaned_kib = g_nc_stock_kib = g_gpu_dma_kib = 0;
 	g_pipeline = 0;
 	g_pipe_reads = g_pipe_reads3 = g_rd_max = g_pipe_waits = g_pipe_wait_us = 0;
 	memset(io_bufs, 0, sizeof(io_bufs));
@@ -195,6 +195,7 @@ static void reset(void)
 	g_dma_small = g_dma_small_kib = g_dma_small_half = g_dma_unal = g_dma_unal_kib = 0;
 	g_dma_last_err = 0;
 	g_dma_here = g_dma_here_kib = 0;
+	g_dma_here_st = g_dma_here_st_kib = 0;
 	g_dcache_cinv = NULL;
 }
 
@@ -2520,6 +2521,87 @@ static int rd_ok(uint8_t *u, uint32_t at, uint32_t n)
 	return rd(u, at, n) == 0 && memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0;
 }
 
+/* DMA copy on and copy on the system core: a staged read whose every part the
+ * controller takes whole is copied in the request thread - no mapping,
+ * nothing on the copier - split as before (the helper reads the next part
+ * meanwhile); anything the CPU would copy or clean still goes to the copier. */
+static void test_dma_staged_here(void)
+{
+	static const uint32_t at[] = { 100, 1700, 900, 2600, 300, 3300 };
+	uint8_t *const a = line_buf(512 * 512 + 64);
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+
+	for (int pm = 0; pm < 2; pm++) {
+		const int pmode = pm ? VM_PIPE_FIXED : VM_PIPE_AUTO;
+		uint32_t off0;
+		int here0, calls0;
+
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_ALL, pmode);
+		s.readahead = VM_RA_OFF;                  /* staged reads only */
+		s.dmacopy = 1;
+		vm_stage_apply(&s);
+		vm_stage_worker_tick();
+		g_dmac_memcpy = fake_dmac;
+		dmac_calls = dmac_fail = dmac_corrupt = dmac_here = 0;
+		use_copy_out = 1;
+		fake_pid = 0x42;
+		fake_memtype = 0xD000;
+		here0 = __atomic_load_n(&io_here, __ATOMIC_RELAXED);
+		calls0 = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+		for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++)
+			CHECK(rd_ok(a, at[i], 256));
+		CHECK(g_dma_here_st == 6 && g_dma_here_st_kib == 6 * 128 && g_off_reads == 0);
+		CHECK(fake_usermap_calls == 0 && dmac_here >= 6 && d->st.errors == 0);
+		/* Fixed splits each in two, every part a DMA copy: this thread
+		 * read the first, the helper the second */
+		if (pm) {
+			CHECK(g_pipe_reads == 6 && io_here - here0 == 6 && io_calls - calls0 == 12);
+			for (int i = 0; i < 2; i++)
+				CHECK(io_ns[i] >= VM_DMA_MIN_BYTES / 512);
+		}
+		/* off a cache line: the copier, as before */
+		off0 = g_off_reads;
+		CHECK(rd_ok(a + 4, 500, 256) && g_off_reads == off0 + 1 && g_dma_here_st == 6);
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+		/* a read the card fails: the error as before, nothing left behind */
+		fail_at_call = io_calls + 1;
+		CHECK(rd(a, 700, 256) != 0 || d->fallback);
+		fail_at_call = 0;
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+		use_copy_out = 0;
+		vm_stage_fini();
+	}
+
+	/* GPU-safe "All": the CPU cleans after each DMA copy - the copier's */
+	reset();
+	ra_settings(&s, 1, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	s.readahead = VM_RA_OFF;
+	s.gpusafe = VM_GPUSAFE_ALL;
+	s.dmacopy = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	g_dcache_clean = fake_clean;
+	g_dmac_memcpy = fake_dmac;
+	use_copy_out = 1;
+	fake_pid = 0x42;
+	fake_memtype = 0xD000;
+	CHECK(rd_ok(a, 100, 256) && g_dma_here_st == 0 && g_off_reads == 1);
+	/* "Non-DMA": nothing to clean after it - here */
+	s.gpusafe = VM_GPUSAFE_NODMA;
+	vm_stage_apply(&s);
+	CHECK(rd_ok(a, 1700, 256) && g_dma_here_st == 1 && g_off_reads == 1);
+	/* DMA copy off: the copier */
+	s.dmacopy = 0;
+	vm_stage_apply(&s);
+	CHECK(rd_ok(a, 900, 256) && g_dma_here_st == 1 && g_off_reads == 2);
+	CHECK(fake_usermap_live == 0 && sems_empty(d));
+	use_copy_out = 0;
+	vm_stage_fini();
+	free(a);
+}
+
 static void test_readahead(void)
 {
 	uint8_t *u = user_buf(1100), *w = user_buf(256);
@@ -2740,6 +2822,27 @@ static void test_readahead(void)
 				CHECK(rd_ok(a, 400 + i * 128, 128));
 			CHECK(g_dma_here == here0 && g_off_reads > off0);
 		}
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+		use_copy_out = 0;
+		vm_stage_fini();
+		free(a);
+	}
+	/* GPU-safe "All": the CPU cleans after each DMA copy - the copier's */
+	{
+		uint8_t *const a = line_buf(128 * 512 + 64);
+
+		reset();
+		ra_settings(&s, 1, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+		s.gpusafe = VM_GPUSAFE_ALL;
+		s.dmacopy = 1;
+		vm_stage_apply(&s);
+		g_dmac_memcpy = fake_dmac;
+		use_copy_out = 1;
+		fake_pid = 0x42;
+		fake_memtype = 0xD000;
+		for (uint32_t i = 0; i < 10; i++)
+			CHECK(rd_ok(a, 400 + i * 128, 128));
+		CHECK(g_ra_hits == 5 && g_dma_here == 0 && g_dma_here_st == 0);
 		CHECK(fake_usermap_live == 0 && sems_empty(d));
 		use_copy_out = 0;
 		vm_stage_fini();
@@ -6838,6 +6941,7 @@ int main(void)
 	RUN(test_every_switch_on_the_fly);
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
+	RUN(test_dma_staged_here);
 	RUN(test_ra_slow_stream);
 	RUN(test_fewer_pieces);
 	RUN(test_read_order);

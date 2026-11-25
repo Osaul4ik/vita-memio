@@ -11,6 +11,7 @@ extern unsigned fake_alloc_type_fail; /* > 0: a block of this type refused      
 extern unsigned fake_block_type[64];  /* each block's type                        */
 extern int fake_alloc_fail_after;     /* > 0: that many more made, then refused  */
 extern int fake_alloc_fail_nth;       /* > 0: only the call that many on refused */
+extern int fake_sync_calls;           /* ksceIoSyncByFd calls */
 unsigned fake_block_size(int uid);
 extern int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 extern int fake_rename_fail;          /* ksceIoRename fails (power cut after remove) */

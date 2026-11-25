@@ -34,7 +34,9 @@ static void test_guard(void)
 	/* none yet: not a start that never finished */
 	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == 0 && len == 0 && size_of(dir) == -1);
 	/* a start, then the home screen: one byte, in place */
+	fake_sync_calls = 0;
 	CHECK(vm_guard_write(PATH, DIR, '1', &len) == 0 && len == 1 && size_of(dir) == 1);
+	CHECK(fake_sync_calls == 1);             /* on the card before a hard reset */
 	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '1' && len == 1);
 	CHECK(vm_guard_write(PATH, DIR, '0', &len) == 0 && size_of(dir) == 1);
 	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '0' && !strcmp(txt, "0"));

@@ -162,6 +162,7 @@ static int power_request(int which)
 	if (first) {   /* a nested one (the apps' call into the driver's) goes straight on */
 		int quiet;
 
+		vm_klog_set_sync(1);              /* its line on the card before the reset */
 		/* the worker's round finished: no tuning, profile, settings or log
 		 * file being written; it writes none from here on */
 		for (int t = 0; t < 1000 && __atomic_load_n(&g_worker_busy, __ATOMIC_SEQ_CST); t++)
@@ -345,6 +346,7 @@ static void guard_tick(void)
 		if (guard_write('0') != VM_OK)
 			VM_KLOGW("boot guard: '0' not written - the next start will be safe mode");
 		g_guard_done = 1;
+		vm_klog_set_sync(0);              /* the start is past: lines as usual */
 		break;
 	default:
 		break;
@@ -638,6 +640,8 @@ int module_start(SceSize argc, const void *args)
 		         "off this start");
 	shell_lookup_init();
 	frames_lookup_init();
+	VM_KLOGI("start: boot guard %s at %u ms, the storage hooks next",
+	         g_guard_armed ? "armed" : "NOT armed", (unsigned)uptime_ms());
 
 	if (vm_stage_init() != VM_OK) {
 		g_disabled = VM_DIS_HOOKS;
@@ -646,6 +650,8 @@ int module_start(SceSize argc, const void *args)
 		power_hooks_init();
 	}
 	start_worker();
+	VM_KLOGI("start: done at %u ms, every transfer the standard way until the home screen",
+	         (unsigned)uptime_ms());
 	return SCE_KERNEL_START_SUCCESS;
 }
 

@@ -581,6 +581,16 @@ int ksceIoWrite(SceUID fd, const void *buf, SceSize n)
 	return (int)write(fd, buf, n);
 }
 
+int fake_sync_calls;
+
+int ksceIoSyncByFd(SceUID fd, int *status)
+{
+	fake_sync_calls++;
+	if (status)
+		*status = 0;
+	return fsync(fd);
+}
+
 int ksceIoClose(SceUID fd)
 {
 	if (fd == fake_tune_fd)

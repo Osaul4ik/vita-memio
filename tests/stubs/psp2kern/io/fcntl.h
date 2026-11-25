@@ -11,6 +11,7 @@ int ksceIoWrite(SceUID fd, const void *buf, SceSize n);
 int ksceIoClose(SceUID fd);
 int ksceIoRemove(const char *path);
 int ksceIoRename(const char *from, const char *to);
+int ksceIoSyncByFd(SceUID fd, int *status);
 #define SCE_SEEK_SET 0
 #define SCE_SEEK_CUR 1
 #define SCE_SEEK_END 2

@@ -47,6 +47,8 @@ void vm_klog_fini(void);
 /* Logging on (1) or off (0), from the settings. Lines logged before the first
  * call are kept and written by it if logging is on. */
 void vm_klog_set_enabled(int on);
+/* Sync the file after every line (on at start: see klog.c). */
+void vm_klog_set_sync(int on);
 
 void vm_klog(int level, const char *fmt, ...);
 /* The same with a va_list (the HUD module logs through it, kernel/hud_link.h). */

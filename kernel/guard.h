@@ -64,6 +64,13 @@ static inline int vm_guard_write(const char *path, const char *dir, char c, int 
 			return fd;
 	}
 	w = ksceIoWrite(fd, &c, 1);
+	if (w == 1) {
+		int st;
+
+		/* on the card now: a hard reset right after (a start that hangs)
+		 * must still find the '1' */
+		ksceIoSyncByFd(fd, &st);
+	}
 	ksceIoClose(fd);
 	if (w != 1)
 		return -1;

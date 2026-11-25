@@ -41,6 +41,11 @@ static int  g_early_n;
 static void lock(void)   { if (g_mtx >= 0) ksceKernelLockMutex(g_mtx, 1, NULL); }
 static void unlock(void) { if (g_mtx >= 0) ksceKernelUnlockMutex(g_mtx, 1); }
 
+/* Every line on the card at once (a sync after each), while the console
+ * starts: a start that hangs and needs a hard reset still leaves its lines.
+ * main.c clears it once the start is good. */
+static int g_sync = 1;
+
 /* ---- file plumbing (best-effort) ---------------------------------------- */
 
 static void file_open_locked(void)
@@ -90,6 +95,11 @@ static void file_write_locked(const char *line, int len)
 		return;
 	}
 	g_file_bytes += (uint32_t)w1 + (uint32_t)w2;
+	if (g_sync) {
+		int st;
+
+		ksceIoSyncByFd(g_fd, &st);        /* kept through a hard reset */
+	}
 }
 
 /* ---- public API --------------------------------------------------------- */
@@ -129,6 +139,13 @@ void vm_klog_set_enabled(int on)
 		}
 		g_early_n = 0;
 	}
+	unlock();
+}
+
+void vm_klog_set_sync(int on)
+{
+	lock();
+	g_sync = on ? 1 : 0;
 	unlock();
 }
 

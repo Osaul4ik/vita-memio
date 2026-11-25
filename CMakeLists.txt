@@ -60,9 +60,21 @@ if(NOT VM_GIT_HASH)
     set(VM_GIT_HASH "")
   endif()
 endif()
+# The log's session statistics (kernel/stage.c, Diag): OFF leaves them out
+# (a smaller kernel module, fewer counts on every transfer); the build is
+# then marked "-nodiag".
+option(VM_DIAG "Session statistics in the log" ON)
+set(VM_SFX "")
 if(VM_GIT_HASH)
-  add_definitions(-DVM_BUILD_SUFFIX=\"+${VM_GIT_HASH}\")
-  message(STATUS "vita-memio build +${VM_GIT_HASH}")
+  set(VM_SFX "+${VM_GIT_HASH}")
+endif()
+if(NOT VM_DIAG)
+  add_definitions(-DVM_DIAG=0)
+  set(VM_SFX "${VM_SFX}-nodiag")
+endif()
+if(VM_SFX)
+  add_definitions(-DVM_BUILD_SUFFIX=\"${VM_SFX}\")
+  message(STATUS "vita-memio build ${VM_SFX}")
 endif()
 add_compile_options(-Wall -Wextra -Wno-unused-parameter -O2)
 

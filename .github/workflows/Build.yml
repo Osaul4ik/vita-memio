@@ -10,6 +10,11 @@ on:
     branches: [main, master, Dev_lifecycle]
   pull_request:
   workflow_dispatch:
+    inputs:
+      diag:
+        description: "Session statistics in the log (off: smaller module, build marked -nodiag)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build (pinned VitaSDK image)
-        run: make build
+        run: make build VM_DIAG=${{ github.event.inputs.diag == 'false' && 'OFF' || 'ON' }}
 
       - name: No VFP/NEON in the kernel and HUD modules
         run: make check-novfp
@@ -74,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: vita-memio-${{ github.sha }}
+          name: vita-memio-${{ github.sha }}${{ github.event.inputs.diag == 'false' && '-nodiag' || '' }}
           path: |
             build/vitamemio_kernel.skprx
             build/vitamemio_hud.skprx

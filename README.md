@@ -168,6 +168,10 @@ The console is out of kernel memory (it can also show as a crash right after swi
 - On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 
+## Building
+
+GitHub Actions builds every push; *Run workflow* on the **build** workflow has a **Session statistics in the log** switch. Off leaves the log's `session …` lines out: a smaller kernel module and fewer counts on every transfer. Such a build's version ends in `-nodiag`. Locally: `make build VM_DIAG=OFF`.
+
 ## Disclaimer
 
 This software is provided **"as is", without warranty of any kind**, and you use it at your own risk. **Back up your memory card and SD card before installing.** See the [MIT License](LICENSE).

@@ -115,18 +115,17 @@ static uint32_t uptime_ms(void)
 }
 
 static char g_guard_txt[48];   /* last content read, for the log */
-static int  g_guard_len;       /* its length: more than 1 from an older version */
 
 /* First byte of the guard file, or 0 if there is none. */
 static char guard_read(void)
 {
-	return vm_guard_read(VM_GUARD_PATH, g_guard_txt, (int)sizeof(g_guard_txt), &g_guard_len);
+	return vm_guard_read(VM_GUARD_PATH, g_guard_txt, (int)sizeof(g_guard_txt));
 }
 
 /* VM_OK, or VM_ERR_IO if the file could not be written. */
 static int guard_write(char c)
 {
-	return vm_guard_write(VM_GUARD_PATH, VM_DATA_DIR, c, &g_guard_len) < 0 ? VM_ERR_IO : VM_OK;
+	return vm_guard_write(VM_GUARD_PATH, VM_DATA_DIR, c) < 0 ? VM_ERR_IO : VM_OK;
 }
 
 /* ---- reset and power off ------------------------------------------------------ */
@@ -701,7 +700,7 @@ int module_start(SceSize argc, const void *args)
 		start_worker();                   /* settings can still be changed */
 		return SCE_KERNEL_START_SUCCESS;
 	}
-	g_guard_armed = vm_guard_arm(VM_GUARD_PATH, VM_DATA_DIR, &g_guard_len) == 0;
+	g_guard_armed = vm_guard_arm(VM_GUARD_PATH, VM_DATA_DIR) == 0;
 	if (!g_guard_armed)
 		VM_KLOGW("boot guard: '1' could not be written and read back - the plugin stays "
 		         "off this start");

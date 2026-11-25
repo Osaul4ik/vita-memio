@@ -27,8 +27,8 @@
 #include <stdint.h>
 
 /* The file's first byte (0: no file, or empty), its text in txt (printable,
- * for the log) and its length in *len. */
-static inline char vm_guard_read(const char *path, char *txt, int cap, int *len)
+ * for the log). */
+static inline char vm_guard_read(const char *path, char *txt, int cap)
 {
 	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
 	int n = 0;
@@ -39,7 +39,6 @@ static inline char vm_guard_read(const char *path, char *txt, int cap, int *len)
 		n = ksceIoRead(fd, txt, (SceSize)(cap - 1));
 		ksceIoClose(fd);
 	}
-	*len = n > 0 ? n : 0;
 	if (n < 0)
 		txt[0] = 0;
 	for (int i = 0; txt[i]; i++)
@@ -48,11 +47,10 @@ static inline char vm_guard_read(const char *path, char *txt, int cap, int *len)
 	return txt[0];
 }
 
-/* `c` as the first byte, in place. A file longer than one byte (an older
- * version wrote a line) is cut to one, once; *len is then 1. 0 or < 0. */
-static inline int vm_guard_write(const char *path, const char *dir, char c, int *len)
+/* `c` as the first byte, in place. 0 or < 0. */
+static inline int vm_guard_write(const char *path, const char *dir, char c)
 {
-	const int flags = SCE_O_WRONLY | SCE_O_CREAT | (*len > 1 ? SCE_O_TRUNC : 0);
+	const int flags = SCE_O_WRONLY | SCE_O_CREAT;
 	SceUID fd = ksceIoOpen(path, flags, 0666);
 	int w;
 
@@ -74,19 +72,17 @@ static inline int vm_guard_write(const char *path, const char *dir, char c, int 
 	ksceIoClose(fd);
 	if (w != 1)
 		return -1;
-	*len = 1;
 	return 0;
 }
 
 /* The start's '1', written and read back: 0 only if it is there. */
-static inline int vm_guard_arm(const char *path, const char *dir, int *len)
+static inline int vm_guard_arm(const char *path, const char *dir)
 {
 	char txt[4];
-	int n;
 
-	if (vm_guard_write(path, dir, '1', len) < 0)
+	if (vm_guard_write(path, dir, '1') < 0)
 		return -1;
-	return vm_guard_read(path, txt, (int)sizeof(txt), &n) == '1' ? 0 : -1;
+	return vm_guard_read(path, txt, (int)sizeof(txt)) == '1' ? 0 : -1;
 }
 
 /* ---- when it comes on, and when the start counts as good --------------------- *

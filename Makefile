@@ -29,6 +29,9 @@ GIT_HASH := $(shell h=$$(git rev-parse --short=7 HEAD 2>/dev/null) && \
 ifneq ($(GIT_HASH),)
 CMAKE_ARGS += -DVM_GIT_HASH=$(GIT_HASH)
 endif
+# The log's session statistics: ON, or OFF for a smaller module (make VM_DIAG=OFF)
+VM_DIAG ?= ON
+CMAKE_ARGS += -DVM_DIAG=$(VM_DIAG)
 
 MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio_hud.skprx $(BUILD)/vitamemio.suprx
 TESTER_VPK := $(BUILD)/vitamemio_tester.vpk

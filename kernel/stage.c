@@ -337,6 +337,9 @@ static struct {
 	uint32_t    hold_n[2];                 /* ... the next time: doubled each time */
 	uint32_t    hits, hit_kib, lost;       /* atomics: for the log              */
 	uint32_t    kept_k[2], hits_k[2], moved_k[2], yoff_k[2];   /* ... by size   */
+	int         used[VM_DEV_COUNT];        /* seq_cst: ever an entry of that storage's
+	                                        * (set before its first): a write skips
+	                                        * the entries while 0 */
 } g_rc = { .uid = -1 };
 
 /* Another app's request than the one in front's (another process: the
@@ -484,12 +487,22 @@ static tai_hook_ref_t ref_of(int h)
 	return vm_hook_ref(&g_ref[h]);
 }
 
+/* A port's controller context: a fixed address, looked up once. */
+static void *volatile g_port_ctx[3];
+
 static int on_port(void *part, int port)
 {
+	void *c;
+
 	if (port < 0)
 		return 1;              /* the memory card hooks only see the card      */
+	c = __atomic_load_n(&g_port_ctx[port], __ATOMIC_RELAXED);
+	if (!c) {
+		c = ksceSdifGetSdContextGlobal(port);
+		__atomic_store_n(&g_port_ctx[port], c, __ATOMIC_RELAXED);
+	}
 	/* A card context's first word is its controller context. */
-	return part && *(void **)part == ksceSdifGetSdContextGlobal(port);
+	return part && *(void **)part == c;
 }
 
 static int alloc_buf(unsigned type, int phycont, SceSize size, SceUID *uid, void **base)
@@ -655,6 +668,13 @@ static int (*g_stack_free_fn)(SceUID thid);
  * system core / by the game's thread: they count as NC, not as copies (C). */
 static uint32_t g_ra_nc_sys_kib, g_ra_nc_own_kib;                  /* atomics */
 static volatile int g_log_diag;            /* the log is on: count            */
+/* The log's session statistics (Diag, the "session ..." lines): built in
+ * unless the build says VM_DIAG=0 (CMake -DVM_DIAG=OFF): then none of it,
+ * and the requests skip every count for it. */
+#ifndef VM_DIAG
+#define VM_DIAG 1
+#endif
+#define LOG_DIAG() (VM_DIAG && LD(g_log_diag))
 /* With the log on: every transfer of each storage timed, whichever way it
  * went, for the session lines (an app's time in front, the worker): reads by
  * size - tiny (< 32 KiB), 32 KiB, large - the reads that came while read
@@ -749,9 +769,10 @@ typedef struct {
 	uint32_t got;                          /* sectors from read ahead's pieces */
 	int      tiny;                         /* tiny: 1 from the block, 2 the block read for it */
 	SceUID   pid;                          /* the request's process (req_pid), once */
+	int      onp;                          /* on_port(), once (stage_xfer)    */
 } XInfo;
 static volatile int g_count_cores;         /* the overlay is open: count too  */
-#define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
+#define COUNT_CORES() (LOG_DIAG() || LD(g_count_cores))
 
 static inline uint32_t cpu_id(void)
 {
@@ -894,7 +915,11 @@ typedef struct {
 static Diag *volatile g_diag;                  /* atomic; published once      */
 static SceUID         g_diag_uid = -1;
 static volatile int   g_diag_busy;
+#if VM_DIAG
 #define DG() __atomic_load_n(&g_diag, __ATOMIC_ACQUIRE)
+#else
+#define DG() ((Diag *)0)
+#endif
 static volatile uint32_t g_mapfail_n;          /* refusals described (claimed) */
 static uint32_t          g_mapfail_logged;     /* the worker's                 */
 
@@ -3841,7 +3866,7 @@ static void ra_adapt_tick(void)
 	/* a round's line only when it changed something of its kind (the log is
 	 * on the internal storage: as few lines as can be); the minute's summary
 	 * has where things stand */
-	if (LD(g_log_diag))
+	if (LOG_DIAG())
 		for (int u = 0; u < 3; u++)
 			if (ol_on[u] && (oo_mv[u] || ol[u].fewer_moved ||
 			                 (u == OO_TINY ? tmv[2] != 0
@@ -3858,7 +3883,7 @@ static void ra_adapt_tick(void)
 				         u == OO_TINY ? "us a read" : "us/MiB", (unsigned)ol[u].held, hb,
 				         ol[u].now ? "off" : "on");
 			}
-	if (any && LD(g_log_diag)) {
+	if (any && LOG_DIAG()) {
 		for (int nc = 0; nc < 2; nc++)
 			if (mv[nc][0] != mv[nc][1] || mv[nc][2] != mv[nc][3])
 				VM_KLOGI("adaptive: %s from read %d -> %d, 32K from %d -> %d", nc ? "NC" : "C",
@@ -4038,7 +4063,7 @@ static void ra_drop(Dev *d)
 					cal_waste(d, &d->ra[i]);   /* none of it used */
 					if (ra_learn_on())
 						oo_waste(d->ra[i].nc ? OO_NC : OO_C, d->ra[i].held_us);
-					Diag *const dg = LD(g_log_diag) ? DG() : NULL;
+					Diag *const dg = LOG_DIAG() ? DG() : NULL;
 
 					if (dg) {
 						LgKind *g = &dg->lk[d->ra[i].nc ? LK_NC : LK_C];
@@ -4760,7 +4785,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 		d->t_gen = LD(g_ad_gen);              /* the run is the state's now in effect */
 	}
 	d->t_next = sector + n;
-	if (LD(g_log_diag) && DG() && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&
+	if (LOG_DIAG() && DG() && LD(d->t_end) != LD(d->t_start) && sector >= LD(d->t_start) &&
 	    sector + n <= LD(d->t_end) && __atomic_load_n(&d->t_dirty, __ATOMIC_SEQ_CST))
 		ADD(DG()->lk[LK_TINY].spoilt, 1);         /* in a block a write spoilt */
 	if (oo_off(OO_TINY)) {                /* off as measured: the run still counted */
@@ -5174,6 +5199,7 @@ static int rc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 				__atomic_store_n(&e->dirty, 0, __ATOMIC_SEQ_CST);
 				__atomic_store_n(&e->sector, sector, __ATOMIC_SEQ_CST);
 				__atomic_store_n(&e->n, n, __ATOMIC_SEQ_CST);
+				__atomic_store_n(&g_rc.used[d - g_dev], 1, __ATOMIC_SEQ_CST);   /* before dev */
 				__atomic_store_n(&e->dev, d, __ATOMIC_SEQ_CST);
 				if (!__atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST)) {
 					*ret = io(ref, part, sector, rc_at(u), n);
@@ -5310,13 +5336,15 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 {
 	uint8_t *p = buf;
 	uint32_t left = nsec;
-	int verify, ret = 0, mine = on_port(part, d->port);
+	int verify, ret = 0, mine = xi->onp;
 	int mt0 = -2, mt1 = -2;               /* the buffer's memory type at its ends */
 	int cal_held = 0;
+	/* read ahead up, as the checks before the buffers are taken see it (after
+	 * take() it is read again: that is the one ra_retire waits for) */
+	const int rr = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 	/* another app's request while one is in front: no read ahead for it
 	 * (see g_bg_n); looked at only while read ahead is up */
-	const int bg = mine && nsec && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
-	               bg_req(&xi->pid);
+	const int bg = mine && nsec && rr && bg_req(&xi->pid);
 	/* calibration on: when it started, and whether a piece held it up */
 	/* (also with Adaptive: who a piece held up, for its on or off) */
 	const uint32_t cal_m = mine && nsec && !bg && (CAL_MEASURING() || ra_learn_on())
@@ -5342,8 +5370,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		ADD(g_bg_kib, nsec / 2);
 	}
 	/* Tiny reads: from their own block, if it holds them */
-	if (mine && !write && !bg && nsec && nsec < RA_SMALL_SECTORS &&
-	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
+	if (mine && !write && !bg && nsec && nsec < RA_SMALL_SECTORS && rr &&
 	    ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret, &xi->tiny, &xi->pid))
 		return ret;
 	/* A non-cacheable caller buffer: the standard path is the faster one
@@ -5356,8 +5383,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 		/* ... unless read ahead holds it: a stream into non-cacheable
 		 * memory, as games load their graphics data */
-		if (!write && !bg && nsec >= RA_SMALL_SECTORS &&
-		    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
+		if (!write && !bg && nsec >= RA_SMALL_SECTORS && rr && mt0 == MEMTYPE_NC &&
+		    mt1 == MEMTYPE_NC)
 			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held, &xi->got,
 			                  &xi->pid);
 		ADD(g_nc_stock_kib, nsec / 2);
@@ -5404,10 +5431,10 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	const int stats = LD(g_stats);
 	int problem = 0;                    /* an error or a mismatch: wake the worker */
-	const int clean = !write && LD(g_gpu_safe) && g_dcache_clean;
+	const int gs = LD(g_gpu_safe);      /* one value for the whole request */
+	const int clean = !write && gs && g_dcache_clean;
 	/* what the split plans for: no clean after the DMA copies with "Non-DMA" */
-	const int plan_clean = clean && !(LD(g_gpu_safe) == VM_GPUSAFE_NODMA &&
-	                                  dma_state() == VM_DMA_ON);
+	const int plan_clean = clean && !(gs == VM_GPUSAFE_NODMA && dma_state() == VM_DMA_ON);
 	const int ready = !write && __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE);
 	const int mode = LD(g_pipeline);    /* one value for the whole request */
 	const int pipe = ready && !verify && mode;
@@ -5497,7 +5524,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 			 * the split keeps every part a DMA copy (VM_DMA_MIN_BYTES up:
 			 * a shorter last part would be the CPU's, on this core). */
 			const int try_here = off && dma_state() == VM_DMA_ON &&
-			                     !(clean && LD(g_gpu_safe) != VM_GPUSAFE_NODMA) &&
+			                     !(clean && gs != VM_GPUSAFE_NODMA) &&
 			                     !((uintptr_t)p & (VM_DMA_ALIGN - 1u));
 			uint32_t done = 0;
 			int here = 0;
@@ -5815,13 +5842,14 @@ static void pt_session(Diag *dg, int print)
 static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_ref_t rd_ref,
                       void *part, uint32_t sector, void *buf, uint32_t nsec)
 {
-	const int mine = nsec && on_port(part, d->port);
-	const int lg = mine && LD(g_log_diag);
+	const int onp = on_port(part, d->port);
+	const int mine = nsec && onp;
+	const int lg = mine && LOG_DIAG();
 	/* Adaptive: the reads timed for "on or off, as measured" (oo_note; the
 	 * rest is the worker's, on the system core) */
 	const int ms = mine && !write && LD(d->enabled) && ra_learn_on();
 	const uint32_t t0 = lg || ms ? ksceKernelGetSystemTimeLow() : 0;
-	XInfo xi = { 0, 0, 0, REQ_PID_NONE };
+	XInfo xi = { 0, 0, 0, REQ_PID_NONE, onp };
 	int col = 0, r;
 	uint32_t us;
 
@@ -5877,7 +5905,11 @@ static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hoo
 		if (e != a && (uint64_t)sector < e && (uint64_t)sector + nsec > a)
 			__atomic_store_n(&d->t_dirty, 1, __ATOMIC_SEQ_CST);
 	}
-	for (uint32_t i = 0; i < RC_UNITS; i++) {   /* the again cache's, as the pieces */
+	/* the again cache's, as the pieces: none ever of this storage's (seq_cst,
+	 * after ra_wbusy: one made meanwhile sees the write and is not used) */
+	const uint32_t rc_n = __atomic_load_n(&g_rc.used[d - g_dev], __ATOMIC_SEQ_CST) ? RC_UNITS : 0;
+
+	for (uint32_t i = 0; i < rc_n; i++) {
 		RcEnt *e = &g_rc.e[i];
 
 		if (__atomic_load_n(&e->dev, __ATOMIC_SEQ_CST) == d) {
@@ -6424,7 +6456,7 @@ static void diag_make(void)
 {
 	void *b = NULL;
 
-	if (DG() || __sync_lock_test_and_set(&g_diag_busy, 1))
+	if (!VM_DIAG || DG() || __sync_lock_test_and_set(&g_diag_busy, 1))
 		return;
 	if (!DG() && alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0, (sizeof(Diag) + 0xFFFu) & ~0xFFFu,
 	                       &g_diag_uid, &b) >= 0) {
@@ -7130,7 +7162,7 @@ void vm_stage_worker_tick(void)
 			const uint64_t wide_us = (uint64_t)ksceKernelGetSystemTimeWide();
 			Diag *const dg = DG();
 
-			if (LD(g_log_diag) && dg) {
+			if (LOG_DIAG() && dg) {
 				LgSnap cur;
 
 				lg_snap(&cur);
@@ -7161,7 +7193,7 @@ void vm_stage_worker_tick(void)
 	/* With the log on: when it was switched on, how the app in front is followed */
 	{
 		static int was_on;
-		const int on = LD(g_log_diag);
+		const int on = LOG_DIAG();
 
 		if (on && !was_on) {
 			char ft[16];

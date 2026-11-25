@@ -26,34 +26,19 @@ static long size_of(const char *dir)
 static void test_guard(void)
 {
 	char txt[48];
-	int len = -1;
 	const char *dir;
 
 	fakes_tmpdir_remove();
 	dir = fakes_tmpdir_new();
 	/* none yet: not a start that never finished */
-	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == 0 && len == 0 && size_of(dir) == -1);
+	CHECK(vm_guard_read(PATH, txt, sizeof(txt)) == 0 && size_of(dir) == -1);
 	/* a start, then the home screen: one byte, in place */
 	fake_sync_calls = 0;
-	CHECK(vm_guard_write(PATH, DIR, '1', &len) == 0 && len == 1 && size_of(dir) == 1);
+	CHECK(vm_guard_write(PATH, DIR, '1') == 0 && size_of(dir) == 1);
 	CHECK(fake_sync_calls == 1);             /* on the card before a hard reset */
-	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '1' && len == 1);
-	CHECK(vm_guard_write(PATH, DIR, '0', &len) == 0 && size_of(dir) == 1);
-	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '0' && !strcmp(txt, "0"));
-	/* an older version's line: read as before, cut to one byte at the next write */
-	{
-		char p[512];
-		FILE *f;
-
-		snprintf(p, sizeof(p), "%s/boot_guard", dir);
-		f = fopen(p, "wb");
-		fputs("1 up=1234 by=start\n", f);
-		fclose(f);
-	}
-	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '1' && len == 19 &&
-	      !strcmp(txt, "1 up=1234 by=start."));
-	CHECK(vm_guard_write(PATH, DIR, '0', &len) == 0 && len == 1 && size_of(dir) == 1);
-	CHECK(vm_guard_read(PATH, txt, sizeof(txt), &len) == '0' && len == 1);
+	CHECK(vm_guard_read(PATH, txt, sizeof(txt)) == '1');
+	CHECK(vm_guard_write(PATH, DIR, '0') == 0 && size_of(dir) == 1);
+	CHECK(vm_guard_read(PATH, txt, sizeof(txt)) == '0' && !strcmp(txt, "0"));
 	fakes_tmpdir_remove();
 }
 
@@ -62,12 +47,11 @@ static void test_guard(void)
 static void test_arm(void)
 {
 	char txt[48];
-	int len = 0;
 
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
-	CHECK(vm_guard_arm(PATH, DIR, &len) == 0 && vm_guard_read(PATH, txt, sizeof(txt), &len) == '1');
-	CHECK(vm_guard_arm("ux9:nowhere/x/boot_guard", "ux9:nowhere/x", &len) < 0);
+	CHECK(vm_guard_arm(PATH, DIR) == 0 && vm_guard_read(PATH, txt, sizeof(txt)) == '1');
+	CHECK(vm_guard_arm("ux9:nowhere/x/boot_guard", "ux9:nowhere/x") < 0);
 	fakes_tmpdir_remove();
 }
 

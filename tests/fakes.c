@@ -314,6 +314,15 @@ SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, vo
 	return -6;
 }
 
+int fake_blocks_live(void)
+{
+	int n = 0;
+
+	for (int i = 1; i < 64; i++)
+		n += g_blocks[i] != NULL;
+	return n;
+}
+
 int ksceKernelGetMemBlockBase(SceUID uid, void **base)
 {
 	if (uid <= 0 || uid >= 64 || !g_blocks[uid])

@@ -680,6 +680,7 @@ int module_start(SceSize argc, const void *args)
 	l->hud.tick = hud_tick;
 	l->hud.busy = hud_busy;
 	l->hud.fini = hud_fini_all;
+	l->hud.mem = vm_hud_mem;
 	__sync_synchronize();
 	l->hud.size = sizeof(VmHudApi);   /* last: the kernel module checks it */
 	return SCE_KERNEL_START_SUCCESS;

@@ -61,6 +61,7 @@ static volatile uint32_t g_seq;
 static volatile int g_readers;
 static HudCache     g_cache;
 static SceUID       g_cache_uid = -1;
+static volatile int g_cache_size;          /* its size (the status dialog)  */
 static SceUID       g_cache_stale = -1;   /* freed at the next swap */
 static uint32_t     g_gen;
 
@@ -253,6 +254,12 @@ static int readers_gone(void)
 	return 0;
 }
 
+/* The HUD's block (the rows and the cache), bytes: the status dialog. */
+uint32_t vm_hud_mem(void)
+{
+	return (uint32_t)__atomic_load_n(&g_cache_size, __ATOMIC_RELAXED);
+}
+
 /* Put the block `uid` at `base` of `size` in as the rows and the cache (uid
  * -1: none) and free the old one once no frame can be using it. Worker
  * thread only. */
@@ -263,6 +270,7 @@ static void cache_swap(SceUID uid, uint8_t *base, int size)
 	cache_begin();
 	old = g_cache_uid;
 	g_cache_uid = uid;
+	__atomic_store_n(&g_cache_size, uid >= 0 ? size : 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_rows, (uint32_t *)base, __ATOMIC_SEQ_CST);   /* before readers_gone */
 	g_cache.px = base ? base + HUD_ROWS_BYTES : NULL;
 	g_cache.bytes = base ? size - HUD_ROWS_BYTES : 0;

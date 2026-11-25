@@ -275,6 +275,7 @@ static struct {
 	uint32_t     yielded;              /* atomic: not the app in front's       */
 } g_sh = { .uid = -1, .uid2 = -1 };
 static volatile int g_kmem;                /* the setting, VM_KMEM_*           */
+static volatile int g_kmem_run = -1;       /* ... this start's (vm_stage_init); -1: none */
 static int          g_share_on;            /* in effect for this start         */
 
 static inline volatile int *dbusy(Dev *d)
@@ -5997,6 +5998,7 @@ int vm_stage_init(void)
 	 * each storage its own set, on or off */
 	g_share_on = LD(g_kmem) != VM_KMEM_FULL && !g_dev[VM_DEV_SD2VITA].buf &&
 	             !g_dev[VM_DEV_MEMCARD].buf;
+	ST(g_kmem_run, g_share_on ? LD(g_kmem) : VM_KMEM_FULL);
 	g_dev[VM_DEV_SD2VITA].shared = g_dev[VM_DEV_MEMCARD].shared = g_share_on;
 	prealloc(&g_dev[VM_DEV_SD2VITA]);
 	prealloc(&g_dev[VM_DEV_MEMCARD]);
@@ -6301,6 +6303,78 @@ static void eff_update(void)
 		for (int i = 0; i < VM_DEV_COUNT; i++)
 			ST(g_dev[i].pipe_failed, 0);
 	__sync_lock_release(&g_eff_lock);
+}
+
+/* Free kernel memory, for the status dialog: the largest block of `type`
+ * (in one physical stretch if `contig`) the system gives now, found by
+ * asking for blocks - each freed again at once - halving the step down to
+ * PROBE_STEP. One probe at a time; up to PROBE_MAX. */
+#define PROBE_MAX   (64u << 20)
+#define PROBE_STEP  (16u << 10)
+static volatile int g_probe_lock;
+
+static int probe_try(unsigned type, int contig, uint32_t size)
+{
+	SceKernelAllocMemBlockKernelOpt opt;
+	SceUID uid;
+
+	memset(&opt, 0, sizeof(opt));
+	opt.size = sizeof(opt);
+	if (contig)
+		opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_PHYCONT;
+	uid = ksceKernelAllocMemBlock("SceVitaMemioProbe", type, size, &opt);
+	if (uid < 0)
+		return 0;
+	ksceKernelFreeMemBlock(uid);
+	return 1;
+}
+
+static uint32_t probe_free(unsigned type, int contig)
+{
+	uint32_t lo = 0, hi = PROBE_MAX;    /* lo: given; hi: refused (or the cap) */
+
+	if (probe_try(type, contig, hi))
+		return hi;
+	while (hi - lo > PROBE_STEP) {
+		const uint32_t mid = ((lo + hi) / 2) & ~0xFFFu;
+
+		if (probe_try(type, contig, mid))
+			lo = mid;
+		else
+			hi = mid;
+	}
+	return lo;
+}
+
+/* The plugin's memory and the free kernel memory, for vmGetInfo (the
+ * caller fills in the rest). Each block counted at the size asked for. */
+void vm_stage_info(VmInfo *k)
+{
+	uint32_t buffers = 0, ra = 0, threads = 0, other = 0;
+
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		const Dev *d = &g_dev[i];
+
+		buffers += (LD(d->uid) >= 0 ? STAGE_BYTES : 0) +
+		           (LD(d->uid2) >= 0 ? PIPE_TAIL_SECTORS * 512 : 0);
+		ra += LD(d->t_uid) >= 0 ? RA_TINY_SECTORS * 512 : 0;
+		threads += ((LD(d->th) >= 0) + (LD(d->th2) >= 0) + (LD(d->ra_th) >= 0)) * VM_STACK_DEV;
+	}
+	buffers += (LD(g_sh.uid) >= 0 ? STAGE_BYTES : 0) + (LD(g_sh.uid2) >= 0 ? PIPE_TAIL_SECTORS * 512 : 0);
+	other += (LD(g_diag_uid) >= 0 ? ((uint32_t)sizeof(Diag) + 0xFFFu) & ~0xFFFu : 0) +
+	         (LD(g_shadow_uid) >= 0 ? STAGE_BYTES : 0);
+	k->kmem = LD(g_kmem_run);
+	k->kmem_set = LD(g_kmem);
+	k->buffers = buffers;
+	k->again = LD(g_rc.uid) >= 0 ? g_rc.own_units * RC_UNIT * 512 : 0;
+	k->readahead = ra;
+	k->threads = threads;
+	k->other = other;
+	if (__sync_lock_test_and_set(&g_probe_lock, 1))
+		return;                           /* another dialog measures now */
+	k->free_kernel = probe_free(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 0);
+	k->free_contig = probe_free(MEMBLOCK_KERNEL_NC_RW, 1);
+	__sync_lock_release(&g_probe_lock);
 }
 
 /* With the log on, once: what each of the plugin's blocks really takes - the

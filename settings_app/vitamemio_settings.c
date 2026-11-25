@@ -37,6 +37,7 @@
 
 #include "../include/vitamemio.h"
 #include "../include/vitamemio_kernel_api.h"
+#include "../include/vm_fmt.h"
 #include "vitamemio_i18n.h"
 #include "settings_ui.h"
 #include "vmlog.h"
@@ -80,7 +81,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 	"<setting_list id=\"vitamemio_settings\" title=\"vm_t_title\" icon=\"tex_spanner\">" \
 	ROW_TOGGLE("driver") \
 	"<button id=\"" STATUS_BUTTON_ID "\" title=\"vm_t_status\" icon=\"tex_spanner\" " \
-	"hint=\"vm_h_status\" success_dialog_message=\"vm_h_status\"/>"
+	"hint=\"vm_h_status\" success_dialog_message=\"vm_d_status\"/>"
 #define X_SAFE \
 	"<button id=\"" SAFE_BUTTON_ID "\" title=\"vm_t_safe\" icon=\"tex_spanner\" " \
 	"hint=\"vm_h_safe\" success_dialog_message=\"vm_m_safe_ok\" " \
@@ -266,6 +267,117 @@ static const vm_u16 *status_text(int hint)
 	return o;
 }
 
+/* A size for the status dialog: KiB, or MiB with one decimal from 1 MiB. */
+static void l_size(Line *l, uint32_t bytes)
+{
+	const uint32_t kib = (bytes + 512u) / 1024u;
+	char t[16];
+	int n = 0;
+
+	if (kib >= 1024u) {
+		const uint32_t tenths = (kib * 10u + 512u) / 1024u;
+
+		n = vm_fmt_uint(t, sizeof(t), n, tenths / 10u, 10, 0, 0, 0);
+		t[n++] = '.';
+		t[n++] = (char)('0' + tenths % 10u);
+		t[n] = 0;
+		l_put(l, t);
+		l_put(l, " MiB");
+		return;
+	}
+	n = vm_fmt_uint(t, sizeof(t), n, kib, 10, 0, 0, 0);
+	t[n] = 0;
+	l_put(l, t);
+	l_put(l, " KiB");
+}
+
+static const char *const k_kmem_name[] = { "Full", "Medium", "Low" };
+
+static const char *kmem_name(int32_t m)
+{
+	return m >= VM_KMEM_FULL && m <= VM_KMEM_LOW ? k_kmem_name[m] : "?";
+}
+
+/* The status dialog (pressing the status row): asked from the kernel module
+ * once, as it opens. */
+static const vm_u16 *status_dialog(void)
+{
+	VmState st;
+	VmInfo in;
+	Line l = { {0}, 0 };
+	const int up = get_state(&st);
+	int info;
+
+	for (unsigned i = 0; i < sizeof(in); i++)
+		((char *)&in)[i] = 0;
+	info = up && vmGetInfo(&in) == VM_OK && in.magic == VM_INFO_MAGIC && in.size == sizeof(in);
+	l_put(&l, "Ver: ");
+	l_put(&l, info && in.build[0] ? in.build : VM_VERSION_STR);
+	if (info && !s_eqn(in.build, VM_BUILD_STR, (int)sizeof(VM_BUILD_STR))) {
+		l_put(&l, " (this page: " VM_BUILD_STR ")");
+	}
+	l_put(&l, "\nStatus: ");
+	if (!up)
+		l_put(&l, "Not loaded");
+	else if (st.disabled == VM_DIS_SAFE)
+		l_put(&l, "Safe mode");
+	else if (st.disabled == VM_DIS_OFF)
+		l_put(&l, "Off (Driver)");
+	else if (st.disabled == VM_DIS_FIRMWARE)
+		l_put(&l, "Firmware not supported");
+	else if (st.disabled == VM_DIS_HOOKS)
+		l_put(&l, "Could not start");
+	else
+		l_put(&l, "Loaded");
+	if (!up) {
+		l_put(&l, "\n");
+		l_put(&l, vm_i18n(VM_I18N_HINT_STATUS_NO_KERNEL));
+	} else if (!info) {
+		l_put(&l, "\nStorage driver: ");
+		l_hex(&l, st.fingerprint);
+		l_put(&l, "\n(the kernel module is an older build: replace all three files)");
+	} else {
+		const uint32_t used = in.buffers + in.again + in.readahead + in.threads + in.hud +
+		                      in.other + in.code;
+
+		if (in.kmem >= 0) {
+			l_put(&l, "\nKernel memory: ");
+			l_put(&l, kmem_name(in.kmem));
+			if (in.kmem_set != in.kmem) {
+				l_put(&l, " (");
+				l_put(&l, kmem_name(in.kmem_set));
+				l_put(&l, " after a restart)");
+			}
+		}
+		l_put(&l, "\nUsed: ");
+		l_size(&l, used);
+		l_put(&l, "   Free: ");
+		l_size(&l, in.free_kernel);
+		l_put(&l, " (in one piece ");
+		l_size(&l, in.free_contig);
+		l_put(&l, ")");
+		l_put(&l, "\nStorage buffers: ");
+		l_size(&l, in.buffers);
+		l_put(&l, "\nR/A buffers: ");
+		l_size(&l, in.readahead);
+		if (in.again) {
+			l_put(&l, "\nAgain cache: ");
+			l_size(&l, in.again);
+		}
+		if (in.hud_loaded) {
+			l_put(&l, "\nHUD / overlay: ");
+			l_size(&l, in.hud);
+		}
+		l_put(&l, "\nCode, threads, log: ");
+		l_size(&l, in.code + in.threads + in.other);
+		l_put(&l, "\nStorage driver: ");
+		l_hex(&l, in.fingerprint);
+	}
+	vm_u16 *o = next_buf();
+	vm_i18n_to_u16(l.s, o, (int)(sizeof(g_txt[0]) / sizeof(g_txt[0][0])));
+	return o;
+}
+
 /* A storage row's help text, plus why it isn't working when it isn't.
  * Speeds and counters are the HUD's and the tester's job. */
 static const vm_u16 *device_hint(int dev, int help_id)
@@ -425,6 +537,8 @@ static const vm_u16 *vm_text(const char *id)
 		return status_text(0);
 	if (s_eqn(id, "vm_h_status", 12))
 		return status_text(1);
+	if (s_eqn(id, "vm_d_status", 12))
+		return status_dialog();
 	if (s_eqn(id, "vm_t_advanced", 14))
 		return fixed_text(VM_I18N_TITLE_ADVANCED);
 	if (s_eqn(id, "vm_t_developer", 15))

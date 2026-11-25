@@ -29,7 +29,7 @@
 #include "stage.h"
 
 #define VM_HUD_LINK_MAGIC    0x4C44554Du   /* "MUDL" */
-#define VM_HUD_LINK_VERSION  6
+#define VM_HUD_LINK_VERSION  7
 
 /* The kernel module's functions, for the HUD module. */
 typedef struct VmCoreApi {
@@ -66,6 +66,7 @@ typedef struct VmHudApi {
 	void (*tick)(const VmDevState now[VM_DEV_COUNT]);
 	int  (*busy)(void);                   /* VM_HUD_*                           */
 	void (*fini)(void);                   /* every hook released                */
+	uint32_t (*mem)(void);                /* its blocks' bytes (status dialog)  */
 } VmHudApi;
 
 typedef struct VmHudLink {
@@ -81,6 +82,10 @@ typedef struct VmHudLink {
  * draw. */
 void vm_hud_link_tick(const VmDevState now[VM_DEV_COUNT], void (*wake)(void));
 int  vm_hud_link_busy(void);           /* VM_HUD_*; VM_HUD_IDLE without it   */
+/* Loaded (1) or not; its blocks' and its code's bytes (the status dialog). */
+int  vm_hud_link_mem(uint32_t *blocks, uint32_t *code);
+/* A module's code and data, bytes, by an address in it (main.c). */
+uint32_t vm_module_bytes(const void *addr);
 void vm_hud_link_fini(void);           /* module_stop: its hooks out, unloaded */
 
 #endif /* VITAMEMIO_HUD_LINK_H */

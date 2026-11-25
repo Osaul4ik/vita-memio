@@ -148,6 +148,40 @@ _Static_assert(sizeof(VmDma) == 64, "VmDma: grow only through a new call");
  * VM_ERR_ARG. Newer than 1.3.0: an older module does not have it. */
 int vmGetDma(VmDma *out);
 
+/* What the Settings page's status dialog shows (vmGetInfo): asked once, when
+ * the dialog opens. Every size in bytes; 0 where there is none. */
+typedef struct VmInfo {
+	uint32_t size;           /* sizeof(VmInfo), set by the kernel                */
+	uint32_t magic;          /* VM_INFO_MAGIC                                    */
+	char     build[40];      /* the kernel module's VM_BUILD_STR                 */
+	int32_t  disabled;       /* VM_DIS_*                                         */
+	uint32_t fingerprint;    /* the storage driver's                             */
+	uint32_t uptime_s;       /* since the kernel module started                  */
+	uint32_t on_ms;          /* ... when it came on; 0: not (yet)                */
+	int32_t  kmem;           /* VM_KMEM_* in effect (this start's)               */
+	int32_t  kmem_set;       /* ... as set (the next start's)                    */
+	int32_t  hud_loaded;     /* the HUD/overlay module is loaded                 */
+	uint32_t buffers;        /* the storages' buffers (staging, second)          */
+	uint32_t again;          /* the again cache's own block                      */
+	uint32_t readahead;      /* the tiny reads' blocks                           */
+	uint32_t threads;        /* the plugin's thread stacks                       */
+	uint32_t hud;            /* the HUD/overlay's blocks                         */
+	uint32_t other;          /* the log's counts, the verify buffer              */
+	uint32_t code;           /* the plugin's modules: code and data              */
+	uint32_t free_kernel;    /* free kernel memory: the largest block one gets   */
+	uint32_t free_contig;    /* ... in one physical stretch (as the buffers)     */
+	int32_t  dev_status[VM_DEV_COUNT];   /* VM_ST_*                              */
+	int32_t  memcard_slow;   /* 1 on, 0 off, -1 n/a                              */
+} VmInfo;
+
+#define VM_INFO_MAGIC  0x4F464E49u   /* 'INFO' */
+_Static_assert(sizeof(VmInfo) == 128, "VmInfo: grow only through a new call");
+
+/* Copy what the status dialog shows to *out (user pointer). Returns VM_OK
+ * or VM_ERR_ARG. Measures the free kernel memory with a test allocation,
+ * so it takes a few milliseconds: ask it once, not every frame. */
+int vmGetInfo(VmInfo *out);
+
 /* An app's threshold in the overlay: read ahead never starts for it. */
 #define VM_RA_NEVER      0xFFFF
 

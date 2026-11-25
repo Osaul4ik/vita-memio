@@ -29,6 +29,7 @@
 int  vm_hud_init(void);   /* install the set-framebuffer hook              */
 void vm_hud_fini(void);
 int  vm_hud_installed(void);
+uint32_t vm_hud_mem(void); /* its block's bytes (the status dialog)       */
 
 /* Replace the text (n lines, n = 0 hides the HUD) and the look
  * Worker thread only. */

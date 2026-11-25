@@ -13,6 +13,7 @@ extern int fake_alloc_fail_after;     /* > 0: that many more made, then refused 
 extern int fake_alloc_fail_nth;       /* > 0: only the call that many on refused */
 extern int fake_sync_calls;           /* ksceIoSyncByFd calls */
 unsigned fake_block_size(int uid);
+int fake_blocks_live(void);           /* blocks made and not freed */
 extern int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 extern int fake_rename_fail;          /* ksceIoRename fails (power cut after remove) */
 extern int fake_prof_writes;          /* files opened to write under .../ra/        */

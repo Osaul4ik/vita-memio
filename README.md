@@ -67,6 +67,8 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 | Enable log | Writes a log to `ur0:data/vita-memio/`, with a summary of each game's reads when you leave it | Off |
 | Statistics | Collects timings for the tester app | Off |
 
+Press the **Driver: …** status row to see the plugin's version and status, the kernel memory it uses and how much is still free (measured when you press it), and the storage driver.
+
 If the plugin ever could not start properly, a **Reset safe mode** row appears under the status.
 
 ### Read ahead

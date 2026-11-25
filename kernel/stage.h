@@ -43,6 +43,9 @@ void vm_stage_get(VmDevState out[VM_DEV_COUNT], int plugin_active);
 /* Where faster-path time goes: system read/write vs the CPU copy. */
 void vm_stage_timing(VmTimingDev out[VM_DEV_COUNT]);
 
+/* The plugin's memory and the free kernel memory (vmGetInfo; see stage.c). */
+void vm_stage_info(VmInfo *k);
+
 /* DMA copy's state and counters (VM_KEY_DMACOPY). */
 void vm_stage_dma(VmDma *out);
 

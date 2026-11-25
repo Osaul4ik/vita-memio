@@ -1093,6 +1093,41 @@ static void test_init_all_hooks(void)
 	CHECK(n == 0 && fake_alloc_calls == 4);
 }
 
+/* The status dialog's memory (vmGetInfo): the plugin's blocks at the sizes
+ * asked for, the mode in effect against the one set, and the free kernel
+ * memory found by test blocks - each freed again. */
+static void test_info(void)
+{
+	VmSettings s = devices_on(1, 0, 1);
+	VmInfo k;
+	int n;
+
+	boot_state();
+	CHECK(vm_stage_init() == VM_OK);       /* Full: each storage its own set */
+	memset(&k, 0, sizeof(k));
+	fake_alloc_max = 3u << 20;            /* the system gives up to 3 MiB */
+	n = fake_blocks_live();
+	vm_stage_info(&k);
+	fake_alloc_max = 0;
+	CHECK(fake_blocks_live() == n);       /* every test block freed again */
+	CHECK(k.kmem == VM_KMEM_FULL && k.kmem_set == VM_KMEM_FULL);
+	CHECK(k.buffers == 2 * (STAGE_BYTES + PIPE_TAIL_SECTORS * 512) && k.again == 0);
+	CHECK(k.free_kernel <= (3u << 20) && k.free_kernel > (3u << 20) - PROBE_STEP);
+	CHECK(k.free_contig == k.free_kernel);
+	s.lowmem = VM_KMEM_LOW;
+	vm_stage_apply(&s);
+	memset(&k, 0, sizeof(k));
+	vm_stage_info(&k);
+	CHECK(k.kmem == VM_KMEM_FULL && k.kmem_set == VM_KMEM_LOW);   /* after a restart */
+	CHECK(k.free_kernel == PROBE_MAX);    /* nothing refused: the cap */
+	g_probe_lock = 1;                     /* another dialog measures: not twice */
+	memset(&k, 0, sizeof(k));
+	vm_stage_info(&k);
+	CHECK(k.free_kernel == 0 && k.buffers != 0);
+	g_probe_lock = 0;
+	vm_stage_fini();
+}
+
 /* A request in flight that waits for a queued piece: let go after 30 ms,
  * noting whether its piece was still queued then. */
 static int g_down_seen_queued;
@@ -7249,6 +7284,7 @@ int main(void)
 	RUN(test_timing_split);
 	RUN(test_init_all_hooks);
 	RUN(test_init_prealloc);
+	RUN(test_info);
 	RUN(test_down);
 	RUN(test_down_before_go);
 	RUN(test_init_sdif_hook_fails_releases_everything);

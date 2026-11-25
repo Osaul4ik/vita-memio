@@ -155,6 +155,20 @@ int vm_hud_link_busy(void)
 	return h ? h->busy() : VM_HUD_IDLE;
 }
 
+/* The HUD module, for the status dialog: loaded or not, its blocks and its
+ * code and data (bytes). */
+int vm_hud_link_mem(uint32_t *blocks, uint32_t *code)
+{
+	const VmHudApi *const h = __atomic_load_n(&g_hud, __ATOMIC_ACQUIRE);
+
+	*blocks = *code = 0;
+	if (!h)
+		return 0;
+	*blocks = h->mem ? h->mem() : 0;
+	*code = vm_module_bytes((const void *)h->tick);
+	return 1;
+}
+
 void vm_hud_link_fini(void)
 {
 	if (!g_hud)

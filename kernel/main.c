@@ -92,6 +92,7 @@ static uint64_t g_t0_us;             /* ... from this system time          */
 static SceUID g_wake = -1;
 static volatile int g_guard_done;    /* the boot guard is settled            */
 static volatile int g_on;            /* came on: the home screen was up      */
+static volatile uint32_t g_on_ms;    /* ... at (ms since the module started) */
 static int          g_guard_armed;   /* the start's '1' is written           */
 static VmGuard      g_guard;         /* worker only                          */
 
@@ -336,6 +337,7 @@ static void guard_tick(void)
 		}
 		if (g_disabled == VM_DIS_NONE && vm_stage_go())
 			vm_settings_reapply();            /* the devices as set, now */
+		g_on_ms = ms ? ms : 1;
 		g_on = 1;
 		VM_KLOGI("on at %u.%01us: %s", (unsigned)(ms / 1000u), (unsigned)(ms % 1000u / 100u),
 		         k_guard_why[g_guard.why]);
@@ -550,6 +552,50 @@ int vmGetBuild(char *out, int size)
 	memcpy(k, b, sizeof(b));
 	k[n - 1] = 0;
 	if (ksceKernelMemcpyKernelToUser(out, k, n) < 0)
+		return VM_ERR_ARG;
+	return VM_OK;
+}
+
+uint32_t vm_module_bytes(const void *addr)
+{
+	SceKernelModuleInfo mi;
+	uint32_t n = 0;
+
+	memset(&mi, 0, sizeof(mi));
+	mi.size = sizeof(mi);
+	if (!addr || ksceKernelGetModuleInfoByAddr(addr, &mi) < 0)
+		return 0;
+	for (int i = 0; i < 4; i++)
+		n += mi.segments[i].memsz;
+	return n;
+}
+
+int vmGetInfo(VmInfo *out)
+{
+	static const char b[] = VM_BUILD_STR;
+	VmDevState dev[VM_DEV_COUNT];
+	VmInfo k;
+	uint32_t hud_code;
+
+	if (!out)
+		return VM_ERR_ARG;
+	memset(&k, 0, sizeof(k));
+	k.size = sizeof(k);
+	k.magic = VM_INFO_MAGIC;
+	memcpy(k.build, b, sizeof(b) < sizeof(k.build) ? sizeof(b) : sizeof(k.build) - 1);
+	k.disabled = g_disabled;
+	k.fingerprint = g_fingerprint;
+	k.uptime_s = uptime_s();
+	k.on_ms = g_on_ms;
+	vm_stage_info(&k);                 /* the memory, and what is free */
+	k.threads += g_worker >= 0 ? VM_STACK_WORKER : 0;
+	k.hud_loaded = vm_hud_link_mem(&k.hud, &hud_code);
+	k.code = vm_module_bytes((const void *)vmGetInfo) + hud_code;
+	vm_stage_get(dev, g_disabled == VM_DIS_NONE);
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		k.dev_status[i] = dev[i].status;
+	k.memcard_slow = vm_stage_memcard_slow();
+	if (ksceKernelMemcpyKernelToUser(out, &k, sizeof(k)) < 0)
 		return VM_ERR_ARG;
 	return VM_OK;
 }

@@ -79,8 +79,6 @@ enum vm_i18n_id {
 	VM_I18N_HINT_SYSAPPS,
 	VM_I18N_ROW_LOWMEM,         /* Low kernel memory (both storages on)           */
 	VM_I18N_HINT_LOWMEM,
-	VM_I18N_ROW_RCKEEP,         /* Keep memory for reading again (one storage) */
-	VM_I18N_HINT_RCKEEP,
 	VM_I18N_COUNT
 };
 

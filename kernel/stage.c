@@ -236,7 +236,6 @@ typedef struct Dev {
 	void         *t_buf;
 	SceUID        t_uid;
 	int           t_cached;               /* t_buf in cached memory (tiny_alloc) */
-	int           buf2_lent;              /* switched off: buf2 left to the again cache */
 	uint32_t      t_next, t_streak;
 	uint32_t      t_run_sec;              /* the run's sectors so far (Adaptive) */
 	uint32_t      t_start, t_end;         /* atomic; t_end == t_start: empty   */
@@ -276,17 +275,7 @@ static struct {
 	uint32_t     yielded;              /* atomic: not the app in front's       */
 } g_sh = { .uid = -1, .uid2 = -1 };
 static volatile int g_lowmem_set;          /* the setting                      */
-static volatile int g_rc_keep;             /* VM_KEY_RCKEEP                    */
 static int          g_share_on;            /* in effect for this start         */
-/* The again cache keeps memory (VM_KEY_RCKEEP), unless Low kernel memory is
- * in effect (both storages on at the start; then it has no say - set with
- * one storage, it changes nothing): a storage switched off leaves its
- * buffers to the cache (rc_lends), and with one storage alone the cache has
- * blocks of its own (rc_keep_now). */
-static int rc_keep_on(void)
-{
-	return LD(g_rc_keep) && !LD(g_share_on);
-}
 
 static inline volatile int *dbusy(Dev *d)
 {
@@ -297,12 +286,15 @@ static SceUID g_ra_fg;                    /* the app in front (see the app event
 
 /* The again cache (see "again cache" below): what a game read lately, kept
  * for when it reads it again - in the staging buffers of the storage the
- * game does not use (`host`), or in a block of its own with no such
- * storage. The host's own requests come first: one that takes its buffers
- * bumps `gen`, and what the cache held there is gone. */
+ * game does not use (`host`: both storages' buffers are made at the start,
+ * whether on or off), or with Low kernel memory (one set of buffers for
+ * both) in a small block of its own (RC_OWN_UNITS). The host's own requests
+ * come first: one that takes its buffers bumps `gen`, and what the cache
+ * held there is gone; a host switched off never takes them. */
 #define RC_UNIT     64u                    /* sectors: 32 KiB, the cache's unit  */
 #define RC_UNITS    12u                    /* 384 KiB: a staging buffer and a second one */
 #define RC_UNITS0   (STAGE_SECTORS / RC_UNIT)   /* in the staging buffer: 8   */
+#define RC_OWN_UNITS 4u                    /* 128 KiB: its own block (Low kernel memory) */
 #define RC_HIST     8u
 typedef struct {
 	struct Dev *dev;                       /* atomic: whose reads (NULL: none)  */
@@ -320,17 +312,12 @@ static struct {
 	struct Dev  *host;                     /* whose buffers (NULL: its own block) */
 	struct Dev  *user;                     /* whose reads it holds              */
 	void        *zb[2];                    /* the buffers its entries are in    */
+	uint32_t    n0, nu;                    /* units in zb[0], in all (zb[1]: the rest) */
 	uint32_t    gen, seen;                 /* gen: atomic, bumped by the host's take */
 	uint32_t    next;                      /* the unit the next entry goes to   */
 	RcEnt       e[RC_UNITS];               /* by the unit each starts at        */
-	SceUID      uid, uid2;                 /* its own blocks (no host): as a    */
-	void       *own, *own2;                /* storage's two buffers; own atomic,
-	                                        * published after own2              */
-	SceUID      own_fail;                  /* atomic: the app they could not be
-	                                        * made for (not asked again for it) */
-	int         want_own;                  /* atomic: the worker makes it       */
-	uint32_t    own_freed;                 /* atomic: times it was given back   */
-	uint32_t    own_errs;                  /* atomic: times they could not be made */
+	SceUID      uid;                       /* its own block (Low kernel memory), */
+	void       *own;                       /* made at the start, kept to the end */
 	/* the app it is for, and whether it reads again what it read (by size: 0
 	 * 32 KiB, 1 large): the last reads the standard way, and the counts */
 	SceUID      pid;
@@ -346,7 +333,7 @@ static struct {
 	uint32_t    hold_n[2];                 /* ... the next time: doubled each time */
 	uint32_t    hits, hit_kib, lost;       /* atomics: for the log              */
 	uint32_t    kept_k[2], hits_k[2], moved_k[2], yoff_k[2];   /* ... by size   */
-} g_rc = { .uid = -1, .uid2 = -1 };
+} g_rc = { .uid = -1 };
 
 /* Another app's request than the one in front's (another process: the
  * system's own, one in the background) while an app is in front. The
@@ -1476,18 +1463,9 @@ static void pipe_release(Dev *d)
 	d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	ST(d->pipe_made, 0);
-	/* a storage switched off with the cache keeping memory: its second
-	 * buffer stays, with its staging buffer (kept to the end anyway), for the
-	 * again cache to borrow (rc_lends); given back by rc_lent_idle when that
-	 * no longer holds, and used again if the storage comes back on */
-	if (d->uid2 >= 0 && !d->shared && !LD(d->enabled) && rc_keep_on()) {
-		d->buf2_lent = 1;
-		return;
-	}
-	if (d->uid2 >= 0)
-		ksceKernelFreeMemBlock(d->uid2);
-	d->uid2 = -1;
-	d->buf2 = NULL;
+	/* the second buffer stays, as the staging buffer does, to the end: the
+	 * again cache uses both while the storage is off (rc_lends), and it is
+	 * there again when it comes back on */
 }
 
 /* Worker thread: stop the hooks from starting overlapped reads on `d`, wait
@@ -1526,10 +1504,9 @@ static int pipe_setup(Dev *d)
 	d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->pipe_quit = 0;
-	/* its buffer: already there if made at the start (prealloc), or left to
-	 * the again cache while it was off (taken back: the cache sees the
-	 * storage on and its take empties it) */
-	d->buf2_lent = 0;
+	/* its buffer: made at the start (prealloc) and kept, or made now if that
+	 * failed; the again cache may have used it meanwhile (the storage's take
+	 * empties the cache) */
 	if (!d->buf2 && (r = ensure_buf2(d)) < 0) {
 		d->uid2 = -1;
 		d->buf2 = NULL;
@@ -4992,8 +4969,9 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
  *   - The host storage's own requests come first: one taking its buffers
  *     empties the cache (gen); the cache uses them only while it holds that
  *     storage (a try: busy, it reads as without it), its pieces dropped.
- *     With no other storage on, a block of its own (made by the worker); with
- *     Low kernel memory (one buffer for both), none at all.
+ *     Both storages' buffers are made at the start, on or off: the other
+ *     one's hold it (lent while it is on, the cache's while it is off). With
+ *     Low kernel memory (one set for both) a small block of its own, 128 KiB.
  *   - By size (32 KiB, large): kept only while the game reads again enough
  *     of them (rc_on_pm of the reads it reads the standard way, off again
  *     under rc_off_pm), and while what is kept is read again: of every
@@ -5043,19 +5021,17 @@ static void rc_clear(void)
 		__atomic_store_n(&g_rc.e[i].dev, NULL, __ATOMIC_SEQ_CST);
 }
 
-/* The storage whose buffers the cache may use for `d`'s reads (NULL: none
- * such - its own block). Under g_rc.lock. */
-/* Whether storage h's buffers may be lent to the again cache: it is on, or
- * switched off with the cache keeping memory (its buffers left for it, see
- * pipe_release); not with Low kernel memory, after a problem, or without
- * both buffers. */
+/* Whether storage h's buffers may hold the again cache: both made (on or
+ * off: lent while on, its own requests first; the cache's while off) - not
+ * with Low kernel memory or after a problem. */
 static int rc_lends(const Dev *h)
 {
 	return !h->shared && !LD(h->fallback) && !LD(h->unusable) &&
-	       (LD(h->enabled) || (h->buf2_lent && rc_keep_on())) &&
 	       __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE) && h->buf2;
 }
 
+/* The storage whose buffers the cache may use for `d`'s reads (NULL: none
+ * such - its own block, if any). Under g_rc.lock. */
 static Dev *rc_pick(const Dev *d)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
@@ -5073,17 +5049,16 @@ static int rc_hold(void)
 {
 	Dev *const h = g_rc.host;
 	void *zb[2];
+	uint32_t n0, nu;
 
 	if (!h) {
 		uint8_t *const own = __atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE);
 
-		if (!own) {
-			if (__atomic_load_n(&g_rc.own_fail, __ATOMIC_RELAXED) != g_rc.pid)
-				__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);   /* the worker makes it */
-			return 0;
-		}
+		if (!own)
+			return 0;                         /* none (its buffers not made) */
 		zb[0] = own;
-		zb[1] = g_rc.own2;
+		zb[1] = NULL;
+		n0 = nu = RC_OWN_UNITS;
 	} else {
 		if (__sync_lock_test_and_set(dbusy(h), 1))
 			return 0;                         /* its own request: it comes first */
@@ -5097,6 +5072,8 @@ static int rc_hold(void)
 		/* its own pieces are in them (waited for, if being read) */
 		if (ra_any(h))
 			ra_drop(h);
+		n0 = RC_UNITS0;
+		nu = RC_UNITS;
 	}
 	/* taken back by the host since, or other buffers: what was kept is gone */
 	if (__atomic_load_n(&g_rc.gen, __ATOMIC_SEQ_CST) != g_rc.seen || zb[0] != g_rc.zb[0] ||
@@ -5107,6 +5084,8 @@ static int rc_hold(void)
 		g_rc.seen = __atomic_load_n(&g_rc.gen, __ATOMIC_SEQ_CST);
 		g_rc.zb[0] = zb[0];
 		g_rc.zb[1] = zb[1];
+		g_rc.n0 = n0;
+		g_rc.nu = nu;
 	}
 	return 1;
 }
@@ -5119,8 +5098,8 @@ static void rc_let_go(void)
 
 static uint8_t *rc_at(uint32_t unit)
 {
-	return unit < RC_UNITS0 ? (uint8_t *)g_rc.zb[0] + (size_t)unit * RC_UNIT * 512
-	                        : (uint8_t *)g_rc.zb[1] + (size_t)(unit - RC_UNITS0) * RC_UNIT * 512;
+	return unit < g_rc.n0 ? (uint8_t *)g_rc.zb[0] + (size_t)unit * RC_UNIT * 512
+	                      : (uint8_t *)g_rc.zb[1] + (size_t)(unit - g_rc.n0) * RC_UNIT * 512;
 }
 
 /* The entry holding all of [sector, sector + n) (-1: none). */
@@ -5140,14 +5119,16 @@ static int rc_find(const Dev *d, void *part, io_fn io, uint32_t sector, uint32_t
 	return -1;
 }
 
-/* Room for `len` units, in one buffer: the entries there given up. */
+/* Room for `len` units (at most RC_OWN_UNITS), in one buffer: the entries
+ * there given up. */
 static uint32_t rc_room(uint32_t len)
 {
-	uint32_t u = g_rc.next >= RC_UNITS ? 0 : g_rc.next;
+	const uint32_t n0 = g_rc.n0, nu = g_rc.nu;
+	uint32_t u = g_rc.next >= nu ? 0 : g_rc.next;
 
-	if (u < RC_UNITS0 ? u + len > RC_UNITS0 : u + len > RC_UNITS)
-		u = u < RC_UNITS0 ? RC_UNITS0 : 0;    /* the next buffer's start */
-	for (uint32_t i = 0; i < RC_UNITS; i++) {
+	if (u < n0 ? u + len > n0 : u + len > nu)
+		u = u < n0 && n0 + len <= nu ? n0 : 0;   /* the next buffer's start */
+	for (uint32_t i = 0; i < nu; i++) {
 		RcEnt *e = &g_rc.e[i];
 
 		if (__atomic_load_n(&e->dev, __ATOMIC_SEQ_CST) && i < u + len && i + e->len > u)
@@ -5272,7 +5253,7 @@ static int rc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 {
 	int done = 0, i;
 
-	if (d->shared || __sync_lock_test_and_set(&g_rc.lock, 1))
+	if (__sync_lock_test_and_set(&g_rc.lock, 1))
 		return 0;
 	rc_app();
 	if (!g_rc.game) {
@@ -6074,18 +6055,18 @@ static int h_wr_ms(uint32_t sector, void *buf, uint32_t nsec)
 	         : VM_IO_ERROR;
 }
 
-/* At the start: device `d`'s staging buffer, and the overlapped reads' and
- * the tiny reads' buffers if what is set will use them (their threads come
- * later, from the worker, once the home screen is up). One that fails is
- * tried again when it is needed. */
+/* At the start: device `d`'s staging buffer and second buffer, whether it
+ * is on or not (kept to the end: a storage that is off holds the again
+ * cache, see rc_lends), and the tiny reads' block if it is on with read
+ * ahead (their threads come later, from the worker, once the home screen is
+ * up). One that fails is tried again when the storage is switched on. */
 static void prealloc(Dev *d)
 {
 	ensure_buf(d);
 	if (!__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE))
 		return;
-	if (LD(g_pipeline) || LD(g_offload) || LD(g_readahead))
-		(void)ensure_buf2(d);                 /* tried again when needed */
-	if (LD(g_readahead))
+	(void)ensure_buf2(d);
+	if (LD(d->want) && LD(g_readahead))
 		tiny_alloc(d);
 }
 
@@ -6133,21 +6114,31 @@ int vm_stage_init(void)
 			g_stack_free_fn = (int (*)(SceUID))f;
 
 	}
-	/* Every buffer the devices set on will use, now while contiguous memory
-	 * is easy to find - though none comes on before the home screen
-	 * (g_hold, vm_stage_go); the others get theirs when they are switched on
-	 * (vm_stage_apply). */
+	/* Both storages' buffers, on or off, now while contiguous memory is easy
+	 * to find - though none comes on before the home screen (g_hold,
+	 * vm_stage_go); one that fails is tried again when its storage is
+	 * switched on (vm_stage_apply). */
 	ST(g_live, 1);
-	/* Low kernel memory: decided once, here - both storages set on */
-	g_share_on = LD(g_lowmem_set) && LD(g_dev[VM_DEV_SD2VITA].want) &&
-	             LD(g_dev[VM_DEV_MEMCARD].want) && !g_dev[VM_DEV_SD2VITA].buf &&
-	             !g_dev[VM_DEV_MEMCARD].buf;
+	/* Low kernel memory: decided once, here - one set of buffers for both
+	 * storages, and a small block of its own for the again cache; else each
+	 * storage its own set, on or off */
+	g_share_on = LD(g_lowmem_set) && !g_dev[VM_DEV_SD2VITA].buf && !g_dev[VM_DEV_MEMCARD].buf;
 	g_dev[VM_DEV_SD2VITA].shared = g_dev[VM_DEV_MEMCARD].shared = g_share_on;
-	if (g_share_on)
-		VM_KLOGI("stage: low kernel memory: one buffer for the SD2Vita and the memory card");
-	for (int i = 0; i < VM_DEV_COUNT; i++)
-		if (LD(g_dev[i].want))
-			prealloc(&g_dev[i]);
+	prealloc(&g_dev[VM_DEV_SD2VITA]);
+	prealloc(&g_dev[VM_DEV_MEMCARD]);
+	if (g_share_on) {
+		void *b = NULL;
+		const int r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RC_OWN_UNITS * RC_UNIT * 512,
+		                        &g_rc.uid, &b);
+
+		if (r < 0)
+			g_rc.uid = -1;
+		else
+			__atomic_store_n(&g_rc.own, b, __ATOMIC_RELEASE);
+		VM_KLOGI("stage: low kernel memory: one buffer for the SD2Vita and the memory card; "
+		         "the again cache's own %u KiB %s (0x%08x)", RC_OWN_UNITS * RC_UNIT / 2,
+		         r < 0 ? "not made" : "made", (unsigned)(r < 0 ? r : 0));
+	}
 	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
 			(tai_hook_ref_t *)&g_ref[k_hooks[i].h], "SceSdif", LIB_SDIF, k_hooks[i].nid,
@@ -6180,6 +6171,10 @@ int vm_stage_init(void)
 				ksceKernelFreeMemBlock(m->uid);
 				m->uid = -1;
 			}
+			if (m->uid2 >= 0)                 /* (shared: not its own) */
+				ksceKernelFreeMemBlock(m->uid2);
+			m->uid2 = -1;
+			m->buf2 = NULL;
 			break;
 		}
 	}
@@ -6242,8 +6237,8 @@ void vm_stage_fini(void)
 			ksceKernelFreeMemBlock(d->uid);
 			d->uid = -1;
 		}
-		/* made at the start, never put to use (prealloc) */
-		if (!d->pipe_made && d->uid2 >= 0) {
+		/* kept to the end (pipe_release leaves it) */
+		if (d->uid2 >= 0) {
 			ksceKernelFreeMemBlock(d->uid2);
 			d->uid2 = -1;
 			d->buf2 = NULL;
@@ -6255,15 +6250,12 @@ void vm_stage_fini(void)
 			d->t_cached = 0;
 		}
 	}
-	if (g_rc.uid >= 0) {                  /* the again cache's own blocks */
+	if (g_rc.uid >= 0) {                  /* the again cache's own block */
 		__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
 		ksceKernelFreeMemBlock(g_rc.uid);
 		g_rc.uid = -1;
-		ksceKernelFreeMemBlock(g_rc.uid2);
-		g_rc.uid2 = -1;
-		g_rc.own2 = NULL;
 	}
-	__atomic_store_n(&g_rc.own_fail, 0, __ATOMIC_RELAXED);
+	g_rc.zb[0] = g_rc.zb[1] = NULL;
 	__atomic_store_n(&g_rc.host, NULL, __ATOMIC_SEQ_CST);
 	g_rc.user = NULL;
 	rc_clear();
@@ -6409,6 +6401,7 @@ static void mem_report(void)
 	}
 	mem_report_one("shared staging", -1, g_sh.uid, STAGE_BYTES);
 	mem_report_one("shared second buffer", -1, g_sh.uid2, PIPE_TAIL_SECTORS * 512);
+	mem_report_one("again cache", -1, g_rc.uid, RC_OWN_UNITS * RC_UNIT * 512);
 	mem_report_one("log counts", -1, g_diag_uid, (uint32_t)sizeof(Diag));
 	if (g_shadow_uid >= 0)
 		mem_report_one("verify", -1, g_shadow_uid, STAGE_BYTES);
@@ -6471,10 +6464,6 @@ void vm_stage_apply(const VmSettings *s)
 		ra_wake();
 	}
 	ST(g_lowmem_set, s->lowmem ? 1 : 0);   /* used at the start only */
-	if ((s->rckeep ? 1 : 0) != LD(g_rc_keep)) {
-		ST(g_rc_keep, s->rckeep ? 1 : 0);
-		ra_wake();                        /* the worker: its own blocks made or given back */
-	}
 	if (s->log)
 		diag_make();
 	ST(g_log_diag, s->log && DG() ? 1 : 0);
@@ -6867,144 +6856,6 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
-/* A storage switched off that left its second buffer to the cache
- * (pipe_release): given back once the cache no longer keeps memory (or no
- * storage is on at all), the cache let go of it first. A request in the cache: the next tick. Worker. */
-static void rc_lent_idle(void)
-{
-	int any_on = 0;
-
-	for (int i = 0; i < VM_DEV_COUNT; i++)
-		any_on |= LD(g_dev[i].enabled) != 0;
-	if (rc_keep_on() && any_on)           /* no storage on: nobody to lend to */
-		return;
-	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		Dev *d = &g_dev[i];
-		SceUID uid2;
-
-		if (!d->buf2_lent || LD(d->enabled) || d->pipe_made || d->uid2 < 0)
-			continue;
-		if (__sync_lock_test_and_set(&g_rc.lock, 1))
-			return;
-		if (g_rc.host == d) {
-			__atomic_store_n(&g_rc.host, NULL, __ATOMIC_SEQ_CST);
-			rc_clear();
-		}
-		uid2 = d->uid2;
-		d->buf2 = NULL;
-		d->uid2 = -1;
-		d->buf2_lent = 0;
-		__sync_lock_release(&g_rc.lock);
-		ksceKernelFreeMemBlock(uid2);
-		VM_KLOGI("stage: dev %d second buffer given back (%s)", i,
-		         any_on ? "the again cache keeps no memory" : "no storage on");
-	}
-}
-
-/* The worker makes the again cache's own blocks when asked (want_own): 1 if
- * it made them now. */
-static int rc_own_make(void)
-{
-	int made = 0;
-
-	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
-	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
-		/* two blocks, as a storage's buffers (one contiguous 384 KiB is
-		 * often not there once games run) */
-		const uint32_t b0 = RC_UNITS0 * RC_UNIT * 512, b1 = (RC_UNITS - RC_UNITS0) * RC_UNIT * 512;
-		void *a = NULL, *b = NULL;
-		int r;
-
-		__atomic_store_n(&g_rc.want_own, 0, __ATOMIC_RELAXED);
-		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b0, &g_rc.uid, &a);
-		if (r >= 0) {
-			r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b1, &g_rc.uid2, &b);
-			if (r < 0) {
-				ksceKernelFreeMemBlock(g_rc.uid);
-				g_rc.uid2 = -1;
-			}
-		}
-		if (r >= 0) {
-			g_rc.own2 = b;
-			__atomic_store_n(&g_rc.own, a, __ATOMIC_RELEASE);   /* published last */
-			mem_report_one("again cache", -1, g_rc.uid, b0);
-			mem_report_one("again cache 2nd", -1, g_rc.uid2, b1);
-			made = 1;
-		} else {
-			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
-
-			g_rc.uid = -1;
-			/* not asked again for this app: it reads as without the cache */
-			__atomic_store_n(&g_rc.own_fail, fg, __ATOMIC_RELAXED);
-			ADD(g_rc.own_errs, 1);
-			VM_KLOGW("stage: again cache: no memory for its own blocks (0x%08x) - not "
-			         "asked again for this app", (unsigned)r);
-		}
-	}
-	return made;
-}
-
-/* Whether the again cache keeps its own blocks whatever is in front
- * (VM_KEY_RCKEEP): the setting on and exactly one storage on, with buffers
- * of its own (Low kernel memory: no cache at all) - none to borrow from. */
-static int rc_keep_now(void)
-{
-	int on = 0;
-
-	if (!rc_keep_on())                    /* Low kernel memory: the setting has no say */
-		return 0;
-	for (int i = 0; i < VM_DEV_COUNT; i++) {
-		const Dev *d = &g_dev[i];
-
-		if (LD(d->enabled) && !LD(d->fallback)) {
-			if (d->shared)
-				return 0;
-			on++;
-		} else if (!d->shared && !LD(d->fallback) && !LD(d->unusable) &&
-		           __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) && d->buf2) {
-			/* a storage switched off lends its own (rc_lends) - also
-			 * while its threads are still being let go */
-			return 0;
-		}
-	}
-	return on == 1;
-}
-
-/* The again cache's own block back to the system once nothing uses it
- * (unless kept: rc_keep_now):
- * the game it was made for left the front (it quit, or went to the home
- * screen - suspended, ev 4) or another storage lends its buffers now. Made
- * again when a game in front needs it (rc_hold). What it held is dropped (a
- * new block has none of it). A request in the cache: the next tick. Worker. */
-static void rc_own_idle(int keep)
-{
-	SceUID uid, uid2;
-	int lent;
-
-	if (keep || !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE) ||
-	    __atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) ||
-	    __sync_lock_test_and_set(&g_rc.lock, 1))
-		return;
-	if (g_rc.game && !g_rc.host && g_rc.pid &&
-	    __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) == g_rc.pid) {
-		__sync_lock_release(&g_rc.lock);      /* its game is in front: kept */
-		return;
-	}
-	lent = g_rc.host != NULL;
-	__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
-	uid = g_rc.uid;
-	uid2 = g_rc.uid2;
-	g_rc.uid = g_rc.uid2 = -1;
-	g_rc.own2 = NULL;
-	rc_clear();
-	__sync_lock_release(&g_rc.lock);
-	ksceKernelFreeMemBlock(uid);
-	ksceKernelFreeMemBlock(uid2);
-	ADD(g_rc.own_freed, 1);
-	VM_KLOGI("stage: again cache's own block freed (%s)",
-	         lent ? "another storage lends its buffers" : "its game left the front");
-}
-
 void vm_stage_worker_tick(void)
 {
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
@@ -7012,24 +6863,6 @@ void vm_stage_worker_tick(void)
 
 	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
-	/* the again cache's own blocks: kept while the setting says so and one
-	 * storage is on (made at once, a failure not tried again till that
-	 * changes); else made for a game that needs them, given back after */
-	{
-		static int keep_failed;
-		const int keep = rc_keep_now();
-
-		if (!keep)
-			keep_failed = 0;
-		rc_lent_idle();
-		rc_own_idle(keep);
-		if (keep && !keep_failed && LD(g_live) && !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
-			__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);
-			keep_failed = 1;                  /* cleared below when made */
-		}
-		if (rc_own_make() && keep)
-			keep_failed = 0;
-	}
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;

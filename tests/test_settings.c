@@ -220,9 +220,7 @@ static void test_driver_key(void)
 	CHECK(s.lowmem == 0 && VM_DEF_LOWMEM == 0);                              /* 1.5.0's too */
 	CHECK(vm_settings_set(VM_KEY_SYSAPPS, 2) == VM_ERR_ARG);
 	CHECK(vm_settings_set(VM_KEY_LOWMEM, 2) == VM_ERR_ARG);
-	CHECK(s.rckeep == 0 && VM_DEF_RCKEEP == 0);                              /* 1.5.x's too */
-	CHECK(vm_settings_set(VM_KEY_RCKEEP, 2) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_RCKEEP, 1) == VM_OK);
+	CHECK(VM_KEY_COUNT == VM_KEY_LOWMEM + 1);   /* (a 1.6.0 test build's key past it: ignored) */
 	CHECK(vm_settings_set(VM_KEY_DRIVER, 0) == VM_OK);
 	vm_settings_flush();
 	vm_settings_init();                       /* the next start */

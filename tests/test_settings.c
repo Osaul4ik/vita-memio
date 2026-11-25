@@ -23,6 +23,15 @@ void vm_stage_apply(const VmSettings *s)
 	last_applied = *s;
 }
 
+static int down_calls, down_last = -1;
+
+int vm_stage_down(int down)
+{
+	down_calls++;
+	down_last = down;
+	return 1;
+}
+
 static const char *dir;
 
 static void path_of(const char *name, char *out, size_t n)
@@ -415,6 +424,25 @@ static void test_save_gives_up_after_retries(void)
 	CHECK(g_dirty == 1);
 }
 
+/* A reset or power off: the storage code told, a change waiting is saved
+ * now; refused: the settings applied again, as they are. */
+static void test_down_saves_and_reapplies(void)
+{
+	VmSettings s;
+
+	clean();
+	vm_settings_init();
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK && vm_settings_pending());
+	down_calls = 0;
+	CHECK(vm_settings_down(1) == 1 && down_calls == 1 && down_last == 1);
+	CHECK(!vm_settings_pending() && exists("settings.bin"));
+	apply_calls = 0;
+	CHECK(vm_settings_down(0) == 1 && down_last == 0 && apply_calls == 1);
+	vm_settings_copy(&s);
+	CHECK(!memcmp(&last_applied, &s, sizeof(s)) && s.sd2vita == 1);
+	CHECK(!vm_settings_pending());
+}
+
 int main(void)
 {
 	dir = fakes_tmpdir_new();
@@ -428,6 +456,7 @@ int main(void)
 	RUN(test_pending);
 	RUN(test_mismatch_resets_to_defaults);
 	RUN(test_bad_tmp_removed);
+	RUN(test_down_saves_and_reapplies);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);

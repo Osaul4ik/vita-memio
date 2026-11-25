@@ -43,6 +43,7 @@
 
 #define VM_GUARD_PATH  VM_DATA_DIR "/boot_guard"
 #include "guard.h"
+#include "vm_hook.h"
 
 /* Storage driver (SceSdif) module fingerprints of the firmwares this build
  * supports. Its code is identical across all of them; anything else stays
@@ -125,6 +126,98 @@ static char guard_read(void)
 static int guard_write(char c)
 {
 	return vm_guard_write(VM_GUARD_PATH, VM_DATA_DIR, c, &g_guard_len) < 0 ? VM_ERR_IO : VM_OK;
+}
+
+/* ---- reset and power off ------------------------------------------------------ */
+
+/* A reset or a power off asked for (VitaShell's or HENkaku's reboot, the
+ * system's restart, switching off): before it goes on, every storage back to
+ * the standard way with nothing of ours in flight, the settings saved and the
+ * log closed - so the system shuts the cards down cleanly. A plain power off
+ * cut the power with nothing left to finish; a reset did not, and a transfer
+ * of ours caught in it could leave a card needing a hard reset. Suspend (rest
+ * mode) is not touched: the plugin goes on after it. */
+#define LIB_POWER        0x1082DA7Fu   /* ScePower: the apps' syscalls */
+#define LIB_POWER_DRV    0x1590166Fu   /* ScePowerForDriver            */
+#define NID_COLD_RESET   0x0442D852u   /* (k)scePowerRequestColdReset  */
+#define NID_STANDBY      0x2B7C7CF4u   /* (k)scePowerRequestStandby    */
+#define NID_SOFT_RESET   0x2875994Bu   /* kscePowerRequestSoftReset    */
+
+enum { PW_COLD, PW_STANDBY, PW_COLD_DRV, PW_STANDBY_DRV, PW_SOFT_DRV, PW_COUNT };
+static const char *const k_pw_name[PW_COUNT] = { "reset", "power off", "reset", "power off",
+                                                 "soft reset" };
+static SceUID g_pw_hook[PW_COUNT] = { -1, -1, -1, -1, -1 };
+static volatile tai_hook_ref_t g_pw_ref[PW_COUNT];
+static volatile int g_pw_down;          /* a request is being handled, or went on */
+static volatile int g_worker_busy;      /* the worker's round: files may be written */
+
+static int power_request(int which)
+{
+	const tai_hook_ref_t ref = vm_hook_ref(&g_pw_ref[which]);
+	int first, r;
+
+	if (!ref)
+		return VM_HOOK_NO_REF;
+	first = !__atomic_exchange_n(&g_pw_down, 1, __ATOMIC_SEQ_CST);   /* before the busy check */
+	if (first) {   /* a nested one (the apps' call into the driver's) goes straight on */
+		int quiet;
+
+		/* the worker's round finished: no tuning, profile, settings or log
+		 * file being written; it writes none from here on */
+		for (int t = 0; t < 1000 && __atomic_load_n(&g_worker_busy, __ATOMIC_SEQ_CST); t++)
+			ksceKernelDelayThread(1000);
+		quiet = vm_settings_down(1);
+
+		VM_KLOGI("power: %s asked for at %us - every storage the standard way%s",
+		         k_pw_name[which], (unsigned)uptime_s(),
+		         quiet ? "" : " (a transfer still in flight after 1 s)");
+		vm_klog_set_enabled(0);           /* the log file closed */
+	}
+	r = TAI_CONTINUE(int, ref);
+	if (first && r < 0) {                 /* refused: the plugin goes on */
+		vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));
+		VM_KLOGW("power: %s refused (0x%08x) - the plugin goes on", k_pw_name[which],
+		         (unsigned)r);
+		vm_settings_down(0);
+		__atomic_store_n(&g_pw_down, 0, __ATOMIC_RELEASE);
+		worker_wake();
+	}
+	return r;
+}
+
+static int hook_cold(void)        { return power_request(PW_COLD); }
+static int hook_standby(void)     { return power_request(PW_STANDBY); }
+static int hook_cold_drv(void)    { return power_request(PW_COLD_DRV); }
+static int hook_standby_drv(void) { return power_request(PW_STANDBY_DRV); }
+static int hook_soft_drv(void)    { return power_request(PW_SOFT_DRV); }
+
+static void power_hooks_init(void)
+{
+	static const struct { uint32_t lib, nid; int (*fn)(void); } k[PW_COUNT] = {
+		{ LIB_POWER, NID_COLD_RESET, hook_cold },
+		{ LIB_POWER, NID_STANDBY, hook_standby },
+		{ LIB_POWER_DRV, NID_COLD_RESET, hook_cold_drv },
+		{ LIB_POWER_DRV, NID_STANDBY, hook_standby_drv },
+		{ LIB_POWER_DRV, NID_SOFT_RESET, hook_soft_drv },
+	};
+
+	for (int i = 0; i < PW_COUNT; i++) {
+		g_pw_ref[i] = 0;
+		g_pw_hook[i] = taiHookFunctionExportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_pw_ref[i],
+		                                              "ScePower", k[i].lib, k[i].nid, k[i].fn);
+		if (g_pw_hook[i] < 0)
+			VM_KLOGW("power: hook %d not installed (0x%08x) - that %s is not prepared for",
+			         i, (unsigned)g_pw_hook[i], k_pw_name[i]);
+	}
+}
+
+static void power_hooks_fini(void)
+{
+	for (int i = PW_COUNT - 1; i >= 0; i--)
+		if (g_pw_hook[i] >= 0) {
+			taiHookReleaseForKernel(g_pw_hook[i], g_pw_ref[i]);
+			g_pw_hook[i] = -1;
+		}
 }
 
 /* ---- the home screen, for the boot guard ------------------------------------ */
@@ -289,6 +382,8 @@ static void log_problem(const VmDevState *d, int i)
 	         (unsigned)d->verified);
 }
 
+static void worker_round(VmDevState *prev);
+
 static int worker(SceSize args, void *argp)
 {
 	VmDevState prev[VM_DEV_COUNT];
@@ -296,7 +391,6 @@ static int worker(SceSize args, void *argp)
 	(void)args; (void)argp;
 	memset(prev, 0, sizeof(prev));
 	while (g_run) {
-		VmDevState now[VM_DEV_COUNT];
 		const int running = g_disabled == VM_DIS_NONE || g_disabled == VM_DIS_HOOKS;
 		const int hud = running ? vm_hud_link_busy() : VM_HUD_IDLE;   /* hud_link.h */
 		SceUInt wait = 0;
@@ -317,35 +411,49 @@ static int worker(SceSize args, void *argp)
 			ksceKernelDelayThread(VM_WORKER_FAST_US);
 		if (!g_run)
 			break;
-		g_uptime = uptime_s();
-		/* Always, also in safe mode or on an unknown firmware: settings can
-		 * still be changed there (to switch off what broke the last start),
-		 * so they are saved, and the log follows its switch. */
-		vm_settings_flush();
-		vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));   /* follows the switch */
-		/* Safe mode stays until it is reset, an unknown firmware and a
-		 * driver switched off never set the guard: nothing else runs in
-		 * those three. */
-		if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE || g_disabled == VM_DIS_OFF)
+		__atomic_store_n(&g_worker_busy, 1, __ATOMIC_SEQ_CST);
+		if (__atomic_load_n(&g_pw_down, __ATOMIC_SEQ_CST)) {   /* going down: nothing written */
+			__atomic_store_n(&g_worker_busy, 0, __ATOMIC_RELEASE);
 			continue;
-		guard_tick();
-		if (!g_on)
-			continue;                       /* the console still starts: nothing yet */
-		vm_stage_worker_tick();
-		vm_stage_get(now, 1);
-		vm_hud_link_tick(now, worker_wake);
-		vm_stage_io_tick();               /* the overlay's files, from here: its stack free */
-		for (int i = 0; i < VM_DEV_COUNT; i++) {
-			int fell_back = now[i].status == VM_ST_FALLBACK && prev[i].status != VM_ST_FALLBACK;
-			int new_err = now[i].errors != prev[i].errors ||
-			              now[i].mismatches != prev[i].mismatches;
-
-			if (fell_back || new_err)
-				log_problem(&now[i], i);
-			prev[i] = now[i];
 		}
+		worker_round(prev);
+		__atomic_store_n(&g_worker_busy, 0, __ATOMIC_RELEASE);
 	}
 	return 0;
+}
+
+/* One round of the worker (g_worker_busy set). */
+static void worker_round(VmDevState *prev)
+{
+	VmDevState now[VM_DEV_COUNT];
+
+	g_uptime = uptime_s();
+	/* Always, also in safe mode or on an unknown firmware: settings can
+	 * still be changed there (to switch off what broke the last start),
+	 * so they are saved, and the log follows its switch. */
+	vm_settings_flush();
+	vm_klog_set_enabled(__atomic_load_n(&g_vm_settings.log, __ATOMIC_RELAXED));   /* follows the switch */
+	/* Safe mode stays until it is reset, an unknown firmware and a
+	 * driver switched off never set the guard: nothing else runs in
+	 * those three. */
+	if (g_disabled == VM_DIS_SAFE || g_disabled == VM_DIS_FIRMWARE || g_disabled == VM_DIS_OFF)
+		return;
+	guard_tick();
+	if (!g_on)
+		return;                         /* the console still starts: nothing yet */
+	vm_stage_worker_tick();
+	vm_stage_get(now, 1);
+	vm_hud_link_tick(now, worker_wake);
+	vm_stage_io_tick();                 /* the overlay's files, from here: its stack free */
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		int fell_back = now[i].status == VM_ST_FALLBACK && prev[i].status != VM_ST_FALLBACK;
+		int new_err = now[i].errors != prev[i].errors ||
+		              now[i].mismatches != prev[i].mismatches;
+
+		if (fell_back || new_err)
+			log_problem(&now[i], i);
+		prev[i] = now[i];
+	}
 }
 
 /* ---- exported SceVitaMemio API (user-callable) --------------------------- */
@@ -534,6 +642,8 @@ int module_start(SceSize argc, const void *args)
 	if (vm_stage_init() != VM_OK) {
 		g_disabled = VM_DIS_HOOKS;
 		VM_KLOGW("storage hooks NOT installed: storage stays stock");
+	} else {
+		power_hooks_init();
 	}
 	start_worker();
 	return SCE_KERNEL_START_SUCCESS;
@@ -543,6 +653,7 @@ int module_stop(SceSize argc, const void *args)
 {
 	(void)argc; (void)args;
 	/* Every state runs the worker; the rest releases only what was set up. */
+	power_hooks_fini();
 	vm_stage_on_problem(NULL);
 	g_run = 0;
 	worker_wake();

@@ -140,6 +140,28 @@ void vm_settings_reapply(void)
 	__sync_lock_release(&g_set_lock);
 }
 
+/* The console resets or powers off (1: vm_stage_down; the settings saved
+ * now, not by the worker meanwhile), or that failed (0: the settings applied
+ * again). Under the same lock as vm_settings_set, so none applied at the
+ * same time switches a storage back on. 1 if quiet in time. */
+int vm_settings_down(int down)
+{
+	VmSettings now;
+	int r;
+
+	while (__sync_lock_test_and_set(&g_set_lock, 1))
+		ksceKernelDelayThread(100);
+	r = vm_stage_down(down);
+	if (!down) {
+		vm_settings_copy(&now);
+		vm_stage_apply(&now);
+	}
+	__sync_lock_release(&g_set_lock);
+	if (down)
+		vm_settings_flush();
+	return r;
+}
+
 void vm_settings_copy(VmSettings *out)
 {
 	/* word by word, each read whole (a key may be set meanwhile) */

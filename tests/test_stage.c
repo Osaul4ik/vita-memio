@@ -153,6 +153,7 @@ static void reset(void)
 	g_sh.owner = NULL;
 	g_sh.handovers = g_sh.other_busy = 0;
 	g_hold = 0;                                     /* the home screen is up */
+	g_down = 0;
 	g_sysapps = 0;                                  /* as before: games only */
 	g_app_pid = 0;
 	g_app_title[0] = 0;
@@ -1090,6 +1091,85 @@ static void test_init_all_hooks(void)
 	vm_stage_apply(&s);                       /* after fini: nothing allocated again */
 	count_free_bufs(&n);
 	CHECK(n == 0 && fake_alloc_calls == 4);
+}
+
+/* A request in flight that waits for a queued piece: let go after 30 ms,
+ * noting whether its piece was still queued then. */
+static int g_down_seen_queued;
+
+static void *down_request(void *arg)
+{
+	Dev *const d = arg;
+
+	usleep(30000);
+	g_down_seen_queued = __atomic_load_n(&d->ra[0].state, __ATOMIC_ACQUIRE) == RA_QUEUED;
+	__atomic_store_n(dbusy(d), 0, __ATOMIC_RELEASE);
+	return NULL;
+}
+
+/* A reset or power off asked for (main.c's power hooks): every storage the
+ * standard way at once, also with its setting on and through a setting
+ * applied meanwhile, read ahead stopped, the queued pieces dropped - after
+ * the transfers in flight (bounded); refused, it comes back as set. */
+static void test_down(void)
+{
+	VmSettings s = devices_on(1, 0, 1);
+	Dev *const d = &g_dev[M];
+
+	boot_state();
+	CHECK(vm_stage_init() == VM_OK);
+	vm_stage_apply(&s);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_SD2VITA].enabled && d->enabled);
+	__atomic_store_n(&d->ra_ready, 1, __ATOMIC_RELEASE);
+	d->ra[0].state = RA_QUEUED;
+	d->ra[1].state = RA_READY;
+	CHECK(vm_stage_down(1) == 1);
+	CHECK(!g_dev[VM_DEV_SD2VITA].enabled && !d->enabled && !d->ra_ready);
+	CHECK(d->ra[0].state == RA_FREE && d->ra[1].state == RA_READY);   /* read: left */
+	vm_stage_apply(&s);                       /* a setting meanwhile: still off */
+	CHECK(!g_dev[VM_DEV_SD2VITA].enabled && !d->enabled);
+	/* a transfer that never ends: given up after the bound, still off */
+	__atomic_store_n(dbusy(d), 1, __ATOMIC_RELEASE);
+	CHECK(vm_stage_down(1) == 0 && !d->enabled);
+	__atomic_store_n(dbusy(d), 0, __ATOMIC_RELEASE);
+	d->ra[2].state = RA_READING;              /* a piece still being read */
+	CHECK(vm_stage_down(1) == 0);
+	d->ra[2].state = RA_FREE;
+	/* the requests in flight finish first, their queued pieces still there */
+	{
+		pthread_t t;
+
+		d->ra[0].state = RA_QUEUED;
+		g_down_seen_queued = 0;
+		__atomic_store_n(dbusy(d), 1, __ATOMIC_RELEASE);
+		CHECK(pthread_create(&t, NULL, down_request, d) == 0);
+		CHECK(vm_stage_down(1) == 1);
+		pthread_join(t, NULL);
+		CHECK(g_down_seen_queued && d->ra[0].state == RA_FREE);
+	}
+	/* refused: back as set at the next apply */
+	CHECK(vm_stage_down(0) == 1);
+	vm_stage_apply(&s);
+	CHECK(g_dev[VM_DEV_SD2VITA].enabled && d->enabled);
+	vm_stage_fini();
+}
+
+/* Going down before the home screen came up: it never comes on. */
+static void test_down_before_go(void)
+{
+	VmSettings s = devices_on(1, 0, 1);
+
+	boot_state();
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(vm_stage_down(1) == 1);
+	CHECK(vm_stage_go() == 0 && g_proc_hook < 0);
+	vm_stage_apply(&s);
+	CHECK(!g_dev[VM_DEV_SD2VITA].enabled && !g_dev[M].enabled);
+	vm_stage_down(0);
+	CHECK(vm_stage_go() == 1);
+	vm_stage_fini();
 }
 
 static void test_init_sdif_hook_fails_releases_everything(void)
@@ -7169,6 +7249,8 @@ int main(void)
 	RUN(test_timing_split);
 	RUN(test_init_all_hooks);
 	RUN(test_init_prealloc);
+	RUN(test_down);
+	RUN(test_down_before_go);
 	RUN(test_init_sdif_hook_fails_releases_everything);
 	RUN(test_init_memcard_hook_fails_only_memcard_stock);
 	RUN(test_buffers_on_demand);

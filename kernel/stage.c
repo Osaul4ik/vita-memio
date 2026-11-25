@@ -395,6 +395,10 @@ static int g_live;
  * transfer on the standard way, and no buffer, helper thread or app event is
  * set up. The settings applied meanwhile take effect at vm_stage_go. */
 static volatile int g_hold = 1;
+/* The console is going down (vm_stage_down: a reset or power off asked
+ * for): as g_hold, every device off and the plugin never comes on again,
+ * unless the request fails (vm_stage_down(0)). */
+static volatile int g_down;
 
 /* Smallest transfer the faster path takes (sectors): MIN_SECTORS, or 1 with
  * small transfers switched on. */
@@ -6067,7 +6071,7 @@ int vm_stage_init(void)
  * 1 the first time, 0 after. */
 int vm_stage_go(void)
 {
-	if (!LD(g_hold) || !LD(g_live))
+	if (!LD(g_hold) || !LD(g_live) || LD(g_down))
 		return 0;
 	g_proc_ref = 0;
 	g_proc_hook = taiHookFunctionImportForKernel(KERNEL_PID, (tai_hook_ref_t *)&g_proc_ref, "SceProcessmgr",
@@ -6080,6 +6084,62 @@ int vm_stage_go(void)
 		         "ahead Auto follow no app", (unsigned)g_proc_hook);
 	ST(g_hold, 0);
 	return 1;
+}
+
+/* The console is about to reset or power off (main.c's power hooks), or
+ * that failed after all (down 0: the caller applies the settings again).
+ * Going down: from now on every transfer the standard way and nothing more
+ * read ahead or read again from memory; then wait, bounded, for the faster
+ * transfers and the read-ahead pieces in flight, so the system shuts the
+ * storages down with nothing of ours on them. Buffers and threads stay (the
+ * reset ends them; freeing them here could race a request just past its
+ * check). 1 if everything was quiet in time. */
+#define DOWN_WAIT_MS  1000
+int vm_stage_down(int down)
+{
+	int quiet = 0, left = 1;
+
+	ST(g_down, down ? 1 : 0);
+	if (!down)
+		return 1;
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		Dev *d = &g_dev[i];
+
+		ADD(d->ra_epoch, 1);              /* nothing read before is used after */
+		ST(d->enabled, 0);
+		__atomic_store_n(&d->ra_ready, 0, __ATOMIC_SEQ_CST);   /* no new pieces */
+	}
+	__sync_synchronize();
+	/* as ra_retire: the requests in flight first - one may wait for a piece
+	 * still queued, which the read-ahead thread still reads - then the
+	 * queued pieces dropped and the one being read let finish */
+	for (int t = 0; t <= DOWN_WAIT_MS && !quiet; t++) {
+		quiet = 1;
+		for (int i = 0; i < VM_DEV_COUNT; i++)
+			if (__atomic_load_n(dbusy(&g_dev[i]), __ATOMIC_ACQUIRE))
+				quiet = 0;
+		if (!quiet)
+			ksceKernelDelayThread(1000);
+	}
+	for (int t = 0; t <= DOWN_WAIT_MS; t++) {
+		left = 0;
+		for (int i = 0; i < VM_DEV_COUNT; i++) {
+			Dev *d = &g_dev[i];
+
+			for (int k = 0; k < RA_PIECES; k++) {
+				int exp = RA_QUEUED;
+
+				__atomic_compare_exchange_n(&d->ra[k].state, &exp, RA_FREE, 0,
+				                            __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+				left |= __atomic_load_n(&d->ra[k].state, __ATOMIC_ACQUIRE) == RA_READING;
+			}
+			left |= __atomic_load_n(dbusy(d), __ATOMIC_ACQUIRE) != 0;
+		}
+		if (!left)
+			break;
+		ksceKernelDelayThread(1000);
+	}
+	return quiet && !left;
 }
 
 void vm_stage_fini(void)
@@ -6306,7 +6366,7 @@ static void diag_make(void)
 void vm_stage_apply(const VmSettings *s)
 {
 	/* the internal storage never: its setting is reserved (VM_KEY_INTERNAL) */
-	const int hold = LD(g_hold);
+	const int hold = LD(g_hold) || LD(g_down);
 	const int32_t want[VM_DEV_COUNT] = { hold ? 0 : s->sd2vita, 0, hold ? 0 : s->memcard };
 
 	for (int i = 0; i < VM_DEV_COUNT; i++) {

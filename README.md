@@ -161,6 +161,7 @@ The console is out of kernel memory (it can also show as a crash right after swi
 - Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
 - Memory: 768, 640 or 512 KiB of buffers by *Kernel memory*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. It is set aside when the console starts and kept.
 - Settings, profiles and `tuning.bin` from another version are not converted: such a file is deleted and everything starts from the defaults.
+- When the console is restarted (from VitaShell, HENkaku or the system) or switched off, the plugin first puts every storage back the normal way, lets what it was reading finish and saves its files, so the cards are shut down cleanly.
 - While the console starts, everything goes the normal way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
 - On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

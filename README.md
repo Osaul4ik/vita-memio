@@ -40,7 +40,9 @@ Back up your cards first, as with any plugin that touches storage.
 
 Deleting the folders sets everything back to the defaults: settings, the games' overlay profiles and *Tuning*'s measurements. Tuning measures your card again by itself while you play.
 
-**To uninstall:** switch off every storage (or *Driver*), remove the lines from `config.txt`, restart, then delete the three files and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+## Uninstall
+
+Switch **Driver** off, remove the plugin's lines from `config.txt` and restart. Then delete the three files from `ur0:tai/` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
 
 ## Settings
 

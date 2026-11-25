@@ -3834,13 +3834,8 @@ static void test_tiny_reads(void)
 	CHECK(g_ra_tiny_reads == 0 && !d->ra_made && !d->t_buf && d->t_uid < 0);
 	vm_stage_fini();
 
-	/* no clean-and-invalidate: the block non-cacheable as before */
-	on_game(&s, 0x44);
-	CHECK(d->t_buf && !d->t_cached && fake_block_type[d->t_uid] == MEMBLOCK_KERNEL_NC_RW);
-	vm_stage_fini();
-
-	/* with it: in cached memory, emptied from the cache when made and after
-	 * each block read (right after the card's read), the data right */
+	/* the block non-cacheable, also with a clean-and-invalidate there:
+	 * nothing of the cache's work around its reads */
 	fakes_tmpdir_remove();
 	fakes_tmpdir_new();
 	reset();
@@ -3850,51 +3845,8 @@ static void test_tiny_reads(void)
 	g_title_fn = fake_title;
 	as_app(0x44);
 	vm_stage_worker_tick();
-	CHECK(d->t_buf && d->t_cached &&
-	      fake_block_type[d->t_uid] == SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW);
-	CHECK(cinv_calls == 1 && cinv_at == d->t_buf && cinv_size == RA_TINY_SECTORS * 512);
-	at = 500;
-	for (int k = 0; k < RA_TINY_STREAK - 1; k++, at++)
-		CHECK(rd_ok(u, at, 1));
-	CHECK(cinv_calls == 1);
-	{
-		const int calls = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+	CHECK(d->t_buf && fake_block_type[d->t_uid] == MEMBLOCK_KERNEL_NC_RW && cinv_calls == 0);
 
-		CHECK(rd_ok(u, at, 1));                       /* the block read */
-		at++;
-		CHECK(cinv_calls == 2 && cinv_io == calls + 1 && cinv_at == d->t_buf &&
-		      cinv_size == tiny_blk() * 512);
-		for (int k = 1; k < RA_TINY_SECTORS; k++, at++)
-			CHECK(rd_ok(u, at, 1));
-		CHECK(cinv_calls == 2 && g_ra_tiny_reads == RA_TINY_SECTORS);   /* hits: none */
-		CHECK(rd_ok(u, at, 1));                       /* the next block */
-		CHECK(cinv_calls == 3 && cinv_io == calls + 2);
-	}
-	/* a block read that fails: nothing to empty */
-	at = 2400;
-	for (int k = 0; k < RA_TINY_STREAK - 1; k++, at++)
-		CHECK(rd_ok(u, at, 1));
-	fail_at_call = io_calls + 1;
-	{
-		const int c = cinv_calls;
-
-		CHECK(rd_ok(u, at, 1) && cinv_calls == c);
-	}
-	fail_at_call = 0;
-	vm_stage_fini();
-
-	/* cached memory refused: non-cacheable, nothing emptied */
-	fakes_tmpdir_remove();
-	fakes_tmpdir_new();
-	reset();
-	cinv_calls = 0;
-	g_dcache_cinv = fake_cinv;
-	fake_alloc_type_fail = SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW;
-	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
-	g_title_fn = fake_title;
-	as_app(0x44);
-	vm_stage_worker_tick();
-	CHECK(d->t_buf && !d->t_cached && fake_block_type[d->t_uid] == MEMBLOCK_KERNEL_NC_RW);
 	at = 600;
 	for (int k = 0; k < RA_TINY_STREAK + 4; k++, at++)
 		CHECK(rd_ok(u, at, 1));

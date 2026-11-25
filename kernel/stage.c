@@ -235,7 +235,6 @@ typedef struct Dev {
 	 * request holder's; a write looks at t_start, t_end, t_dirty */
 	void         *t_buf;
 	SceUID        t_uid;
-	int           t_cached;               /* t_buf in cached memory (tiny_alloc) */
 	uint32_t      t_next, t_streak;
 	uint32_t      t_run_sec;              /* the run's sectors so far (Adaptive) */
 	uint32_t      t_start, t_end;         /* atomic; t_end == t_start: empty   */
@@ -4596,7 +4595,6 @@ static void ra_release(Dev *d)
 		ksceKernelFreeMemBlock(d->t_uid);
 	d->t_uid = -1;
 	d->t_buf = NULL;
-	d->t_cached = 0;
 	ST(d->t_end, LD(d->t_start));
 	for (int i = 0; i < RA_PIECES; i++)
 		__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
@@ -4605,40 +4603,19 @@ static void ra_release(Dev *d)
 	ST(d->ra_made, 0);
 }
 
-/* The tiny reads' block if the device has none. Cached memory when the cache
- * can be cleaned and invalidated (g_dcache_cinv): a hit is then a copy out of
- * the cache, not out of uncached memory (~114 MB/s); after each fill its lines
- * are cleaned and invalidated (tiny_filled). Else, or if that memory is not
- * there, non-cacheable as before; without either the tiny reads read as
- * before. */
+/* The tiny reads' block if the device has none (without it they read as
+ * before). */
 static void tiny_alloc(Dev *d)
 {
 	if (d->t_buf)
 		return;
-	d->t_cached = 0;
-	if (g_dcache_cinv &&
-	    alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid,
-	              &d->t_buf) >= 0) {
-		/* nothing of the memory's last owner left in the cache: no line of
-		 * it written back over what the card puts there */
-		g_dcache_cinv(d->t_buf, RA_TINY_SECTORS * 512);
-		d->t_cached = 1;
-		return;
-	}
+	/* non-cacheable: the driver then has no cache work around the block's
+	 * read (in cached memory a block read took ~1.3 ms more in games, far
+	 * more than its reads from it gained) */
 	if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
 		d->t_uid = -1;
 		d->t_buf = NULL;
 	}
-}
-
-/* A block just read into a cached t_buf: none of its lines stale in the cache
- * (read before the card wrote memory, or the CPU's look ahead while it did);
- * a line the driver wrote through the cache is written back first, so either
- * way the cache then holds nothing of it and the next read sees memory. */
-static void tiny_filled(Dev *d, uint32_t blk)
-{
-	if (d->t_cached)
-		g_dcache_cinv(d->t_buf, blk * 512);
 }
 
 /* Worker: the read-ahead thread of a device whose helper exists. 0 or the
@@ -4820,7 +4797,6 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 			__sync_lock_release(dbusy(d));
 			return 0;
 		}
-		tiny_filled(d, blk);
 		d->t_io = io;
 		d->t_epoch = LD(d->ra_epoch);
 		d->t_us = ksceKernelGetSystemTimeLow();
@@ -6219,7 +6195,6 @@ void vm_stage_fini(void)
 			ksceKernelFreeMemBlock(d->t_uid);
 			d->t_uid = -1;
 			d->t_buf = NULL;
-			d->t_cached = 0;
 		}
 	}
 	if (g_rc.uid >= 0) {                  /* the again cache's own block */
@@ -7028,18 +7003,13 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
 		{
-			/* the block's memory: cached where it is (tiny_alloc) */
-			const char *const tm = g_dev[VM_DEV_SD2VITA].t_cached || g_dev[VM_DEV_MEMCARD].t_cached ?
-			                       "cached" : "non-cacheable";
-
 			if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
-				VM_KLOGI("stage: tiny reads from their block %u (%s); adaptive: from read %u, "
-				         "block %u KiB now, moved %u", (unsigned)LD(g_ra_tiny_reads), tm,
+				VM_KLOGI("stage: tiny reads from their block %u; adaptive: from read %u, "
+				         "block %u KiB now, moved %u", (unsigned)LD(g_ra_tiny_reads),
 				         (unsigned)LD(g_tiny_thr), (unsigned)(LD(g_tiny_blk) / 2),
 				         (unsigned)LD(g_tn_moves));
 			else
-				VM_KLOGI("stage: tiny reads from their block %u (%s)",
-				         (unsigned)LD(g_ra_tiny_reads), tm);
+				VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
 		}
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			const CalDev *c = &g_cal[i];

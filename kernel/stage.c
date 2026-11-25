@@ -4411,9 +4411,11 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
                          uint32_t *own)
 {
 	int idx[RA_PIECES], cnt;
-	const void *src[RA_PIECES];
-	uint32_t st[RA_PIECES], sz[RA_PIECES], cov = ra_cover(d, part, io, sector, n, idx, st, &cnt),
-	         w0, wait_us, cp_us = 0, at = 0;
+	/* filled for the cnt pieces below; zeroed so the compiler sees them set
+	 * (it cannot tell cnt > 0 whenever cov is) */
+	const void *src[RA_PIECES] = { 0 };
+	uint32_t st[RA_PIECES], sz[RA_PIECES] = { 0 },
+	         cov = ra_cover(d, part, io, sector, n, idx, st, &cnt), w0, wait_us, cp_us = 0, at = 0;
 
 	if (!cov)
 		return 0;

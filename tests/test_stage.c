@@ -5287,6 +5287,127 @@ static void test_mixed_sizes(void)
  * follows it, the part read again comes from the card and the rest from the
  * pieces - the right data, into ordinary and non-cacheable memory; a read
  * that only reaches into a later piece is not one of these. */
+/* The again cache: a game reading again 32 KiB reads it read a moment
+ * before (PCSF00024). The memory card in use, the SD2Vita's buffers lent to
+ * it: once the game showed it reads them again, they are kept there and read
+ * again from there - always the right data; the SD2Vita's own read takes its
+ * buffers back (the cache empty, right data); a write over what is kept is
+ * read as written; not for a homebrew app; with one storage, a block of the
+ * cache's own. */
+static uint8_t rc_hbuf[STAGE_BYTES], rc_hbuf2[PIPE_TAIL_SECTORS * 512];
+
+static void rc_host(int on)
+{
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA];
+
+	memset(sd, 0, sizeof(*sd));
+	sd->port = -1;
+	sd->uid = sd->uid2 = sd->t_uid = -1;
+	sd->th = sd->th2 = sd->ra_th = -1;
+	sd->sem_go = sd->sem_done = sd->sem_free = sd->sem_cgo = sd->sem_fin = -1;
+	sd->ra_go = sd->ra_done = -1;
+	if (on) {
+		sd->buf = rc_hbuf;
+		sd->buf2 = rc_hbuf2;
+		sd->enabled = 1;
+	}
+}
+
+/* n rounds of: a 32 KiB read somewhere new, then the same again */
+static void rc_rounds(uint8_t *u, uint32_t from, int n)
+{
+	for (int i = 0; i < n; i++) {
+		const uint32_t at = (from + (uint32_t)i * 200u) % 3800u;
+
+		CHECK(rd_ok(u, at, 64));
+		CHECK(rd_ok(u, at, 64));
+	}
+}
+
+static void test_again_cache(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+
+	for (int one = 0; one < 2; one++) {
+		uint32_t h0, k0;
+
+		reset();
+		g_title_fn = fake_title;
+		ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+		rc_host(!one);
+		as_app(0x42);                                    /* PCSE00001: a game */
+		fake_memtype = MEMTYPE_NC;
+		fake_meminfo_type = 0x10208006;
+		h0 = g_rc.hits;
+		k0 = g_rc.kept;
+		rc_rounds(u, 0, 80);                             /* 160 reads: half again */
+		CHECK(g_rc.on[0] && !g_rc.on[1]);
+		if (one) {
+			/* no other storage: its own block, from the worker */
+			CHECK(g_rc.host == NULL && g_rc.want_own && !g_rc.own);
+			vm_stage_worker_tick();
+			CHECK(g_rc.own != NULL && g_rc.uid >= 0);
+		} else {
+			CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA]);
+		}
+		rc_rounds(u, 7, 40);
+		CHECK(g_rc.kept - k0 >= 39 && g_rc.hits - h0 >= 39);
+		if (!one) {
+			/* the SD2Vita's own (cached) read takes its buffers back: what
+			 * was kept is gone, the game's read again from the card */
+			const uint32_t lost = g_rc.lost, at = 7 + 39 * 200;
+
+			fake_memtype = 0xD000;
+			CHECK(stage_xfer(&g_dev[VM_DEV_SD2VITA], 0, fake_io, REF_RD2, 0, NULL, 500, u,
+			                 256) == 0 &&
+			      memcmp(u, disk2 + 500 * 512, 256 * 512) == 0);
+			fake_memtype = MEMTYPE_NC;
+			h0 = g_rc.hits;
+			CHECK(rd_ok(u, at % 3800u, 64) && g_rc.hits == h0 && g_rc.lost == lost + 1);
+		}
+		/* a write over what is kept: read again, as written */
+		{
+			const uint32_t at = 3000;
+
+			CHECK(rd_ok(u, at, 64));
+			h0 = g_rc.hits;
+			CHECK(rd_ok(u, at, 64) && g_rc.hits == h0 + 1);
+			memset(u, 0x5A, 64 * 512);
+			fake_memtype = 0xD000;
+			CHECK(wr(u, at + 10, 8, REF_RD) == 0);
+			fake_memtype = MEMTYPE_NC;
+			CHECK(rd_ok(u, at, 64) && g_rc.hits == h0 + 1 && u[10 * 512] == 0x5A);
+		}
+		vm_stage_fini();
+		rc_host(0);
+		CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.host == NULL);
+		fake_memtype = 0xD000;
+		fake_meminfo_type = 0;
+		fake_pid = 0;
+	}
+	/* a homebrew app (VITASHELL): never */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(1);
+	as_app(0x46);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t k0 = g_rc.kept, h0 = g_rc.hits;
+
+		rc_rounds(u, 0, 80);
+		CHECK(!g_rc.on[0] && g_rc.kept == k0 && g_rc.hits == h0);
+	}
+	vm_stage_fini();
+	rc_host(0);
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0;
+	fake_pid = 0;
+	free(u);
+}
+
 static void test_overlapping_reads(void)
 {
 	uint8_t *u = user_buf(256);
@@ -6442,6 +6563,7 @@ int main(void)
 	RUN(test_read_order);
 	RUN(test_mixed_sizes);
 	RUN(test_overlapping_reads);
+	RUN(test_again_cache);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

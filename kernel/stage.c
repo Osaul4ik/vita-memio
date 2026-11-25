@@ -285,6 +285,48 @@ static inline volatile int *dbusy(Dev *d)
 
 static SceUID g_ra_fg;                    /* the app in front (see the app events) */
 
+/* The again cache (see "again cache" below): what a game read lately, kept
+ * for when it reads it again - in the staging buffers of the storage the
+ * game does not use (`host`), or in a block of its own with no such
+ * storage. The host's own requests come first: one that takes its buffers
+ * bumps `gen`, and what the cache held there is gone. */
+#define RC_UNIT     64u                    /* sectors: 32 KiB, the cache's unit  */
+#define RC_UNITS    12u                    /* 384 KiB: a staging buffer and a second one */
+#define RC_UNITS0   (STAGE_SECTORS / RC_UNIT)   /* in the staging buffer: 8   */
+#define RC_HIST     8u
+typedef struct {
+	struct Dev *dev;                       /* atomic: whose reads (NULL: none)  */
+	void       *part;
+	io_fn       io;
+	uint32_t    sector, n;                 /* atomic: a write looks at them     */
+	uint32_t    len;                       /* units                             */
+	uint32_t    epoch, t;
+	int         ok;                        /* read: may be handed out           */
+	int         dirty;                     /* atomic: a write touched it        */
+} RcEnt;
+static struct {
+	volatile int lock;                     /* its fields: one request at a time */
+	struct Dev  *host;                     /* whose buffers (NULL: its own block) */
+	struct Dev  *user;                     /* whose reads it holds              */
+	void        *zb[2];                    /* the buffers its entries are in    */
+	uint32_t    gen, seen;                 /* gen: atomic, bumped by the host's take */
+	uint32_t    next;                      /* the unit the next entry goes to   */
+	RcEnt       e[RC_UNITS];               /* by the unit each starts at        */
+	SceUID      uid;                       /* its own block (no host)           */
+	void       *own;                       /* atomic                            */
+	int         want_own;                  /* atomic: the worker makes it       */
+	/* the app it is for, and whether it reads again what it read (by size: 0
+	 * 32 KiB, 1 large): the last reads the standard way, and the counts */
+	SceUID      pid;
+	int         game;                      /* the app is a game (PCS*)          */
+	uint32_t    hs[RC_HIST], he[RC_HIST];
+	void       *hp[RC_HIST];
+	uint32_t    hi;
+	uint32_t    reads[2], again[2];
+	int         on[2];                     /* atomic                            */
+	uint32_t    hits, hit_kib, kept, lost, moved;   /* atomics: for the log     */
+} g_rc = { .uid = -1 };
+
 /* Another app's request than the one in front's (another process: the
  * system's own, one in the background) while an app is in front. The
  * kernel's own requests count as the app's: they may be its asynchronous
@@ -493,6 +535,10 @@ static int take(Dev *d, int mine, uint32_t nsec)
 		__sync_lock_release(dbusy(d));
 		return 0;
 	}
+	/* the again cache's host: its buffers are its own again (what the cache
+	 * kept there is gone) */
+	if (__atomic_load_n(&g_rc.host, __ATOMIC_RELAXED) == d)
+		__atomic_fetch_add(&g_rc.gen, 1, __ATOMIC_SEQ_CST);
 	/* Low kernel memory: the buffers were the other storage's - its pieces
 	 * (in them) dropped first, waiting for one being read */
 	if (d->shared && __atomic_load_n(&g_sh.owner, __ATOMIC_RELAXED) != d) {
@@ -4807,6 +4853,315 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 	return 1;
 }
 
+/* ---- again cache -------------------------------------------------------------
+ *
+ * Games read again much of what they read a moment before, the standard
+ * way each time (PCSF00024: a quarter of its 32 KiB reads, each the same 32
+ * KiB it read within the last 384 KiB; PCSB01007: a fifth of its large
+ * reads): 2.6 s of PCSF00024's 32 s of reading. A game reads from one
+ * storage; the other's staging buffers (384 KiB) wait meanwhile. Kept
+ * there, the reads of the size a game reads again are read into them and
+ * copied to the game by the copier (DMA: 3 ms a MiB against the card's 54),
+ * and read again, only copied.
+ *   - Games only (title ids PCS*: not homebrew, Adrenaline, the system's
+ *     apps), non-cacheable reads (what read ahead's pieces do not give).
+ *   - The host storage's own requests come first: one taking its buffers
+ *     empties the cache (gen); the cache uses them only while it holds that
+ *     storage (a try: busy, it reads as without it), its pieces dropped.
+ *     With no other storage on, a block of its own (made by the worker); with
+ *     Low kernel memory (one buffer for both), none at all.
+ *   - By size (32 KiB, large): kept only while the game reads again enough
+ *     of them (RC_ON_PM of the reads it reads the standard way, off again
+ *     under RC_OFF_PM): a copy of each read costs about what reading again
+ *     6 % of them saves.
+ *   - Writes mark what they touch (as read ahead's pieces); an entry is used
+ *     for RA_MAX_AGE_US, of the same storage switch (epoch) only. */
+#define RC_ON_PM   100u
+#define RC_OFF_PM  50u
+#define RC_ROUND   128u                    /* reads of a size between two looks  */
+
+/* A game's title id: PCSA..PCSI and 5 digits (the system's apps are NPXS,
+ * homebrew and Adrenaline anything else). */
+static int rc_title_game(const char *t)
+{
+	if (t[0] != 'P' || t[1] != 'C' || t[2] != 'S' || t[3] < 'A' || t[3] > 'I')
+		return 0;
+	for (int i = 4; i < 9; i++)
+		if (t[i] < '0' || t[i] > '9')
+			return 0;
+	return !t[9];
+}
+
+static void rc_clear(void)
+{
+	for (uint32_t i = 0; i < RC_UNITS; i++)
+		__atomic_store_n(&g_rc.e[i].dev, NULL, __ATOMIC_SEQ_CST);
+}
+
+/* The storage whose buffers the cache may use for `d`'s reads (NULL: none
+ * such - its own block). Under g_rc.lock. */
+static Dev *rc_pick(const Dev *d)
+{
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		Dev *h = &g_dev[i];
+
+		if (h != d && !h->shared && LD(h->enabled) && !LD(h->fallback) &&
+		    __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE) && h->buf2)
+			return h;
+	}
+	return NULL;
+}
+
+/* The cache's buffers, held for this request: 1 if they are (then
+ * rc_let_go after). Under g_rc.lock. */
+static int rc_hold(void)
+{
+	Dev *const h = g_rc.host;
+	void *zb[2];
+
+	if (!h) {
+		uint8_t *const own = __atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE);
+
+		if (!own) {
+			__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);   /* the worker makes it */
+			return 0;
+		}
+		zb[0] = own;
+		zb[1] = own + STAGE_BYTES;
+	} else {
+		if (__sync_lock_test_and_set(dbusy(h), 1))
+			return 0;                         /* its own request: it comes first */
+		__sync_synchronize();
+		zb[0] = __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE);
+		zb[1] = h->buf2;
+		if (!LD(h->enabled) || LD(h->fallback) || !zb[0] || !zb[1]) {
+			__sync_lock_release(dbusy(h));
+			return 0;
+		}
+		/* its own pieces are in them (waited for, if being read) */
+		if (ra_any(h))
+			ra_drop(h);
+	}
+	/* taken back by the host since, or other buffers: what was kept is gone */
+	if (__atomic_load_n(&g_rc.gen, __ATOMIC_SEQ_CST) != g_rc.seen || zb[0] != g_rc.zb[0] ||
+	    zb[1] != g_rc.zb[1]) {
+		if (g_rc.seen != __atomic_load_n(&g_rc.gen, __ATOMIC_SEQ_CST))
+			ADD(g_rc.lost, 1);
+		rc_clear();
+		g_rc.seen = __atomic_load_n(&g_rc.gen, __ATOMIC_SEQ_CST);
+		g_rc.zb[0] = zb[0];
+		g_rc.zb[1] = zb[1];
+	}
+	return 1;
+}
+
+static void rc_let_go(void)
+{
+	if (g_rc.host)
+		__sync_lock_release(dbusy(g_rc.host));
+}
+
+static uint8_t *rc_at(uint32_t unit)
+{
+	return unit < RC_UNITS0 ? (uint8_t *)g_rc.zb[0] + (size_t)unit * RC_UNIT * 512
+	                        : (uint8_t *)g_rc.zb[1] + (size_t)(unit - RC_UNITS0) * RC_UNIT * 512;
+}
+
+/* The entry holding all of [sector, sector + n) (-1: none). */
+static int rc_find(const Dev *d, void *part, io_fn io, uint32_t sector, uint32_t n)
+{
+	const uint32_t now = ksceKernelGetSystemTimeLow();
+
+	for (uint32_t i = 0; i < RC_UNITS; i++) {
+		const RcEnt *e = &g_rc.e[i];
+
+		if (__atomic_load_n(&e->dev, __ATOMIC_SEQ_CST) == d && e->ok && e->part == part &&
+		    e->io == io && e->epoch == LD(d->ra_epoch) && sector >= e->sector &&
+		    n <= e->n && sector - e->sector <= e->n - n && now - e->t < RA_MAX_AGE_US &&
+		    !__atomic_load_n(&e->dirty, __ATOMIC_SEQ_CST))
+			return (int)i;
+	}
+	return -1;
+}
+
+/* Room for `len` units, in one buffer: the entries there given up. */
+static uint32_t rc_room(uint32_t len)
+{
+	uint32_t u = g_rc.next >= RC_UNITS ? 0 : g_rc.next;
+
+	if (u < RC_UNITS0 ? u + len > RC_UNITS0 : u + len > RC_UNITS)
+		u = u < RC_UNITS0 ? RC_UNITS0 : 0;    /* the next buffer's start */
+	for (uint32_t i = 0; i < RC_UNITS; i++) {
+		RcEnt *e = &g_rc.e[i];
+
+		if (__atomic_load_n(&e->dev, __ATOMIC_SEQ_CST) && i < u + len && i + e->len > u)
+			__atomic_store_n(&e->dev, NULL, __ATOMIC_SEQ_CST);
+	}
+	g_rc.next = u + len;
+	return u;
+}
+
+/* Copy n sectors at src to the game's buffer p: by the copier as read ahead
+ * does (`off`), else this thread. */
+static void rc_copy(Dev *d, uint8_t *p, const uint8_t *src, uint32_t n, int off, OffMap *om,
+                    int last, uint32_t *own)
+{
+	if (off) {
+		const void *s1 = src;
+		uint32_t cp_us = 0;
+
+		ra_copy_off(d, p, &s1, &n, 1, 0, om, last, own, &cp_us);
+	} else {
+		copy_out(p, src, n * 512, 0);
+		vm_dsb();
+		*own += n;
+	}
+}
+
+/* For the app in front: whether it is a game, and its counts afresh when
+ * another came. Under g_rc.lock. */
+static void rc_app(void)
+{
+	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
+	if (fg == g_rc.pid)
+		return;
+	{
+		char t[16];
+
+		g_rc.game = fg && fg_get(t) == fg && rc_title_game(t);
+	}
+	g_rc.pid = fg;
+	memset(g_rc.hs, 0, sizeof(g_rc.hs));
+	memset(g_rc.he, 0, sizeof(g_rc.he));
+	memset(g_rc.hp, 0, sizeof(g_rc.hp));
+	g_rc.reads[0] = g_rc.reads[1] = g_rc.again[0] = g_rc.again[1] = 0;
+	__atomic_store_n(&g_rc.on[0], 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&g_rc.on[1], 0, __ATOMIC_RELAXED);
+	rc_clear();
+}
+
+/* A read of the game's (all of it) noted: whether it lay in one it read the
+ * standard way lately, and (`std`) it was one such. Every RC_ROUND reads of
+ * a size, whether the cache keeps that size. Under g_rc.lock. */
+static void rc_note(void *part, uint32_t sector, uint32_t n, int std)
+{
+	const int k = n >= RA_MIN_SECTORS;
+	int in = 0;
+
+	for (uint32_t j = 0; j < RC_HIST && !in; j++)
+		in = g_rc.hp[j] == part && g_rc.he[j] != g_rc.hs[j] && sector >= g_rc.hs[j] &&
+		     sector < g_rc.he[j] && n <= g_rc.he[j] - sector;
+	g_rc.reads[k]++;
+	g_rc.again[k] += in;
+	if (std && !in) {
+		const uint32_t j = g_rc.hi++ % RC_HIST;
+
+		g_rc.hp[j] = part;
+		g_rc.hs[j] = sector;
+		g_rc.he[j] = sector + n;
+	}
+	if (g_rc.reads[k] >= RC_ROUND) {
+		const uint32_t pm = g_rc.again[k] * 1000u / g_rc.reads[k];
+		const int was = __atomic_load_n(&g_rc.on[k], __ATOMIC_RELAXED);
+		const int on = was ? pm >= RC_OFF_PM : pm >= RC_ON_PM;
+
+		if (on != was) {
+			__atomic_store_n(&g_rc.on[k], on, __ATOMIC_RELAXED);
+			ADD(g_rc.moved, 1);
+		}
+		g_rc.reads[k] /= 2;                   /* the older reads weigh less */
+		g_rc.again[k] /= 2;
+	}
+}
+
+/* The part [sector, sector + n) of a game's read (of `all` sectors) that
+ * read ahead did not give: from the cache if it holds it, or read into the
+ * cache (the size kept) and copied. 1 if done here (*ret: the read's
+ * result), 0: the caller reads it as before. The device is the caller's. */
+static int rc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
+                   uint8_t *p, uint32_t n, uint32_t all, int off, OffMap *om, uint32_t *own,
+                   int *ret)
+{
+	int done = 0, i;
+
+	if (d->shared || __sync_lock_test_and_set(&g_rc.lock, 1))
+		return 0;
+	rc_app();
+	if (!g_rc.game) {
+		__sync_lock_release(&g_rc.lock);
+		return 0;
+	}
+	/* another storage of the game's: the cache afresh for it */
+	{
+		Dev *const h = rc_pick(d);
+
+		if (h != g_rc.host || d != g_rc.user) {
+			__atomic_store_n(&g_rc.host, h, __ATOMIC_SEQ_CST);
+			g_rc.user = d;
+			rc_clear();
+		}
+	}
+	if ((i = rc_find(d, part, io, sector, n)) >= 0 || (n == all && n <= 4 * RC_UNIT &&
+	    __atomic_load_n(&g_rc.on[all >= RA_MIN_SECTORS], __ATOMIC_RELAXED))) {
+		if (rc_hold()) {
+			i = rc_find(d, part, io, sector, n);   /* (emptied, if taken back) */
+			if (i >= 0) {
+				const RcEnt *e = &g_rc.e[i];
+
+				rc_copy(d, p, rc_at((uint32_t)i) + (size_t)(sector - e->sector) * 512, n, off,
+				        om, 1, own);
+				*ret = 0;
+				done = 1;
+				ADD(g_rc.hits, 1);
+				ADD(g_rc.hit_kib, n / 2);
+			} else if (n == all && n <= 4 * RC_UNIT &&
+			           __atomic_load_n(&g_rc.on[all >= RA_MIN_SECTORS], __ATOMIC_RELAXED)) {
+				const uint32_t len = (n + RC_UNIT - 1) / RC_UNIT, u = rc_room(len);
+				RcEnt *e = &g_rc.e[u];
+
+				/* as a piece: its range before the look at ra_wbusy, both
+				 * in one order with a write's own steps */
+				e->ok = 0;
+				e->part = part;
+				e->io = io;
+				e->len = len;
+				__atomic_store_n(&e->dirty, 0, __ATOMIC_SEQ_CST);
+				__atomic_store_n(&e->sector, sector, __ATOMIC_SEQ_CST);
+				__atomic_store_n(&e->n, n, __ATOMIC_SEQ_CST);
+				__atomic_store_n(&e->dev, d, __ATOMIC_SEQ_CST);
+				if (!__atomic_load_n(&d->ra_wbusy, __ATOMIC_SEQ_CST)) {
+					*ret = io(ref, part, sector, rc_at(u), n);
+					done = 1;
+					if (*ret >= 0) {
+						rc_copy(d, p, rc_at(u), n, off, om, 1, own);
+						e->epoch = LD(d->ra_epoch);
+						e->t = ksceKernelGetSystemTimeLow();
+						e->ok = 1;
+						ADD(g_rc.kept, 1);
+					}
+				}
+				if (!done || *ret < 0)
+					__atomic_store_n(&e->dev, NULL, __ATOMIC_SEQ_CST);
+			}
+			rc_let_go();
+		}
+	}
+	__sync_lock_release(&g_rc.lock);
+	return done;
+}
+
+/* After a game's read: noted for the cache's say (see rc_note). */
+static void rc_seen(void *part, uint32_t sector, uint32_t n, int std)
+{
+	if (__sync_lock_test_and_set(&g_rc.lock, 1))
+		return;                               /* a lost count: fine */
+	rc_app();
+	if (g_rc.game)
+		rc_note(part, sector, n, std);
+	__sync_lock_release(&g_rc.lock);
+}
+
 /* A read into non-cacheable memory (64 KiB and up) while read ahead is on:
  * from the pieces where they continue the stream (copied, by the copier as
  * the setting says; no cache to clean), the rest the standard way straight
@@ -4866,22 +5221,29 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		if (hd + got < nsec)
 			ra_drop(d);                         /* elsewhere, or used up */
 	}
-	if (om.uid >= 0)
-		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
 	if (got && shadow)
 		bad = ra_verify(d, io, ref, part, sector + hd, p + (size_t)hd * 512, got, 0, shadow);
 	if (ret >= 0 && hd + got < nsec) {
-		/* the rest: "C + NC" on the system core, else the standard way */
+		/* the rest: from the again cache (or through it), else "C + NC" on
+		 * the system core, else the standard way */
 		const uint32_t at = hd + got;
 		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - at);
 
-		if (pid == KERNEL_PID ||
-		    !ncd_job(d, io, ref, part, sector + at, p + (size_t)at * 512, nsec - at, pid,
-		             &ret)) {
+		if (!shadow && off &&
+		    rc_read(d, io, ref, part, sector + at, p + (size_t)at * 512, nsec - at, nsec, off,
+		            &om, &own, &ret)) {
+			/* done there */
+		} else if (pid == KERNEL_PID ||
+		           !ncd_job(d, io, ref, part, sector + at, p + (size_t)at * 512, nsec - at, pid,
+		                    &ret)) {
 			ret = io(ref, part, sector + at, p + (size_t)at * 512, nsec - at);
 			ADD(g_nc_stock_kib, (nsec - at) / 2);
 		}
 	}
+	if (om.uid >= 0)
+		ksceKernelUserUnmap(om.uid);              /* the copier is done with it */
+	if (ret >= 0 && !shadow)
+		rc_seen(part, sector, nsec, !hd && !got);
 	if (shadow)
 		__sync_lock_release(&g_shadow_busy);
 	if (got)
@@ -5611,6 +5973,17 @@ static int stage_xfer_w(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hoo
 		if (e != a && (uint64_t)sector < e && (uint64_t)sector + nsec > a)
 			__atomic_store_n(&d->t_dirty, 1, __ATOMIC_SEQ_CST);
 	}
+	for (uint32_t i = 0; i < RC_UNITS; i++) {   /* the again cache's, as the pieces */
+		RcEnt *e = &g_rc.e[i];
+
+		if (__atomic_load_n(&e->dev, __ATOMIC_SEQ_CST) == d) {
+			const uint64_t a = __atomic_load_n(&e->sector, __ATOMIC_SEQ_CST);
+			const uint64_t z = a + __atomic_load_n(&e->n, __ATOMIC_SEQ_CST);
+
+			if ((uint64_t)sector < z && (uint64_t)sector + nsec > a)
+				__atomic_store_n(&e->dirty, 1, __ATOMIC_SEQ_CST);
+		}
+	}
 	r = stage_xfer_one(d, 1, io, ref, rd_ref, part, sector, buf, nsec, xi);
 	__atomic_fetch_sub(&d->ra_wbusy, 1, __ATOMIC_SEQ_CST);
 	return r;
@@ -5831,6 +6204,14 @@ void vm_stage_fini(void)
 			d->t_buf = NULL;
 		}
 	}
+	if (g_rc.uid >= 0) {                  /* the again cache's own block */
+		__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
+		ksceKernelFreeMemBlock(g_rc.uid);
+		g_rc.uid = -1;
+	}
+	__atomic_store_n(&g_rc.host, NULL, __ATOMIC_SEQ_CST);
+	g_rc.user = NULL;
+	rc_clear();
 	if (g_shadow_uid >= 0) {
 		__atomic_store_n(&g_shadow, NULL, __ATOMIC_RELEASE);
 		ksceKernelFreeMemBlock(g_shadow_uid);
@@ -6437,6 +6818,19 @@ void vm_stage_worker_tick(void)
 
 	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
+	/* the again cache's own block, with no other storage to lend it buffers */
+	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
+	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
+		void *b = NULL;
+
+		__atomic_store_n(&g_rc.want_own, 0, __ATOMIC_RELAXED);
+		if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RC_UNITS * RC_UNIT * 512, &g_rc.uid, &b) >= 0) {
+			__atomic_store_n(&g_rc.own, b, __ATOMIC_RELEASE);
+			mem_report_one("again cache", -1, g_rc.uid, RC_UNITS * RC_UNIT * 512);
+		} else {
+			g_rc.uid = -1;
+		}
+	}
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */
 	if (LD(g_gpu_safe) && !g_dcache_clean && LD(g_live) && !g_gpu_safe_logged) {
 		g_gpu_safe_logged = 1;
@@ -6490,6 +6884,21 @@ void vm_stage_worker_tick(void)
 			         (unsigned)LD(g_ra_drops),
 			         (unsigned)(LD(g_ra_waste_kib) / 1024), (unsigned)LD(g_ra_bad),
 			         (int)LD(g_nc_off_refused), (unsigned)LD(g_nc_off_type));
+		if (LD(g_rc.kept) || LD(g_rc.moved)) {
+			const Dev *const h = __atomic_load_n(&g_rc.host, __ATOMIC_RELAXED);
+
+			char where[24];
+
+			if (h)
+				snprintf(where, sizeof(where), "dev %d's buffers", (int)(h - g_dev));
+			else
+				snprintf(where, sizeof(where), "its own block");
+			VM_KLOGI("stage: again cache in %s: 32K %s, large %s now (moved %u); kept %u, "
+			         "read again %u (%u MiB), taken back %u", where,
+			         LD(g_rc.on[0]) ? "on" : "off", LD(g_rc.on[1]) ? "on" : "off",
+			         (unsigned)LD(g_rc.moved), (unsigned)LD(g_rc.kept), (unsigned)LD(g_rc.hits),
+			         (unsigned)(LD(g_rc.hit_kib) / 1024), (unsigned)LD(g_rc.lost));
+		}
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {
 			const uint32_t t0 = ra_threshold(0), t1 = ra_threshold(1);
 

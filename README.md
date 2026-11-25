@@ -27,7 +27,18 @@ Download `vita-memio-<version>.zip` from the [latest release](https://github.com
 3. Restart the console.
 4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything else is already set as recommended.
 
-Back up your cards first, as with any plugin that touches storage. **To update:** replace all three files and restart; always update them together.
+Back up your cards first, as with any plugin that touches storage.
+
+## Update
+
+1. Open **Settings > Devices > vita-memio** and switch **Driver** off.
+2. Restart the console.
+3. Replace `vitamemio_kernel.skprx`, `vitamemio_hud.skprx` and `vitamemio.suprx` in `ur0:tai/` with the new ones. Always replace all three together.
+4. Delete the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+5. Restart the console.
+6. Open **Settings > Devices > vita-memio** again and switch on the storage you use.
+
+Deleting the folders sets everything back to the defaults: settings, the games' overlay profiles and *Tuning*'s measurements. Tuning measures your card again by itself while you play.
 
 **To uninstall:** switch off every storage (or *Driver*), remove the lines from `config.txt`, restart, then delete the three files and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
 

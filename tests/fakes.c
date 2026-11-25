@@ -390,8 +390,10 @@ void fakes_tmpdir_remove(void)
 int fake_pid = 0x10005;
 pthread_t fake_usermap_thread, fake_unmap_thread;   /* which thread mapped / unmapped last */
 int fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
+int fake_pid_calls;
 SceUID ksceKernelGetProcessId(void)
 {
+	__atomic_fetch_add(&fake_pid_calls, 1, __ATOMIC_RELAXED);
 	return __atomic_load_n(&fake_pid, __ATOMIC_RELAXED);   /* a test may switch it meanwhile */
 }
 

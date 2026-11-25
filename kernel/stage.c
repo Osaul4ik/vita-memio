@@ -338,22 +338,32 @@ static struct {
  * system's own, one in the background) while an app is in front. The
  * kernel's own requests count as the app's: they may be its asynchronous
  * reads. With the home screen in front: none is. */
-static int bg_req(void)
+/* The request's process, asked once per request: *c starts at REQ_PID_NONE
+ * and keeps it (every step of one request runs on its thread). */
+#define REQ_PID_NONE ((SceUID)-1)
+static SceUID req_pid(SceUID *c)
+{
+	if (*c == REQ_PID_NONE)
+		*c = ksceKernelGetProcessId();
+	return *c;
+}
+
+static int bg_req(SceUID *c)
 {
 	const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_RELAXED);
 	SceUID pid;
 
 	if (!fg)
 		return 0;
-	pid = ksceKernelGetProcessId();
+	pid = req_pid(c);
 	return pid != fg && pid != KERNEL_PID;
 }
 
 /* Whether this request may take d's buffers: always, unless they are shared
  * and another app than the one in front asks (see g_sh). */
-static int share_may(const Dev *d)
+static int share_may(const Dev *d, SceUID *c)
 {
-	if (!d->shared || !bg_req())
+	if (!d->shared || !bg_req(c))
 		return 1;
 	ADD(g_sh.yielded, 1);
 	return 0;
@@ -526,11 +536,11 @@ static void ensure_buf(Dev *d)
 static void ra_drop(Dev *d);
 
 /* Take the device buffer for one request, or 0 if the request stays stock. */
-static int take(Dev *d, int mine, uint32_t nsec)
+static int take(Dev *d, int mine, uint32_t nsec, SceUID *pc)
 {
 	if (!mine || !LD(d->enabled) || LD(d->fallback) ||
 	    !__atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) || nsec < LD(g_min_sectors) || !nsec ||
-	    !share_may(d))
+	    !share_may(d, pc))
 		return 0;
 	if (__sync_lock_test_and_set(dbusy(d), 1)) {
 		ADD(d->st.passthru, 1);
@@ -729,6 +739,7 @@ typedef struct {
 	int      nc;                           /* 0 ordinary, 1 non-cacheable, 2 device memory */
 	uint32_t got;                          /* sectors from read ahead's pieces */
 	int      tiny;                         /* tiny: 1 from the block, 2 the block read for it */
+	SceUID   pid;                          /* the request's process (req_pid), once */
 } XInfo;
 static volatile int g_count_cores;         /* the overlay is open: count too  */
 #define COUNT_CORES() (LD(g_log_diag) || LD(g_count_cores))
@@ -4882,7 +4893,7 @@ static int ra_verify(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t 
 /* A tiny read while read ahead is on. 1 if it is done here (*ret: its result),
  * else the caller goes on as usual. */
 static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                        uint8_t *p, uint32_t n, int *ret, int *how)
+                        uint8_t *p, uint32_t n, int *ret, int *how, SceUID *pc)
 {
 	const int clean = LD(g_gpu_safe) && g_dcache_clean;
 	const int cal = CAL_MEASURING();          /* calibration: block reads and hits timed */
@@ -4890,7 +4901,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 	int wr, filled = 0;
 	void *shadow;
 
-	if ((LD(g_gpu_safe) && !g_dcache_clean) || !share_may(d) ||
+	if ((LD(g_gpu_safe) && !g_dcache_clean) || !share_may(d, pc) ||
 	    __sync_lock_test_and_set(dbusy(d), 1))
 		return 0;                             /* (no cache clean: the standard path) */
 	__sync_synchronize();                     /* pairs with ra_retire's fence */
@@ -5006,9 +5017,9 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
  *     about even). A read read again counts for the size of the read it
  *     lies in (a 32 KiB read inside a 128 KiB one: for the 128 KiB reads), the
  *     size whose reads are kept. A kept read costs more than
- *     its copy: the copier woken, the game's buffer mapped, then the DMA
- *     (3 ms a MiB) - about 6 % more than the card alone for 128 KiB, 20 %
- *     for 32 KiB (PCSF00007: 1060 kept, 190 read again, the game slower).
+ *     its copy: the DMA (3 ms a MiB; in the game's thread, ra_copy_off) - about
+ *     6 % more than the card alone for 128 KiB, more for 32 KiB (PCSF00007,
+ *     with the copier: 1060 kept, 190 read again, the game slower).
  *   - Writes mark what they touch (as read ahead's pieces); an entry is used
  *     for RA_MAX_AGE_US, of the same storage switch (epoch) only. */
 static const uint32_t rc_on_pm[2] = { 100u, 100u };    /* 32 KiB, large  */
@@ -5020,7 +5031,9 @@ static const uint32_t rc_yield_pm[2] = { 300u, 250u };
  * session, yet off 8 times with 64) */
 #define RC_YIELD_N 128u
 #define RC_HOLD    4u                      /* looks off for a poor yield, doubled */
-#define RC_HOLD_MAX 32u                    /* ... each time in a row, up to this  */
+/* ... each time in a row, up to this: 8 looks (1024 reads of the size), so
+ * a spell of reading again that comes back is not missed for long */
+#define RC_HOLD_MAX 8u
 
 /* A game's title id: PCSA..PCSI and 5 digits (the system's apps are NPXS,
  * homebrew and Adrenaline anything else) - or the tester's, which measures
@@ -5350,9 +5363,10 @@ static void rc_seen(void *part, uint32_t sector, uint32_t n, int std)
 static uint32_t g_ra_nc_kib;              /* atomic: for the log */
 static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret);
-static SceUID ncd_wanted(uint32_t nsec);
+static SceUID ncd_wanted(uint32_t nsec, SceUID *pc);
 static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                      uint8_t *p, uint32_t nsec, uint32_t cal_t0, int cal_held, uint32_t *gotp)
+                      uint8_t *p, uint32_t nsec, uint32_t cal_t0, int cal_held, uint32_t *gotp,
+                      SceUID *pc)
 {
 	/* the caller found it non-cacheable at both ends */
 	OffMap om = { .uid = -1, .user = p, .len = nsec * 512, .first = -2, .mt = MEMTYPE_NC, .nc = 1 };
@@ -5360,7 +5374,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	int ret = 0, stats, off, offload, bad = 0;
 	void *shadow;
 
-	if (!take(d, 1, nsec)) {
+	if (!take(d, 1, nsec, pc)) {
 		ADD(g_nc_stock_kib, nsec / 2);
 		ret = io(ref, part, sector, p, nsec);
 		ra_note_small_stock(d, part, sector, nsec, 1, ret);
@@ -5376,7 +5390,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 	offload = LD(g_offload);
 	off = __atomic_load_n(&d->pipe_ready, __ATOMIC_ACQUIRE) &&
 	      __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 && !LD(g_nc_off_refused) &&
-	      vm_offload_nc(offload) && (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
+	      vm_offload_nc(offload) && (om.pid = req_pid(pc)) != KERNEL_PID;
 	/* a 32 KiB read leaves the large reads' pieces alone (it goes straight
 	 * into its own buffer, they are not in its way) - unless they go on where
 	 * it starts: their stream, read in both sizes */
@@ -5407,7 +5421,7 @@ static int ra_nc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t
 		/* the rest: from the again cache (or through it), else "C + NC" on
 		 * the system core, else the standard way */
 		const uint32_t at = hd + got;
-		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - at);
+		const SceUID pid = shadow ? KERNEL_PID : ncd_wanted(nsec - at, pc);
 
 		if (!shadow && off &&
 		    rc_read(d, io, ref, part, sector + at, p + (size_t)at * 512, nsec - at, nsec, off,
@@ -5557,21 +5571,21 @@ static int ncd_job(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 
 /* Whether "C + NC" takes an n-sector read: the process to map for, or
  * KERNEL_PID if not. */
-static SceUID ncd_wanted(uint32_t nsec)
+static SceUID ncd_wanted(uint32_t nsec, SceUID *pc)
 {
 	if (!vm_offload_direct(LD(g_offload)) || LD(g_verify) || nsec < NCD_MIN_SECTORS ||
 	    __atomic_load_n(&g_ncd_state, __ATOMIC_ACQUIRE) < 0)
 		return KERNEL_PID;
-	return ksceKernelGetProcessId();
+	return req_pid(pc);
 }
 
 /* ncd_job, taking the device first (0 if busy: the read stays standard). */
 static int ncd_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t sector,
-                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret)
+                    uint8_t *p, uint32_t nsec, SceUID pid, int *ret, SceUID *pc)
 {
 	int done;
 
-	if (!share_may(d))
+	if (!share_may(d, pc))
 		return 0;
 	if (__sync_lock_test_and_set(dbusy(d), 1)) {
 		ADD(g_ncd_busy, 1);
@@ -5599,7 +5613,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	int cal_held = 0;
 	/* another app's request while one is in front: no read ahead for it
 	 * (see g_bg_n); looked at only while read ahead is up */
-	const int bg = mine && nsec && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && bg_req();
+	const int bg = mine && nsec && __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
+	               bg_req(&xi->pid);
 	/* calibration on: when it started, and whether a piece held it up */
 	/* (also with Adaptive: who a piece held up, for its on or off) */
 	const uint32_t cal_m = mine && nsec && !bg && (CAL_MEASURING() || ra_learn_on())
@@ -5626,7 +5641,8 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	}
 	/* Tiny reads: from their own block, if it holds them */
 	if (mine && !write && !bg && nsec && nsec < RA_SMALL_SECTORS &&
-	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret, &xi->tiny))
+	    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) &&
+	    ra_tiny_read(d, io, ref, part, sector, p, nsec, &ret, &xi->tiny, &xi->pid))
 		return ret;
 	/* A non-cacheable caller buffer: the standard path is the faster one
 	 * (see the top). Looked at only for transfers that would be staged. */
@@ -5644,10 +5660,11 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 		 * cover goes to the system core there too, with "C + NC") */
 		if (!write && !bg && nsec >= RA_SMALL_SECTORS &&
 		    __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE) && mt0 == MEMTYPE_NC && mt1 == MEMTYPE_NC)
-			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held, &xi->got);
+			return ra_nc_read(d, io, ref, part, sector, p, nsec, cal_t0, cal_held, &xi->got,
+			                  &xi->pid);
 		/* "C + NC": read on the system core instead */
-		if (!write && (pid = ncd_wanted(nsec)) != KERNEL_PID &&
-		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r))
+		if (!write && (pid = ncd_wanted(nsec, &xi->pid)) != KERNEL_PID &&
+		    ncd_read(d, io, ref, part, sector, p, nsec, pid, &r, &xi->pid))
 			return r;
 		ADD(g_nc_stock_kib, nsec / 2);
 		return io(ref, part, sector, buf, nsec);
@@ -5677,7 +5694,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	 * the data in memory as promised. */
 	if (!write && LD(g_gpu_safe) && !g_dcache_clean)
 		return io(ref, part, sector, buf, nsec);
-	if (!take(d, mine, nsec)) {
+	if (!take(d, mine, nsec, &xi->pid)) {
 		ret = io(ref, part, sector, buf, nsec);
 		if (mine && !write && !bg)
 			ra_note_small_stock(d, part, sector, nsec, 0, ret);
@@ -5707,7 +5724,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 	const int off = ready && __atomic_load_n(&g_offload_state, __ATOMIC_ACQUIRE) >= 0 &&
 	                nsec >= OFFLOAD_MIN_SECTORS &&
 	                vm_offload_cached(offload) &&
-	                (om.pid = ksceKernelGetProcessId()) != KERNEL_PID;
+	                (om.pid = req_pid(&xi->pid)) != KERNEL_PID;
 	uint32_t sz[PIPE_MAX_PARTS], own = 0;
 	int k = 0;
 	const uint32_t sector0 = sector;
@@ -5718,7 +5735,7 @@ static int stage_xfer_one(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_h
 
 	if (clean)
 		ADD(g_gpu_cleaned_kib, left / 2);
-	if (write && nsec >= RA_MIN_SECTORS && !bg_req()) {
+	if (write && nsec >= RA_MIN_SECTORS && !bg_req(&xi->pid)) {
 		ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 		ST(d->ra_streak, 0);                  /* a write ends the streams */
 		if (!__sync_lock_test_and_set(&d->rs_lock, 1)) {
@@ -6110,7 +6127,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	 * rest is the worker's, on the system core) */
 	const int ms = mine && !write && LD(d->enabled) && ra_learn_on();
 	const uint32_t t0 = lg || ms ? ksceKernelGetSystemTimeLow() : 0;
-	XInfo xi = { 0, 0, 0 };
+	XInfo xi = { 0, 0, 0, REQ_PID_NONE };
 	int col = 0, r;
 	uint32_t us;
 
@@ -6123,7 +6140,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	us = ksceKernelGetSystemTimeLow() - t0;
 	if (lg) {
 		lg_note(d, write, nsec, us, col);
-		if (!write && r >= 0 && !bg_req())
+		if (!write && r >= 0 && !bg_req(&xi.pid))
 			pt_note(d, part, sector, nsec, us, xi.got != 0);   /* where it lay */
 		if (!write && r >= 0)
 			lk_note(nsec < RA_SMALL_SECTORS ? LK_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us, col,

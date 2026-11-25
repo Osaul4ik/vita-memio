@@ -3629,6 +3629,43 @@ static void on_game(VmSettings *s, SceUID pid)
 	vm_stage_worker_tick();
 }
 
+/* One request asks for its process once, however many steps want it (the
+ * app in front's check, the copier's mapping, the log's). */
+static void test_pid_once(void)
+{
+	static uint8_t u[256 * 512];
+	VmSettings s;
+	Dev *const d = &g_dev[M];
+
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	g_title_fn = fake_title;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	g_log_diag = 1;                               /* the log's look too */
+	for (int i = 0; i < 6; i++) {
+		const int c0 = __atomic_load_n(&fake_pid_calls, __ATOMIC_RELAXED);
+
+		CHECK(rd_ok(u, 100 + (uint32_t)i * 600, 256));   /* staged, on the copier */
+		CHECK(__atomic_load_n(&fake_pid_calls, __ATOMIC_RELAXED) - c0 == 1);
+	}
+	CHECK(g_off_reads >= 6 && d->st.errors == 0);
+	/* another app's read: still once, and it is told apart */
+	fake_pid = 0x77;
+	{
+		const int c0 = __atomic_load_n(&fake_pid_calls, __ATOMIC_RELAXED);
+		const uint32_t bg0 = g_bg_n;
+
+		CHECK(rd_ok(u, 3000, 256));
+		CHECK(__atomic_load_n(&fake_pid_calls, __ATOMIC_RELAXED) - c0 == 1 && g_bg_n == bg0 + 1);
+	}
+	fake_pid = 0x44;
+	g_log_diag = 0;
+	vm_stage_fini();
+}
+
 /* ksceKernelDcacheCleanInvalidateRange, faked: each call's range, and the
  * card reads done by then. */
 static int cinv_calls, cinv_io;
@@ -5714,6 +5751,19 @@ static void test_again_cache(void)
 			CHECK(!g_rc.on[0]);
 		}
 	}
+	/* poor yields in a row: the hold doubles up to RC_HOLD_MAX and stays
+	 * there; one that pays makes it short again */
+	g_rc.hold_n[0] = RC_HOLD;
+	for (int i = 0; i < 6; i++) {
+		g_rc.ykept[0] = RC_YIELD_N - 1;
+		g_rc.yhit[0] = 0;
+		rc_yield(0);
+	}
+	CHECK(g_rc.hold_n[0] == RC_HOLD_MAX && g_rc.hold[0] == RC_HOLD_MAX && RC_HOLD_MAX == 8u);
+	g_rc.ykept[0] = RC_YIELD_N - 1;
+	g_rc.yhit[0] = RC_YIELD_N;
+	rc_yield(0);
+	CHECK(g_rc.hold_n[0] == RC_HOLD);
 	vm_stage_fini();
 	rc_host(0);
 	/* 32 KiB read again inside the 128 KiB read before it (PCSB00554,
@@ -6958,6 +7008,7 @@ int main(void)
 	RUN(test_pipeline_learns_without_statistics);
 	RUN(test_readahead);
 	RUN(test_dma_staged_here);
+	RUN(test_pid_once);
 	RUN(test_ra_slow_stream);
 	RUN(test_fewer_pieces);
 	RUN(test_read_order);

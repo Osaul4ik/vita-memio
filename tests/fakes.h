@@ -21,6 +21,7 @@ extern int fake_thread_fail, fake_sema_fail;  /* thread / the n-th semaphore fai
 extern int fake_threads_live, fake_semas_live;
 extern int fake_thread_fail_from;     /* from the n-th thread creation on, all fail */
 int fake_sema_count(int id);
+extern int fake_pid_calls;            /* ksceKernelGetProcessId() calls            */
 extern int fake_pid, fake_usermap_err, fake_usermap_deny, fake_usermap_calls, fake_usermap_live;
 extern int fake_meminfo_type, fake_meminfo_err, fake_meminfo_calls;
 extern uintptr_t fake_noblock_lo, fake_noblock_hi;   /* in no memory block */

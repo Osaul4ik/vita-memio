@@ -51,7 +51,7 @@
 [VM_I18N_ITEM_PIPE_AUTO] = "Auto",
 [VM_I18N_ITEM_PIPE_FIXED] = "Fixed (2, GPU-safe 3)",
 [VM_I18N_ROW_OFFLOAD] = "Copy on the system core",
-[VM_I18N_HINT_OFFLOAD] = "Copies what a game reads on the console's system core instead of the game's own core, so the game's core is free sooner while it loads. Cached only: reads into ordinary memory. C + NC R/A: Cached + reads into non-cacheable memory (graphics data), only what Read ahead has already read, so it needs Read ahead; other such reads have nothing to copy. C + NC All: and the NC reads themselves (64 KiB or more) are done on the system core. If the console does not allow it, games copy as before (see the log).",
+[VM_I18N_HINT_OFFLOAD] = "Which copies run on the console's system core instead of the game's own core. With DMA copy on, the DMA controller makes most copies in the game's thread, which only waits for it, so this covers the rest: small pieces, buffers off a cache line, GPU-safe All. Cached only: reads into ordinary memory. C + NC R/A: and non-cacheable reads (graphics data) from Read ahead. C + NC All: and those reads themselves, 64 KiB or more. Best left at C + NC R/A.",
 [VM_I18N_ITEM_OFF_OFF] = "Off",
 [VM_I18N_ITEM_OFF_ALWAYS] = "Cached only",
 [VM_I18N_ITEM_OFF_ALL] = "C + NC R/A",

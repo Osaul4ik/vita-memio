@@ -53,7 +53,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
 | Low kernel memory | Shown while both storages are on. They share one set of buffers, so the plugin needs 384 KiB less memory, but part of read ahead is lost. See below. Takes effect after a restart | Off |
-| Keep memory for reading again | For when only one storage is on: the 384 KiB that *reading again from memory* (see below) needs are set aside at once and kept, so they are always there. With both storages on it changes nothing until you switch one off. Not shown with *Low kernel memory* | Off |
+| Keep memory for reading again | For when only one storage is on: the 384 KiB that *reading again from memory* (see below) needs are kept, so they are always there. If you switch a storage off, its buffers stay for this; if only one storage was on from the start, the memory is set aside at once. With both storages on it changes nothing. Not shown with *Low kernel memory* | Off |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
@@ -94,7 +94,7 @@ If you play from one card only, you can switch the other storage off instead: th
 Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of from the card. There is nothing to set:
 
 - It uses the buffers of the storage you are not using at that moment (the SD2Vita's while you play from the memory card, or the other way round).
-- If only one storage is on, it needs 384 KiB of its own. Normally it takes them while a game needs them and gives them back as soon as you quit the game or go to the home screen; if the console has no room for them at that moment, the game simply reads without it. With **Keep memory for reading again** on, they are set aside as soon as only one storage is on and kept.
+- If only one storage is on, it needs 384 KiB of its own. Normally it takes them while a game needs them and gives them back as soon as you quit the game or go to the home screen; if the console has no room for them at that moment, the game simply reads without it. With **Keep memory for reading again** on, they are kept: a storage you switch off leaves its buffers for this, and if only one was on from the start, the memory is set aside at once.
 - It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
 - It switches itself off in a game where it does not pay off.
 - It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A or C + NC All, and is not used with *Low kernel memory*.

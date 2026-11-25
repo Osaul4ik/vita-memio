@@ -238,6 +238,7 @@ typedef struct Dev {
 	void         *t_buf;
 	SceUID        t_uid;
 	int           t_cached;               /* t_buf in cached memory (tiny_alloc) */
+	int           buf2_lent;              /* switched off: buf2 left to the again cache */
 	uint32_t      t_next, t_streak;
 	uint32_t      t_run_sec;              /* the run's sectors so far (Adaptive) */
 	uint32_t      t_start, t_end;         /* atomic; t_end == t_start: empty   */
@@ -278,6 +279,14 @@ static struct {
 } g_sh = { .uid = -1, .uid2 = -1 };
 static volatile int g_lowmem_set;          /* the setting                      */
 static volatile int g_rc_keep;             /* VM_KEY_RCKEEP                    */
+/* The again cache keeps memory (VM_KEY_RCKEEP), unless Low kernel memory is
+ * set (then it has no say): a storage switched off leaves its buffers to
+ * the cache (rc_lends), and with one storage alone the cache has blocks of
+ * its own (rc_keep_now). */
+static int rc_keep_on(void)
+{
+	return LD(g_rc_keep) && !LD(g_lowmem_set);
+}
 static int          g_share_on;            /* in effect for this start         */
 
 static inline volatile int *dbusy(Dev *d)
@@ -1499,12 +1508,21 @@ static void pipe_release(Dev *d)
 		ksceKernelDeleteSema(d->sem_done);
 	if (d->sem_free >= 0)
 		ksceKernelDeleteSema(d->sem_free);
+	d->th = d->sem_go = d->sem_done = d->sem_free = -1;
+	d->th2 = d->sem_cgo = d->sem_fin = -1;
+	ST(d->pipe_made, 0);
+	/* a storage switched off with the cache keeping memory: its second
+	 * buffer stays, with its staging buffer (kept to the end anyway), for the
+	 * again cache to borrow (rc_lends); given back by rc_lent_idle when that
+	 * no longer holds, and used again if the storage comes back on */
+	if (d->uid2 >= 0 && !d->shared && !LD(d->enabled) && rc_keep_on()) {
+		d->buf2_lent = 1;
+		return;
+	}
 	if (d->uid2 >= 0)
 		ksceKernelFreeMemBlock(d->uid2);
-	d->th = d->sem_go = d->sem_done = d->sem_free = d->uid2 = -1;
-	d->th2 = d->sem_cgo = d->sem_fin = -1;
+	d->uid2 = -1;
 	d->buf2 = NULL;
-	ST(d->pipe_made, 0);
 }
 
 /* Worker thread: stop the hooks from starting overlapped reads on `d`, wait
@@ -1543,7 +1561,10 @@ static int pipe_setup(Dev *d)
 	d->th = d->sem_go = d->sem_done = d->sem_free = -1;
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->pipe_quit = 0;
-	/* its buffer: already there if made at the start (prealloc) */
+	/* its buffer: already there if made at the start (prealloc), or left to
+	 * the again cache while it was off (taken back: the cache sees the
+	 * storage on and its take empties it) */
+	d->buf2_lent = 0;
 	if (!d->buf2 && (r = ensure_buf2(d)) < 0) {
 		d->uid2 = -1;
 		d->buf2 = NULL;
@@ -5062,13 +5083,23 @@ static void rc_clear(void)
 
 /* The storage whose buffers the cache may use for `d`'s reads (NULL: none
  * such - its own block). Under g_rc.lock. */
+/* Whether storage h's buffers may be lent to the again cache: it is on, or
+ * switched off with the cache keeping memory (its buffers left for it, see
+ * pipe_release); not with Low kernel memory, after a problem, or without
+ * both buffers. */
+static int rc_lends(const Dev *h)
+{
+	return !h->shared && !LD(h->fallback) && !LD(h->unusable) &&
+	       (LD(h->enabled) || (h->buf2_lent && rc_keep_on())) &&
+	       __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE) && h->buf2;
+}
+
 static Dev *rc_pick(const Dev *d)
 {
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		Dev *h = &g_dev[i];
 
-		if (h != d && !h->shared && LD(h->enabled) && !LD(h->fallback) &&
-		    __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE) && h->buf2)
+		if (h != d && rc_lends(h))
 			return h;
 	}
 	return NULL;
@@ -5097,7 +5128,7 @@ static int rc_hold(void)
 		__sync_synchronize();
 		zb[0] = __atomic_load_n(&h->buf, __ATOMIC_ACQUIRE);
 		zb[1] = h->buf2;
-		if (!LD(h->enabled) || LD(h->fallback) || !zb[0] || !zb[1]) {
+		if (!rc_lends(h) || !zb[0] || !zb[1]) {
 			__sync_lock_release(dbusy(h));
 			return 0;
 		}
@@ -7036,6 +7067,40 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
+/* A storage switched off that left its second buffer to the cache
+ * (pipe_release): given back once the cache no longer keeps memory (or no
+ * storage is on at all), the cache let go of it first. A request in the cache: the next tick. Worker. */
+static void rc_lent_idle(void)
+{
+	int any_on = 0;
+
+	for (int i = 0; i < VM_DEV_COUNT; i++)
+		any_on |= LD(g_dev[i].enabled) != 0;
+	if (rc_keep_on() && any_on)           /* no storage on: nobody to lend to */
+		return;
+	for (int i = 0; i < VM_DEV_COUNT; i++) {
+		Dev *d = &g_dev[i];
+		SceUID uid2;
+
+		if (!d->buf2_lent || LD(d->enabled) || d->pipe_made || d->uid2 < 0)
+			continue;
+		if (__sync_lock_test_and_set(&g_rc.lock, 1))
+			return;
+		if (g_rc.host == d) {
+			__atomic_store_n(&g_rc.host, NULL, __ATOMIC_SEQ_CST);
+			rc_clear();
+		}
+		uid2 = d->uid2;
+		d->buf2 = NULL;
+		d->uid2 = -1;
+		d->buf2_lent = 0;
+		__sync_lock_release(&g_rc.lock);
+		ksceKernelFreeMemBlock(uid2);
+		VM_KLOGI("stage: dev %d second buffer given back (%s)", i,
+		         any_on ? "the again cache keeps no memory" : "no storage on");
+	}
+}
+
 /* The worker makes the again cache's own blocks when asked (want_own): 1 if
  * it made them now. */
 static int rc_own_make(void)
@@ -7086,7 +7151,7 @@ static int rc_keep_now(void)
 {
 	int on = 0;
 
-	if (!LD(g_rc_keep) || LD(g_lowmem_set))   /* Low kernel memory: the setting has no say */
+	if (!rc_keep_on())                    /* Low kernel memory: the setting has no say */
 		return 0;
 	for (int i = 0; i < VM_DEV_COUNT; i++) {
 		const Dev *d = &g_dev[i];
@@ -7095,6 +7160,11 @@ static int rc_keep_now(void)
 			if (d->shared)
 				return 0;
 			on++;
+		} else if (!d->shared && !LD(d->fallback) && !LD(d->unusable) &&
+		           __atomic_load_n(&d->buf, __ATOMIC_ACQUIRE) && d->buf2) {
+			/* a storage switched off lends its own (rc_lends) - also
+			 * while its threads are still being let go */
+			return 0;
 		}
 	}
 	return on == 1;
@@ -7151,6 +7221,7 @@ void vm_stage_worker_tick(void)
 
 		if (!keep)
 			keep_failed = 0;
+		rc_lent_idle();
 		rc_own_idle(keep);
 		if (keep && !keep_failed && LD(g_live) && !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
 			__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);

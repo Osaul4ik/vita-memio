@@ -6344,6 +6344,108 @@ static void test_bg_no_readahead(void)
 
 /* ---- Low kernel memory: one buffer for both storages ---------------------- */
 
+/* Keep memory for reading again, both storages on: the SD2Vita switched off
+ * leaves its buffers to the cache (no blocks of its own made), takes them
+ * back when switched on again; the setting off: its second buffer given
+ * back, the cache's own blocks made for a game again. */
+static void test_rc_keep_lend(void)
+{
+	uint8_t *u = user_buf(256);
+	Dev *const sd = &g_dev[VM_DEV_SD2VITA];
+	VmSettings s;
+	uint32_t h0;
+	int a0, f0;
+	SceUID lent2;
+
+	reset();
+	g_title_fn = fake_title;
+	rc_host(0);
+	sd->buf = rc_hbuf;                                /* its staging buffer (static) */
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	s.sd2vita = 1;
+	s.rckeep = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(sd->enabled && sd->pipe_made && sd->buf2 && sd->uid2 >= 0 && !g_rc.own);
+	as_app(0x42);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	h0 = g_rc.hits;
+	rc_rounds(u, 0, 80);
+	rc_rounds(u, 7, 40);
+	CHECK(g_rc.host == sd && g_rc.hits - h0 >= 39);
+	/* the SD2Vita off: its buffers stay for the cache, none made */
+	a0 = fake_alloc_calls;
+	s.sd2vita = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(!sd->enabled && !sd->pipe_made && sd->buf2 && sd->uid2 >= 0 && sd->buf2_lent);
+	lent2 = sd->uid2;
+	CHECK(!g_rc.own && !g_rc.want_own && fake_alloc_calls == a0);
+	h0 = g_rc.hits;
+	rc_rounds(u, 11, 40);
+	rc_rounds(u, 13, 40);
+	CHECK(g_rc.host == sd && g_rc.hits - h0 >= 39 && !g_rc.own && fake_alloc_calls == a0);
+	vm_stage_worker_tick();
+	CHECK(!g_rc.own && sd->buf2_lent);
+	/* back on: its buffers its own again (nothing made), the cache borrows
+	 * them as from any storage on */
+	s.sd2vita = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(sd->enabled && sd->pipe_made && !sd->buf2_lent && sd->uid2 == lent2);
+	CHECK(rd_ok(u, 2000, 64));
+	/* both off: nobody to lend to - given back; on again: made anew */
+	s.sd2vita = 0;
+	s.memcard = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(!sd->buf2 && sd->uid2 < 0 && !sd->buf2_lent && !g_rc.own);
+	s.sd2vita = 1;
+	s.memcard = 1;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(sd->enabled && sd->pipe_made && sd->buf2);
+	/* off again, then the setting off: its second buffer given back, the
+	 * cache's own blocks made for the game */
+	s.sd2vita = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	vm_stage_worker_tick();
+	CHECK(sd->buf2_lent && sd->uid2 >= 0);
+	f0 = fake_free_calls;
+	s.rckeep = 0;
+	vm_stage_apply(&s);
+	vm_stage_worker_tick();
+	CHECK(!sd->buf2 && sd->uid2 < 0 && !sd->buf2_lent && fake_free_calls == f0 + 1);
+	CHECK(g_rc.host == NULL);
+	h0 = g_rc.hits;
+	rc_rounds(u, 0, 80);
+	vm_stage_worker_tick();
+	CHECK(g_rc.own != NULL);
+	rc_rounds(u, 7, 40);
+	CHECK(g_rc.host == NULL && g_rc.hits - h0 >= 39);
+	/* the storage off and its buffer gone: the setting on keeps blocks */
+	s.rckeep = 1;
+	vm_stage_apply(&s);
+	ra_proc_event(0x42, 3);
+	vm_stage_worker_tick();
+	CHECK(g_rc.own != NULL);
+	vm_stage_fini();
+	CHECK(!g_rc.own && sd->uid2 < 0);
+	rc_host(0);
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0;
+	fake_pid = 0;
+	free(u);
+}
+
 /* Keep memory for reading again (VM_KEY_RCKEEP): with one storage on, the
  * again cache's own blocks are made at once and kept whatever is in front;
  * another storage on: given back, its buffers borrowed; the setting off:
@@ -7256,6 +7358,7 @@ int main(void)
 	RUN(test_verify_no_learning);
 	RUN(test_bg_no_readahead);
 	RUN(test_rc_keep);
+	RUN(test_rc_keep_lend);
 	RUN(test_lowmem_init);
 	RUN(test_lowmem_handover);
 	RUN(test_lowmem_data_right);

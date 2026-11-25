@@ -324,7 +324,9 @@ static struct {
 	uint32_t    hi;
 	uint32_t    reads[2], again[2];
 	int         on[2];                     /* atomic                            */
-	uint32_t    hits, hit_kib, kept, lost, moved;   /* atomics: for the log     */
+	uint32_t    ykept[2], yhit[2];         /* while on: kept, and read again from it */
+	uint32_t    hold[2];                   /* looks a size stays off (its yield) */
+	uint32_t    hits, hit_kib, kept, lost, moved, yoff;   /* atomics: for the log */
 } g_rc = { .uid = -1 };
 
 /* Another app's request than the one in front's (another process: the
@@ -4871,14 +4873,21 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
  *     With no other storage on, a block of its own (made by the worker); with
  *     Low kernel memory (one buffer for both), none at all.
  *   - By size (32 KiB, large): kept only while the game reads again enough
- *     of them (RC_ON_PM of the reads it reads the standard way, off again
- *     under RC_OFF_PM): a copy of each read costs about what reading again
- *     6 % of them saves.
+ *     of them (rc_on_pm of the reads it reads the standard way, off again
+ *     under rc_off_pm), and while what is kept is read again: of every
+ *     RC_YIELD_N kept, at least rc_yield_pm read again from the cache - else
+ *     off, and not on again for RC_HOLD looks. A kept read costs more than
+ *     its copy: the copier woken, the game's buffer mapped, then the DMA
+ *     (3 ms a MiB) - about 6 % more than the card alone for 128 KiB, 20 %
+ *     for 32 KiB (PCSF00007: 1060 kept, 190 read again, the game slower).
  *   - Writes mark what they touch (as read ahead's pieces); an entry is used
  *     for RA_MAX_AGE_US, of the same storage switch (epoch) only. */
-#define RC_ON_PM   100u
-#define RC_OFF_PM  50u
+static const uint32_t rc_on_pm[2] = { 250u, 100u };    /* 32 KiB, large  */
+static const uint32_t rc_off_pm[2] = { 125u, 50u };
+static const uint32_t rc_yield_pm[2] = { 300u, 150u };
 #define RC_ROUND   128u                    /* reads of a size between two looks  */
+#define RC_YIELD_N 64u                     /* kept between two looks at the yield */
+#define RC_HOLD    4u
 
 /* A game's title id: PCSA..PCSI and 5 digits (the system's apps are NPXS,
  * homebrew and Adrenaline anything else) - or the tester's, which measures
@@ -5039,6 +5048,9 @@ static void rc_app(void)
 	memset(g_rc.he, 0, sizeof(g_rc.he));
 	memset(g_rc.hp, 0, sizeof(g_rc.hp));
 	g_rc.reads[0] = g_rc.reads[1] = g_rc.again[0] = g_rc.again[1] = 0;
+	memset(g_rc.ykept, 0, sizeof(g_rc.ykept));
+	memset(g_rc.yhit, 0, sizeof(g_rc.yhit));
+	memset(g_rc.hold, 0, sizeof(g_rc.hold));
 	__atomic_store_n(&g_rc.on[0], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_rc.on[1], 0, __ATOMIC_RELAXED);
 	rc_clear();
@@ -5067,15 +5079,37 @@ static void rc_note(void *part, uint32_t sector, uint32_t n, int std)
 	if (g_rc.reads[k] >= RC_ROUND) {
 		const uint32_t pm = g_rc.again[k] * 1000u / g_rc.reads[k];
 		const int was = __atomic_load_n(&g_rc.on[k], __ATOMIC_RELAXED);
-		const int on = was ? pm >= RC_OFF_PM : pm >= RC_ON_PM;
+		const int on = was ? pm >= rc_off_pm[k] : pm >= rc_on_pm[k] && !g_rc.hold[k];
 
+		if (g_rc.hold[k])
+			g_rc.hold[k]--;                   /* off for its yield: a few looks more */
 		if (on != was) {
 			__atomic_store_n(&g_rc.on[k], on, __ATOMIC_RELAXED);
 			ADD(g_rc.moved, 1);
+			g_rc.ykept[k] = g_rc.yhit[k] = 0;   /* its yield afresh */
 		}
 		g_rc.reads[k] /= 2;                   /* the older reads weigh less */
 		g_rc.again[k] /= 2;
 	}
+}
+
+/* A read of size k kept: every RC_YIELD_N, whether enough of them were read
+ * again from the cache to pay for their copies (else that size off, and
+ * held off a while). Under g_rc.lock. */
+static void rc_yield(int k)
+{
+	if (++g_rc.ykept[k] < RC_YIELD_N)
+		return;
+	if (g_rc.yhit[k] * 1000u < g_rc.ykept[k] * rc_yield_pm[k]) {
+		__atomic_store_n(&g_rc.on[k], 0, __ATOMIC_RELAXED);
+		g_rc.hold[k] = RC_HOLD;
+		g_rc.ykept[k] = g_rc.yhit[k] = 0;
+		ADD(g_rc.moved, 1);
+		ADD(g_rc.yoff, 1);
+		return;
+	}
+	g_rc.ykept[k] /= 2;                       /* the older ones weigh less */
+	g_rc.yhit[k] /= 2;
 }
 
 /* The part [sector, sector + n) of a game's read (of `all` sectors) that
@@ -5118,6 +5152,7 @@ static int rc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 				done = 1;
 				ADD(g_rc.hits, 1);
 				ADD(g_rc.hit_kib, n / 2);
+				g_rc.yhit[all >= RA_MIN_SECTORS]++;
 			} else if (n == all && n <= 4 * RC_UNIT &&
 			           __atomic_load_n(&g_rc.on[all >= RA_MIN_SECTORS], __ATOMIC_RELAXED)) {
 				const uint32_t len = (n + RC_UNIT - 1) / RC_UNIT, u = rc_room(len);
@@ -5142,6 +5177,7 @@ static int rc_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32_t se
 						e->t = ksceKernelGetSystemTimeLow();
 						e->ok = 1;
 						ADD(g_rc.kept, 1);
+						rc_yield(all >= RA_MIN_SECTORS);
 					}
 				}
 				if (!done || *ret < 0)
@@ -6896,10 +6932,10 @@ void vm_stage_worker_tick(void)
 				snprintf(where, sizeof(where), "dev %d's buffers", (int)(h - g_dev));
 			else
 				snprintf(where, sizeof(where), "its own block");
-			VM_KLOGI("stage: again cache in %s: 32K %s, large %s now (moved %u); kept %u, "
-			         "read again %u (%u MiB), taken back %u", where,
+			VM_KLOGI("stage: again cache in %s: 32K %s, large %s now (moved %u, %u for little "
+			         "read again); kept %u, read again %u (%u MiB), taken back %u", where,
 			         LD(g_rc.on[0]) ? "on" : "off", LD(g_rc.on[1]) ? "on" : "off",
-			         (unsigned)LD(g_rc.moved), (unsigned)LD(g_rc.kept), (unsigned)LD(g_rc.hits),
+			         (unsigned)LD(g_rc.moved), (unsigned)LD(g_rc.yoff), (unsigned)LD(g_rc.kept), (unsigned)LD(g_rc.hits),
 			         (unsigned)(LD(g_rc.hit_kib) / 1024), (unsigned)LD(g_rc.lost));
 		}
 		if (LD(g_ra_mode) == VM_RA_ADAPTIVE) {

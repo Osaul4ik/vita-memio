@@ -5386,6 +5386,41 @@ static void test_again_cache(void)
 		fake_meminfo_type = 0;
 		fake_pid = 0;
 	}
+	/* read again, but too late for the cache (each entry too old by then):
+	 * it reads again often enough to come on, yet hardly anything is read
+	 * from it - off for its yield, and held off a while */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(1);
+	as_app(0x42);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t y0 = g_rc.yoff, h0 = g_rc.hits;
+		int was_on = 0;
+
+		for (int i = 0; i < 200 && g_rc.yoff == y0; i++) {
+			const uint32_t at = (uint32_t)i * 200u % 3800u;
+
+			CHECK(rd_ok(u, at, 64));
+			__atomic_fetch_add(&fake_now_us, RA_MAX_AGE_US + 1000, __ATOMIC_RELAXED);
+			CHECK(rd_ok(u, at, 64));
+			was_on |= g_rc.on[0];
+		}
+		CHECK(was_on && g_rc.yoff == y0 + 1 && !g_rc.on[0] && g_rc.hits == h0);
+		/* the next looks: off still, the reads again as many */
+		for (int i = 0; i < 60; i++) {
+			const uint32_t at = 7 + (uint32_t)i * 200u % 3800u;
+
+			CHECK(rd_ok(u, at, 64));
+			__atomic_fetch_add(&fake_now_us, RA_MAX_AGE_US + 1000, __ATOMIC_RELAXED);
+			CHECK(rd_ok(u, at, 64));
+			CHECK(!g_rc.on[0]);
+		}
+	}
+	vm_stage_fini();
+	rc_host(0);
 	/* the tester: as a game (it measures what games get) */
 	reset();
 	g_title_fn = fake_title;

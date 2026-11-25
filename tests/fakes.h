@@ -7,6 +7,8 @@ extern uint32_t fake_now_us;          /* ksceKernelGetSystemTimeLow()           
 extern int fake_time_calls;           /* ... and how often it was called             */
 extern int fake_alloc_fail, fake_alloc_calls, fake_free_calls;
 extern unsigned fake_alloc_max;       /* > 0: a block bigger than this refused */
+extern unsigned fake_alloc_type_fail; /* > 0: a block of this type refused        */
+extern unsigned fake_block_type[64];  /* each block's type                        */
 extern int fake_hook_fail_at, fake_hook_calls, fake_hook_releases;
 extern int fake_rename_fail;          /* ksceIoRename fails (power cut after remove) */
 extern int fake_prof_writes;          /* files opened to write under .../ra/        */

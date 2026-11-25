@@ -194,6 +194,8 @@ static void reset(void)
 	g_dma_copies = g_dma_kib = g_dma_us = g_dma_errors = g_dma_mid = g_dma_mid_us = 0;
 	g_dma_small = g_dma_small_kib = g_dma_small_half = g_dma_unal = g_dma_unal_kib = 0;
 	g_dma_last_err = 0;
+	g_dma_here = g_dma_here_kib = 0;
+	g_dcache_cinv = NULL;
 }
 
 static uint8_t *user_buf(size_t sectors)
@@ -570,10 +572,12 @@ static void test_write_verify_mismatch(void)
 /* The system's ksceDmacMemcpy, faked: copies, or refuses (having written junk
  * into part of dst first), or "copies" wrong data (as a controller that missed
  * the CPU's cache would leave it). */
-static int dmac_calls, dmac_fail, dmac_corrupt;
+static int dmac_calls, dmac_fail, dmac_corrupt, dmac_here;
 static int fake_dmac(void *dst, const void *src, SceSize n)
 {
-	dmac_calls++;
+	__sync_fetch_and_add(&dmac_calls, 1);
+	if (pthread_equal(pthread_self(), test_thread))
+		__sync_fetch_and_add(&dmac_here, 1);      /* in the request's thread */
 	if (dmac_fail) {
 		memset(dst, 0xA5, n / 2);
 		return (int)0x80020005;
@@ -2684,6 +2688,64 @@ static void test_readahead(void)
 	CHECK(g_offload_state == 1);
 	vm_stage_fini();
 
+	/* DMA copy on: read ahead's copies the controller makes whole are the
+	 * request thread's own, no mapping, nothing on the copier; a buffer off
+	 * a cache line still goes to the copier */
+	for (int nc = 0; nc < 2; nc++) {
+		uint8_t *const a = line_buf(128 * 512 + 64);
+		uint32_t off0, maps0;
+
+		reset();
+		ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+		s.dmacopy = 1;
+		vm_stage_apply(&s);
+		g_dmac_memcpy = fake_dmac;
+		dmac_calls = dmac_fail = dmac_corrupt = dmac_here = 0;
+		use_copy_out = 1;
+		fake_pid = 0x42;
+		fake_memtype = nc ? MEMTYPE_NC : 0xD000;
+		fake_meminfo_type = nc ? 0x10208006 : 0x1020D006;
+		/* the stream's first reads: the card's (cached: on the copier) */
+		for (uint32_t i = 0; i < 5; i++)
+			CHECK(rd_ok(a, 400 + i * 128, 128));
+		CHECK(g_ra_hits == 0 && g_dma_here == 0);
+		off0 = g_off_reads;
+		maps0 = (uint32_t)fake_usermap_calls;
+		/* from the pieces: each one here, by the controller */
+		for (uint32_t i = 5; i < 10; i++)
+			CHECK(rd_ok(a, 400 + i * 128, 128));
+		CHECK(g_ra_hits == 5 && g_dma_here == 5 && g_dma_here_kib == 5 * 64);
+		CHECK(dmac_here >= 5 && g_off_reads == off0 && (uint32_t)fake_usermap_calls == maps0);
+		CHECK(fake_usermap_live == 0 && sems_empty(d) && d->st.errors == 0);
+		/* the copier's: off a cache line (the controller would not take it) */
+		off0 = g_off_reads;
+		maps0 = (uint32_t)fake_usermap_calls;
+		{
+			const uint32_t here0 = g_dma_here;
+
+			for (uint32_t i = 10; i < 16; i++)
+				CHECK(rd_ok(a + 4, 400 + i * 128, 128));
+			CHECK(g_dma_here == here0 && g_off_reads > off0 &&
+			      (uint32_t)fake_usermap_calls > maps0);
+		}
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+		/* DMA copy off: the copier as before */
+		s.dmacopy = 0;
+		vm_stage_apply(&s);
+		off0 = g_off_reads;
+		{
+			const uint32_t here0 = g_dma_here;
+
+			for (uint32_t i = 16; i < 22; i++)
+				CHECK(rd_ok(a, 400 + i * 128, 128));
+			CHECK(g_dma_here == here0 && g_off_reads > off0);
+		}
+		CHECK(fake_usermap_live == 0 && sems_empty(d));
+		use_copy_out = 0;
+		vm_stage_fini();
+		free(a);
+	}
+
 	/* device memory, small reads, read ahead off: straight in as before,
 	 * nothing read ahead */
 	{
@@ -3448,6 +3510,19 @@ static void on_game(VmSettings *s, SceUID pid)
 	vm_stage_worker_tick();
 }
 
+/* ksceKernelDcacheCleanInvalidateRange, faked: each call's range, and the
+ * card reads done by then. */
+static int cinv_calls, cinv_io;
+static void *cinv_at;
+static unsigned cinv_size;
+static void fake_cinv(void *p, unsigned n)
+{
+	cinv_calls++;
+	cinv_at = p;
+	cinv_size = n;
+	cinv_io = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+}
+
 /* A tiny read in order, from their block once it has started. */
 static void test_tiny_reads(void)
 {
@@ -3548,6 +3623,74 @@ static void test_tiny_reads(void)
 	for (int k = 0; k < RA_TINY_STREAK + 8; k++, at++)
 		CHECK(rd_ok(u, at, 1));
 	CHECK(g_ra_tiny_reads == 0 && !d->ra_made && !d->t_buf && d->t_uid < 0);
+	vm_stage_fini();
+
+	/* no clean-and-invalidate: the block non-cacheable as before */
+	on_game(&s, 0x44);
+	CHECK(d->t_buf && !d->t_cached && fake_block_type[d->t_uid] == MEMBLOCK_KERNEL_NC_RW);
+	vm_stage_fini();
+
+	/* with it: in cached memory, emptied from the cache when made and after
+	 * each block read (right after the card's read), the data right */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	cinv_calls = 0;
+	g_dcache_cinv = fake_cinv;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_title_fn = fake_title;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(d->t_buf && d->t_cached &&
+	      fake_block_type[d->t_uid] == SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW);
+	CHECK(cinv_calls == 1 && cinv_at == d->t_buf && cinv_size == RA_TINY_SECTORS * 512);
+	at = 500;
+	for (int k = 0; k < RA_TINY_STREAK - 1; k++, at++)
+		CHECK(rd_ok(u, at, 1));
+	CHECK(cinv_calls == 1);
+	{
+		const int calls = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
+
+		CHECK(rd_ok(u, at, 1));                       /* the block read */
+		at++;
+		CHECK(cinv_calls == 2 && cinv_io == calls + 1 && cinv_at == d->t_buf &&
+		      cinv_size == tiny_blk() * 512);
+		for (int k = 1; k < RA_TINY_SECTORS; k++, at++)
+			CHECK(rd_ok(u, at, 1));
+		CHECK(cinv_calls == 2 && g_ra_tiny_reads == RA_TINY_SECTORS);   /* hits: none */
+		CHECK(rd_ok(u, at, 1));                       /* the next block */
+		CHECK(cinv_calls == 3 && cinv_io == calls + 2);
+	}
+	/* a block read that fails: nothing to empty */
+	at = 2400;
+	for (int k = 0; k < RA_TINY_STREAK - 1; k++, at++)
+		CHECK(rd_ok(u, at, 1));
+	fail_at_call = io_calls + 1;
+	{
+		const int c = cinv_calls;
+
+		CHECK(rd_ok(u, at, 1) && cinv_calls == c);
+	}
+	fail_at_call = 0;
+	vm_stage_fini();
+
+	/* cached memory refused: non-cacheable, nothing emptied */
+	fakes_tmpdir_remove();
+	fakes_tmpdir_new();
+	reset();
+	cinv_calls = 0;
+	g_dcache_cinv = fake_cinv;
+	fake_alloc_type_fail = SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW;
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	g_title_fn = fake_title;
+	as_app(0x44);
+	vm_stage_worker_tick();
+	CHECK(d->t_buf && !d->t_cached && fake_block_type[d->t_uid] == MEMBLOCK_KERNEL_NC_RW);
+	at = 600;
+	for (int k = 0; k < RA_TINY_STREAK + 4; k++, at++)
+		CHECK(rd_ok(u, at, 1));
+	CHECK(cinv_calls == 0 && g_ra_tiny_reads == 5);
+	fake_alloc_type_fail = 0;
 	vm_stage_fini();
 }
 

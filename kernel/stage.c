@@ -237,6 +237,7 @@ typedef struct Dev {
 	 * request holder's; a write looks at t_start, t_end, t_dirty */
 	void         *t_buf;
 	SceUID        t_uid;
+	int           t_cached;               /* t_buf in cached memory (tiny_alloc) */
 	uint32_t      t_next, t_streak;
 	uint32_t      t_run_sec;              /* the run's sectors so far (Adaptive) */
 	uint32_t      t_start, t_end;         /* atomic; t_end == t_start: empty   */
@@ -398,6 +399,10 @@ static volatile int g_count_cfg, g_count_hud;   /* it is: as set, or shown by ke
 #define LIB_CPU_DRIVER     0x40ECDB0E
 #define NID_DCACHE_CLEAN   0x103872A5
 static void (*g_dcache_clean)(void *start, unsigned int size);
+/* ksceKernelDcacheCleanInvalidateRange (L1 and L2): the tiny reads' block in
+ * cached memory (tiny_alloc); without it the block is non-cacheable. */
+#define NID_DCACHE_CINV    0x364E68A4
+static void (*g_dcache_cinv)(void *start, unsigned int size);
 static volatile int g_gpu_safe;
 static int g_gpu_safe_logged;
 static volatile uint32_t g_gpu_cleaned_kib, g_nc_stock_kib;   /* for the log */
@@ -1226,6 +1231,9 @@ static volatile uint32_t g_dma_mid, g_dma_mid_us;
 static volatile uint32_t g_dma_small, g_dma_small_kib, g_dma_small_half;
 static volatile uint32_t g_dma_unal, g_dma_unal_kib;
 static volatile int32_t  g_dma_last_err;
+/* read ahead's and the again cache's copies the DMA controller makes whole,
+ * done in the request's own thread, not on the copier (ra_copy_off) */
+static volatile uint32_t g_dma_here, g_dma_here_kib;
 
 static int dma_state(void)
 {
@@ -4313,15 +4321,53 @@ static void off_memtype(OffMap *om)
 	}
 }
 
+/* Whether the DMA controller would take each of k parts (src, sz sectors)
+ * into p whole, as dma_try decides: then this thread only waits for it, as it
+ * would wait for the copier. */
+static int dma_whole(const uint8_t *p, const void *const *src, const uint32_t *sz, uint32_t k)
+{
+	uint32_t at = 0;
+
+	if (!k || dma_state() != VM_DMA_ON)
+		return 0;
+	for (uint32_t i = 0; i < k; i++) {
+		const uint32_t b = sz[i] * 512;
+
+		if (b < VM_DMA_MIN_BYTES ||
+		    (((uintptr_t)(p + (size_t)at * 512) | (uintptr_t)src[i] | (uintptr_t)b) &
+		     (VM_DMA_ALIGN - 1u)))
+			return 0;
+		at += sz[i];
+	}
+	return 1;
+}
+
 /* Copy k ready parts (src, sz) into p on the copier, as offload_run does with
- * parts it reads; without a usable mapping this thread copies. *own: the
- * sectors this thread copied. */
+ * parts it reads; without a usable mapping this thread copies. Copies the DMA
+ * controller makes whole are this thread's: the copier would only wait for
+ * the controller too, after a mapping and two hand-overs. *own: the sectors
+ * this thread copied. */
 static void ra_copy_off(Dev *d, uint8_t *p, const void *const *src, const uint32_t *sz, uint32_t k,
                         int clean, OffMap *m, int last, uint32_t *own, uint32_t *cp_us)
 {
 	uint32_t done = 0, n = 0;
 	int nomap = 1;
 
+	if (dma_whole(p, src, sz, k)) {
+		const uint32_t c0 = ksceKernelGetSystemTimeLow();
+
+		for (uint32_t i = 0; i < k; i++) {
+			copy_out(p + (size_t)n * 512, src[i], sz[i] * 512, clean);
+			n += sz[i];
+		}
+		if (!clean)
+			vm_dsb();
+		*own += n;
+		*cp_us = ksceKernelGetSystemTimeLow() - c0;
+		ADD(g_dma_here, 1);
+		ADD(g_dma_here_kib, n / 2);
+		return;
+	}
 	d->job_k = k;
 	for (uint32_t i = 0; i < PIPE_MAX_PARTS; i++) {
 		d->job_sz[i] = i < k ? sz[i] : 0;
@@ -4639,12 +4685,49 @@ static void ra_release(Dev *d)
 		ksceKernelFreeMemBlock(d->t_uid);
 	d->t_uid = -1;
 	d->t_buf = NULL;
+	d->t_cached = 0;
 	ST(d->t_end, LD(d->t_start));
 	for (int i = 0; i < RA_PIECES; i++)
 		__atomic_store_n(&d->ra[i].state, RA_FREE, __ATOMIC_RELEASE);
 	__atomic_store_n(&d->ra_waiting, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&d->ra_ready, 0, __ATOMIC_RELEASE);
 	ST(d->ra_made, 0);
+}
+
+/* The tiny reads' block if the device has none. Cached memory when the cache
+ * can be cleaned and invalidated (g_dcache_cinv): a hit is then a copy out of
+ * the cache, not out of uncached memory (~114 MB/s); after each fill its lines
+ * are cleaned and invalidated (tiny_filled). Else, or if that memory is not
+ * there, non-cacheable as before; without either the tiny reads read as
+ * before. */
+static void tiny_alloc(Dev *d)
+{
+	if (d->t_buf)
+		return;
+	d->t_cached = 0;
+	if (g_dcache_cinv &&
+	    alloc_buf(SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid,
+	              &d->t_buf) >= 0) {
+		/* nothing of the memory's last owner left in the cache: no line of
+		 * it written back over what the card puts there */
+		g_dcache_cinv(d->t_buf, RA_TINY_SECTORS * 512);
+		d->t_cached = 1;
+		return;
+	}
+	if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
+		d->t_uid = -1;
+		d->t_buf = NULL;
+	}
+}
+
+/* A block just read into a cached t_buf: none of its lines stale in the cache
+ * (read before the card wrote memory, or the CPU's look ahead while it did);
+ * a line the driver wrote through the cache is written back first, so either
+ * way the cache then holds nothing of it and the next read sees memory. */
+static void tiny_filled(Dev *d, uint32_t blk)
+{
+	if (d->t_cached)
+		g_dcache_cinv(d->t_buf, blk * 512);
 }
 
 /* Worker: the read-ahead thread of a device whose helper exists. 0 or the
@@ -4669,11 +4752,7 @@ static int ra_setup(Dev *d)
 	}
 	/* the tiny reads' block (already there if made at the start): without
 	 * it they read as before */
-	if (!d->t_buf &&
-	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
-		d->t_uid = -1;
-		d->t_buf = NULL;
-	}
+	tiny_alloc(d);
 	/* on the system core, as the helper: the card goes on at once */
 	d->ra_th = ksceKernelCreateThread("SceVitaMemioAhead", ra_thread, 0x40, VM_STACK_DEV, 0,
 	                                  PIPE_CPU_SYSTEM, NULL);
@@ -4830,6 +4909,7 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 			__sync_lock_release(dbusy(d));
 			return 0;
 		}
+		tiny_filled(d, blk);
 		d->t_io = io;
 		d->t_epoch = LD(d->ra_epoch);
 		d->t_us = ksceKernelGetSystemTimeLow();
@@ -6101,11 +6181,8 @@ static void prealloc(Dev *d)
 		return;
 	if (LD(g_pipeline) || LD(g_offload) || LD(g_readahead))
 		(void)ensure_buf2(d);                 /* tried again when needed */
-	if (LD(g_readahead) && !d->t_buf &&
-	    alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RA_TINY_SECTORS * 512, &d->t_uid, &d->t_buf) < 0) {
-		d->t_uid = -1;
-		d->t_buf = NULL;
-	}
+	if (LD(g_readahead))
+		tiny_alloc(d);
 }
 
 int vm_stage_init(void)
@@ -6123,6 +6200,10 @@ int vm_stage_init(void)
 		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CLEAN,
 		                           &f) >= 0)
 			g_dcache_clean = (void (*)(void *, unsigned int))f;
+		f = 0;
+		if (module_get_export_func(KERNEL_PID, "SceSysmem", LIB_CPU_DRIVER, NID_DCACHE_CINV,
+		                           &f) >= 0 && f)
+			g_dcache_cinv = (void (*)(void *, unsigned int))f;
 		/* title ids (ksceKernelSysrootGetProcessTitleId) and whether an
 		 * exclusive app runs (ksceAppMgrIsExclusiveProcessRunning: 1 if one
 		 * does; title_id NULL: any), looked up by their NIDs - the way that
@@ -6267,6 +6348,7 @@ void vm_stage_fini(void)
 			ksceKernelFreeMemBlock(d->t_uid);
 			d->t_uid = -1;
 			d->t_buf = NULL;
+			d->t_cached = 0;
 		}
 	}
 	if (g_rc.uid >= 0) {                  /* the again cache's own block */
@@ -6932,10 +7014,11 @@ void vm_stage_worker_tick(void)
 		         (unsigned)last_cleaned, (unsigned)LD(g_gpu_dma_kib), (unsigned)(last_max / 2));
 		if (LD(g_dma_want)) {
 			VM_KLOGI("stage: DMA copies %u (%u MiB in %u ms; %u of 16-32 KiB in %u ms), "
-			         "refused %u",
+			         "refused %u; in the request thread %u reads %u MiB",
 			         (unsigned)LD(g_dma_copies), (unsigned)(LD(g_dma_kib) / 1024),
 			         (unsigned)(LD(g_dma_us) / 1000), (unsigned)LD(g_dma_mid),
-			         (unsigned)(LD(g_dma_mid_us) / 1000), (unsigned)LD(g_dma_errors));
+			         (unsigned)(LD(g_dma_mid_us) / 1000), (unsigned)LD(g_dma_errors),
+			         (unsigned)LD(g_dma_here), (unsigned)(LD(g_dma_here_kib) / 1024));
 		}
 		VM_KLOGI("stage: overlapped reads %u (%u in 3 parts), helper waited %u times %u ms",
 		         (unsigned)LD(g_pipe_reads), (unsigned)LD(g_pipe_reads3),
@@ -7013,12 +7096,20 @@ void vm_stage_worker_tick(void)
 			         "switched %u, old %u", (unsigned)LD(g_ra_bad_why[0]),
 			         (unsigned)LD(g_ra_bad_why[1]), (unsigned)LD(g_ra_bad_why[2]),
 			         (unsigned)LD(g_ra_bad_why[3]), (unsigned)LD(g_ra_bad_why[4]));
-		if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
-			VM_KLOGI("stage: tiny reads from their block %u; adaptive: from read %u, block %u KiB "
-			         "now, moved %u", (unsigned)LD(g_ra_tiny_reads), (unsigned)LD(g_tiny_thr),
-			         (unsigned)(LD(g_tiny_blk) / 2), (unsigned)LD(g_tn_moves));
-		else
-			VM_KLOGI("stage: tiny reads from their block %u", (unsigned)LD(g_ra_tiny_reads));
+		{
+			/* the block's memory: cached where it is (tiny_alloc) */
+			const char *const tm = g_dev[VM_DEV_SD2VITA].t_cached || g_dev[VM_DEV_MEMCARD].t_cached ?
+			                       "cached" : "non-cacheable";
+
+			if (LD(g_ra_mode) == VM_RA_ADAPTIVE)
+				VM_KLOGI("stage: tiny reads from their block %u (%s); adaptive: from read %u, "
+				         "block %u KiB now, moved %u", (unsigned)LD(g_ra_tiny_reads), tm,
+				         (unsigned)LD(g_tiny_thr), (unsigned)(LD(g_tiny_blk) / 2),
+				         (unsigned)LD(g_tn_moves));
+			else
+				VM_KLOGI("stage: tiny reads from their block %u (%s)",
+				         (unsigned)LD(g_ra_tiny_reads), tm);
+		}
 		for (int i = 0; i < VM_DEV_COUNT; i++) {
 			const CalDev *c = &g_cal[i];
 			const uint32_t hn = LD(c->tiny_hit_n), bn = LD(c->tiny_blk_n);

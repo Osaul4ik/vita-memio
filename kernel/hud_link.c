@@ -66,6 +66,7 @@ static const VmCoreApi k_core = {
 	.cal            = vm_stage_cal,
 	.cal_set        = vm_stage_cal_set,
 	.cal_reset      = vm_stage_cal_reset,
+	.dma_stats      = vm_stage_dma_stats,
 };
 
 static VmHudLink        g_link;

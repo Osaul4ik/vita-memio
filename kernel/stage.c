@@ -1256,6 +1256,9 @@ static volatile int32_t  g_dma_last_err;
 static volatile uint32_t g_dma_here, g_dma_here_kib;
 /* ... and staged reads' (stage_xfer_one) */
 static volatile uint32_t g_dma_here_st, g_dma_here_st_kib;
+/* every read's copy out to the caller (copy_out), in sectors, and of it the
+ * DMA controller's: counted like the cores' (COUNT_CORES) */
+static volatile uint32_t g_cpo_sec, g_cpo_dma_sec;
 
 static int dma_state(void)
 {
@@ -1338,6 +1341,12 @@ static int __attribute__((unused)) stage_copy_out(void *dst, const void *src, si
 static void copy_out(void *dst, const void *src, uint32_t n, int clean)
 {
 	const int dma = vm_copy_from_stage(dst, src, n);
+
+	if (COUNT_CORES()) {                      /* the HUD: how much the controller made */
+		ADD(g_cpo_sec, n >> 9);
+		if (dma)
+			ADD(g_cpo_dma_sec, n >> 9);
+	}
 
 	if (!clean)
 		return;
@@ -7548,6 +7557,12 @@ void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t
 	 * from read ahead, against read the standard way or copied by the game */
 	*nc_sys_kib = LD(g_ncd_kib) + LD(g_ra_nc_sys_kib);
 	*nc_own_kib = LD(g_nc_stock_kib) + LD(g_ra_nc_own_kib);
+}
+
+void vm_stage_dma_stats(uint32_t *dma_sec, uint32_t *all_sec)
+{
+	*dma_sec = LD(g_cpo_dma_sec);
+	*all_sec = LD(g_cpo_sec);
 }
 
 void vm_stage_count_cores(int on)

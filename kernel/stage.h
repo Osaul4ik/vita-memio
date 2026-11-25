@@ -125,6 +125,10 @@ void vm_stage_fg(VmFg *out);
  * the copies by core, and non-cacheable reads on the system core vs the
  * caller's own. Counted while vm_stage_count_cores(1) or the log is on. */
 void vm_stage_core_stats(uint32_t cp_core_kib[4], uint32_t *nc_sys_kib, uint32_t *nc_own_kib);
+/* The reads' copies out to the caller, in sectors since boot (wrap-safe
+ * differences), and of them the DMA controller's, on whichever thread.
+ * Counted as vm_stage_core_stats. */
+void vm_stage_dma_stats(uint32_t *dma_sec, uint32_t *all_sec);
 void vm_stage_count_cores(int on);
 /* Whether the HUD or the overlay shows transfers now, whatever the settings
  * say (either by keys): every transfer's bytes are counted while it does. */

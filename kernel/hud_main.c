@@ -62,6 +62,7 @@ int  vm_stage_app_save(void)                    { return g_core->app_save(); }
 void vm_stage_cal(int dev, VmCal *out)          { g_core->cal(dev, out); }
 void vm_stage_cal_set(int on)                   { g_core->cal_set(on); }
 void vm_stage_cal_reset(void)                   { g_core->cal_reset(); }
+void vm_stage_dma_stats(uint32_t *dma_sec, uint32_t *all_sec) { g_core->dma_stats(dma_sec, all_sec); }
 
 /* ---- the HUD's and the overlay's text ------------------------------------------ */
 
@@ -141,6 +142,19 @@ static void pct_text(char *o, int cap, int p)
 		         (unsigned)(p > 100 ? 100 : p));
 }
 
+/* The DMA controller's share of the copies: white (more is not better or
+ * worse in itself: it says who copies), "-" without copies, "off" with DMA
+ * copy off. */
+static void dma_text(char *o, int cap, int on, uint32_t dma, uint32_t all)
+{
+	if (!on)
+		snprintf(o, cap, HUD_C_DIM "off");
+	else if (!all)
+		snprintf(o, cap, HUD_C_DIM "-");
+	else
+		snprintf(o, cap, HUD_C_TEXT "%u%%", (unsigned)ov_pct(dma, all - (dma < all ? dma : all)));
+}
+
 /* "B": the app's buffers for the system core (VmRaNow.bufmap) - green all
  * mapped, yellow some from their 2nd page (worked around), red some refused;
  * grey while none is mapped (or the setting is off): always there, so the
@@ -156,12 +170,15 @@ static const char *hud_bufmap(int b)
  *   C:5:2/16/8 NC:never Auto             (reads in a row before it starts:
  *                                         as set : now for large / 32 KiB /
  *                                         tiny reads; hud_streak_kind)
- *   Core 3 B C: 98%  NC: 100%            (since the HUD came up; B: hud_bufmap)
+ *   Core 3 B C: 98%  NC: 100%  DMA: 80%  (since the HUD came up; B: hud_bufmap;
+ *                                         C / NC: copied on the system core, DMA:
+ *                                         of every copy, the controller's - on
+ *                                         whichever thread; "off": DMA copy off)
  * Off: no such line. Returns the lines added (at most `room`). */
 static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, int on)
 {
 	static int counting;
-	static uint32_t base_core[4], base_ncs, base_nco;
+	static uint32_t base_core[4], base_ncs, base_nco, base_dma, base_all;
 	char c[32], nc[32];
 	const char *mode;
 	VmRaNow now;
@@ -171,6 +188,7 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 	if (on && !counting) {
 		count_cores_want(&g_cnt_hud, 1);
 		vm_stage_core_stats(base_core, &base_ncs, &base_nco);
+		vm_stage_dma_stats(&base_dma, &base_all);
 		counting = 1;
 	} else if (!on && counting) {
 		count_cores_want(&g_cnt_hud, 0);
@@ -196,16 +214,20 @@ static int hud_ra_lines(char (*L)[VM_HUD_LINE_MAX], int room, const VmFg *fg, in
 		         cal.on ? HUD_C_GOOD : HUD_C_DIM);
 	}
 	if (n < room) {
-		uint32_t core[4], ncs, nco, other = 0;
-		char a[16], b[16];
+		uint32_t core[4], ncs, nco, other = 0, dma, all;
+		char a[16], b[16], c[16];
+		VmSettings s;
 
 		vm_stage_core_stats(core, &ncs, &nco);
+		vm_stage_dma_stats(&dma, &all);
+		vm_settings_copy(&s);
 		for (int i = 0; i < 3; i++)
 			other += core[i] - base_core[i];
 		pct_text(a, sizeof(a), ov_pct(core[3] - base_core[3], other));
 		pct_text(b, sizeof(b), ov_pct(ncs - base_ncs, nco - base_nco));
+		dma_text(c, sizeof(c), s.dmacopy, dma - base_dma, all - base_all);
 		snprintf(L[n++], VM_HUD_LINE_MAX, HUD_C_DIM "Core 3 %s " HUD_C_DIM "C: %.7s" HUD_C_DIM
-		         "  NC: %.7s", hud_bufmap(now.bufmap), a, b);
+		         "  NC: %.7s" HUD_C_DIM "  DMA: %.7s", hud_bufmap(now.bufmap), a, b, c);
 	}
 	return n;
 }

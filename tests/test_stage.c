@@ -196,6 +196,7 @@ static void reset(void)
 	g_dma_last_err = 0;
 	g_dma_here = g_dma_here_kib = 0;
 	g_dma_here_st = g_dma_here_st_kib = 0;
+	g_cpo_sec = g_cpo_dma_sec = 0;
 	g_dcache_cinv = NULL;
 }
 
@@ -2548,6 +2549,7 @@ static void test_dma_staged_here(void)
 		use_copy_out = 1;
 		fake_pid = 0x42;
 		fake_memtype = 0xD000;
+		g_count_cores = 1;                        /* the HUD shows it */
 		here0 = __atomic_load_n(&io_here, __ATOMIC_RELAXED);
 		calls0 = __atomic_load_n(&io_calls, __ATOMIC_RELAXED);
 		for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++)
@@ -2561,9 +2563,23 @@ static void test_dma_staged_here(void)
 			for (int i = 0; i < 2; i++)
 				CHECK(io_ns[i] >= VM_DMA_MIN_BYTES / 512);
 		}
-		/* off a cache line: the copier, as before */
+		/* the HUD's DMA share: every copy the controller's */
+		{
+			uint32_t dma, all;
+
+			vm_stage_dma_stats(&dma, &all);
+			CHECK(dma == 6 * 256 && all == 6 * 256);
+		}
+		/* off a cache line: the copier, as before - the CPU's copy */
 		off0 = g_off_reads;
 		CHECK(rd_ok(a + 4, 500, 256) && g_off_reads == off0 + 1 && g_dma_here_st == 6);
+		{
+			uint32_t dma, all;
+
+			vm_stage_dma_stats(&dma, &all);
+			CHECK(dma == 6 * 256 && all == 7 * 256);
+		}
+		g_count_cores = 0;
 		CHECK(fake_usermap_live == 0 && sems_empty(d));
 		/* a read the card fails: the error as before, nothing left behind */
 		fail_at_call = io_calls + 1;

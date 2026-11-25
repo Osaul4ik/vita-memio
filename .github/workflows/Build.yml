@@ -58,6 +58,9 @@ jobs:
       - name: Build (pinned VitaSDK image)
         run: make build
 
+      - name: No VFP/NEON in the kernel and HUD modules
+        run: make check-novfp
+
       - name: Check the modules exist and are not empty
         run: |
           for f in build/vitamemio_kernel.skprx build/vitamemio_hud.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do

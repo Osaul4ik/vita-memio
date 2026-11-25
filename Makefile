@@ -34,7 +34,7 @@ MODULES := $(BUILD)/vitamemio_kernel.skprx $(BUILD)/vitamemio_hud.skprx $(BUILD)
 TESTER_VPK := $(BUILD)/vitamemio_tester.vpk
 FTP      = ftp://$(VITA_IP):1337
 
-.PHONY: all build install deploy log results config clean check-ip test cppcheck sim
+.PHONY: all build install deploy log results config clean check-ip test cppcheck sim check-novfp
 
 all: build
 
@@ -47,6 +47,17 @@ else
 	  cmake -S . -B $(BUILD) -DCMAKE_TOOLCHAIN_FILE=$$VITASDK/share/vita.toolchain.cmake $(CMAKE_ARGS) && \
 	  cmake --build $(BUILD) -j$$(nproc) && \
 	  chown -R $(shell id -u):$(shell id -g) $(BUILD)'
+endif
+
+# Kernel code must not touch the VFP/NEON registers (they hold the waiting
+# user thread's state, kernel/fastcopy.h): no such instruction in the kernel
+# and HUD modules. After `make build`; the counts per function if any.
+check-novfp:
+ifdef VITASDK
+	@sh tools/check_novfp.sh arm-vita-eabi-objdump $(BUILD)/vitamemio_kernel $(BUILD)/vitamemio_hud
+else
+	docker run --rm -v "$(CURDIR)":/src -w /src $(VITASDK_IMAGE) sh tools/check_novfp.sh \
+	  arm-vita-eabi-objdump $(BUILD)/vitamemio_kernel $(BUILD)/vitamemio_hud
 endif
 
 check-ip:

@@ -77,8 +77,11 @@ enum vm_i18n_id {
 	VM_I18N_ST_OFF,             /* a storage's help with Driver off               */
 	VM_I18N_ROW_SYSAPPS,        /* Advanced > Profiles for system apps            */
 	VM_I18N_HINT_SYSAPPS,
-	VM_I18N_ROW_LOWMEM,         /* Low kernel memory (both storages on)           */
+	VM_I18N_ROW_LOWMEM,         /* Kernel memory                                  */
 	VM_I18N_HINT_LOWMEM,
+	VM_I18N_ITEM_KMEM_FULL,     /* its choices, in VM_KMEM_* order                */
+	VM_I18N_ITEM_KMEM_MEDIUM,
+	VM_I18N_ITEM_KMEM_LOW,
 	VM_I18N_COUNT
 };
 

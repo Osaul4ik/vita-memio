@@ -88,7 +88,9 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 #define X_STORAGES \
 	ROW_TOGGLE("sd2vita") \
 	ROW_TOGGLE("memcard") \
-	ROW_TOGGLE("lowmem")
+	ROW_LIST("lowmem") \
+		ITEM("vm_i_km0", "0") ITEM("vm_i_km1", "1") ITEM("vm_i_km2", "2") \
+	"</list>"
 #define X_REST \
 	"<setting_list id=\"vm_advanced\" title=\"vm_t_advanced\" icon=\"tex_spanner\">" \
 		ROW_LIST("gpusafe") \
@@ -458,6 +460,8 @@ static const vm_u16 *vm_text(const char *id)
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
 	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '2' && !id[9])
 		return fixed_text(VM_I18N_ITEM_OFF_OFF + (id[8] - '0'));
+	if (s_pfx(id, "vm_i_km") && id[7] >= '0' && id[7] <= '2' && !id[8])   /* VM_KMEM_* */
+		return fixed_text(VM_I18N_ITEM_KMEM_FULL + (id[7] - '0'));
 	return 0;
 }
 

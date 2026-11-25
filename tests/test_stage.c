@@ -146,7 +146,7 @@ static void reset(void)
 	d->th2 = d->sem_cgo = d->sem_fin = -1;
 	d->ra_th = d->ra_go = d->ra_done = d->t_uid = -1;
 	g_readahead = 0;
-	g_lowmem_set = g_share_on = 0;                  /* each storage its own buffers */
+	g_kmem = VM_KMEM_FULL; g_share_on = 0;                 /* each storage its own buffers */
 	for (int i = 0; i < VM_DEV_COUNT; i++)
 		g_dev[i].shared = 0;
 	g_sh.busy = 0;
@@ -4445,43 +4445,6 @@ static void test_tiny_adaptive(void)
 	s.readahead = 1;
 	vm_stage_apply(&s);
 	CHECK(tiny_thr() == RA_TINY_STREAK && tiny_blk() == RA_TINY_SECTORS);
-	/* a version 1 file (before the tiny reads' figures): its counts kept,
-	 * the tiny ones from 0; saved again as version 2 */
-	{
-		char path[256];
-		CalHead h = { CAL_MAGIC, 1u, 1u, VM_DEV_COUNT };
-		CalDev one[VM_DEV_COUNT];
-		uint32_t c = 0x811C9DC5u;
-		FILE *f;
-
-		memset(one, 0, sizeof(one));
-		one[M].n_plain[0] = 70;
-		one[M].plain[0][20] = 70;
-		snprintf(path, sizeof(path), "%s/calib.bin", fakes_tmpdir_new());
-		f = fopen(path, "wb");
-		fwrite(&h, sizeof(h), 1, f);
-		c = cal_fnv(c, &h, sizeof(h));
-		for (int i = 0; i < VM_DEV_COUNT; i++) {
-			fwrite(&one[i], CAL_DEV_V1, 1, f);
-			c = cal_fnv(c, &one[i], CAL_DEV_V1);
-		}
-		c ^= 0xA5C3A5C3u;
-		fwrite(&c, sizeof(c), 1, f);
-		fclose(f);
-		memset(g_cal, 0xEE, sizeof(g_cal));
-		g_cal_on = 0;
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(g_cal_on && g_cal[M].n_plain[0] == 70 && g_cal[M].plain[0][20] == 70 &&
-		      !g_cal[M].tiny_hit_n && !g_cal[M].tiny_blk_us);
-		g_cal[M].tiny_hit_n = 5;
-		cal_save_locked();                                  /* into tuning.bin; calib.bin gone */
-		{ FILE *gone = fopen(path, "rb"); CHECK(gone == NULL); if (gone) fclose(gone); }
-		memset(g_cal, 0, sizeof(g_cal));
-		g_cal_loaded = 0;
-		cal_load();
-		CHECK(g_cal[M].n_plain[0] == 70 && g_cal[M].tiny_hit_n == 5 && !g_tune_legacy);
-	}
 	vm_stage_fini();
 }
 
@@ -4717,10 +4680,10 @@ static void test_onoff_measured(void)
 	vm_stage_fini();
 }
 
-/* An older tuning.bin (versions 3 to 7, apps' slots after the calibration):
- * its calibration kept, the file written anew as this layout - the header
- * and the calibration alone - at the next save. */
-static void tune_old_file(const char *path, uint32_t version, uint32_t slot, int apps, uint32_t n)
+/* A tuning.bin that is not this build's (another version, or junk): no
+ * compatibility - nothing of it used, written anew (header and calibration
+ * alone) at the next save. */
+static void tune_other_file(const char *path, uint32_t version, int junk)
 {
 	TuneHead h;
 	uint32_t on = 1, c;
@@ -4729,16 +4692,21 @@ static void tune_old_file(const char *path, uint32_t version, uint32_t slot, int
 	CHECK(f != NULL);
 	if (!f)
 		return;
-	g_cal[M].waste_us = 77 * n;
-	g_cal[M].waste_n = n;
-	tune_head_of(&h, version, slot);
+	g_cal[M].waste_us = 770;
+	g_cal[M].waste_n = 10;
+	tune_head(&h);
+	h.version = version;
+	h.check = 0;
+	h.check = tune_fnv(0x811C9DC5u, &h, sizeof(h)) | 1u;
+	if (junk)
+		memset(&h, 0x5A, sizeof(h));
 	fwrite(&h, sizeof(h), 1, f);
 	fwrite(&on, sizeof(on), 1, f);
 	fwrite(g_cal, sizeof(g_cal), 1, f);
 	c = tune_fnv(tune_fnv(0x811C9DC5u, &on, sizeof(on)), g_cal, sizeof(g_cal)) | 1u;
 	fwrite(&c, sizeof(c), 1, f);
-	for (int i = 0; i < apps * (int)slot; i++)
-		fputc(0x4A, f);                       /* old apps */
+	for (int i = 0; i < 300; i++)
+		fputc(0x4A, f);                       /* an older build's apps */
 	fclose(f);
 	memset(g_cal, 0, sizeof(g_cal));
 	g_cal_on = 0;
@@ -4746,11 +4714,10 @@ static void tune_old_file(const char *path, uint32_t version, uint32_t slot, int
 	cal_load();
 }
 
-static void test_tune_v3(void)
+static void test_tune_other_file(void)
 {
-	static const struct { uint32_t v, slot; int apps; } k_old[] = {
-		{ 3u, TUNE_SLOT_V3, 3 }, { 4u, TUNE_SLOT_V4, 0 }, { 5u, TUNE_SLOT_V5, 2 },
-		{ 6u, TUNE_SLOT_V6, 2 }, { 7u, TUNE_SLOT_V6, 4 },
+	static const struct { uint32_t v; int junk; } k_other[] = {
+		{ TUNE_VERSION - 1u, 0 }, { TUNE_VERSION + 1u, 0 }, { TUNE_VERSION, 1 },
 	};
 	VmSettings s;
 	char path[256];
@@ -4761,19 +4728,17 @@ static void test_tune_v3(void)
 	snprintf(path, sizeof(path), "%s/ux0", fakes_tmpdir());
 	mkdir(path, 0777);
 	snprintf(path, sizeof(path), "%s/ux0/tuning.bin", fakes_tmpdir());
-	for (uint32_t i = 0; i < sizeof(k_old) / sizeof(k_old[0]); i++) {
-		const uint32_t n = 10 + i;
-
-		tune_old_file(path, k_old[i].v, k_old[i].slot, k_old[i].apps, n);
-		CHECK(!g_tune_ok && g_cal_on && g_cal[M].waste_n == n && g_cal[M].waste_us == 77 * n);
-		CHECK(g_tune_cal_due);                    /* to be written anew */
-		cal_save_locked();
+	for (uint32_t i = 0; i < sizeof(k_other) / sizeof(k_other[0]); i++) {
+		tune_other_file(path, k_other[i].v, k_other[i].junk);
+		CHECK(!g_tune_ok && !g_cal_on && g_cal[M].waste_n == 0 && g_cal[M].waste_us == 0);
+		g_cal[M].waste_n = 3;
+		cal_save_locked();                        /* anew: this layout */
 		CHECK(g_tune_ok && !g_tune_cal_due && stat(path, &st) == 0 &&
-		      st.st_size == (off_t)(TUNE_CAL_OFF + TUNE_CAL_SIZE));   /* the old apps cut off */
+		      st.st_size == (off_t)(TUNE_CAL_OFF + TUNE_CAL_SIZE));   /* the old tail cut off */
 		g_cal_loaded = 0;
 		memset(g_cal, 0, sizeof(g_cal));
 		cal_load();
-		CHECK(g_tune_ok && !g_tune_cal_due && g_cal[M].waste_n == n);
+		CHECK(g_tune_ok && g_cal[M].waste_n == 3);
 	}
 	vm_stage_fini();
 }
@@ -5175,23 +5140,6 @@ static void test_profiles(void)
 	CHECK(!ra_prof_load("PCSB00777", &pf));
 	ra_prof_save("PCSB00777", &pf);
 	CHECK(ra_prof_load("PCSB00777", &pf) && pf.app.pipe == VM_PIPE_FIXED);
-	/* on ux0; an older version's on ur0 moves there when it is first read */
-	{
-		char ux[256], ur[256];
-		struct stat st;
-
-		pf.app.pipe = VM_PIPE_FIXED;
-		ra_prof_save("PCSB00554", &pf);
-		snprintf(ux, sizeof(ux), "%s/ux0/ra/PCSB00554.bin", fakes_tmpdir());
-		snprintf(ur, sizeof(ur), "%s/ra", fakes_tmpdir());
-		mkdir(ur, 0777);
-		snprintf(ur, sizeof(ur), "%s/ra/PCSB00554.bin", fakes_tmpdir());
-		CHECK(stat(ux, &st) == 0 && rename(ux, ur) == 0);
-		memset(&pf, 0, sizeof(pf));
-		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
-		CHECK(stat(ux, &st) == 0 && stat(ur, &st) != 0);
-		CHECK(ra_prof_load("PCSB00554", &pf) && pf.app.pipe == VM_PIPE_FIXED);
-	}
 	/* one that is not right: not used */
 	{
 		RaProfileFile v;
@@ -5216,15 +5164,8 @@ static void test_profiles(void)
 		ksceIoWrite(fd, &v, sizeof(v));
 		ksceIoClose(fd);
 		CHECK(!ra_prof_load("PCSE00001", &pf));
+		CHECK(ksceIoOpen(path, SCE_O_RDONLY, 0) < 0);   /* not this build's: removed */
 		v.check ^= 1;
-		/* saved by an older build with the removed "C + NC All": C + NC R/A */
-		v.offload = VM_OFFLOAD_OLD_FULL;
-		v.check = ra_profile_check(&v);
-		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
-		ksceIoWrite(fd, &v, sizeof(v));
-		ksceIoClose(fd);
-		CHECK(ra_prof_load("PCSE00001", &pf) && pf.app.offload == VM_OFFLOAD_ALL &&
-		      pf.app.ra == VM_RA_ON);
 		v.offload = 5;                                /* out of range */
 		v.check = ra_profile_check(&v);
 		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
@@ -6329,7 +6270,7 @@ static void test_lowmem_init(void)
 	CHECK(fake_free_calls == 6);
 	/* on, both storages: one staging and one second buffer for the two */
 	boot_state();
-	s.lowmem = 1;
+	s.lowmem = VM_KMEM_LOW;
 	vm_stage_apply(&s);
 	CHECK(vm_stage_init() == VM_OK);
 	CHECK(g_share_on && sd->shared && mc->shared);
@@ -6339,7 +6280,7 @@ static void test_lowmem_init(void)
 	CHECK(sd->t_buf && mc->t_buf && sd->t_buf != mc->t_buf);
 	CHECK(sd->uid < 0 && mc->uid < 0 && sd->uid2 < 0 && mc->uid2 < 0);   /* the share's own */
 	CHECK(g_sh.uid >= 0 && g_sh.uid2 >= 0 && g_sh.buf == sd->buf && g_sh.buf2 == sd->buf2);
-	CHECK(fake_log_find("stage: low kernel memory: one buffer") != NULL);
+	CHECK(fake_log_find("stage: kernel memory low: one buffer") != NULL && g_rc.own_units == 4);
 	CHECK(vm_stage_go() == 1);
 	vm_stage_apply(&s);
 	CHECK(fake_alloc_calls == 5 && sd->enabled && mc->enabled && sd->buf == mc->buf);
@@ -6351,7 +6292,7 @@ static void test_lowmem_init(void)
 	/* on, one storage only: shared all the same (the other may come on) */
 	boot_state();
 	s = devices_on(0, 0, 1);
-	s.lowmem = 1;
+	s.lowmem = VM_KMEM_LOW;
 	s.readahead = VM_RA_ON;
 	vm_stage_apply(&s);
 	CHECK(vm_stage_init() == VM_OK);
@@ -6359,6 +6300,29 @@ static void test_lowmem_init(void)
 	CHECK(fake_alloc_calls == 4 && mc->t_buf && !sd->t_buf && g_rc.own);
 	vm_stage_fini();
 	CHECK(fake_free_calls == 4);
+	/* Medium: the same, the again cache's block 256 KiB */
+	boot_state();
+	s.lowmem = VM_KMEM_MEDIUM;
+	vm_stage_apply(&s);
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(g_share_on && mc->shared && sd->shared && sd->buf == mc->buf && fake_alloc_calls == 4);
+	CHECK(g_rc.own && g_rc.own_units == RC_MED_UNITS &&
+	      fake_block_size(g_rc.uid) == RC_MED_UNITS * RC_UNIT * 512);
+	CHECK(fake_log_find("stage: kernel memory medium: one buffer") != NULL &&
+	      fake_log_find("again cache's own 256 KiB made") != NULL);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 4 && !g_rc.own);
+	/* ... 256 KiB refused: 128 KiB instead */
+	boot_state();
+	vm_stage_apply(&s);
+	fake_alloc_fail_nth = 4;                      /* staging, second, tiny, then the cache's */
+	CHECK(vm_stage_init() == VM_OK);
+	CHECK(g_rc.own && g_rc.own_units == RC_OWN_UNITS && fake_alloc_calls == 5 &&
+	      fake_block_size(g_rc.uid) == RC_OWN_UNITS * RC_UNIT * 512);
+	CHECK(fake_log_find("again cache's own 128 KiB made") != NULL);
+	vm_stage_fini();
+	CHECK(fake_free_calls == 4);
+	s.lowmem = VM_KMEM_LOW;
 	/* the cache's block refused: the rest as before, no cache */
 	boot_state();
 	vm_stage_apply(&s);
@@ -6405,7 +6369,7 @@ static void lowmem_on(VmSettings *s, int ra, int offload)
 	s->pipeline = VM_PIPE_AUTO;
 	s->offload = offload;
 	s->readahead = ra;
-	s->lowmem = 1;
+	s->lowmem = VM_KMEM_LOW;
 	vm_stage_apply(s);
 	g_live = 1;
 	vm_stage_worker_tick();
@@ -7178,7 +7142,7 @@ int main(void)
 	RUN(test_fg_events_together);
 	RUN(test_session_log);
 	RUN(test_onoff_measured);
-	RUN(test_tune_v3);
+	RUN(test_tune_other_file);
 	RUN(test_nothing_learned_in_file);
 	RUN(test_adaptive_kept_through_home);
 	RUN(test_adaptive_gen_and_settle);

@@ -52,7 +52,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 |---|---|---|
 | Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
 | Faster SD2Vita / memory card | Speeds up that storage | Off |
-| Low kernel memory | The two storages share one set of buffers, so the plugin needs 256 KiB less memory, but part of read ahead is lost and reading again from memory gets less room. See below. Takes effect after a restart | Off |
+| Kernel memory | How much memory the plugin keeps for its buffers: **Full** (768 KiB), **Medium** (640 KiB) or **Low** (512 KiB). See below. Takes effect after a restart | Medium |
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
@@ -77,22 +77,19 @@ A memory card is slowest when it has to wait for the next request. While a game 
 
 **On** always reads ahead after a fixed number of reads in a row; **Off** never does.
 
-### Low kernel memory
+### Kernel memory
 
-Turn this on only if you get error C1-2569-2 or other plugins run out of memory. The SD2Vita and the memory card then share one set of buffers (384 KiB) instead of having one each, and reading again from memory gets a small block of 128 KiB of its own instead of the other storage's 384 KiB: the plugin needs 256 KiB less. The price is speed:
+- **Full** (768 KiB): each storage has its own set of buffers (384 KiB). Reading again from memory uses the set of the storage the game is not reading from. The fastest when you copy between the two cards or use both at once.
+- **Medium** (640 KiB, the default): the SD2Vita and the memory card share one set of buffers, and reading again from memory has a block of 256 KiB of its own. A game reads from one card at a time, so in games it is as fast as *Full*.
+- **Low** (512 KiB): the same, with a block of 128 KiB for reading again from memory, so that helps less. Choose it if you get error C1-2569-2 or other plugins run out of memory.
 
-- **Read ahead works for one storage at a time.** Data read early for one card sits in the shared buffers, so it is thrown away as soon as the other card is used. While a game streams from one card, small transfers on the other go the normal, slower way.
-- **Reading again from memory keeps less:** 128 KiB instead of 384 KiB, so it helps less.
-- **Only the game in front is sped up.** Other apps' reads, such as the system's or music in the background, go the normal way.
-- **Copying between the two cards** (for example in VitaShell) gains less.
-
+With *Medium* and *Low*, while both cards are in use at the same moment (for example copying between them in VitaShell), one of them goes the normal, slower way for a moment, and data read ahead for one card is thrown away when the other is used.
 
 ### Reading again from memory
 
 Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of from the card. There is nothing to set:
 
-- It uses the buffers of the storage the game is not reading from: the SD2Vita's while you play from the memory card, or the other way round. Both storages get their buffers when the console starts, also the one you switched off, so it always has them. If that storage is on, its own reads come first and take the buffers back; if it is off, the buffers are for this alone.
-- With *Low kernel memory* it has a small block of 128 KiB of its own instead.
+- With *Kernel memory* at *Medium* or *Low* it has a block of its own (256 or 128 KiB). At *Full* it uses the buffers of the storage the game is not reading from: the SD2Vita's while you play from the memory card, or the other way round. If that storage is on, its own reads come first and take the buffers back.
 - It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
 - It switches itself off in a game where it does not pay off.
 - It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A.
@@ -157,12 +154,13 @@ Core 3 B C: 0%  NC: 0%  DMA: 98%
 
 ## Error C1-2569-2
 
-The console is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, switch on *Low kernel memory*, switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
+The console is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, set *Kernel memory* to *Low*, switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
 
 ## Good to know
 
 - Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
-- Memory: 384 KiB for each of the two storages, also one that is off (with *Low kernel memory*, 384 KiB for both and 128 KiB for reading again from memory), about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. It is set aside when the console starts and kept.
+- Memory: 768, 640 or 512 KiB of buffers by *Kernel memory*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. It is set aside when the console starts and kept.
+- Settings, profiles and `tuning.bin` from another version are not converted: such a file is deleted and everything starts from the defaults.
 - While the console starts, everything goes the normal way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
 - On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

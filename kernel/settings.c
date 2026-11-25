@@ -3,12 +3,9 @@
  *
  * The file is tiny and versioned:
  *   magic 'TSCF' | version | count | count x int32 (enum vm_key order) | check
- * Keys are only ever appended, so a file from an older version (fewer keys)
- * still loads: its keys are read and the newer ones take their defaults.
- * A file of another version (1: before slots 4 and 5 became HUD style and
- * logging) is not used: defaults.
- * A missing, short or corrupt file means defaults. Each value is validated on
- * its own, so one bad field falls back to its default without losing the rest.
+ * Only this build's exact file is used: another version or key count, a
+ * value out of range or a wrong check, and it is removed - every setting its
+ * default (written again at the next change). A missing file: defaults.
  *
  * vm_settings_set() runs in the caller's syscall context, so it only updates
  * memory (and the staging switches) and marks the settings dirty; the
@@ -24,7 +21,7 @@
 #include "stage.h"
 
 #define VM_CFG_MAGIC    0x46435354u   /* 'TSCF'                                */
-#define VM_CFG_VERSION  2u
+#define VM_CFG_VERSION  3u            /* 3: Kernel memory Full / Medium / Low */
 
 typedef struct VmSettingsFile {
 	uint32_t magic;
@@ -51,12 +48,7 @@ static const int32_t g_defaults[VM_KEY_COUNT] = {
 	VM_DEF_DRIVER, VM_DEF_SYSAPPS, VM_DEF_LOWMEM,
 };
 
-/* A file may hold more keys than this build knows (one written by a newer
- * build, or by the experimental build that had an 8th key): those are read
- * for the check word and then ignored. */
-#define VM_CFG_MAX_KEYS  32
-
-/* Check word over `count` stored values (all of them, known or not). */
+/* Check word over the stored values. */
 static uint32_t check_of(uint32_t magic, uint32_t version, uint32_t count, const int32_t *values)
 {
 	uint32_t c = magic ^ (version << 8) ^ (count << 16);
@@ -70,38 +62,31 @@ static uint32_t file_check(const VmSettingsFile *f)
 	return check_of(f->magic, f->version, f->count, f->values);
 }
 
-/* Read and check one settings file into `s` (which already holds the defaults).
- * 1 = loaded, 0 = missing or unusable (`s` untouched). */
+/* Read and check one settings file into `s` (which already holds the
+ * defaults). 1 = loaded; 0 = missing, or not this build's exact file (then
+ * removed, `s` untouched). */
 static int load_file(const char *path, VmSettings *s)
 {
-	/* magic, version, count, up to VM_CFG_MAX_KEYS values, check */
-	uint32_t raw[3 + VM_CFG_MAX_KEYS + 1];
-	memset(raw, 0, sizeof(raw));
+	VmSettingsFile f;
 	SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+	int n, ok;
+
 	if (fd < 0)
 		return 0;                      /* no file: defaults, nothing to report */
-	int n = ksceIoRead(fd, raw, sizeof(raw));
+	memset(&f, 0, sizeof(f));
+	n = ksceIoRead(fd, &f, sizeof(f));
 	ksceIoClose(fd);
-	/* The check word follows the last stored value. */
-	uint32_t cnt = raw[2];
-	const int32_t *values = (const int32_t *)&raw[3];
-	int ok = raw[0] == VM_CFG_MAGIC && raw[1] == VM_CFG_VERSION &&
-	         cnt >= 1 && cnt <= VM_CFG_MAX_KEYS &&
-	         n == (int)((3 + cnt + 1) * sizeof(uint32_t)) &&
-	         raw[3 + cnt] == check_of(raw[0], raw[1], cnt, values);
+	ok = n == (int)sizeof(f) && f.magic == VM_CFG_MAGIC && f.version == VM_CFG_VERSION &&
+	     f.count == VM_KEY_COUNT && f.check == file_check(&f);
+	for (int k = 0; k < VM_KEY_COUNT && ok; k++)
+		ok = vm_setting_valid(k, f.values[k]);
 	if (!ok) {
-		VM_KLOGW("settings: %s unusable (n=%d)", path, n);
+		VM_KLOGW("settings: %s not this build's (n=%d): removed, defaults", path, n);
+		ksceIoRemove(path);
 		return 0;
 	}
-	for (int k = 0; k < (int)cnt && k < VM_KEY_COUNT; k++) {
-		const int32_t v = k == VM_KEY_OFFLOAD ? vm_offload_upgrade(values[k]) : values[k];
-
-		if (vm_setting_valid(k, v))
-			*vm_setting_field(s, k) = v;
-		else if (k != VM_KEY_INTERNAL)   /* on in an older build: now off, quietly */
-			VM_KLOGW("settings: key %d value %d out of range, default %d",
-			         k, values[k], g_defaults[k]);
-	}
+	for (int k = 0; k < VM_KEY_COUNT; k++)
+		*vm_setting_field(s, k) = f.values[k];
 	return 1;
 }
 

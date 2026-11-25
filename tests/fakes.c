@@ -286,6 +286,7 @@ unsigned fake_alloc_type_fail;
 unsigned fake_block_type[64];
 static SceSize g_block_size[64];
 int fake_alloc_fail_after;
+int fake_alloc_fail_nth;
 unsigned fake_block_size(int uid)
 {
 	return uid > 0 && uid < 64 ? (unsigned)g_block_size[uid] : 0;
@@ -295,6 +296,8 @@ SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, vo
 {
 	(void)name; (void)opt;
 	fake_alloc_calls++;
+	if (fake_alloc_fail_nth > 0 && --fake_alloc_fail_nth == 0)
+		return -6;
 	if (fake_alloc_fail || (fake_alloc_max && size > fake_alloc_max) ||
 	    (fake_alloc_type_fail && type == fake_alloc_type_fail) || fake_alloc_fail_after < 0)
 		return -6;
@@ -494,6 +497,7 @@ void fakes_reset(void)
 	fake_now_us = 0;
 	fake_time_calls = 0;
 	fake_alloc_fail = fake_alloc_calls = fake_free_calls = 0;
+	fake_alloc_fail_nth = 0;
 	fake_alloc_type_fail = 0;
 	fake_hook_fail_at = fake_hook_calls = fake_hook_releases = 0;
 	fake_rename_fail = fake_write_short = fake_prof_writes = fake_tune_writes = 0;

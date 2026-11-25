@@ -85,7 +85,7 @@ enum vm_key {
 	VM_KEY_DMACOPY,        /* 0/1: copy reads out with the DMA controller    */
 	VM_KEY_DRIVER,         /* 0/1: the kernel plugin starts with the console (at the next start) */
 	VM_KEY_SYSAPPS,        /* 0/1: the home screen and system apps have settings of their own */
-	VM_KEY_LOWMEM,         /* 0/1: one buffer for both storages (at the next start) */
+	VM_KEY_LOWMEM,         /* Kernel memory, VM_KMEM_* (at the next start)    */
 	VM_KEY_COUNT
 };
 
@@ -108,13 +108,6 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_ALWAYS  2   /* "Cached only" (1: the removed "GPU-safe only")     */
 #define VM_OFFLOAD_ALL     3   /* "C + NC R/A": and what read ahead holds for NC     */
-/* 4 was "C + NC All" (also the non-cacheable reads themselves), removed in
- * 1.6.0: a stored 4 reads as VM_OFFLOAD_ALL. */
-#define VM_OFFLOAD_OLD_FULL 4
-static inline int vm_offload_upgrade(int v)
-{
-	return v == VM_OFFLOAD_OLD_FULL ? VM_OFFLOAD_ALL : v;
-}
 
 /* Which reads a VM_OFFLOAD_* setting puts on the system core: reads into
  * ordinary (cached) memory, and
@@ -172,7 +165,14 @@ static inline int vm_offload_nc(int v)
 #define VM_DEF_DMACOPY   1   /* on; stops itself on errors or a mismatch       */
 #define VM_DEF_DRIVER    1   /* on; off: the next start installs nothing       */
 #define VM_DEF_SYSAPPS   1   /* on: LiveArea, Settings, ... as games: profiles, Adaptive kept */
-#define VM_DEF_LOWMEM    0   /* off: each storage its own buffers               */
+/* Kernel memory (VM_KEY_LOWMEM): how much the plugin keeps, at the next start.
+ * Full: each storage its own buffers, the again cache in the other's. Medium:
+ * one set for both storages, the again cache a block of its own (256 KiB).
+ * Low: the same with a 128 KiB block. */
+#define VM_KMEM_FULL     0
+#define VM_KMEM_MEDIUM   1
+#define VM_KMEM_LOW      2
+#define VM_DEF_LOWMEM    VM_KMEM_MEDIUM
 
 /* One int per key, in enum vm_key order. */
 typedef struct VmSettings {
@@ -224,8 +224,9 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_DMACOPY:
 	case VM_KEY_DRIVER:
 	case VM_KEY_SYSAPPS:
-	case VM_KEY_LOWMEM:
 		return v == 0 || v == 1;
+	case VM_KEY_LOWMEM:
+		return v >= VM_KMEM_FULL && v <= VM_KMEM_LOW;
 	case VM_KEY_GPUSAFE:
 		return v >= VM_GPUSAFE_OFF && v <= VM_GPUSAFE_NODMA;
 	case VM_KEY_READAHEAD:

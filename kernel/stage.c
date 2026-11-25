@@ -250,10 +250,10 @@ typedef struct Dev {
 	uint32_t      ra_epoch;               /* + 1 when the device is switched   */
 } Dev;
 
-/* Low kernel memory (VM_KEY_LOWMEM, read at the start): the SD2Vita and the
- * memory card, both set on, share one staging buffer and one second buffer
- * instead of one each (384 KiB less); each keeps its own tiny reads' block
- * and threads. One request at a time on either takes them (a shared `busy`:
+/* Kernel memory Medium or Low (VM_KEY_LOWMEM, read at the start): the SD2Vita
+ * and the memory card share one staging buffer and one second buffer instead
+ * of one each (384 KiB less) - a game reads from one of them; each keeps its
+ * own tiny reads' block and threads. One request at a time on either takes them (a shared `busy`:
  * the other one's request meanwhile goes the standard way, as on a busy
  * device). Read ahead's pieces live in them: only the storage that used
  * them last (owner) can have pieces, and a request of the other one drops
@@ -274,7 +274,7 @@ static struct {
 	uint32_t     handovers, other_busy; /* atomics: for the log               */
 	uint32_t     yielded;              /* atomic: not the app in front's       */
 } g_sh = { .uid = -1, .uid2 = -1 };
-static volatile int g_lowmem_set;          /* the setting                      */
+static volatile int g_kmem;                /* the setting, VM_KMEM_*           */
 static int          g_share_on;            /* in effect for this start         */
 
 static inline volatile int *dbusy(Dev *d)
@@ -294,7 +294,8 @@ static SceUID g_ra_fg;                    /* the app in front (see the app event
 #define RC_UNIT     64u                    /* sectors: 32 KiB, the cache's unit  */
 #define RC_UNITS    12u                    /* 384 KiB: a staging buffer and a second one */
 #define RC_UNITS0   (STAGE_SECTORS / RC_UNIT)   /* in the staging buffer: 8   */
-#define RC_OWN_UNITS 4u                    /* 128 KiB: its own block (Low kernel memory) */
+#define RC_OWN_UNITS 4u                    /* 128 KiB: its own block, Kernel memory Low */
+#define RC_MED_UNITS 8u                    /* 256 KiB: ... Medium (at most RC_UNITS0)  */
 #define RC_HIST     8u
 typedef struct {
 	struct Dev *dev;                       /* atomic: whose reads (NULL: none)  */
@@ -316,8 +317,10 @@ static struct {
 	uint32_t    gen, seen;                 /* gen: atomic, bumped by the host's take */
 	uint32_t    next;                      /* the unit the next entry goes to   */
 	RcEnt       e[RC_UNITS];               /* by the unit each starts at        */
-	SceUID      uid;                       /* its own block (Low kernel memory), */
-	void       *own;                       /* made at the start, kept to the end */
+	SceUID      uid;                       /* its own block (Kernel memory Medium,
+	                                        * Low), made at the start, kept */
+	void       *own;
+	uint32_t    own_units;                 /* its size: RC_MED_UNITS or RC_OWN_UNITS */
 	/* the app it is for, and whether it reads again what it read (by size: 0
 	 * 32 KiB, 1 large): the last reads the standard way, and the counts */
 	SceUID      pid;
@@ -2037,11 +2040,9 @@ static uint32_t g_ra_over;                /* atomic: reads overlapping the strea
 /* The app in front and how much it reads where (the per-app settings; the HUD). */
 #define RA_FG_DEV_MIN     2048            /* sectors (1 MiB): the HUD tells its storage */
 #define RA_THR_NONE       0xFFFFu         /* an app's threshold: never start   */
-/* On ux0 (the memory card or SD2Vita), not the internal flash; older
- * versions' on ur0 move there as each app's is first read. */
+/* On ux0 (the memory card or SD2Vita), not the internal flash. */
 #define RA_PROFILE_ROOT   "ux0:data/vita-memio"
 #define RA_PROFILE_DIR    RA_PROFILE_ROOT "/ra"
-#define RA_PROFILE_OLD    VM_DATA_DIR "/ra"
 #define RA_PROFILE_MAGIC  0x41524D56u     /* "VMRA" */
 
 static volatile int g_ra_mode;            /* VM_RA_*                          */
@@ -2080,8 +2081,8 @@ static void ra_wake(void)
  * overlapped reads, GPU-safe reads (-1: the global one, from Settings), and its
  * thresholds with read ahead On (0: the fixed). Written aside and swapped in, so
  * a cut-off write leaves the old file or the finished copy. Anything not exactly
- * right - another size, a value out of range, a wrong check - is not used: the
- * app then has the global settings. */
+ * right - another size or version, a value out of range, a wrong check - is
+ * removed: the app then has the global settings. */
 #define RA_PROFILE_VERSION 6u
 
 typedef struct RaProf {
@@ -2165,17 +2166,20 @@ static int ra_prof_read(const char *path, RaProf *out)
 	ksceIoClose(fd);
 	if (n != (int)sizeof(f) || f.magic != RA_PROFILE_MAGIC || f.version != RA_PROFILE_VERSION ||
 	    f.check != ra_profile_check(&f))
-		return 0;
+		goto bad;
 	p.app.ra = f.ra;
-	p.app.offload = vm_offload_upgrade(f.offload);   /* an older build's "C + NC All" */
+	p.app.offload = f.offload;
 	p.app.pipe = f.pipe;
 	p.app.gpusafe = f.gpusafe;
 	p.app.thr[0] = f.thr[0];
 	p.app.thr[1] = f.thr[1];
 	if (!ra_app_ok(&p.app))
-		return 0;
+		goto bad;
 	*out = p;
 	return 1;
+bad:
+	ksceIoRemove(path);                   /* not this build's: the global settings */
+	return 0;
 }
 
 /* Profiles, one at a time: the worker loads, the overlay saves (its own
@@ -2184,9 +2188,8 @@ static volatile int g_prof_lock;
 
 static void ra_prof_save_locked(const char *title, const RaProf *in);
 
-/* 1 and the profile if the app has a usable one: its file (or the copy an
- * older version's save cut short left), else an older version's on ur0,
- * moved here. g_prof_lock held. */
+/* 1 and the profile if the app has a usable one: its file, or the copy a
+ * save cut short left. g_prof_lock held. */
 static int ra_prof_load_locked(const char *title, RaProf *out)
 {
 	char path[96];
@@ -2197,22 +2200,6 @@ static int ra_prof_load_locked(const char *title, RaProf *out)
 	if (!ok) {
 		ra_profile_tmp(path, sizeof(path), title);
 		ok = ra_prof_read(path, out);
-	}
-	if (!ok) {                            /* an older version's, on ur0: moved */
-		snprintf(path, sizeof(path), "%s/%s.bin", RA_PROFILE_OLD, title);
-		ok = ra_prof_read(path, out);
-		if (ok) {
-			RaProf back;
-
-			ra_prof_save_locked(title, out);
-			ra_profile_path(path, sizeof(path), title);
-			if (ra_prof_read(path, &back)) {   /* there now: the old one goes */
-				snprintf(path, sizeof(path), "%s/%s.bin", RA_PROFILE_OLD, title);
-				ksceIoRemove(path);
-				snprintf(path, sizeof(path), "%s/%s.tmp", RA_PROFILE_OLD, title);
-				ksceIoRemove(path);
-			}
-		}
 	}
 	return ok;
 }
@@ -2502,9 +2489,6 @@ static uint32_t ra_small_threshold(int nc, uint32_t t)
 #define CAL_STEP_US      250u
 #define CAL_KEEP         4096u
 #define CAL_HELD_MAX_US  16000u
-#define CAL_FILE         VM_DATA_DIR "/calib.bin"
-#define CAL_MAGIC        0x4C41434Du      /* "MCAL" */
-#define CAL_VERSION      2u              /* 1: without the tiny reads' figures */
 
 typedef struct CalDev {
 	uint16_t plain[2][CAL_BUCKETS], served[2][CAL_BUCKETS];
@@ -2514,7 +2498,6 @@ typedef struct CalDev {
 	uint32_t tiny_hit_us, tiny_hit_n;
 	uint32_t tiny_blk_us, tiny_blk_sec, tiny_blk_n;
 } CalDev;
-#define CAL_DEV_V1       ((uint32_t)offsetof(CalDev, tiny_hit_us))   /* version 1's */
 #define CAL_TINY_MAX_US  16000u
 #define CAL_TINY_KEEP    4096u
 #define CAL_MIN_TINY     32u             /* hits, and blocks, before they are used */
@@ -2761,21 +2744,6 @@ static void cal_tiny_cost(int dev, RtTinyCost *t)
 	}
 }
 
-/* The file: a header, each storage's counts, a check over all of it. Written
- * aside, then swapped in, as the profiles are; read straight into g_cal and
- * cleared again if anything is wrong. Worker thread. */
-typedef struct CalHead {
-	uint32_t magic, version, on, devs;
-} CalHead;
-
-static uint32_t cal_fnv(uint32_t c, const void *p, size_t bytes)
-{
-	const uint32_t *w = p;
-
-	for (size_t i = 0; i < bytes / 4; i++)
-		c = (c ^ w[i]) * 16777619u;
-	return c;
-}
 
 /* What the file holds, per storage (as last saved or loaded): the counts
  * and the figures in use then. A save is worth its write only if what is in
@@ -2876,47 +2844,6 @@ static void tune_lock(void)
 		ksceKernelDelayThread(100);
 }
 
-/* An older version's calib.bin into g_cal (the calibration alone); 1 if it
- * was whole and right (else g_cal cleared). Read once, if there is no
- * tuning.bin yet; the first save of tuning.bin removes it. */
-static int cal_read_file(const char *path)
-{
-	const SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
-	CalHead h;
-	uint32_t c = 0x811C9DC5u, check = 0;
-	int ok;
-
-	if (fd < 0)
-		return 0;
-	memset(g_cal, 0, sizeof(g_cal));
-	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && h.magic == CAL_MAGIC &&
-	     (h.version == CAL_VERSION || h.version == 1u) && h.devs == VM_DEV_COUNT;
-	c = cal_fnv(c, &h, sizeof(h));
-	/* version 1: each storage's counts without the tiny reads' (those start at 0) */
-	for (int i = 0; i < VM_DEV_COUNT && ok; i++) {
-		const uint32_t sz = h.version == 1u ? CAL_DEV_V1 : (uint32_t)sizeof(CalDev);
-
-		ok = ksceIoRead(fd, &g_cal[i], sz) == (int)sz;
-		c = cal_fnv(c, &g_cal[i], sz);
-	}
-	ok = ok && ksceIoRead(fd, &check, sizeof(check)) == (int)sizeof(check);
-	ksceIoClose(fd);
-	if (ok) {
-		c ^= 0xA5C3A5C3u;
-		ok = c == check;
-		for (int i = 0; i < VM_DEV_COUNT && ok; i++)
-			for (int k = 0; k < 2; k++)
-				if (g_cal[i].n_plain[k] >= CAL_KEEP || g_cal[i].n_served[k] >= CAL_KEEP)
-					ok = 0;
-	}
-	if (!ok) {
-		memset(g_cal, 0, sizeof(g_cal));
-		return 0;
-	}
-	ST(g_cal_on, h.on ? 1 : 0);
-	return 1;
-}
-
 static void tune_forget_learned(void);
 
 static void cal_reset_now(void)
@@ -2958,18 +2885,8 @@ static void cal_set_now(int on)
  * moved; the whole file once, when there is none (or not this layout). */
 #define TUNE_DIR      "ux0:data/vita-memio"
 #define TUNE_FILE     TUNE_DIR "/tuning.bin"
-#define TUNE_OLD      VM_DATA_DIR "/tuning.bin"    /* v2, on ur0: removed */
 #define TUNE_MAGIC    0x4E54564Du                  /* "MVTN" */
-#define TUNE_VERSION  8u                           /* 1: whole each time, 2: 12 apps,
-                                                    * 3: no on/off, 4: on/off by rounds,
-                                                    * 5: the last state kept, 6: the start
-                                                    * (their mean), 7: the start's
-                                                    * launches kept, 8: the calibration
-                                                    * alone */
-#define TUNE_SLOT_V3  328u                         /* versions 3 to 7's slots: their */
-#define TUNE_SLOT_V4  360u                         /* calibration is read            */
-#define TUNE_SLOT_V5  368u
-#define TUNE_SLOT_V6  504u                         /* (6 and 7: the same size)       */
+#define TUNE_VERSION  8u                           /* another: written anew */
 #define TUNE_TITLE    12u                          /* TuneApp.title, its 0 too */
 
 typedef struct {
@@ -2993,7 +2910,6 @@ typedef struct {
 #define TUNE_CAL_OFF   ((SceOff)sizeof(TuneHead))
 
 static int      g_tune_ok;                     /* the file is there, in this layout */
-static int      g_tune_legacy;                 /* 1 calib.bin was read, 2 a v2 on ur0: removed */
 
 static uint32_t tune_fnv(uint32_t c, const void *p, uint32_t n)
 {
@@ -3282,22 +3198,16 @@ static int tune_write_cal(SceUID fd)
 }
 
 /* The header this build writes. */
-static void tune_head_of(TuneHead *h, uint32_t version, uint32_t slot)
+static void tune_head(TuneHead *h)
 {
-	const TuneHead h0 = { TUNE_MAGIC, version, VM_DEV_COUNT, TUNE_CAL_SIZE, slot, 0 };
+	const TuneHead h0 = { TUNE_MAGIC, TUNE_VERSION, VM_DEV_COUNT, TUNE_CAL_SIZE, 0, 0 };
 
 	*h = h0;
 	h->check = tune_fnv(0x811C9DC5u, &h0, sizeof(h0)) | 1u;
 }
 
-static void tune_head(TuneHead *h)
-{
-	tune_head_of(h, TUNE_VERSION, 0u);
-}
-
-
 /* A new file - the header and the calibration - when there is none in this
- * layout (an older one's app slots after it: cut off). */
+ * layout. */
 static int tune_write_all(void)
 {
 	TuneHead h;
@@ -3333,15 +3243,6 @@ static void cal_save_locked(void)
 		cal_snapshot();
 		g_tune_cal_due = 0;
 	}
-	if (g_tune_legacy) {                  /* the older files: in this one now */
-		if (g_tune_legacy & 1) {
-			ksceIoRemove(CAL_FILE);
-			ksceIoRemove(CAL_FILE ".tmp");
-		}
-		if (g_tune_legacy & 2)
-			ksceIoRemove(TUNE_OLD);
-		g_tune_legacy = 0;
-	}
 	if (!g_tune_cal_due)
 		return;
 	fd = ksceIoOpen(TUNE_FILE, SCE_O_WRONLY, 0666);   /* in place: no truncation */
@@ -3356,34 +3257,20 @@ static void cal_save_locked(void)
 	ksceIoClose(fd);
 }
 
-/* tuning.bin's header and calibration. This layout: 1; an older one (3 to
- * 7, app slots after the calibration): 2, its calibration used if its own
- * check passes, the file written anew at the next save. */
+/* tuning.bin's header and calibration: 1 if it is this build's and right;
+ * else nothing used (0), and written anew at the next save. */
 static int tune_read(void)
 {
 	const SceUID fd = ksceIoOpen(TUNE_FILE, SCE_O_RDONLY, 0);
-	TuneHead h, want, v3, v4, v5, v6, v7;
+	TuneHead h, want;
 	uint32_t on = 0, c, check = 0;
-	int ok, old;
+	int ok;
 
 	if (fd < 0)
 		return 0;
 	tune_head(&want);
-	tune_head_of(&v3, 3u, TUNE_SLOT_V3);
-	tune_head_of(&v4, 4u, TUNE_SLOT_V4);
-	tune_head_of(&v5, 5u, TUNE_SLOT_V5);
-	tune_head_of(&v6, 6u, TUNE_SLOT_V6);
-	tune_head_of(&v7, 7u, TUNE_SLOT_V6);
-	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h);
-	old = ok && (!memcmp(&h, &v3, sizeof(h)) || !memcmp(&h, &v4, sizeof(h)) ||
-	             !memcmp(&h, &v5, sizeof(h)) || !memcmp(&h, &v6, sizeof(h)) ||
-	             !memcmp(&h, &v7, sizeof(h)));
-	if (!ok || (!old && memcmp(&h, &want, sizeof(h)))) {
-		ksceIoClose(fd);
-		return 0;
-	}
-	/* the calibration */
-	ok = ksceIoRead(fd, &on, sizeof(on)) == (int)sizeof(on);
+	ok = ksceIoRead(fd, &h, sizeof(h)) == (int)sizeof(h) && !memcmp(&h, &want, sizeof(h));
+	ok = ok && ksceIoRead(fd, &on, sizeof(on)) == (int)sizeof(on);
 	c = tune_fnv(0x811C9DC5u, &on, sizeof(on));
 	ok = ok && ksceIoRead(fd, g_cal, sizeof(g_cal)) == (int)sizeof(g_cal);
 	c = tune_fnv(c, g_cal, sizeof(g_cal)) | 1u;
@@ -3393,41 +3280,23 @@ static int tune_read(void)
 			if (g_cal[i].n_plain[k] >= CAL_KEEP || g_cal[i].n_served[k] >= CAL_KEEP)
 				ok = 0;
 	ksceIoClose(fd);
-	if (ok) {
-		ST(g_cal_on, on ? 1 : 0);
-	} else {
+	if (!ok) {
 		memset(g_cal, 0, sizeof(g_cal));
-		g_tune_cal_due = 1;               /* spoilt: written right at the next save */
+		return 0;                         /* g_tune_ok 0: written anew */
 	}
-	if (old)
-		g_tune_cal_due = 1;               /* written anew, as this layout */
-	return old ? 2 : 1;
+	ST(g_cal_on, on ? 1 : 0);
+	return 1;
 }
 
-/* Once, by the worker: what was measured before; with no tuning.bin in this
- * layout, an older version's calib.bin (the calibration alone), moved into a
- * new tuning.bin at the first save (and the branch's v2 on ur0 removed). */
+/* Once, by the worker: what was measured before (tuning.bin). */
 static void cal_load(void)
 {
-	SceUID fd;
-
 	tune_lock();
 	if (g_cal_loaded) {
 		__sync_lock_release(&g_tune_lock);
 		return;
 	}
-	{
-		const int r = tune_read();
-
-		g_tune_ok = r == 1;               /* 2: an older layout, its calibration kept: anew */
-		if (!r && (cal_read_file(CAL_FILE) || cal_read_file(CAL_FILE ".tmp")))
-			g_tune_legacy |= 1;
-	}
-	fd = ksceIoOpen(TUNE_OLD, SCE_O_RDONLY, 0);
-	if (fd >= 0) {
-		ksceIoClose(fd);
-		g_tune_legacy |= 2;
-	}
+	g_tune_ok = tune_read();
 	cal_snapshot();                       /* what the file holds (or nothing) */
 	__atomic_store_n(&g_cal_loaded, 1, __ATOMIC_RELEASE);
 	__sync_lock_release(&g_tune_lock);
@@ -5058,7 +4927,7 @@ static int rc_hold(void)
 			return 0;                         /* none (its buffers not made) */
 		zb[0] = own;
 		zb[1] = NULL;
-		n0 = nu = RC_OWN_UNITS;
+		n0 = nu = g_rc.own_units;
 	} else {
 		if (__sync_lock_test_and_set(dbusy(h), 1))
 			return 0;                         /* its own request: it comes first */
@@ -6119,25 +5988,34 @@ int vm_stage_init(void)
 	 * vm_stage_go); one that fails is tried again when its storage is
 	 * switched on (vm_stage_apply). */
 	ST(g_live, 1);
-	/* Low kernel memory: decided once, here - one set of buffers for both
-	 * storages, and a small block of its own for the again cache; else each
-	 * storage its own set, on or off */
-	g_share_on = LD(g_lowmem_set) && !g_dev[VM_DEV_SD2VITA].buf && !g_dev[VM_DEV_MEMCARD].buf;
+	/* Kernel memory: decided once, here - Medium and Low one set of buffers
+	 * for both storages, and a block of its own for the again cache; Full
+	 * each storage its own set, on or off */
+	g_share_on = LD(g_kmem) != VM_KMEM_FULL && !g_dev[VM_DEV_SD2VITA].buf &&
+	             !g_dev[VM_DEV_MEMCARD].buf;
 	g_dev[VM_DEV_SD2VITA].shared = g_dev[VM_DEV_MEMCARD].shared = g_share_on;
 	prealloc(&g_dev[VM_DEV_SD2VITA]);
 	prealloc(&g_dev[VM_DEV_MEMCARD]);
 	if (g_share_on) {
+		const int low = LD(g_kmem) == VM_KMEM_LOW;
 		void *b = NULL;
-		const int r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RC_OWN_UNITS * RC_UNIT * 512,
-		                        &g_rc.uid, &b);
+		int r;
 
+		g_rc.own_units = low ? RC_OWN_UNITS : RC_MED_UNITS;
+		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, g_rc.own_units * RC_UNIT * 512, &g_rc.uid, &b);
+		if (r < 0 && !low) {                  /* Medium: the Low size, rather than none */
+			g_rc.own_units = RC_OWN_UNITS;
+			r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, g_rc.own_units * RC_UNIT * 512,
+			              &g_rc.uid, &b);
+		}
 		if (r < 0)
 			g_rc.uid = -1;
 		else
 			__atomic_store_n(&g_rc.own, b, __ATOMIC_RELEASE);
-		VM_KLOGI("stage: low kernel memory: one buffer for the SD2Vita and the memory card; "
-		         "the again cache's own %u KiB %s (0x%08x)", RC_OWN_UNITS * RC_UNIT / 2,
-		         r < 0 ? "not made" : "made", (unsigned)(r < 0 ? r : 0));
+		VM_KLOGI("stage: kernel memory %s: one buffer for the SD2Vita and the memory card; "
+		         "the again cache's own %u KiB %s (0x%08x)", low ? "low" : "medium",
+		         g_rc.own_units * RC_UNIT / 2, r < 0 ? "not made" : "made",
+		         (unsigned)(r < 0 ? r : 0));
 	}
 	for (int i = 0; i < H_SDIF_COUNT; i++) {
 		g_hook[k_hooks[i].h] = taiHookFunctionExportForKernel(KERNEL_PID,
@@ -6401,7 +6279,7 @@ static void mem_report(void)
 	}
 	mem_report_one("shared staging", -1, g_sh.uid, STAGE_BYTES);
 	mem_report_one("shared second buffer", -1, g_sh.uid2, PIPE_TAIL_SECTORS * 512);
-	mem_report_one("again cache", -1, g_rc.uid, RC_OWN_UNITS * RC_UNIT * 512);
+	mem_report_one("again cache", -1, g_rc.uid, g_rc.own_units * RC_UNIT * 512);
 	mem_report_one("log counts", -1, g_diag_uid, (uint32_t)sizeof(Diag));
 	if (g_shadow_uid >= 0)
 		mem_report_one("verify", -1, g_shadow_uid, STAGE_BYTES);
@@ -6463,7 +6341,8 @@ void vm_stage_apply(const VmSettings *s)
 		__atomic_store_n(&g_app_reload, 1, __ATOMIC_RELEASE);   /* the worker: whose now */
 		ra_wake();
 	}
-	ST(g_lowmem_set, s->lowmem ? 1 : 0);   /* used at the start only */
+	ST(g_kmem, vm_setting_valid(VM_KEY_LOWMEM, s->lowmem) ? s->lowmem : VM_DEF_LOWMEM);
+	                                      /* used at the start only */
 	if (s->log)
 		diag_make();
 	ST(g_log_diag, s->log && DG() ? 1 : 0);

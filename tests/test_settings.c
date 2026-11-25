@@ -86,31 +86,47 @@ static int all_defaults(const VmSettings *s)
 	       s->pipeline == VM_DEF_PIPELINE;
 }
 
-/* Build a settings file by hand, with a correct check word. */
+/* Build a settings file by hand: this build's layout and size, the given
+ * version and count, a correct check word. */
 static size_t make_file_v(uint8_t *out, uint32_t count, const int32_t *vals, uint32_t version)
 {
 	VmSettingsFile f;
-	size_t n;
 
 	memset(&f, 0, sizeof(f));
 	f.magic = VM_CFG_MAGIC;
 	f.version = version;
 	f.count = count;
-	for (uint32_t i = 0; i < count; i++)
+	for (uint32_t i = 0; i < count && i < VM_KEY_COUNT; i++)
 		f.values[i] = vals[i];
-	uint32_t check = file_check(&f);
-
-	/* the check word follows the last value actually stored */
-	memcpy(out, &f, 3 * sizeof(uint32_t));
-	memcpy(out + 12, f.values, count * sizeof(int32_t));
-	memcpy(out + 12 + count * 4, &check, 4);
-	n = 12 + count * 4 + 4;
-	return n;
+	f.check = check_of(f.magic, f.version, count < VM_KEY_COUNT ? count : VM_KEY_COUNT, f.values);
+	memcpy(out, &f, sizeof(f));
+	return sizeof(f);
 }
 
-static size_t make_file(uint8_t *out, uint32_t count, const int32_t *vals)
+/* Every key at its default but the ones the test sets. */
+static void defaults_into(int32_t *v)
 {
-	return make_file_v(out, count, vals, VM_CFG_VERSION);
+	for (int k = 0; k < VM_KEY_COUNT; k++)
+		v[k] = g_defaults[k];
+}
+
+/* The file is not this build's: every setting its default, the file gone
+ * (and a change saves this build's file again). */
+static void check_refused(const uint8_t *buf, size_t n)
+{
+	VmSettings s;
+
+	clean();
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(all_defaults(&s) && s.lowmem == VM_DEF_LOWMEM && s.offload == VM_DEF_OFFLOAD);
+	CHECK(!exists("settings.bin") && !exists("settings.tmp"));
+	CHECK(vm_settings_set(VM_KEY_SD2VITA, 1) == VM_OK);
+	vm_settings_flush();
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.sd2vita == 1 && exists("settings.bin"));
 }
 
 static void test_no_file_gives_defaults(void)
@@ -197,12 +213,11 @@ static void test_corrupt_file_gives_defaults(void)
 	CHECK(all_defaults(&s));
 }
 
-/* Driver: on by default, 0/1 only; a file from before it (15 keys) leaves
- * it on; off is kept across a save. */
-static void test_driver_key(void)
+/* Value rules of the newer keys; a full file keeps every stored value. */
+static void test_values_and_full_file(void)
 {
-	uint8_t buf[128];
-	int32_t v[15] = { 1, 0, 0, VM_HUD_EXTENDED, 1, 0, 0, 1, 0, 2, 1, 3, 2, 1, 1 };
+	uint8_t buf[256];
+	int32_t v[VM_KEY_COUNT];
 	VmSettings s;
 	size_t n;
 
@@ -210,22 +225,38 @@ static void test_driver_key(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.driver == 1 && VM_DEF_DRIVER == 1);
+	CHECK(s.lowmem == VM_KMEM_MEDIUM && VM_DEF_LOWMEM == VM_KMEM_MEDIUM);
+	CHECK(VM_DEF_GPUSAFE == VM_GPUSAFE_NODMA && VM_DEF_PIPELINE == VM_PIPE_AUTO);
+	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALL && VM_KEY_COUNT == VM_KEY_LOWMEM + 1);
 	CHECK(vm_settings_set(VM_KEY_DRIVER, 2) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_SYSAPPS, 2) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_LOWMEM, 3) == VM_ERR_ARG && vm_settings_set(VM_KEY_LOWMEM, -1) == VM_ERR_ARG);
+	CHECK(vm_settings_set(VM_KEY_LOWMEM, VM_KMEM_FULL) == VM_OK &&
+	      vm_settings_set(VM_KEY_LOWMEM, VM_KMEM_LOW) == VM_OK &&
+	      vm_settings_set(VM_KEY_LOWMEM, VM_KMEM_MEDIUM) == VM_OK);
+	CHECK(vm_settings_set(VM_KEY_GPUSAFE, 3) == VM_ERR_ARG && vm_settings_set(VM_KEY_PIPELINE, 3) == VM_ERR_ARG);
+	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALL) && !vm_setting_valid(VM_KEY_OFFLOAD, 1) &&
+	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALWAYS) && vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_OFF) &&
+	      !vm_setting_valid(VM_KEY_OFFLOAD, 4) && !vm_setting_valid(VM_KEY_OFFLOAD, -1));
+	CHECK(vm_setting_valid(VM_KEY_STATS, VM_STATS_OFF) && vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) &&
+	      !vm_setting_valid(VM_KEY_STATS, 2));
+	CHECK(vm_settings_set(VM_KEY_INTERNAL, 1) == VM_ERR_ARG && vm_settings_set(VM_KEY_INTERNAL, 0) == VM_OK);
+
+	defaults_into(v);
+	v[VM_KEY_SD2VITA] = 1;
+	v[VM_KEY_GPUSAFE] = 0;
+	v[VM_KEY_PIPELINE] = VM_PIPE_FIXED;
+	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_ALWAYS;
+	v[VM_KEY_DRIVER] = 0;
+	v[VM_KEY_LOWMEM] = VM_KMEM_LOW;
 	clean();
-	n = make_file(buf, 15, v);                /* 1.4.0's file */
+	n = make_file_v(buf, VM_KEY_COUNT, v, VM_CFG_VERSION);
 	put_file("settings.bin", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.driver == 1 && s.sysapps == VM_DEF_SYSAPPS);   /* newer: defaults */
-	CHECK(s.lowmem == 0 && VM_DEF_LOWMEM == 0);                              /* 1.5.0's too */
-	CHECK(vm_settings_set(VM_KEY_SYSAPPS, 2) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_LOWMEM, 2) == VM_ERR_ARG);
-	CHECK(VM_KEY_COUNT == VM_KEY_LOWMEM + 1);   /* (a 1.6.0 test build's key past it: ignored) */
-	CHECK(vm_settings_set(VM_KEY_DRIVER, 0) == VM_OK);
-	vm_settings_flush();
-	vm_settings_init();                       /* the next start */
-	vm_settings_copy(&s);
-	CHECK(s.driver == 0 && s.sd2vita == 1);
+	CHECK(s.sd2vita == 1 && s.gpusafe == 0 && s.pipeline == VM_PIPE_FIXED);
+	CHECK(s.offload == VM_OFFLOAD_ALWAYS && s.driver == 0 && s.lowmem == VM_KMEM_LOW);
+	CHECK(exists("settings.bin"));
 }
 
 /* The plugin comes on (main.c): the settings in effect applied again, as
@@ -246,124 +277,6 @@ static void test_reapply(void)
 	CHECK(apply_calls == calls + 1);
 	CHECK(!memcmp(&last_applied, &s, sizeof(s)) && s.sd2vita == 1);
 	CHECK(!vm_settings_pending());
-}
-
-static void test_older_file_with_fewer_keys(void)
-{
-	uint8_t buf[128];
-	int32_t v[6] = { 1, 0, 0, 2, 3, 0 };      /* 6 keys: no memcard yet */
-	VmSettings s;
-	size_t n;
-
-	clean();
-	n = make_file(buf, 6, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2);
-	CHECK(s.hud_style == VM_DEF_HUD_STYLE);   /* 3: out of range, the default */
-	CHECK(s.memcard == VM_DEF_MEMCARD);       /* the newer key takes its default */
-}
-
-/* A file from when the HUD had Off: it gets the default (Extended). */
-static void test_stored_hud_off_takes_default(void)
-{
-	uint8_t buf[128];
-	int32_t v[6] = { 1, 0, 0, VM_HUD_OFF, 0, 0 };
-	VmSettings s;
-	size_t n;
-
-	clean();
-	n = make_file(buf, 6, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == VM_DEF_HUD && VM_DEF_HUD == VM_HUD_EXTENDED);
-}
-
-/* GPU-safe reads default to Non-DMA and overlapped reads to auto: a file from
- * before those keys gets them; a file that stored them keeps its values. */
-static void test_gpusafe_default_and_stored_value(void)
-{
-	uint8_t buf[128];
-	int32_t v[VM_KEY_COUNT] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0 };   /* gpusafe stored 0 */
-	VmSettings s;
-	size_t n;
-
-	CHECK(VM_DEF_GPUSAFE == VM_GPUSAFE_NODMA && VM_DEF_PIPELINE == VM_PIPE_AUTO);
-	clean();
-	n = make_file(buf, 9, v);                    /* 9 keys: before GPU-safe existed */
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.gpusafe == VM_GPUSAFE_NODMA && s.pipeline == VM_PIPE_AUTO);
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);         /* GPU-safe stored off: kept */
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.gpusafe == 0 && s.pipeline == VM_PIPE_OFF);     /* both stored: kept */
-	/* three choices: 1 (the old "on") is All, 2 Non-DMA; nothing past them */
-	CHECK(VM_GPUSAFE_ALL == 1 && VM_GPUSAFE_NODMA == 2);
-	CHECK(vm_settings_set(VM_KEY_GPUSAFE, VM_GPUSAFE_NODMA) == VM_OK);
-	vm_settings_copy(&s);
-	CHECK(s.gpusafe == VM_GPUSAFE_NODMA);
-	CHECK(vm_settings_set(VM_KEY_GPUSAFE, 3) == VM_ERR_ARG);
-	vm_settings_copy(&s);
-	CHECK(s.gpusafe == VM_GPUSAFE_NODMA);
-	vm_settings_set(VM_KEY_GPUSAFE, 0);
-	v[VM_KEY_PIPELINE] = VM_PIPE_FIXED;
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.pipeline == VM_PIPE_FIXED);
-	v[VM_KEY_PIPELINE] = 3;                       /* out of range: the default */
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.pipeline == VM_DEF_PIPELINE && s.sd2vita == 1);
-	/* copy on the system core: Always by default, also for a file from before it
-	 * existed (11 keys); stored values kept; out of range: the default */
-	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALL && VM_KEY_OFFLOAD == 11);
-	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALL) && !vm_setting_valid(VM_KEY_OFFLOAD, 1) &&
-	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALWAYS) && vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_OFF) &&
-	      !vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_OLD_FULL) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
-	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
-	CHECK(vm_setting_valid(VM_KEY_STATS, VM_STATS_OFF) && vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) &&
-	      vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) && !vm_setting_valid(VM_KEY_STATS, 2));
-	v[VM_KEY_PIPELINE] = VM_PIPE_AUTO;
-	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_ALWAYS;
-	clean();
-	n = make_file(buf, 11, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.offload == VM_DEF_OFFLOAD && s.pipeline == VM_PIPE_AUTO);
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.offload == VM_OFFLOAD_ALWAYS);
-	/* the removed "C + NC All" (4) stored by an older build: C + NC R/A */
-	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_OLD_FULL;
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.offload == VM_OFFLOAD_ALL && s.pipeline == VM_PIPE_AUTO);
-	v[VM_KEY_OFFLOAD] = 7;
-	clean();
-	n = make_file(buf, VM_KEY_COUNT, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.offload == VM_DEF_OFFLOAD);
 }
 
 /* A save to do keeps the worker waking: pending after a change, not after a
@@ -389,89 +302,61 @@ static void test_pending(void)
 	fake_write_short = 0;
 }
 
-/* A file with more keys than this build knows (the experimental build wrote 8):
- * the check covers all of them, the known ones load, the rest is ignored. */
-static void test_file_with_more_keys(void)
+/* Not this build's file - an older or newer build's key count or version,
+ * one value out of range, a wrong check, a wrong size: no compatibility,
+ * the file goes and every setting takes its default. */
+static void test_mismatch_resets_to_defaults(void)
 {
 	uint8_t buf[256];
-	int32_t v[8] = { 1, 0, 0, 2, 0, 1, 1, 1 };
-	uint32_t hdr[3] = { VM_CFG_MAGIC, VM_CFG_VERSION, 8 }, check;
-	VmSettings s;
+	int32_t v[VM_KEY_COUNT];
 	size_t n;
 
-	clean();
-	check = check_of(hdr[0], hdr[1], 8, v);
-	memcpy(buf, hdr, 12);
-	memcpy(buf + 12, v, sizeof(v));
-	memcpy(buf + 12 + sizeof(v), &check, 4);
-	n = 12 + sizeof(v) + 4;
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.hud_style == 0 && s.log == 1 && s.memcard == 1);
+	defaults_into(v);
+	v[VM_KEY_SD2VITA] = 1;
+	v[VM_KEY_MEMCARD] = 1;
+	v[VM_KEY_LOWMEM] = VM_KMEM_FULL;
 
-	/* the same file with a wrong check word is refused */
-	buf[n - 1] ^= 1;
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.sd2vita == VM_DEF_SD2VITA && s.memcard == VM_DEF_MEMCARD);
+	n = make_file_v(buf, VM_KEY_COUNT - 3, v, VM_CFG_VERSION);   /* fewer keys */
+	check_refused(buf, n);
+	n = make_file_v(buf, VM_KEY_COUNT + 1, v, VM_CFG_VERSION);   /* more keys */
+	check_refused(buf, n);
+	n = make_file_v(buf, VM_KEY_COUNT, v, VM_CFG_VERSION - 1);   /* the older version */
+	check_refused(buf, n);
+	n = make_file_v(buf, VM_KEY_COUNT, v, VM_CFG_VERSION);
+	check_refused(buf, n - 4);                                   /* short */
+	buf[n - 1] ^= 1;                                             /* wrong check */
+	check_refused(buf, n);
+
+	static const int bad[][2] = {
+		{ VM_KEY_HUD, VM_HUD_OFF }, { VM_KEY_HUD_STYLE, 3 }, { VM_KEY_INTERNAL, 1 },
+		{ VM_KEY_OFFLOAD, 4 }, { VM_KEY_PIPELINE, 3 }, { VM_KEY_LOWMEM, 3 },
+	};
+	for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		int32_t w[VM_KEY_COUNT];
+
+		memcpy(w, v, sizeof(w));
+		w[bad[i][0]] = bad[i][1];
+		n = make_file_v(buf, VM_KEY_COUNT, w, VM_CFG_VERSION);
+		check_refused(buf, n);
+	}
 }
 
-static void test_one_bad_value_keeps_the_rest(void)
+/* A bad .tmp copy (no live file) is removed too. */
+static void test_bad_tmp_removed(void)
 {
-	uint8_t buf[128];
-	int32_t v[7] = { 1, 0, 0, 9 /* hud: out of range */, 0, 0, 1 };
+	uint8_t buf[256];
+	int32_t v[VM_KEY_COUNT];
 	VmSettings s;
 	size_t n;
 
+	defaults_into(v);
+	v[VM_KEY_SD2VITA] = 1;
+	n = make_file_v(buf, VM_KEY_COUNT, v, VM_CFG_VERSION - 1);
 	clean();
-	n = make_file(buf, 7, v);
-	put_file("settings.bin", buf, n);
+	put_file("settings.tmp", buf, n);
 	vm_settings_init();
 	vm_settings_copy(&s);
-	CHECK(s.hud == VM_DEF_HUD);
-	CHECK(s.sd2vita == 1 && s.hud_style == 0 && s.memcard == 1);
-}
-
-/* The internal storage is never sped up: a file from an older build with it
- * switched on loads with it off and everything else kept, and it cannot be
- * switched on. */
-static void test_internal_storage_stays_off(void)
-{
-	uint8_t buf[128];
-	int32_t v[7] = { 1, 1 /* internal */, 0, 2, 0, 1, 1 };
-	VmSettings s;
-	size_t n;
-
-	clean();
-	n = make_file(buf, 7, v);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(s.internal == 0);
-	CHECK(s.sd2vita == 1 && s.hud == 2 && s.log == 1 && s.memcard == 1);
-	CHECK(vm_settings_set(VM_KEY_INTERNAL, 1) == VM_ERR_ARG);
-	CHECK(vm_settings_set(VM_KEY_INTERNAL, 0) == VM_OK);
-	vm_settings_copy(&s);
-	CHECK(s.internal == 0);
-}
-
-/* A file of another version (1, before slots 4 and 5 changed meaning) is
- * not used. */
-static void test_other_version_gives_defaults(void)
-{
-	uint8_t buf[128];
-	const int32_t v[7] = { 1, 0, 0, 2, 0, 1, 1 };
-	VmSettings s;
-	size_t n;
-
-	clean();
-	n = make_file_v(buf, 7, v, 1);
-	put_file("settings.bin", buf, n);
-	vm_settings_init();
-	vm_settings_copy(&s);
-	CHECK(all_defaults(&s));
+	CHECK(all_defaults(&s) && !exists("settings.tmp") && !exists("settings.bin"));
 }
 
 static void test_cut_save_after_remove_loads_tmp(void)
@@ -538,16 +423,11 @@ int main(void)
 	RUN(test_save_and_load_roundtrip);
 	RUN(test_invalid_set_is_rejected);
 	RUN(test_corrupt_file_gives_defaults);
-	RUN(test_older_file_with_fewer_keys);
-	RUN(test_driver_key);
+	RUN(test_values_and_full_file);
 	RUN(test_reapply);
-	RUN(test_stored_hud_off_takes_default);
-	RUN(test_gpusafe_default_and_stored_value);
 	RUN(test_pending);
-	RUN(test_file_with_more_keys);
-	RUN(test_one_bad_value_keeps_the_rest);
-	RUN(test_internal_storage_stays_off);
-	RUN(test_other_version_gives_defaults);
+	RUN(test_mismatch_resets_to_defaults);
+	RUN(test_bad_tmp_removed);
 	RUN(test_cut_save_after_remove_loads_tmp);
 	RUN(test_short_write_leaves_old_file);
 	RUN(test_save_gives_up_after_retries);

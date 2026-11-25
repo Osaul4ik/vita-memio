@@ -30,8 +30,10 @@
  *                 where the last began (a file read backwards)
  *     mix 128/32K 128 KiB and 32 KiB reads in turn, one after another
  *                 (one file read in both sizes: PCSF00007, PCSG01179)
- *     again 32K   32 KiB reads 96 KiB apart, each read twice in a row (the
- *                 same 32 KiB read again: PCSF00024)
+ *     again 32/128 128 KiB reads 192 KiB apart, after each a 32 KiB read
+ *                 inside it (read again: PCSB00554, PCSF00024 - a 32 KiB
+ *                 read twice in a row does not reach the card at all, the
+ *                 file system keeps it)
  *     again 128K  128 KiB reads 192 KiB apart, each read twice (PCSB01007)
  *   (the sequential 128K reads above are the plain stream). Read ahead
  *   and the again cache decide from what they see, so the first run may

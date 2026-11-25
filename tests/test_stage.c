@@ -5282,6 +5282,38 @@ static void test_mixed_sizes(void)
 	free(u);
 }
 
+/* The same, the 32 KiB parts into cached memory between non-cacheable large
+ * reads (a file system reading them into its own buffer: the tester's files):
+ * one stream still, the parts too from the pieces, right data. */
+static void test_mixed_memory(void)
+{
+	uint8_t *u = user_buf(256);
+	VmSettings s;
+	Dev *d = &g_dev[M];
+	uint32_t at = 100, h0, k0;
+
+	reset();
+	ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);
+	fake_pid = 0x42;
+	fake_meminfo_type = 0x10208006;
+	h0 = g_ra_hits;
+	k0 = g_ra_kib;
+	for (int r = 0; r < 22; r++) {
+		const uint32_t n = r & 1 ? 64 : 256;
+
+		fake_memtype = r & 1 ? 0xD000 : MEMTYPE_NC;   /* the parts cached */
+		CHECK(rd_ok(u, at, n));
+		at += n;
+	}
+	CHECK(d->ra_streak >= 10 && g_ra_hits - h0 >= 12 && (g_ra_kib - k0) * 2 >= 1890);
+	ra_drop(d);
+	vm_stage_fini();
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0;
+	fake_pid = 0;
+	free(u);
+}
+
 /* A stream whose reads each take again the end of the one before (128 KiB
  * reads, 32 KiB back each time: PCSB00554, the home screen): read ahead
  * follows it, the part read again comes from the card and the rest from the
@@ -5340,7 +5372,7 @@ static void test_again_cache(void)
 		fake_memtype = MEMTYPE_NC;
 		fake_meminfo_type = 0x10208006;
 		h0 = g_rc.hits;
-		k0 = g_rc.kept;
+		k0 = g_rc.kept_k[0];
 		rc_rounds(u, 0, 80);                             /* 160 reads: half again */
 		CHECK(g_rc.on[0] && !g_rc.on[1]);
 		if (one) {
@@ -5352,7 +5384,7 @@ static void test_again_cache(void)
 			CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA]);
 		}
 		rc_rounds(u, 7, 40);
-		CHECK(g_rc.kept - k0 >= 39 && g_rc.hits - h0 >= 39);
+		CHECK(g_rc.kept_k[0] - k0 >= 39 && g_rc.hits - h0 >= 39 && g_rc.hits_k[0] - h0 >= 39);
 		if (!one) {
 			/* the SD2Vita's own (cached) read takes its buffers back: what
 			 * was kept is gone, the game's read again from the card */
@@ -5397,10 +5429,10 @@ static void test_again_cache(void)
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
 	{
-		const uint32_t y0 = g_rc.yoff, h0 = g_rc.hits;
+		const uint32_t y0 = g_rc.yoff_k[0], h0 = g_rc.hits;
 		int was_on = 0;
 
-		for (int i = 0; i < 200 && g_rc.yoff == y0; i++) {
+		for (int i = 0; i < 200 && g_rc.yoff_k[0] == y0; i++) {
 			const uint32_t at = (uint32_t)i * 200u % 3800u;
 
 			CHECK(rd_ok(u, at, 64));
@@ -5408,7 +5440,8 @@ static void test_again_cache(void)
 			CHECK(rd_ok(u, at, 64));
 			was_on |= g_rc.on[0];
 		}
-		CHECK(was_on && g_rc.yoff == y0 + 1 && !g_rc.on[0] && g_rc.hits == h0);
+		CHECK(was_on && g_rc.yoff_k[0] == y0 + 1 && !g_rc.on[0] && g_rc.hits == h0);
+		CHECK(g_rc.hold_n[0] == 2 * RC_HOLD);          /* the next hold: twice as long */
 		/* the next looks: off still, the reads again as many */
 		for (int i = 0; i < 60; i++) {
 			const uint32_t at = 7 + (uint32_t)i * 200u % 3800u;
@@ -5418,6 +5451,33 @@ static void test_again_cache(void)
 			CHECK(rd_ok(u, at, 64));
 			CHECK(!g_rc.on[0]);
 		}
+	}
+	vm_stage_fini();
+	rc_host(0);
+	/* 32 KiB read again inside the 128 KiB read before it (PCSB00554,
+	 * PCSF00024): counted for the 128 KiB reads, which are kept - the 32 KiB
+	 * parts read from them, right data */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(1);
+	as_app(0x42);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t k0 = g_rc.kept_k[1], h0 = g_rc.hits_k[1], s0 = g_rc.kept_k[0];
+		const uint32_t y0 = g_rc.yoff_k[1];
+
+		for (int i = 0; i < 300; i++) {
+			const uint32_t at = (uint32_t)i * 384u % 3700u;
+
+			CHECK(rd_ok(u, at, 256));
+			CHECK(rd_ok(u, at + 64, 64));
+		}
+		CHECK(g_rc.on[1] && !g_rc.on[0] && g_rc.kept_k[0] == s0);
+		/* past several looks at its yield, which the 32 KiB parts pay */
+		CHECK(g_rc.kept_k[1] - k0 >= 2 * RC_YIELD_N && g_rc.hits_k[1] - h0 >= 2 * RC_YIELD_N);
+		CHECK(g_rc.yoff_k[1] == y0);
 	}
 	vm_stage_fini();
 	rc_host(0);
@@ -5446,10 +5506,10 @@ static void test_again_cache(void)
 	fake_memtype = MEMTYPE_NC;
 	fake_meminfo_type = 0x10208006;
 	{
-		const uint32_t k0 = g_rc.kept, h0 = g_rc.hits;
+		const uint32_t k0 = g_rc.kept_k[0], h0 = g_rc.hits;
 
 		rc_rounds(u, 0, 80);
-		CHECK(!g_rc.on[0] && g_rc.kept == k0 && g_rc.hits == h0);
+		CHECK(!g_rc.on[0] && g_rc.kept_k[0] == k0 && g_rc.hits == h0);
 	}
 	vm_stage_fini();
 	rc_host(0);
@@ -6615,6 +6675,7 @@ int main(void)
 	RUN(test_mixed_sizes);
 	RUN(test_overlapping_reads);
 	RUN(test_again_cache);
+	RUN(test_mixed_memory);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

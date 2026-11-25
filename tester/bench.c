@@ -19,7 +19,7 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"NC read 1M", "NC read 128K",
 	"NCphy read 1M", "CDRAM read 1M", "NC rnd read 1M",
 	"over 128K C", "over 128K NC", "back 128K C", "back 128K NC",
-	"mix 128/32K C", "mix 128/32K NC", "again 32K C", "again 32K NC",
+	"mix 128/32K C", "mix 128/32K NC", "again 32/128 C", "again 32/128 NC",
 	"again 128K C", "again 128K NC",
 };
 
@@ -85,9 +85,11 @@ static int game_op(int g, uint32_t i, uint32_t S, uint64_t *pos, uint64_t *off, 
 		*off = *pos;
 		*pos += *len;
 		break;
-	case G_AGAIN32:                            /* 32K twice, 96K apart */
-		*len = 32 * KIB;
-		*off = (uint64_t)(i / 2) * 96 * KIB;
+	case G_AGAIN32:                            /* 128K, then 32K inside it; 192K apart */
+		*len = (i & 1) ? 32 * KIB : 128 * KIB;
+		*off = (uint64_t)(i / 2) * 192 * KIB + ((i & 1) ? 32 * KIB : 0);
+		if ((i & 1) && (uint64_t)(i / 2) * 192 * KIB + 128 * KIB > S)
+			return 0;                          /* (its 128K did not fit either) */
 		break;
 	default:                                   /* G_AGAIN128: 128K twice, 192K apart */
 		*len = 128 * KIB;

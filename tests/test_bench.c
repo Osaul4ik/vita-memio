@@ -419,7 +419,7 @@ static void test_game_reads(void)
 	BenchEnv e;
 	static const struct { int m; uint32_t ops; } want[] = {
 		{ BM_G_OVER_C, 21 }, { BM_G_BACK_C, 16 }, { BM_G_MIX_C, 25 },
-		{ BM_G_AGAIN32_C, 44 }, { BM_G_AGAIN128_C, 22 },
+		{ BM_G_AGAIN32_C, 22 }, { BM_G_AGAIN128_C, 22 },
 	};
 	int pairs = 0;
 
@@ -437,10 +437,10 @@ static void test_game_reads(void)
 		CHECK(!bench_metric_is_iops(m) && !strcmp(bench_metric_unit(m + 1), "MiB/s"));
 	}
 	CHECK(g_rd_n < RD_LOG && rd_find_back(2u * 1048576u));
-	for (int i = 0; i + 1 < g_rd_n; i++)              /* again 32K: the same read twice */
-		pairs += g_rd_len[i] == 32768 && g_rd_len[i + 1] == 32768 &&
-		         g_rd_off[i] == g_rd_off[i + 1] && g_rd_off[i] % (96 * 1024) == 0;
-	CHECK(pairs >= 2 * 22);
+	for (int i = 0; i + 1 < g_rd_n; i++)              /* again 32/128: 32K inside the 128K before */
+		pairs += g_rd_len[i] == 131072 && g_rd_len[i + 1] == 32768 &&
+		         g_rd_off[i] % (192 * 1024) == 0 && g_rd_off[i + 1] == g_rd_off[i] + 32768;
+	CHECK(pairs >= 2 * 11);
 	CHECK_UNTOUCHED(f);
 
 	/* without non-cacheable memory: the C ones only */

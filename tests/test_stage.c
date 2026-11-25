@@ -5151,28 +5151,28 @@ static void test_read_order(void)
 	CHECK(dg != NULL);
 	pt_session(dg, 0);                               /* (earlier tests' reads gone) */
 	PT_MARK();
-	pt_note(d, pa, 1000, 256, 10);                   /* the first: elsewhere */
-	pt_note(d, pa, 1256, 256, 10);                   /* on from it: its own */
-	pt_note(d, pa, 1512, 256, 10);
+	pt_note(d, pa, 1000, 256, 10, 0);                   /* the first: elsewhere */
+	pt_note(d, pa, 1256, 256, 10, 0);                   /* on from it: its own */
+	pt_note(d, pa, 1512, 256, 10, 0);
 	CHECK(PT_DELTA(LG_LARGE, PT_FAR) == 1 && PT_DELTA(LG_LARGE, PT_OWN) == 2);
 	/* two 32 KiB streams in turn: the same size, another stream */
 	PT_MARK();
-	pt_note(d, pa, 5000, 64, 10);                    /* A: elsewhere */
-	pt_note(d, pa, 5064, 64, 10);                    /* A: its own */
-	pt_note(d, pa, 9000, 64, 10);                    /* B: elsewhere */
-	pt_note(d, pa, 5128, 64, 10);                    /* A again: the same size's other */
-	pt_note(d, pa, 9064, 64, 10);                    /* B */
+	pt_note(d, pa, 5000, 64, 10, 0);                    /* A: elsewhere */
+	pt_note(d, pa, 5064, 64, 10, 0);                    /* A: its own */
+	pt_note(d, pa, 9000, 64, 10, 0);                    /* B: elsewhere */
+	pt_note(d, pa, 5128, 64, 10, 0);                    /* A again: the same size's other */
+	pt_note(d, pa, 9064, 64, 10, 0);                    /* B */
 	CHECK(PT_DELTA(LG_SMALL, PT_FAR) == 2 && PT_DELTA(LG_SMALL, PT_OWN) == 1 &&
 	      PT_DELTA(LG_SMALL, PT_SAME) == 2);
 	/* one stream, sizes mixed: a large read where a 32 KiB one ended */
 	PT_MARK();
-	pt_note(d, pa, 9128, 256, 10);
+	pt_note(d, pa, 9128, 256, 10, 0);
 	CHECK(PT_DELTA(LG_LARGE, PT_MIX) == 1);
 	/* overlapping on past one's end; wholly inside one; just before one */
 	PT_MARK();
-	pt_note(d, pa, 9384 - 32, 64, 10);               /* the last 16 KiB again, then on */
-	pt_note(d, pa, 9200, 64, 10);                    /* inside the large one */
-	pt_note(d, pa, 4900, 64, 10);                    /* 50 KiB before A's start */
+	pt_note(d, pa, 9384 - 32, 64, 10, 0);               /* the last 16 KiB again, then on */
+	pt_note(d, pa, 9200, 64, 10, 0);                    /* inside the large one */
+	pt_note(d, pa, 4900, 64, 10, 0);                    /* 50 KiB before A's start */
 	CHECK(PT_DELTA(LG_SMALL, PT_OVER) == 1 && PT_DELTA(LG_SMALL, PT_IN) == 1 &&
 	      PT_DELTA(LG_SMALL, PT_BACK) == 1);
 	/* how far: the one inside read 64 sectors after the large one (pieces
@@ -5180,25 +5180,30 @@ static void test_read_order(void)
 	CHECK(dg->ag.n[LG_SMALL][PT_AGAIN_IN + 0] == 1 && dg->ag.n[LG_SMALL][PT_AGAIN_BACK + 1] == 1);
 	/* a little skipped; another partition: elsewhere */
 	PT_MARK();
-	pt_note(d, pa, 9416 + 300, 8, 10);               /* 150 KiB on */
-	pt_note(d, pb, 9416 + 300, 8, 10);
+	pt_note(d, pa, 9416 + 300, 8, 10, 0);               /* 150 KiB on */
+	pt_note(d, pb, 9416 + 300, 8, 10, 0);
 	CHECK(PT_DELTA(LG_TINY, PT_SKIP) == 1 && PT_DELTA(LG_TINY, PT_FAR) == 1);
 	/* read again after 1000 sectors, and after 2200 (past 1 MiB, still in
 	 * the ring); a file read backwards (each read ending where the last
 	 * began); one before with a gap past 32 KiB */
-	pt_note(d, pa, 50000, 256, 10);
-	pt_note(d, pa, 60000, 1000, 10);
-	pt_note(d, pa, 50010, 64, 10);
-	pt_note(d, pa, 20000, 256, 10);
-	pt_note(d, pa, 30000, 1100, 10);
-	pt_note(d, pa, 40000, 1100, 10);
-	pt_note(d, pa, 20010, 64, 10);
-	pt_note(d, pa, 70000, 256, 10);
-	pt_note(d, pa, 69744, 256, 10);
-	pt_note(d, pa, 80000, 256, 10);
-	pt_note(d, pa, 79700, 64, 10);
+	pt_note(d, pa, 50000, 256, 10, 0);
+	pt_note(d, pa, 60000, 1000, 10, 0);
+	pt_note(d, pa, 50010, 64, 10, 0);
+	pt_note(d, pa, 20000, 256, 10, 0);
+	pt_note(d, pa, 30000, 1100, 10, 0);
+	pt_note(d, pa, 40000, 1100, 10, 0);
+	pt_note(d, pa, 20010, 64, 10, 0);
+	pt_note(d, pa, 70000, 256, 10, 0);
+	pt_note(d, pa, 69744, 256, 10, 0);
+	pt_note(d, pa, 80000, 256, 10, 0);
+	pt_note(d, pa, 79700, 64, 10, 0);
+	pt_note(d, pa, 90000, 256, 10, 1);               /* this one from read ahead's pieces */
+	pt_note(d, pa, 90010, 64, 10, 0);
 	CHECK(dg->ag.n[LG_SMALL][PT_AGAIN_IN + 1] == 1 && dg->ag.n[LG_SMALL][PT_AGAIN_IN + 2] == 1 &&
 	      dg->ag.n[LG_LARGE][PT_AGAIN_BACK + 0] == 1 && dg->ag.n[LG_SMALL][PT_AGAIN_BACK + 2] == 1);
+	/* the 32 KiB reads again all lay in large ones, one of them from the pieces */
+	CHECK(dg->ag.in_of[LG_SMALL][LG_LARGE] == 4 && dg->ag.in_of[LG_SMALL][LG_SMALL] == 0 &&
+	      dg->ag.in_of[LG_SMALL][LG_TINY] == 0 && dg->ag.in_of[LG_SMALL][PT_OF_RA] == 1);
 	/* the times go with them; the session's counts start afresh */
 	CHECK(dg->pc.us[LG_SMALL][PT_OVER] >= 10);
 	pt_session(dg, 1);
@@ -5219,8 +5224,9 @@ static void test_read_order(void)
 
 		CHECK(n < 192);
 		CHECK(snprintf(b, sizeof(b), "[vita-memio] [99999.999999] INFO session again large: "
-		               "in %u (384K %u 1M %u more %u), back %u (next %u 32K %u more %u)",
-		               99999u, 100u, 100u, 100u, 99999u, 100u, 100u, 100u) < 192);
+		               "in %u (384K %u 1M %u more %u; in t %u s %u l %u R/A %u), back %u "
+		               "(next %u 32K %u more %u)", 99999u, 100u, 100u, 100u, 100u, 100u, 100u,
+		               100u, 99999u, 100u, 100u, 100u) < 192);
 	}
 #undef PT_DELTA
 #undef PT_MARK

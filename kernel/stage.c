@@ -629,7 +629,10 @@ typedef struct {
  * again (PT_IN) by how much the storage read after the read it lies in
  * (could pieces kept that long have had it: 384 KiB is what the three hold),
  * one before (PT_BACK) by the gap to the read it lies before (none: a file
- * read backwards, each read ending where the last began). */
+ * read backwards, each read ending where the last began). A read again also
+ * by the read it lies in: its size, and whether read ahead's pieces gave it
+ * (then a piece kept has it: served again) - the rest went the standard
+ * way, straight into the game's buffer, with no copy of ours left. */
 #define PT_HIST     8
 #define PT_OWN      0
 #define PT_SAME     1
@@ -642,7 +645,8 @@ typedef struct {
 #define PT_N        8
 typedef struct {
 	uint32_t start, end, part;
-	uint32_t size;                         /* LG_* | the device's sectors read with it << 2 */
+	uint32_t size;                         /* LG_* | 4: from read ahead's pieces (some)
+	                                        * | the device's sectors read with it << 3 */
 } PtRead;
 typedef struct {
 	PtRead   h[PT_HIST];                   /* the last reads (a ring)          */
@@ -653,8 +657,10 @@ typedef struct {
 #define PT_AGAIN_IN    0                   /* + 0 within 384 KiB, 1 within 1 MiB, 2 further */
 #define PT_AGAIN_BACK  3                   /* + 0 ending where it began, 1 within 32 KiB, 2 further */
 #define PT_AGAIN_N     6
+#define PT_OF_RA       3                   /* in_of: + LG_* the read it lies in, PT_OF_RA its pieces' */
 typedef struct {
 	uint32_t n[3][PT_AGAIN_N];             /* atomics, by size; the session's  */
+	uint32_t in_of[3][4];                  /* ... the reads again, by the one they lie in */
 } PtAgain;
 typedef struct {
 	uint32_t n[3][PT_N];
@@ -5409,14 +5415,14 @@ static void lk_note(int k, uint32_t nsec, uint32_t us, int col, int how)
 }
 
 /* With the log on: where a read of the app in front lies (see PT_*). */
-static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t us)
+static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t us, int ra)
 {
 	Diag *const dg = DG();
 	const int k = nsec < RA_SMALL_SECTORS ? LG_TINY : nsec < RA_MIN_SECTORS ? LG_SMALL : LG_LARGE;
 	const uint32_t pt = (uint32_t)(uintptr_t)part;
 	PtDev *t;
 	int c = PT_FAR;
-	uint32_t tot, since = 0xFFFFFFFFu, gap = 0xFFFFFFFFu;
+	uint32_t tot, since = 0xFFFFFFFFu, gap = 0xFFFFFFFFu, of = 0;
 
 	if (!dg)
 		return;
@@ -5439,11 +5445,13 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 			} else if (sector >= a && sector < e) {
 				w = e0 > e ? PT_OVER : PT_IN;
 				if (w == PT_IN) {
-					/* read by the storage since (30 bits: wraps alike) */
-					const uint32_t s = ((tot << 2) - (hs & ~3u)) >> 2;
+					/* read by the storage since (29 bits: wraps alike) */
+					const uint32_t s = ((tot << 3) - (hs & ~7u)) >> 3;
 
-					if (s < since)
+					if (s < since) {
 						since = s;
+						of = hs;
+					}
 				}
 			} else if (sector < a && sector + 2 * RA_PIECE_SECTORS >= a) {
 				w = PT_BACK;
@@ -5460,15 +5468,19 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 	}
 	ADD(dg->pc.n[k][c], 1);
 	ADD(dg->pc.us[k][c], (uint64_t)us);
-	if (c == PT_IN)
+	if (c == PT_IN) {
 		ADD(dg->ag.n[k][PT_AGAIN_IN + (since <= 3 * RA_PIECE_SECTORS ? 0 : since <= 2048u ? 1 : 2)], 1);
+		ADD(dg->ag.in_of[k][of & 3u], 1);
+		if (of & 4u)
+			ADD(dg->ag.in_of[k][PT_OF_RA], 1);
+	}
 	else if (c == PT_BACK)
 		ADD(dg->ag.n[k][PT_AGAIN_BACK + (!gap ? 0 : gap <= RA_SMALL_SECTORS ? 1 : 2)], 1);
 	{
 		PtRead *h = &t->h[__atomic_fetch_add(&t->i, 1, __ATOMIC_RELAXED) % PT_HIST];
 
 		ST(h->part, pt);
-		ST(h->size, (uint32_t)k | (tot + nsec) << 2);
+		ST(h->size, (uint32_t)k | (ra ? 4u : 0u) | (tot + nsec) << 3);
 		ST(h->start, sector);
 		ST(h->end, sector + nsec);
 	}
@@ -5511,19 +5523,25 @@ static void pt_session(Diag *dg, int print)
 	}
 	/* how far the reads again and before lay (PtAgain), per cent of each */
 	for (int k = 0; k < 3; k++) {
-		uint32_t a[PT_AGAIN_N], in, bk;
+		uint32_t a[PT_AGAIN_N], f[4], in, bk;
 
 		for (int b = 0; b < PT_AGAIN_N; b++)
 			a[b] = __atomic_exchange_n(&dg->ag.n[k][b], 0, __ATOMIC_RELAXED);
+		for (int b = 0; b < 4; b++)
+			f[b] = __atomic_exchange_n(&dg->ag.in_of[k][b], 0, __ATOMIC_RELAXED);
 		in = a[0] + a[1] + a[2];
 		bk = a[3] + a[4] + a[5];
 		if (!print || in + bk < 16)
 			continue;
-		VM_KLOGI("session again %s: in %u (384K %u 1M %u more %u), back %u (next %u 32K %u more %u)",
-		         what[k], (unsigned)in, (unsigned)(in ? a[0] * 100u / in : 0),
-		         (unsigned)(in ? a[1] * 100u / in : 0), (unsigned)(in ? a[2] * 100u / in : 0),
-		         (unsigned)bk, (unsigned)(bk ? a[3] * 100u / bk : 0),
-		         (unsigned)(bk ? a[4] * 100u / bk : 0), (unsigned)(bk ? a[5] * 100u / bk : 0));
+		/* in: how far, then in what (tiny / 32K / large reads, from R/A) */
+		VM_KLOGI("session again %s: in %u (384K %u 1M %u more %u; in t %u s %u l %u R/A %u), "
+		         "back %u (next %u 32K %u more %u)", what[k], (unsigned)in,
+		         (unsigned)(in ? a[0] * 100u / in : 0), (unsigned)(in ? a[1] * 100u / in : 0),
+		         (unsigned)(in ? a[2] * 100u / in : 0), (unsigned)(in ? f[0] * 100u / in : 0),
+		         (unsigned)(in ? f[1] * 100u / in : 0), (unsigned)(in ? f[2] * 100u / in : 0),
+		         (unsigned)(in ? f[3] * 100u / in : 0), (unsigned)bk,
+		         (unsigned)(bk ? a[3] * 100u / bk : 0), (unsigned)(bk ? a[4] * 100u / bk : 0),
+		         (unsigned)(bk ? a[5] * 100u / bk : 0));
 	}
 	dg->pc_at = now;
 }
@@ -5551,7 +5569,7 @@ static int stage_xfer(Dev *d, int write, io_fn io, tai_hook_ref_t ref, tai_hook_
 	if (lg) {
 		lg_note(d, write, nsec, us, col);
 		if (!write && r >= 0 && !bg_req())
-			pt_note(d, part, sector, nsec, us);   /* where it lay */
+			pt_note(d, part, sector, nsec, us, xi.got != 0);   /* where it lay */
 		if (!write && r >= 0)
 			lk_note(nsec < RA_SMALL_SECTORS ? LK_TINY : xi.nc == 2 ? -1 : xi.nc, nsec, us, col,
 			        nsec < RA_SMALL_SECTORS ? xi.tiny : !xi.got ? 0 : xi.got >= nsec ? 1 : 2);

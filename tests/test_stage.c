@@ -5759,7 +5759,7 @@ static void test_again_cache(void)
 		g_rc.yhit[0] = 0;
 		rc_yield(0);
 	}
-	CHECK(g_rc.hold_n[0] == RC_HOLD_MAX && g_rc.hold[0] == RC_HOLD_MAX && RC_HOLD_MAX == 8u);
+	CHECK(g_rc.hold_n[0] == RC_HOLD_MAX && g_rc.hold[0] == RC_HOLD_MAX);
 	g_rc.ykept[0] = RC_YIELD_N - 1;
 	g_rc.yhit[0] = RC_YIELD_N;
 	rc_yield(0);

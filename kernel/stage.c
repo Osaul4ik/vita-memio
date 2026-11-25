@@ -5031,9 +5031,7 @@ static const uint32_t rc_yield_pm[2] = { 300u, 250u };
  * session, yet off 8 times with 64) */
 #define RC_YIELD_N 128u
 #define RC_HOLD    4u                      /* looks off for a poor yield, doubled */
-/* ... each time in a row, up to this: 8 looks (1024 reads of the size), so
- * a spell of reading again that comes back is not missed for long */
-#define RC_HOLD_MAX 8u
+#define RC_HOLD_MAX 32u                    /* ... each time in a row, up to this  */
 
 /* A game's title id: PCSA..PCSI and 5 digits (the system's apps are NPXS,
  * homebrew and Adrenaline anything else) - or the tester's, which measures

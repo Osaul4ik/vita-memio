@@ -332,7 +332,8 @@ static void test_gpusafe_default_and_stored_value(void)
 	 * existed (11 keys); stored values kept; out of range: the default */
 	CHECK(VM_DEF_OFFLOAD == VM_OFFLOAD_ALL && VM_KEY_OFFLOAD == 11);
 	CHECK(vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALL) && !vm_setting_valid(VM_KEY_OFFLOAD, 1) &&
-	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_FULL) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
+	      vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_ALWAYS) && vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_OFF) &&
+	      !vm_setting_valid(VM_KEY_OFFLOAD, VM_OFFLOAD_OLD_FULL) && !vm_setting_valid(VM_KEY_OFFLOAD, 5));
 	CHECK(!vm_setting_valid(VM_KEY_OFFLOAD, -1));
 	CHECK(vm_setting_valid(VM_KEY_STATS, VM_STATS_OFF) && vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) &&
 	      vm_setting_valid(VM_KEY_STATS, VM_STATS_ON) && !vm_setting_valid(VM_KEY_STATS, 2));
@@ -350,6 +351,14 @@ static void test_gpusafe_default_and_stored_value(void)
 	vm_settings_init();
 	vm_settings_copy(&s);
 	CHECK(s.offload == VM_OFFLOAD_ALWAYS);
+	/* the removed "C + NC All" (4) stored by an older build: C + NC R/A */
+	v[VM_KEY_OFFLOAD] = VM_OFFLOAD_OLD_FULL;
+	clean();
+	n = make_file(buf, VM_KEY_COUNT, v);
+	put_file("settings.bin", buf, n);
+	vm_settings_init();
+	vm_settings_copy(&s);
+	CHECK(s.offload == VM_OFFLOAD_ALL && s.pipeline == VM_PIPE_AUTO);
 	v[VM_KEY_OFFLOAD] = 7;
 	clean();
 	n = make_file(buf, VM_KEY_COUNT, v);

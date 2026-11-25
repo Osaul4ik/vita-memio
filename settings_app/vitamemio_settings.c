@@ -105,7 +105,7 @@ static const char *const g_keys[VM_KEY_COUNT] = {
 			ITEM("vm_i_pipe0", "0") ITEM("vm_i_pipe1", "1") ITEM("vm_i_pipe2", "2") \
 		"</list>" \
 		ROW_LIST("offload") \
-			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "2") ITEM("vm_i_off2", "3") ITEM("vm_i_off3", "4") \
+			ITEM("vm_i_off0", "0") ITEM("vm_i_off1", "2") ITEM("vm_i_off2", "3") \
 		"</list>" \
 		ROW_TOGGLE("dmacopy") \
 		ROW_LIST("readahead") \
@@ -468,7 +468,7 @@ static const vm_u16 *vm_text(const char *id)
 		                  : id[7] == '1' ? VM_I18N_ITEM_RA_ON : VM_I18N_ITEM_RA_ADAPTIVE);
 	if (s_pfx(id, "vm_i_pipe") && id[9] >= '0' && id[9] <= '2' && !id[10])
 		return fixed_text(VM_I18N_ITEM_PIPE_OFF + (id[9] - '0'));
-	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '3' && !id[9])
+	if (s_pfx(id, "vm_i_off") && id[8] >= '0' && id[8] <= '2' && !id[9])
 		return fixed_text(VM_I18N_ITEM_OFF_OFF + (id[8] - '0'));
 	return 0;
 }

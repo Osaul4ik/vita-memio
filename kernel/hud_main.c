@@ -321,7 +321,7 @@ static void hud_feed(const VmDevState *now)
 /* ---- the overlay (SELECT + arrows) ------------------------------------------ */
 
 static const char *const k_ov_ra[] = { "Off", "On", "Adaptive" };   /* VM_RA_* */
-static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A", "C + NC All" };
+static const char *const k_ov_off[] = { "Off", "?", "Cached only", "C + NC R/A" };
 static const char *const k_ov_pipe[] = { "Off", "Auto", "Fixed" };
 /* GPU-safe reads, by value (VM_GPUSAFE_*) */
 static const char *const k_ov_gs[] = { "Off", "All", "Non-DMA" };
@@ -336,8 +336,8 @@ static const char *ov_name(const char *title);
 static void overlay_op(uint32_t op, char *msg, int cap)
 {
 	static const int ra[] = { VM_APP_GLOBAL, VM_RA_OFF, VM_RA_ON, VM_RA_ADAPTIVE };
-	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
-	                           VM_OFFLOAD_FULL };   /* as on the Settings page */
+	/* as on the Settings page */
+	static const int off[] = { VM_APP_GLOBAL, VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL };
 	static const int pipe[] = { VM_APP_GLOBAL, VM_PIPE_OFF, VM_PIPE_AUTO, VM_PIPE_FIXED };
 	static const int gs[] = { VM_APP_GLOBAL, VM_GPUSAFE_OFF, VM_GPUSAFE_NODMA, VM_GPUSAFE_ALL };
 	static const int thr[] = { 0, 2, 3, 4, 5, 6, 7, 8, VM_RA_NEVER };   /* 0: the fixed */
@@ -388,7 +388,7 @@ static void overlay_op(uint32_t op, char *msg, int cap)
 		break;
 	}
 	case OV_ITEM_OFFLOAD:
-		a.offload = ov_step(off, 5, a.offload, dir);
+		a.offload = ov_step(off, 4, a.offload, dir);
 		break;
 	case OV_ITEM_PIPE:
 		a.pipe = ov_step(pipe, 4, a.pipe, dir);
@@ -584,7 +584,7 @@ static void overlay_feed(void)
 				}
 				mask |= (1u << OV_ITEM_C) | (1u << OV_ITEM_NC);
 			}
-			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 5);
+			ov_val(v, sizeof(v), an.cur.offload, an.global.offload, k_ov_off, 4);
 			ov_line(L[n++], cur, OV_ITEM_OFFLOAD, 0, "Copy on core 3",
 			        ov_color(an.cur.offload, an.saved.offload, an.global.offload), v);
 			ov_line(L[n++], cur, OV_ITEM_ADV, 0, g_ov_adv ? "Hide advanced" : "Show advanced",

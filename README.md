@@ -57,7 +57,7 @@ Everything is in **Settings > Devices > vita-memio** and takes effect at once, e
 | *Advanced* | | |
 | GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
 | Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
-| Copy on the system core | Lets the console's spare core do copies that would otherwise keep the game's core busy. With *DMA copy* on, most copying is done by the DMA chip anyway, so this only handles what is left. Keep **C + NC R/A**: *Off* and *Cached only* also switch off reading again from memory (see below) | C + NC R/A |
+| Copy on the system core | Lets the console's spare core do copies that would otherwise keep the game's core busy. With *DMA copy* on, most copying is done by the DMA chip anyway, so this only handles what is left. Choices: *Off*, *Cached only* (copies into ordinary memory), *C + NC R/A* (also graphics data from Read ahead). Keep **C + NC R/A**: *Off* and *Cached only* also switch off reading again from memory (see below) | C + NC R/A |
 | DMA copy | Copies are made by the console's DMA chip, about twice as fast as by the processor. Switches itself off if anything goes wrong | On |
 | Read ahead | Reads the next part of a file before the game asks for it: **Adaptive**, **On** or **Off**. See below | Adaptive |
 | Small transfers too | Also speeds up transfers under 32 KiB, such as opening folders and small files | On |
@@ -97,7 +97,7 @@ Many commercial games read the same graphics data again a moment later. vita-mem
 - If only one storage is on, it needs 384 KiB of its own. Normally it takes them while a game needs them and gives them back as soon as you quit the game or go to the home screen; if the console has no room for them at that moment, the game simply reads without it. With **Keep memory for reading again** on, they are kept: a storage you switch off leaves its buffers for this, and if only one was on from the start, the memory is set aside at once.
 - It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
 - It switches itself off in a game where it does not pay off.
-- It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A or C + NC All, and is not used with *Low kernel memory*.
+- It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A, and is not used with *Low kernel memory*.
 
 ## How much faster
 

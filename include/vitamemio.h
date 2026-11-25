@@ -109,23 +109,24 @@ enum vm_key {
 #define VM_OFFLOAD_OFF     0
 #define VM_OFFLOAD_ALWAYS  2   /* "Cached only" (1: the removed "GPU-safe only")     */
 #define VM_OFFLOAD_ALL     3   /* "C + NC R/A": and what read ahead holds for NC     */
-#define VM_OFFLOAD_FULL    4   /* "C + NC All": and non-cacheable reads themselves   */
+/* 4 was "C + NC All" (also the non-cacheable reads themselves), removed in
+ * 1.6.0: a stored 4 reads as VM_OFFLOAD_ALL. */
+#define VM_OFFLOAD_OLD_FULL 4
+static inline int vm_offload_upgrade(int v)
+{
+	return v == VM_OFFLOAD_OLD_FULL ? VM_OFFLOAD_ALL : v;
+}
 
 /* Which reads a VM_OFFLOAD_* setting puts on the system core: reads into
  * ordinary (cached) memory, and
  * reads into non-cacheable memory (incl. read-ahead pieces copied into it). */
 static inline int vm_offload_cached(int v)
 {
-	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
+	return v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL;
 }
 static inline int vm_offload_nc(int v)
 {
-	return v == VM_OFFLOAD_ALL || v == VM_OFFLOAD_FULL;
-}
-/* ... and whether non-cacheable reads themselves go there, straight in. */
-static inline int vm_offload_direct(int v)
-{
-	return v == VM_OFFLOAD_FULL;
+	return v == VM_OFFLOAD_ALL;
 }
 
 /* GPU-safe reads: after a faster read, its data is written out of the CPU
@@ -238,7 +239,7 @@ static inline int vm_setting_valid(int key, int v)
 	case VM_KEY_PIPELINE:
 		return v >= VM_PIPE_OFF && v <= VM_PIPE_FIXED;
 	case VM_KEY_OFFLOAD:
-		return v == VM_OFFLOAD_OFF || (v >= VM_OFFLOAD_ALWAYS && v <= VM_OFFLOAD_FULL);
+		return v == VM_OFFLOAD_OFF || v == VM_OFFLOAD_ALWAYS || v == VM_OFFLOAD_ALL;
 	case VM_KEY_HUD:                 /* not in Settings: always Extended */
 		return v == VM_HUD_EXTENDED;
 	case VM_KEY_HUD_STYLE:

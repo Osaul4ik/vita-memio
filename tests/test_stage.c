@@ -43,6 +43,25 @@ static int fake_copy(void *d, const void *s, size_t n)
 
 #include "../kernel/stage.c"
 
+/* The planner with its usual shortest part (PIPE_MIN_TAIL), as the tests
+ * call it (the kernel passes the part it needs). */
+static int pipe_fit(uint32_t n, int k, uint32_t x, uint64_t io, uint64_t cp, uint32_t inv,
+                    uint64_t cmd, uint32_t s[PIPE_MAX_PARTS])
+{
+	return pipe_fit_min(n, k, x, io, cp, inv, cmd, s, PIPE_MIN_TAIL);
+}
+
+static int pipe_plan_costs(uint32_t n, uint64_t io, uint64_t cp, uint64_t cmd, int kmin, int kmax,
+                           uint32_t out[PIPE_MAX_PARTS])
+{
+	return pipe_plan_costs_min(n, io, cp, cmd, kmin, kmax, out, PIPE_MIN_TAIL);
+}
+
+static int pipe_plan(const Dev *d, uint32_t n, int clean, uint32_t out[PIPE_MAX_PARTS])
+{
+	return pipe_plan_min(d, n, clean, out, PIPE_MIN_TAIL);
+}
+
 #include <stdio.h>
 #include <pthread.h>
 #include <time.h>
@@ -160,9 +179,6 @@ static void reset(void)
 	g_offload_type = 0;
 	g_offload_err = 0;
 	g_off_reads = g_off_kib = g_off_maperr = 0;
-	g_ncd_state = g_ncd_logged = g_ncd_err = 0;
-	g_ncd_type = 0;
-	g_ncd_reads = g_ncd_kib = g_ncd_maperr = g_ncd_busy = g_ncd_fail = 0;
 	g_log_diag = 0;
 	memset(g_cp_core_kib, 0, sizeof(g_cp_core_kib));
 	g_ra_nc_sys_kib = g_ra_nc_own_kib = 0;
@@ -1955,151 +1971,69 @@ static int sems_empty(const Dev *d)
 	       fake_sema_count(d->sem_fin) == 0;
 }
 
-/* "C + NC": a game's read into non-cacheable memory is
- * read by the helper straight into the game's buffer (mapped, non-cacheable
- * too); the game's thread reads nothing itself. Small reads, system threads,
- * other settings, verify, a busy device, a cached or unwritable mapping: the
- * standard path, as before. A failed read is read again the standard way. */
-static pthread_t ncd_io_thread;
-static int ncd_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
+/* Non-cacheable reads without read ahead: the standard way on the game's own
+ * thread, straight into its buffer, at every setting of copy on the system
+ * core (the highest, C + NC R/A, included: it copies only read ahead's
+ * pieces); nothing mapped. Cached reads: on the copier as before. */
+static pthread_t nc_io_thread;
+static int nc_io(tai_hook_ref_t ref, void *part, uint32_t sector, void *buf, uint32_t n)
 {
-	ncd_io_thread = pthread_self();
+	nc_io_thread = pthread_self();
 	return fake_io(ref, part, sector, buf, n);
 }
 
-static int ncd_rd(uint8_t *u, uint32_t sector, uint32_t n)
+static int nc_rd(uint8_t *u, uint32_t sector, uint32_t n)
 {
-	return stage_xfer(&g_dev[M], 0, ncd_io, REF_RD, 0, NULL, sector, u, n);
+	return stage_xfer(&g_dev[M], 0, nc_io, REF_RD, 0, NULL, sector, u, n);
 }
 
-static void test_ncd(void)
+static void test_nc_standard(void)
 {
-	uint8_t *u = user_buf(2048), *other = user_buf(2048);
+	static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL };
+	static const uint32_t sizes[] = { 64, 128, 256, 2048 };
+	uint8_t *u = user_buf(2048);
 	VmSettings s;
 	Dev *d = &g_dev[M];
 	int saved_live = g_live;
-	uint32_t nc;
 
 	reset();
-	offload_on(&s, 0, VM_OFFLOAD_FULL, 1);
+	offload_on(&s, 0, VM_OFFLOAD_ALL, 1);
 	CHECK(d->pipe_made && d->pipe_ready);
 	fake_pid = 0x42;
-	fake_memtype = MEMTYPE_NC;                 /* the game's buffer and its mapping */
-	fake_meminfo_type = 0x10208006;            /* non-cacheable, read and write */
-
-	/* 128 KiB, 256 KiB and 1 MiB: on the helper, into the buffer itself */
-	{
-		static const uint32_t sizes[] = { 128, 256, 512, 2048 };
-
+	for (size_t m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
+		s.offload = modes[m];
+		vm_stage_apply(&s);
+		fake_memtype = MEMTYPE_NC;
+		fake_meminfo_type = 0x10208006;
 		for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
-			const uint32_t n = sizes[i], at = (uint32_t)(i * 211) % 1000;
+			const uint32_t n = sizes[i], at = (uint32_t)(i * 211 + m * 7) % 1000;
+			const uint32_t nc = g_nc_stock_kib, maps = (uint32_t)fake_usermap_calls;
 
 			memset(u, 0, (size_t)n * 512);
 			io_calls = 0;
-			ncd_io_thread = pthread_self();
-			CHECK(ncd_rd(u, at, n) == 0);
+			nc_io_thread = (pthread_t)0;
+			CHECK(nc_rd(u, at, n) == 0);
 			CHECK(memcmp(u, disk + (size_t)at * 512, (size_t)n * 512) == 0);
-			CHECK(io_calls == 1 && last_buf == u);            /* one read, no staging */
-			CHECK(!pthread_equal(ncd_io_thread, pthread_self()));   /* by the helper */
-			CHECK(fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
+			CHECK(io_calls == 1 && last_buf == u);                 /* no staging */
+			CHECK(pthread_equal(nc_io_thread, pthread_self()));  /* the game's thread */
+			CHECK((uint32_t)fake_usermap_calls == maps && fake_usermap_live == 0);
+			CHECK(g_nc_stock_kib == nc + n / 2 && sems_empty(d) && d->busy == 0);
 		}
-		CHECK(g_ncd_reads == 4 && g_ncd_state == 1 && g_ncd_kib == (128 + 256 + 512 + 2048) / 2);
-		CHECK(g_nc_stock_kib == 0 && d->st.reads == 0 && d->st.errors == 0);
-		CHECK(fake_meminfo_calls == fake_usermap_calls && fake_usermap_calls == 4);
+		/* cached reads: on the copier where the setting says so */
+		if (vm_offload_cached(modes[m])) {
+			fake_meminfo_type = 0x1020D006;
+			fake_memtype = 0xD000;
+			copies_here = copies_elsewhere = 0;
+			CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
+			CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
+		}
 	}
-
-	/* under 64 KiB, a system thread, verify on: the standard path, nothing mapped */
-	nc = g_nc_stock_kib;
-	io_calls = 0;
-	CHECK(ncd_rd(u, 5, 64) == 0 && memcmp(u, disk + 5 * 512, 64 * 512) == 0);
-	CHECK(io_calls == 1 && last_buf == u && pthread_equal(ncd_io_thread, pthread_self()));
-	fake_pid = KERNEL_PID;
-	CHECK(ncd_rd(u, 7, 256) == 0 && memcmp(u, disk + 7 * 512, 256 * 512) == 0);
-	CHECK(pthread_equal(ncd_io_thread, pthread_self()));
-	fake_pid = 0x42;
-	g_verify = 1;
-	CHECK(ncd_rd(u, 9, 256) == 0 && pthread_equal(ncd_io_thread, pthread_self()));
-	g_verify = 0;
-	CHECK(g_nc_stock_kib == nc + (64 + 256 + 256) / 2 && fake_usermap_calls == 4 && g_ncd_reads == 4);
-
-	/* the device busy (another request): this one standard, counted */
-	d->busy = 1;
-	CHECK(ncd_rd(u, 11, 256) == 0 && memcmp(u, disk + 11 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_busy == 1 && pthread_equal(ncd_io_thread, pthread_self()));
-	d->busy = 0;
-
-	/* the read fails on the helper: read again the standard way, all of it */
-	io_calls = 0;
-	fail_at_call = 1;
-	memset(u, 0, 256 * 512);
-	CHECK(ncd_rd(u, 13, 256) == 0 && memcmp(u, disk + 13 * 512, 256 * 512) == 0);
-	CHECK(io_calls == 2 && g_ncd_fail == 1 && fake_usermap_live == 0 && sems_empty(d));
-	fail_at_call = 0;
-
-	/* device memory (not non-cacheable): standard, nothing mapped, not refused */
-	fake_memtype = MEMTYPE_DEVICE;
-	CHECK(ncd_rd(u, 15, 256) == 0 && pthread_equal(ncd_io_thread, pthread_self()));
-	CHECK(fake_usermap_calls == 5 && g_ncd_state == 1);
-	fake_memtype = MEMTYPE_NC;
-
-	/* the mapping cached: refused until the setting changes; reads standard */
-	fake_usermap_elsewhere = other;
-	fake_memtype_from = other;
-	fake_memtype_to = other + 2048 * 512;
-	fake_memtype_above = 0xD000;
-	g_ncd_state = 0;
-	CHECK(ncd_rd(u, 17, 256) == 0 && memcmp(u, disk + 17 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_state == -2 && fake_usermap_live == 0);
-	{
-		const int maps = fake_usermap_calls;
-
-		CHECK(ncd_rd(u, 19, 256) == 0 && fake_usermap_calls == maps);   /* not tried again */
-	}
-	fake_usermap_elsewhere = NULL;
-	fake_memtype_from = fake_memtype_to = NULL;
-	fake_memtype_above = 0xD000;
-	vm_stage_worker_tick();                       /* logs the refusal once */
-	CHECK(g_ncd_logged == -2);
-
-	/* switching the setting checks afresh; a mapping without write: refused */
-	s.offload = VM_OFFLOAD_ALWAYS;
-	vm_stage_apply(&s);
-	CHECK(g_ncd_state == 0);
-	CHECK(ncd_rd(u, 21, 256) == 0 && g_ncd_reads == 4);   /* Always: uncached stays standard */
-	s.offload = VM_OFFLOAD_FULL;
-	vm_stage_apply(&s);
-	fake_meminfo_type = 0x10208004;               /* no read bit */
-	CHECK(ncd_rd(u, 23, 256) == 0 && memcmp(u, disk + 23 * 512, 256 * 512) == 0);
-	CHECK(g_ncd_state == -1 && fake_usermap_live == 0);
-
-	/* cached reads with "C + NC": copied on the system core */
-	fake_meminfo_type = 0x1020D006;
-	fake_memtype = 0xD000;
-	copies_here = copies_elsewhere = 0;
-	CHECK(rd(u, 25, 256) == 0 && memcmp(u, disk + 25 * 512, 256 * 512) == 0);
-	CHECK(copies_here == 0 && copies_elsewhere >= 1 && g_off_reads >= 1);
-
-	/* C + NC R/A: cached reads on the copier; without read ahead non-cacheable
-	 * reads stay standard */
-	s.offload = VM_OFFLOAD_ALL;
-	vm_stage_apply(&s);
-	copies_here = copies_elsewhere = 0;
-	CHECK(rd(u, 27, 256) == 0 && memcmp(u, disk + 27 * 512, 256 * 512) == 0);
-	CHECK(copies_here == 0 && copies_elsewhere >= 1);
-	fake_memtype = MEMTYPE_NC;
-	fake_meminfo_type = 0x10208006;
-	{
-		const uint32_t reads = g_ncd_reads;
-
-		CHECK(ncd_rd(u, 29, 256) == 0 && memcmp(u, disk + 29 * 512, 256 * 512) == 0);
-		CHECK(g_ncd_reads == reads && fake_usermap_live == 0 && sems_empty(d) && d->busy == 0);
-	}
+	CHECK(d->st.errors == 0);
 
 	vm_stage_fini();
 	CHECK(fake_threads_live == 0 && fake_semas_live == 0 && fake_usermap_live == 0);
 	g_live = saved_live;
 	free(u);
-	free(other);
 }
 
 static void test_offload(void)
@@ -2222,7 +2156,7 @@ static void test_offload(void)
 	CHECK(copies_elsewhere == 0 && g_off_maperr == 1 && g_offload_state == 0);
 	CHECK(g_offload_err == (int)0x80020001 && sems_empty(d) && g_off_reads == 0);
 	/* ... and described for the log: once, by the worker */
-	CHECK(g_mapfail_n == 1 && DG()->mapfail[0].ready && DG()->mapfail[0].which == 0 &&
+	CHECK(g_mapfail_n == 1 && DG()->mapfail[0].ready &&
 	      DG()->mapfail[0].err == (int)0x80020001 && DG()->mapfail[0].pid == 0x42 &&
 	      DG()->mapfail[0].len == 700 * 512 && DG()->mapfail[0].nseg >= 1 && DG()->mapfail[0].nblk >= 1 &&
 	      DG()->mapfail[0].blk[0].info == 0 && DG()->mapfail[0].seg[0].off == 0);
@@ -2684,12 +2618,11 @@ static void test_readahead(void)
 	/* a stream into non-cacheable memory (a game's graphics data): the first
 	 * reads straight into the buffer as before, then from the pieces, copied
 	 * by the copier through its non-cacheable mapping (only with an NC
-	 * setting: "Always" covers cached reads only), nothing cleaned; with an
-	 * NC setting the first reads go to the system core too, straight in */
-	for (int mode = 0; mode < 4; mode++) {
-		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL,
-		                             VM_OFFLOAD_FULL };
-		const int offl = vm_offload_nc(modes[mode]), direct = vm_offload_direct(modes[mode]);
+	 * setting: "Always" covers cached reads only), nothing cleaned; the first
+	 * reads the standard way at every setting */
+	for (int mode = 0; mode < 3; mode++) {
+		static const int modes[] = { VM_OFFLOAD_OFF, VM_OFFLOAD_ALWAYS, VM_OFFLOAD_ALL };
+		const int offl = vm_offload_nc(modes[mode]);
 
 		reset();
 		ra_settings(&s, 1, modes[mode], VM_PIPE_AUTO);
@@ -2713,8 +2646,7 @@ static void test_readahead(void)
 			}
 		}
 		CHECK(g_ra_hits == 7 && g_ra_nc_kib == 7 * 128);
-		CHECK(direct ? g_nc_stock_kib == 0 && g_ncd_reads == 5 && g_ncd_kib == 5 * 128
-		           : g_nc_stock_kib == 5 * 128 && g_ncd_reads == 0);
+		CHECK(g_nc_stock_kib == 5 * 128);
 		CHECK(d->st.reads == 0 && d->st.errors == 0 && !d->fallback);
 		CHECK(g_nc_off_refused == 0 && g_offload_state >= 0);
 		/* graphics data counts as NC, in "Core 3 NC", not as copies (C) */
@@ -2725,8 +2657,7 @@ static void test_readahead(void)
 			CHECK(core[0] + core[1] + core[2] + core[3] == 0);
 			CHECK(offl ? g_ra_nc_sys_kib == 7 * 128 && g_ra_nc_own_kib == 0
 			           : g_ra_nc_own_kib == 7 * 128 && g_ra_nc_sys_kib == 0);
-			CHECK(ncs == (direct ? 5u * 128 : 0u) + g_ra_nc_sys_kib &&
-			      nco == (direct ? 0u : 5u * 128) + g_ra_nc_own_kib);
+			CHECK(ncs == g_ra_nc_sys_kib && nco == 5u * 128 + g_ra_nc_own_kib);
 		}
 		/* elsewhere: dropped, straight in */
 		CHECK(rd_ok(u, 3500, 300) && ra_idle(d) && __atomic_load_n(&last_buf, __ATOMIC_RELAXED) == u);
@@ -4570,7 +4501,7 @@ static void test_bufmap_state(void)
 	ADD(g_off_headed, 1);
 	vm_stage_ra_now(&rn);
 	CHECK(rn.bufmap == VM_BUFMAP_WORKAROUND);
-	ADD(g_ncd_maperr, 1);
+	ADD(g_off_maperr, 1);
 	vm_stage_ra_now(&rn);
 	CHECK(rn.bufmap == VM_BUFMAP_REFUSED);
 	as_app(0x44);                                    /* another app: afresh */
@@ -5154,10 +5085,10 @@ static void test_system_apps(void)
 	CHECK(!strcmp(an.title, HOME_TITLE) && app_in_front());
 	ra_app_global(&a);
 	a.ra = VM_RA_ADAPTIVE;
-	a.offload = VM_OFFLOAD_FULL;
+	a.offload = VM_OFFLOAD_ALL;
 	CHECK(vm_stage_app_set(&a) == VM_OK && app_save_done() == VM_OK);
-	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_offload == VM_OFFLOAD_FULL);
-	CHECK(ra_prof_load(HOME_TITLE, &pf) && pf.app.offload == VM_OFFLOAD_FULL);
+	CHECK(g_ra_mode == VM_RA_ADAPTIVE && g_offload == VM_OFFLOAD_ALL);
+	CHECK(ra_prof_load(HOME_TITLE, &pf) && pf.app.offload == VM_OFFLOAD_ALL);
 	/* a system app: in front as a game is, the global ones until it has its own */
 	as_app(0x47);
 	vm_stage_worker_tick();
@@ -5172,7 +5103,7 @@ static void test_system_apps(void)
 	ra_proc_event(0x47, 4);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
-	CHECK(g_ra_fg == 0 && !strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_FULL);
+	CHECK(g_ra_fg == 0 && !strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_ALL);
 	/* the home screen's own process ("main") never takes the front */
 	as_app(0x48);
 	vm_stage_worker_tick();
@@ -5198,7 +5129,7 @@ static void test_system_apps(void)
 	vm_stage_apply(&s);
 	vm_stage_worker_tick();
 	vm_stage_app_now(&an);
-	CHECK(!strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_FULL);
+	CHECK(!strcmp(an.title, HOME_TITLE) && g_offload == VM_OFFLOAD_ALL);
 	vm_stage_fini();
 }
 
@@ -5279,6 +5210,21 @@ static void test_profiles(void)
 		ksceIoClose(fd);
 		CHECK(!ra_prof_load("PCSE00001", &pf));
 		v.check ^= 1;
+		/* saved by an older build with the removed "C + NC All": C + NC R/A */
+		v.offload = VM_OFFLOAD_OLD_FULL;
+		v.check = ra_profile_check(&v);
+		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+		ksceIoWrite(fd, &v, sizeof(v));
+		ksceIoClose(fd);
+		CHECK(ra_prof_load("PCSE00001", &pf) && pf.app.offload == VM_OFFLOAD_ALL &&
+		      pf.app.ra == VM_RA_ON);
+		v.offload = 5;                                /* out of range */
+		v.check = ra_profile_check(&v);
+		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+		ksceIoWrite(fd, &v, sizeof(v));
+		ksceIoClose(fd);
+		CHECK(!ra_prof_load("PCSE00001", &pf));
+		v.offload = -1;
 		v.ra = 3;                                     /* out of range */
 		v.check = ra_profile_check(&v);
 		fd = ksceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
@@ -6158,7 +6104,7 @@ static void test_log_block(void)
 	g_mapfail_n = 0;
 	lg_note(&g_dev[M], 0, 64, 10, 1);
 	lk_note(LK_C, 64, 10, 1, 0);
-	mapfail_note(0, &m, -1);
+	mapfail_note(&m, -1);
 	CHECK(g_mapfail_n == 0);
 	memset(&snap, 0x4A, sizeof(snap));
 	lg_snap(&snap);
@@ -7289,7 +7235,7 @@ int main(void)
 	RUN(test_helper_runs_ahead);
 	RUN(test_plan_quick_check);
 	RUN(test_copy_diagnostics);
-	RUN(test_ncd);
+	RUN(test_nc_standard);
 	RUN(test_offload);
 	RUN(test_pipe_retire_bounded);
 	RUN(test_stress_concurrency);

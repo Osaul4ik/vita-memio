@@ -94,8 +94,10 @@ static int load_file(const char *path, VmSettings *s)
 		return 0;
 	}
 	for (int k = 0; k < (int)cnt && k < VM_KEY_COUNT; k++) {
-		if (vm_setting_valid(k, values[k]))
-			*vm_setting_field(s, k) = values[k];
+		const int32_t v = k == VM_KEY_OFFLOAD ? vm_offload_upgrade(values[k]) : values[k];
+
+		if (vm_setting_valid(k, v))
+			*vm_setting_field(s, k) = v;
 		else if (k != VM_KEY_INTERNAL)   /* on in an older build: now off, quietly */
 			VM_KLOGW("settings: key %d value %d out of range, default %d",
 			         k, values[k], g_defaults[k]);

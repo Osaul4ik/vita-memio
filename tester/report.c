@@ -111,7 +111,6 @@ static const char *offload_text(int v)
 	return v == VM_OFFLOAD_OFF ? "off"
 	     : v == VM_OFFLOAD_ALWAYS ? "cached only"
 	     : v == VM_OFFLOAD_ALL ? "C + NC R/A (cached and non-cacheable read ahead)"
-	     : v == VM_OFFLOAD_FULL ? "C + NC All (cached and non-cacheable, also the reads themselves)"
 	     : "unknown";
 }
 
@@ -458,8 +457,7 @@ int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], i
 		     res->plugin0.verify && res->plugin0.pipeline > 0 ? " (off: verify on)" : "");
 		if (res->plugin0.offload > 0)
 			line(&s, "copy on the system core: %s",
-			     res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC R/A"
-			     : res->plugin0.offload == VM_OFFLOAD_FULL ? "C + NC All" : "cached only");
+			     res->plugin0.offload == VM_OFFLOAD_ALL ? "C + NC R/A" : "cached only");
 		if (res->plugin0.readahead == VM_RA_ON || res->plugin0.readahead == VM_RA_ADAPTIVE)
 			line(&s, "read ahead: %s", res->plugin0.readahead == VM_RA_ON ? "on" : "adaptive");
 		if (dma_shown(res)) {

@@ -51,7 +51,11 @@ static inline VM_NO_MEMCPY_IDIOM void *vm_fast_copy(void *dst, const void *src, 
 		 * sp, lr and pc are not used; the compiler keeps sw/dw out of the
 		 * clobbered registers. */
 		while (n >= 64) {
+			/* the line two passes on asked for meanwhile: a cached source
+			 * (the game's buffer, the tiny reads' block) no longer waits for
+			 * each line; on non-cacheable memory it does nothing */
 			__asm__ volatile(
+				"pld [%[s], #128]\n\t"
 				"ldmia %[s]!, {r3, r4, r5, r6, r8, r9, r10, r12}\n\t"
 				"stmia %[d]!, {r3, r4, r5, r6, r8, r9, r10, r12}\n\t"
 				"ldmia %[s]!, {r3, r4, r5, r6, r8, r9, r10, r12}\n\t"

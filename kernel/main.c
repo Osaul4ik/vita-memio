@@ -556,17 +556,38 @@ int vmGetBuild(char *out, int size)
 	return VM_OK;
 }
 
+/* SceKernelModuleInfo as on 3.60-3.74 (0x1B8 bytes), the segments alone
+ * named: the SDK this builds with may not declare it, nor
+ * ksceKernelGetModuleInfoByAddr (SceModulemgrForDriver), looked up at run
+ * time. */
+typedef struct {
+	uint32_t size;
+	uint8_t  head[336];
+	struct { uint32_t size, perms; void *vaddr; uint32_t memsz, filesz, res; } seg[4];
+	uint32_t state;
+} VmModInfo;
+_Static_assert(sizeof(VmModInfo) == 0x1B8, "SceKernelModuleInfo is 0x1B8 bytes");
+
 uint32_t vm_module_bytes(const void *addr)
 {
-	SceKernelModuleInfo mi;
+	static int (*by_addr)(const void *a, VmModInfo *info);
+	VmModInfo mi;
 	uint32_t n = 0;
 
+	if (!by_addr) {
+		uintptr_t f = 0;
+
+		if (module_get_export_func(KERNEL_PID, "SceKernelModulemgr", 0xD4A60A52, 0x1D9E0F7E,
+		                           &f) < 0 || !f)
+			return 0;
+		by_addr = (int (*)(const void *, VmModInfo *))f;
+	}
 	memset(&mi, 0, sizeof(mi));
 	mi.size = sizeof(mi);
-	if (!addr || ksceKernelGetModuleInfoByAddr(addr, &mi) < 0)
+	if (!addr || by_addr(addr, &mi) < 0)
 		return 0;
 	for (int i = 0; i < 4; i++)
-		n += mi.segments[i].memsz;
+		n += mi.seg[i].memsz;
 	return n;
 }
 

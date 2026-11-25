@@ -93,6 +93,10 @@ target_link_libraries(vitamemio_kernel
 # module info to the end of the text segment, and a fixed data address
 # leaves room for it however the code grows.
 target_link_options(vitamemio_kernel PRIVATE -nostartfiles -Wl,-Tdata=0x81100000)
+# Kernel code must leave the VFP/NEON registers alone: they hold the state
+# of the user thread that called in, and the kernel does not save them for
+# it. -O2 would otherwise vectorise copies and zeroing (make check-novfp).
+target_compile_options(vitamemio_kernel PRIVATE -mgeneral-regs-only)
 
 vita_create_self(vitamemio_kernel.skprx vitamemio_kernel
   CONFIG ${CMAKE_SOURCE_DIR}/vitamemio_kernel.yml
@@ -112,6 +116,7 @@ add_executable(vitamemio_hud
   kernel/hud.c                   # drawing over the framebuffer
   kernel/overlay.c               # the overlay's keys
 )
+target_compile_options(vitamemio_hud PRIVATE -mgeneral-regs-only)   # as the kernel module
 target_link_libraries(vitamemio_hud
   taihenForKernel_stub
   taihenModuleUtils_stub        # module_get_export_func (is a game running)

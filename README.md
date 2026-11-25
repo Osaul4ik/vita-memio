@@ -81,7 +81,7 @@ A memory card is slowest when it has to wait for the next request. While a game 
 
 Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of from the card. There is nothing to set:
 
-- It uses the buffers of the storage you are not using at that moment (the SD2Vita's while you play from the memory card, or the other way round). If only one storage is on, it sets aside 384 KiB of its own the first time a game needs it.
+- It uses the buffers of the storage you are not using at that moment (the SD2Vita's while you play from the memory card, or the other way round). If only one storage is on, it sets aside 384 KiB of its own while a game needs it, and gives it back as soon as you quit the game or go to the home screen.
 - It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
 - It switches itself off in a game where it does not pay off.
 - It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A or C + NC All, and is not used with *Low kernel memory*.
@@ -151,7 +151,7 @@ The console is out of kernel memory (it can also show as a crash right after swi
 ## Good to know
 
 - Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
-- Memory: 256 KiB per storage (with *Low kernel memory*, one set for both), 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. With only one storage on, reading again from memory takes 384 KiB more once a game has used it.
+- Memory: 256 KiB per storage (with *Low kernel memory*, one set for both), 128 KiB more with *Overlapped reads* or *Copy on the system core*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. With only one storage on, reading again from memory takes 384 KiB more while a game is in front.
 - While the console starts, everything goes the normal way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
 - On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
 - Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.

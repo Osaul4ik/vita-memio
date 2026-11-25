@@ -317,6 +317,7 @@ static struct {
 	SceUID      uid;                       /* its own block (no host)           */
 	void       *own;                       /* atomic                            */
 	int         want_own;                  /* atomic: the worker makes it       */
+	uint32_t    own_freed;                 /* atomic: times it was given back   */
 	/* the app it is for, and whether it reads again what it read (by size: 0
 	 * 32 KiB, 1 large): the last reads the standard way, and the counts */
 	SceUID      pid;
@@ -7021,6 +7022,37 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
 		         (unsigned)((b->bg_kib - a->bg_kib) / 1024u), (unsigned)(b->bg_kept - a->bg_kept));
 }
 
+/* The again cache's own block back to the system once nothing uses it:
+ * the game it was made for left the front (it quit, or went to the home
+ * screen - suspended, ev 4) or another storage lends its buffers now. Made
+ * again when a game in front needs it (rc_hold). What it held is dropped (a
+ * new block has none of it). A request in the cache: the next tick. Worker. */
+static void rc_own_idle(void)
+{
+	SceUID uid;
+	int lent;
+
+	if (!__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE) ||
+	    __atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) ||
+	    __sync_lock_test_and_set(&g_rc.lock, 1))
+		return;
+	if (g_rc.game && !g_rc.host && g_rc.pid &&
+	    __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE) == g_rc.pid) {
+		__sync_lock_release(&g_rc.lock);      /* its game is in front: kept */
+		return;
+	}
+	lent = g_rc.host != NULL;
+	__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
+	uid = g_rc.uid;
+	g_rc.uid = -1;
+	rc_clear();
+	__sync_lock_release(&g_rc.lock);
+	ksceKernelFreeMemBlock(uid);
+	ADD(g_rc.own_freed, 1);
+	VM_KLOGI("stage: again cache's own block freed (%s)",
+	         lent ? "another storage lends its buffers" : "its game left the front");
+}
+
 void vm_stage_worker_tick(void)
 {
 	static uint32_t last_log_us, last_cleaned, last_nc, last_max;
@@ -7028,6 +7060,7 @@ void vm_stage_worker_tick(void)
 
 	if (!__atomic_load_n(&g_cal_loaded, __ATOMIC_ACQUIRE) && LD(g_live))
 		cal_load();                       /* what was measured before, once */
+	rc_own_idle();
 	/* the again cache's own block, with no other storage to lend it buffers */
 	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
 	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {

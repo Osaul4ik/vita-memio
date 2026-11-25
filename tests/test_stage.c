@@ -5684,6 +5684,46 @@ static void test_again_cache(void)
 		}
 		rc_rounds(u, 7, 40);
 		CHECK(g_rc.kept_k[0] - k0 >= 39 && g_rc.hits - h0 >= 39 && g_rc.hits_k[0] - h0 >= 39);
+		if (one) {
+			/* the game in front: the block stays */
+			const int frees0 = fake_free_calls;
+
+			vm_stage_worker_tick();
+			CHECK(g_rc.own != NULL && g_rc.uid >= 0 && fake_free_calls == frees0);
+			/* to the home screen (suspended): given back; what it held
+			 * is gone with it */
+			ra_proc_event(0x42, 4);
+			vm_stage_worker_tick();
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && fake_free_calls == frees0 + 1 &&
+			      g_rc.own_freed == 1);
+			for (uint32_t i = 0; i < RC_UNITS; i++)
+				CHECK(g_rc.e[i].dev == NULL);
+			/* back in front: made again on its first read, then read
+			 * again from it, the data right */
+			ra_proc_event(0x42, 5);
+			h0 = g_rc.hits;
+			CHECK(rd_ok(u, 1000, 64) && g_rc.want_own && !g_rc.own);
+			vm_stage_worker_tick();
+			CHECK(g_rc.own != NULL && g_rc.uid >= 0);
+			rc_rounds(u, 11, 20);
+			CHECK(g_rc.hits - h0 >= 19);
+			/* the game quits: given back */
+			ra_proc_event(0x42, 3);
+			vm_stage_worker_tick();
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == 2);
+			as_app(0x42);
+			/* another storage comes on: its buffers lent, the block given
+			 * back */
+			CHECK(rd_ok(u, 1000, 64));
+			vm_stage_worker_tick();
+			CHECK(g_rc.own != NULL);
+			rc_host(1);
+			rc_rounds(u, 13, 20);
+			CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA]);
+			vm_stage_worker_tick();
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == 3);
+			/* (the storage stays on till vm_stage_fini: its threads) */
+		}
 		if (!one) {
 			/* the SD2Vita's own (cached) read takes its buffers back: what
 			 * was kept is gone, the game's read again from the card */

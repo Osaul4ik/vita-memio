@@ -624,7 +624,12 @@ typedef struct {
  *   PT_SKIP   up to 256 KiB after one ended
  *   PT_FAR    none of these
  * The last reads are a ring that racing threads may blur (a lost update or a
- * start and end of two reads): it only counts. */
+ * start and end of two reads): it only counts.
+ * For the two read ahead does not get, how far they lie (PtAgain): a read
+ * again (PT_IN) by how much the storage read after the read it lies in
+ * (could pieces kept that long have had it: 384 KiB is what the three hold),
+ * one before (PT_BACK) by the gap to the read it lies before (none: a file
+ * read backwards, each read ending where the last began). */
 #define PT_HIST     8
 #define PT_OWN      0
 #define PT_SAME     1
@@ -636,13 +641,21 @@ typedef struct {
 #define PT_FAR      7
 #define PT_N        8
 typedef struct {
-	uint32_t start, end, part, size;       /* size: LG_*                       */
+	uint32_t start, end, part;
+	uint32_t size;                         /* LG_* | the device's sectors read with it << 2 */
 } PtRead;
 typedef struct {
 	PtRead   h[PT_HIST];                   /* the last reads (a ring)          */
 	uint32_t i;                            /* atomic: the next slot            */
 	uint32_t own_end[3], own_part[3];      /* the last read's end, by size     */
+	uint32_t tot;                          /* atomic: sectors read (wraps)     */
 } PtDev;
+#define PT_AGAIN_IN    0                   /* + 0 within 384 KiB, 1 within 1 MiB, 2 further */
+#define PT_AGAIN_BACK  3                   /* + 0 ending where it began, 1 within 32 KiB, 2 further */
+#define PT_AGAIN_N     6
+typedef struct {
+	uint32_t n[3][PT_AGAIN_N];             /* atomics, by size; the session's  */
+} PtAgain;
 typedef struct {
 	uint32_t n[3][PT_N];
 	uint64_t us[3][PT_N];
@@ -797,6 +810,7 @@ typedef struct {
 	PtDev    pt[3];                    /* VM_DEV_COUNT (pt_note)              */
 	PtCount  pc;                       /* atomics                             */
 	PtCount  pc_at;                    /* the worker's: at the session's start */
+	PtAgain  ag;                       /* atomics, cleared by the session line */
 } Diag;
 static Diag *volatile g_diag;                  /* atomic; published once      */
 static SceUID         g_diag_uid = -1;
@@ -5402,10 +5416,12 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 	const uint32_t pt = (uint32_t)(uintptr_t)part;
 	PtDev *t;
 	int c = PT_FAR;
+	uint32_t tot, since = 0xFFFFFFFFu, gap = 0xFFFFFFFFu;
 
 	if (!dg)
 		return;
 	t = &dg->pt[d - g_dev];
+	tot = __atomic_fetch_add(&t->tot, nsec, __ATOMIC_RELAXED);   /* read before this one */
 	if (LD(t->own_part[k]) == pt && LD(t->own_end[k]) == sector && sector) {
 		c = PT_OWN;
 	} else {
@@ -5413,32 +5429,46 @@ static void pt_note(Dev *d, void *part, uint32_t sector, uint32_t nsec, uint32_t
 
 		for (int j = 0; j < PT_HIST; j++) {
 			const PtRead *h = &t->h[j];
-			const uint32_t a = LD(h->start), e = LD(h->end);
+			const uint32_t a = LD(h->start), e = LD(h->end), hs = LD(h->size);
 			int w;
 
 			if (LD(h->part) != pt || a == e)
 				continue;
-			if (sector == e)
-				w = (int)LD(h->size) == k ? PT_SAME : PT_MIX;
-			else if (sector >= a && sector < e)
+			if (sector == e) {
+				w = (int)(hs & 3u) == k ? PT_SAME : PT_MIX;
+			} else if (sector >= a && sector < e) {
 				w = e0 > e ? PT_OVER : PT_IN;
-			else if (sector < a && sector + 2 * RA_PIECE_SECTORS >= a)
+				if (w == PT_IN) {
+					/* read by the storage since (30 bits: wraps alike) */
+					const uint32_t s = ((tot << 2) - (hs & ~3u)) >> 2;
+
+					if (s < since)
+						since = s;
+				}
+			} else if (sector < a && sector + 2 * RA_PIECE_SECTORS >= a) {
 				w = PT_BACK;
-			else if (sector > e && sector - e <= 2 * RA_PIECE_SECTORS)
+				if ((e0 >= a ? 0 : a - e0) < gap)
+					gap = e0 >= a ? 0 : a - e0;
+			} else if (sector > e && sector - e <= 2 * RA_PIECE_SECTORS) {
 				w = PT_SKIP;
-			else
+			} else {
 				continue;
+			}
 			if (w < c)
 				c = w;
 		}
 	}
 	ADD(dg->pc.n[k][c], 1);
 	ADD(dg->pc.us[k][c], (uint64_t)us);
+	if (c == PT_IN)
+		ADD(dg->ag.n[k][PT_AGAIN_IN + (since <= 3 * RA_PIECE_SECTORS ? 0 : since <= 2048u ? 1 : 2)], 1);
+	else if (c == PT_BACK)
+		ADD(dg->ag.n[k][PT_AGAIN_BACK + (!gap ? 0 : gap <= RA_SMALL_SECTORS ? 1 : 2)], 1);
 	{
 		PtRead *h = &t->h[__atomic_fetch_add(&t->i, 1, __ATOMIC_RELAXED) % PT_HIST];
 
 		ST(h->part, pt);
-		ST(h->size, (uint32_t)k);
+		ST(h->size, (uint32_t)k | (tot + nsec) << 2);
 		ST(h->start, sector);
 		ST(h->end, sector + nsec);
 	}
@@ -5478,6 +5508,22 @@ static void pt_session(Diag *dg, int print)
 		         (unsigned)ms[4], (unsigned)(n[5] * 100u / all), (unsigned)ms[5],
 		         (unsigned)(n[6] * 100u / all), (unsigned)ms[6], (unsigned)(n[7] * 100u / all),
 		         (unsigned)ms[7]);
+	}
+	/* how far the reads again and before lay (PtAgain), per cent of each */
+	for (int k = 0; k < 3; k++) {
+		uint32_t a[PT_AGAIN_N], in, bk;
+
+		for (int b = 0; b < PT_AGAIN_N; b++)
+			a[b] = __atomic_exchange_n(&dg->ag.n[k][b], 0, __ATOMIC_RELAXED);
+		in = a[0] + a[1] + a[2];
+		bk = a[3] + a[4] + a[5];
+		if (!print || in + bk < 16)
+			continue;
+		VM_KLOGI("session again %s: in %u (384K %u 1M %u more %u), back %u (next %u 32K %u more %u)",
+		         what[k], (unsigned)in, (unsigned)(in ? a[0] * 100u / in : 0),
+		         (unsigned)(in ? a[1] * 100u / in : 0), (unsigned)(in ? a[2] * 100u / in : 0),
+		         (unsigned)bk, (unsigned)(bk ? a[3] * 100u / bk : 0),
+		         (unsigned)(bk ? a[4] * 100u / bk : 0), (unsigned)(bk ? a[5] * 100u / bk : 0));
 	}
 	dg->pc_at = now;
 }

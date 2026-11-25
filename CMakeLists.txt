@@ -189,7 +189,7 @@ vita_create_self(vitamemio.suprx vitamemio
 # module the state shows as unknown). Disable with -DVM_BUILD_TESTER=OFF.
 option(VM_BUILD_TESTER "Build the on-device tester app (VPK)" ON)
 if(VM_BUILD_TESTER)
-  set(TESTER_TITLE_ID "VMEMIO001")
+  set(TESTER_TITLE_ID "VMEMIO001")   # = VM_TESTER_TITLE (include/vitamemio.h)
   add_executable(vitamemio_tester
     tester/main.c
     tester/bench.c

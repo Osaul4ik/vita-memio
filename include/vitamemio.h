@@ -34,6 +34,10 @@
 
 /* Everything the plugin writes lives here (created on first use). */
 #define VM_DATA_DIR       "ur0:data/vita-memio"
+/* The tester app's title id (CMakeLists.txt: TESTER_TITLE_ID, kept the same):
+ * read as a game where only games are served (the again cache), so it can
+ * measure what games get */
+#define VM_TESTER_TITLE   "VMEMIO001"
 
 /* Error codes returned across the whole plugin. */
 #define VM_OK              0

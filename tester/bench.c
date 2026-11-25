@@ -18,9 +18,17 @@ const char *const bench_metric_name[BM_COUNT] = {
 	"files create", "files read", "files delete",
 	"NC read 1M", "NC read 128K",
 	"NCphy read 1M", "CDRAM read 1M", "NC rnd read 1M",
+	"over 128K C", "over 128K NC", "back 128K C", "back 128K NC",
+	"mix 128/32K C", "mix 128/32K NC", "again 32K C", "again 32K NC",
+	"again 128K C", "again 128K NC",
 };
 
-typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R, K_NC_RR } Kind;
+typedef enum { K_SEQ_W, K_SEQ_R, K_RR, K_RW, K_SF, K_NC_R, K_NCPC_R, K_CDRAM_R, K_NC_RR,
+               K_GAME } Kind;
+
+/* The games' ways of reading (K_GAME): io is the pattern, the NC ones odd. */
+enum { G_OVER, G_BACK, G_MIX, G_AGAIN32, G_AGAIN128 };
+#define KIB 1024u
 
 #define SF_BYTES 4096u          /* one small file */
 
@@ -44,7 +52,56 @@ static const struct { Kind kind; uint32_t io; } k_def[BM_COUNT] = {
 	[BM_NCPC_R_1M] = { K_NCPC_R, MIB },
 	[BM_CDRAM_R_1M] = { K_CDRAM_R, MIB },
 	[BM_NC_RR_1M]  = { K_NC_RR, MIB },
+	[BM_G_OVER_C]  = { K_GAME, G_OVER },     [BM_G_OVER_NC]  = { K_GAME, G_OVER },
+	[BM_G_BACK_C]  = { K_GAME, G_BACK },     [BM_G_BACK_NC]  = { K_GAME, G_BACK },
+	[BM_G_MIX_C]   = { K_GAME, G_MIX },      [BM_G_MIX_NC]   = { K_GAME, G_MIX },
+	[BM_G_AGAIN32_C] = { K_GAME, G_AGAIN32 }, [BM_G_AGAIN32_NC] = { K_GAME, G_AGAIN32 },
+	[BM_G_AGAIN128_C] = { K_GAME, G_AGAIN128 }, [BM_G_AGAIN128_NC] = { K_GAME, G_AGAIN128 },
 };
+
+/* Into non-cacheable memory: the second of each pair. */
+static int game_nc(int m)
+{
+	return k_def[m].kind == K_GAME && (m - BM_G_OVER_C) % 2 == 1;
+}
+
+/* Call i of pattern g over a file of S bytes: its offset and size, 0 past
+ * the last. `pos` carries G_MIX's place from call to call (0 at the start). */
+static int game_op(int g, uint32_t i, uint32_t S, uint64_t *pos, uint64_t *off, uint32_t *len)
+{
+	switch (g) {
+	case G_OVER:                               /* 128K, each 32K back */
+		*len = 128 * KIB;
+		*off = (uint64_t)i * 96 * KIB;
+		break;
+	case G_BACK:                               /* 128K, from the end backwards */
+		*len = 128 * KIB;
+		if ((uint64_t)(i + 1) * *len > S)
+			return 0;
+		*off = S - (uint64_t)(i + 1) * *len;
+		return 1;
+	case G_MIX:                                /* 128K, 32K, 128K ... on and on */
+		*len = (i & 1) ? 32 * KIB : 128 * KIB;
+		*off = *pos;
+		*pos += *len;
+		break;
+	case G_AGAIN32:                            /* 32K twice, 96K apart */
+		*len = 32 * KIB;
+		*off = (uint64_t)(i / 2) * 96 * KIB;
+		break;
+	default:                                   /* G_AGAIN128: 128K twice, 192K apart */
+		*len = 128 * KIB;
+		*off = (uint64_t)(i / 2) * 192 * KIB;
+		break;
+	}
+	return *off + *len <= S;
+}
+
+/* The most calls any pattern makes on a file of S bytes. */
+static uint32_t game_max_ops(uint32_t S)
+{
+	return S / (96 * KIB) * 2 + 4;
+}
 
 const BenchProfile bench_profile_quick = {
 	"quick", 16, 3, { 100, 80, 40, 10 }, { 20, 20, 10, 6 }, 64,
@@ -349,6 +406,54 @@ static int run_small_files(Ctx *c, BenchRun *r)
 	return BR_OK;
 }
 
+/* A game's way of reading (K_GAME), into cached or non-cacheable memory:
+ * every call timed and checked. */
+static int run_game(Ctx *c, BenchRun *r, int m, int h)
+{
+	const BenchEnv *e = c->env;
+	const uint32_t S = c->cfg->profile->file_mib * MIB;
+	uint8_t *const buf = game_nc(m) ? c->nc : c->buf;
+	uint64_t total = 0, bytes = 0, pos = 0, off;
+	uint32_t n = 0, len, all = 0;
+
+	{
+		uint64_t p2 = 0;
+
+		while (all < c->lat_cap && game_op((int)k_def[m].io, all, S, &p2, &off, &len))
+			all++;
+	}
+	for (uint32_t i = 0; i < all; i++) {
+		uint64_t t0, t1, c0, k0[3];
+		int got, k_ok;
+
+		if (is_cancelled(c))
+			return BR_CANCEL;
+		(void)game_op((int)k_def[m].io, i, S, &pos, &off, &len);
+		k_ok = e->core_busy_us && e->core_busy_us(e->ctx, k0) == 0;
+		c0 = e->cpu_us ? e->cpu_us(e->ctx) : 0;
+		t0 = e->now_us(e->ctx);
+		got = e->pread(e->ctx, h, buf, len, off);
+		t1 = e->now_us(e->ctx);
+		core_note(e, r, m, len, k_ok, k0);
+		if (e->cpu_us) {
+			r->cpu_us[m] += e->cpu_us(e->ctx) - c0;
+			r->cpu_bytes[m] += len;
+		}
+		if (got != (int)len) {
+			r->io_errors++;
+			fail(c, "read error");
+			return BR_FAIL;
+		}
+		c->lat[n++] = (uint32_t)(t1 - t0);
+		total += t1 - t0;
+		bytes += len;
+		r->verify_bad += tp_verify(buf, off, len, NULL);
+		progress(c, BP_METRIC, r, m, (uint32_t)((uint64_t)(i + 1) * 1000 / all));
+	}
+	finish_metric(c, r, m, n, total, bytes);
+	return BR_OK;
+}
+
 /* Read the whole file in the current mode and count words that differ. */
 static int read_all(Ctx *c, BenchRun *r_for_progress, int phase, uint32_t *bad)
 {
@@ -469,6 +574,7 @@ static int do_run(Ctx *c, int round)
 		case K_RR:
 		case K_RW:    rc = run_rand(c, r, m, h); break;
 		case K_NC_RR: rc = c->nc ? run_rand(c, r, m, h) : BR_OK; break;
+		case K_GAME:  rc = !game_nc(m) || c->nc ? run_game(c, r, m, h) : BR_OK; break;
 		default:      break;
 		}
 	}
@@ -534,6 +640,8 @@ int bench_run(const BenchEnv *env, const BenchConfig *cfg, BenchResult *res)
 		maxops = cfg->profile->sf_files;
 	if (maxops > c.lat_cap)
 		c.lat_cap = maxops;
+	if (game_max_ops(cfg->profile->file_mib * MIB) > c.lat_cap)
+		c.lat_cap = game_max_ops(cfg->profile->file_mib * MIB);
 	c.buf = malloc(MIB);
 	c.lat = malloc((size_t)c.lat_cap * sizeof(c.lat[0]));
 	if (!c.buf || !c.lat) {

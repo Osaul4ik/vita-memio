@@ -3053,7 +3053,7 @@ static const char *fake_title_of(SceUID pid)
 	return pid == 0x42 ? "PCSE00001" : pid == 0x43 ? "PCSE00001" : (pid >= 0x4A && pid <= 0x4F) ? "PCSE00001"
 	     : pid == 0x44 ? "PCSB00777" : pid == 0x45 ? "../bad" : pid == 0x46 ? "VITASHELL"
 	     : pid == 0x47 ? "NPXS10015" : pid == 0x48 ? "main" : pid == 0x49 ? "NPXS10079"
-	     : pid == (SceUID)0x80410023 ? "PCSE00042" : NULL;
+	     : pid == (SceUID)0x80410023 ? "PCSE00042" : pid == 0x50 ? VM_TESTER_TITLE : NULL;
 }
 
 static int fake_title(SceUID pid, char *t, SceSize len)
@@ -5386,6 +5386,22 @@ static void test_again_cache(void)
 		fake_meminfo_type = 0;
 		fake_pid = 0;
 	}
+	/* the tester: as a game (it measures what games get) */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(1);
+	as_app(0x50);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t h0 = g_rc.hits;
+
+		rc_rounds(u, 0, 80);
+		CHECK(g_rc.on[0] && g_rc.hits > h0);
+	}
+	vm_stage_fini();
+	rc_host(0);
 	/* a homebrew app (VITASHELL): never */
 	reset();
 	g_title_fn = fake_title;

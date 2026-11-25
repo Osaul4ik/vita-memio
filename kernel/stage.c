@@ -4881,9 +4881,12 @@ static int ra_tiny_read(Dev *d, io_fn io, tai_hook_ref_t ref, void *part, uint32
 #define RC_ROUND   128u                    /* reads of a size between two looks  */
 
 /* A game's title id: PCSA..PCSI and 5 digits (the system's apps are NPXS,
- * homebrew and Adrenaline anything else). */
+ * homebrew and Adrenaline anything else) - or the tester's, which measures
+ * what games get. */
 static int rc_title_game(const char *t)
 {
+	if (!strcmp(t, VM_TESTER_TITLE))
+		return 1;
 	if (t[0] != 'P' || t[1] != 'C' || t[2] != 'S' || t[3] < 'A' || t[3] > 'I')
 		return 0;
 	for (int i = 4; i < 9; i++)

@@ -21,6 +21,21 @@
  *   the plugin has nothing to clean there; the other reads go into ordinary
  *   cached memory, which it does clean). Only where the platform can give
  *   such memory (BenchEnv.nc_alloc); otherwise not measured
+ *   the way games read (what read ahead and its again cache are for), each
+ *   into cached (C) and into non-cacheable memory (NC), MiB/s over every
+ *   call:
+ *     over 128K   128 KiB reads, each starting 32 KiB before the last ended
+ *                 (a file system's clusters read again: PCSB00554)
+ *     back 128K   128 KiB reads from the file's end to its start, each ending
+ *                 where the last began (a file read backwards)
+ *     mix 128/32K 128 KiB and 32 KiB reads in turn, one after another
+ *                 (one file read in both sizes: PCSF00007, PCSG01179)
+ *     again 32K   32 KiB reads 96 KiB apart, each read twice in a row (the
+ *                 same 32 KiB read again: PCSF00024)
+ *     again 128K  128 KiB reads 192 KiB apart, each read twice (PCSB01007)
+ *   (the sequential 128K reads above are the plain stream). Read ahead
+ *   and the again cache decide from what they see, so the first run may
+ *   differ from the later ones.
  * Only the time spent inside the read/write calls counts: filling and checking
  * the data happens outside the timer.
  *
@@ -53,6 +68,9 @@ enum bench_metric {
 	BM_NC_R_1M, BM_NC_R_128K,
 	BM_NCPC_R_1M, BM_CDRAM_R_1M,   /* games' GPU memory */
 	BM_NC_RR_1M,                   /* random 1 MiB reads into non-cacheable memory */
+	/* the way games read (see the top): C, then NC */
+	BM_G_OVER_C, BM_G_OVER_NC, BM_G_BACK_C, BM_G_BACK_NC, BM_G_MIX_C, BM_G_MIX_NC,
+	BM_G_AGAIN32_C, BM_G_AGAIN32_NC, BM_G_AGAIN128_C, BM_G_AGAIN128_NC,
 	BM_COUNT
 };
 

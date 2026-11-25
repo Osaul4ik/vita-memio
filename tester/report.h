@@ -31,7 +31,7 @@ void report_fmt_change(char *out, size_t cap, double off, double on);
 size_t report_format(const BenchResult *res, const ReportMeta *meta, char *out, size_t cap);
 
 #define REPORT_LINE_MAX  90
-#define REPORT_LINES_MAX 80
+#define REPORT_LINES_MAX 110
 
 /* Short lines for the screen (at most `max`). Returns the number of lines. */
 int report_screen_lines(const BenchResult *res, char lines[][REPORT_LINE_MAX], int max);

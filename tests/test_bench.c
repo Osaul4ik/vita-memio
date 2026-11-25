@@ -138,6 +138,11 @@ static int counts(const Fake *f, uint32_t n)
 	return n >= 32768 && ((f->on && !f->no_counters) || (!f->on && f->counts_when_off));
 }
 
+#define RD_LOG 4096
+static uint64_t g_rd_off[RD_LOG];
+static uint32_t g_rd_len[RD_LOG];
+static int      g_rd_n;
+
 static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 {
 	Fake *f = c;
@@ -155,6 +160,10 @@ static int f_pread(void *c, int h, void *buf, uint32_t n, uint64_t off)
 	}
 	if (off + n > f->size)
 		return -1;
+	if (g_rd_n < RD_LOG) {                         /* the test file's reads, in order */
+		g_rd_off[g_rd_n] = off;
+		g_rd_len[g_rd_n++] = n;
+	}
 	memcpy(buf, f->data + off, n);
 	f->cpu += (uint64_t)n * 1000 / 1048576;        /* 1.0 ms per MiB */
 	f->now += 200 + (uint64_t)(n * (f->on ? 0.06 : 0.08));        /* ON reads ~33% faster */
@@ -384,6 +393,72 @@ static void f_nc_free(void *c, void *p)
 	free(p);
 }
 static void *f_nc_none(void *c, uint32_t size) { (void)c; (void)size; return NULL; }
+
+/* The games' ways of reading, on a 2 MiB file: how many calls each makes,
+ * the backwards one from the end to the start, each read twice in a row by
+ * "again", every byte checked (into cached and non-cacheable memory), and a
+ * read that comes back wrong is caught there too. */
+static int rd_find_back(uint32_t S)
+{
+	for (int i = 0; i + 16 <= g_rd_n; i++) {
+		int ok = 1;
+
+		for (int k = 0; k < 16 && ok; k++)
+			ok = g_rd_len[i + k] == 131072 && g_rd_off[i + k] == S - (uint64_t)(k + 1) * 131072;
+		if (ok)
+			return 1;
+	}
+	return 0;
+}
+
+static void test_game_reads(void)
+{
+	Fake f = { 0 };
+	BenchResult *r = new_result();
+	BenchConfig cfg = { VM_DEV_SD2VITA, &one_round, "ux0:data/t/" };
+	BenchEnv e;
+	static const struct { int m; uint32_t ops; } want[] = {
+		{ BM_G_OVER_C, 21 }, { BM_G_BACK_C, 16 }, { BM_G_MIX_C, 25 },
+		{ BM_G_AGAIN32_C, 44 }, { BM_G_AGAIN128_C, 22 },
+	};
+	int pairs = 0;
+
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.nc_alloc = f_nc_alloc;
+	e.nc_free = f_nc_free;
+	g_rd_n = 0;
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_integrity_ok(r) && bench_plugin_ok(r));
+	for (unsigned i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+		const int m = want[i].m;
+
+		CHECK(r->runs[0].ops[m] == want[i].ops && r->runs[0].ops[m + 1] == want[i].ops);
+		CHECK(r->runs[0].value[m] > 0 && r->runs[0].value[m + 1] > 0);
+		CHECK(!bench_metric_is_iops(m) && !strcmp(bench_metric_unit(m + 1), "MiB/s"));
+	}
+	CHECK(g_rd_n < RD_LOG && rd_find_back(2u * 1048576u));
+	for (int i = 0; i + 1 < g_rd_n; i++)              /* again 32K: the same read twice */
+		pairs += g_rd_len[i] == 32768 && g_rd_len[i + 1] == 32768 &&
+		         g_rd_off[i] == g_rd_off[i + 1] && g_rd_off[i] % (96 * 1024) == 0;
+	CHECK(pairs >= 2 * 22);
+	CHECK_UNTOUCHED(f);
+
+	/* without non-cacheable memory: the C ones only */
+	fake_init(&f, 1);
+	e = env_for(&f);
+	e.nc_alloc = f_nc_none;
+	e.nc_free = f_nc_free;
+	CHECK(bench_run(&e, &cfg, r) == 0 && bench_integrity_ok(r));
+	CHECK(bench_metric_measured(r, BM_G_BACK_C) && !bench_metric_measured(r, BM_G_BACK_NC));
+
+	/* reads that come back wrong (plugin ON): caught */
+	fake_init(&f, 1);
+	f.corrupt_read_on = 1;
+	e = env_for(&f);
+	CHECK(bench_run(&e, &cfg, r) == 0 && !bench_integrity_ok(r) && r->runs[0].verify_bad);
+	free(f.data);
+	free(r);
+}
 
 static void test_nc_reads(void)
 {
@@ -764,10 +839,12 @@ static void test_small_files(void)
 	for (int i = 0; i < n; i++)
 		found |= !strcmp(lines[i], "GPU-safe reads: all");
 	CHECK(found);
-	CHECK(strstr(lines[n - 6], "files delete"));      /* then the NC reads */
-	CHECK(strstr(lines[n - 4], "NC read 128K"));
-	CHECK(strstr(lines[n - 2], "CDRAM read 1M"));    /* the other kinds */
-	CHECK(strstr(lines[n - 1], "NC rnd read 1M"));   /* random, non-cacheable */
+	CHECK(strstr(lines[n - 16], "files delete"));     /* then the NC reads */
+	CHECK(strstr(lines[n - 14], "NC read 128K"));
+	CHECK(strstr(lines[n - 12], "CDRAM read 1M"));   /* the other kinds */
+	CHECK(strstr(lines[n - 11], "NC rnd read 1M"));  /* random, non-cacheable */
+	CHECK(strstr(lines[n - 10], "over 128K C"));     /* the games' ways of reading */
+	CHECK(strstr(lines[n - 1], "again 128K NC"));
 
 	/* a small file that reads back wrong fails the data check */
 	fake_init(&f, 1);
@@ -1440,6 +1517,7 @@ int main(void)
 	RUN(test_full_run_on);
 	RUN(test_full_run_off);
 	RUN(test_nc_reads);
+	RUN(test_game_reads);
 	RUN(test_write_corruption_is_caught);
 	RUN(test_read_corruption_is_caught);
 	RUN(test_plugin_counters);

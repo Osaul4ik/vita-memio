@@ -5678,15 +5678,19 @@ static void test_again_cache(void)
 			/* no other storage: its own block, from the worker */
 			CHECK(g_rc.host == NULL && g_rc.want_own && !g_rc.own);
 			vm_stage_worker_tick();
-			CHECK(g_rc.own != NULL && g_rc.uid >= 0);
+			CHECK(g_rc.own != NULL && g_rc.uid >= 0 && g_rc.uid2 >= 0 && g_rc.own2 != NULL);
+			/* two blocks, as a storage's buffers */
+			CHECK(fake_block_size(g_rc.uid) == RC_UNITS0 * RC_UNIT * 512 &&
+			      fake_block_size(g_rc.uid2) == (RC_UNITS - RC_UNITS0) * RC_UNIT * 512);
 		} else {
 			CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA]);
 		}
 		rc_rounds(u, 7, 40);
 		CHECK(g_rc.kept_k[0] - k0 >= 39 && g_rc.hits - h0 >= 39 && g_rc.hits_k[0] - h0 >= 39);
 		if (one) {
-			/* the game in front: the block stays */
+			/* the game in front: the blocks stay */
 			const int frees0 = fake_free_calls;
+			const uint32_t fr0 = g_rc.own_freed;
 
 			vm_stage_worker_tick();
 			CHECK(g_rc.own != NULL && g_rc.uid >= 0 && fake_free_calls == frees0);
@@ -5694,8 +5698,8 @@ static void test_again_cache(void)
 			 * is gone with it */
 			ra_proc_event(0x42, 4);
 			vm_stage_worker_tick();
-			CHECK(g_rc.own == NULL && g_rc.uid < 0 && fake_free_calls == frees0 + 1 &&
-			      g_rc.own_freed == 1);
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.uid2 < 0 && !g_rc.own2 &&
+			      fake_free_calls == frees0 + 2 && g_rc.own_freed == fr0 + 1);
 			for (uint32_t i = 0; i < RC_UNITS; i++)
 				CHECK(g_rc.e[i].dev == NULL);
 			/* back in front: made again on its first read, then read
@@ -5710,7 +5714,7 @@ static void test_again_cache(void)
 			/* the game quits: given back */
 			ra_proc_event(0x42, 3);
 			vm_stage_worker_tick();
-			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == 2);
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == fr0 + 2);
 			as_app(0x42);
 			/* another storage comes on: its buffers lent, the block given
 			 * back */
@@ -5721,7 +5725,7 @@ static void test_again_cache(void)
 			rc_rounds(u, 13, 20);
 			CHECK(g_rc.host == &g_dev[VM_DEV_SD2VITA]);
 			vm_stage_worker_tick();
-			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == 3);
+			CHECK(g_rc.own == NULL && g_rc.uid < 0 && g_rc.own_freed == fr0 + 3);
 			/* (the storage stays on till vm_stage_fini: its threads) */
 		}
 		if (!one) {
@@ -5757,6 +5761,50 @@ static void test_again_cache(void)
 		fake_meminfo_type = 0;
 		fake_pid = 0;
 	}
+	/* no memory for its own blocks (a 256 KiB one refused): the game reads as
+	 * without the cache, the worker not asked again for this launch; the
+	 * next launch tries again */
+	reset();
+	g_title_fn = fake_title;
+	ra_settings(&s, 0, VM_OFFLOAD_ALL, VM_PIPE_AUTO);
+	rc_host(0);
+	as_app(0x42);
+	fake_memtype = MEMTYPE_NC;
+	fake_meminfo_type = 0x10208006;
+	{
+		const uint32_t e0 = g_rc.own_errs, h0 = g_rc.hits;
+
+		rc_rounds(u, 0, 80);
+		CHECK(g_rc.on[0] && g_rc.want_own);
+		fake_alloc_max = 200 * 1024;
+		vm_stage_worker_tick();
+		CHECK(!g_rc.own && g_rc.uid < 0 && g_rc.uid2 < 0 && g_rc.own_errs == e0 + 1 &&
+		      !g_rc.want_own);
+		rc_rounds(u, 7, 20);                          /* right data, from the card */
+		CHECK(!g_rc.want_own && g_rc.hits == h0);
+		vm_stage_worker_tick();
+		CHECK(g_rc.own_errs == e0 + 1);
+		/* the second block refused: the first given back too */
+		fake_alloc_max = 0;
+		ra_proc_event(0x42, 3);
+		as_app(0x4A);                                 /* another launch (a game) */
+		{
+			const int a0 = fake_alloc_calls, f0 = fake_free_calls;
+
+			rc_rounds(u, 0, 80);
+			CHECK(g_rc.want_own);
+			fake_alloc_fail_after = 1;                /* the first made, the second not */
+			vm_stage_worker_tick();
+			fake_alloc_fail_after = 0;
+			CHECK(!g_rc.own && g_rc.uid < 0 && g_rc.uid2 < 0 && g_rc.own_errs == e0 + 2 &&
+			      fake_alloc_calls >= a0 + 2 && fake_free_calls == f0 + 1);
+		}
+	}
+	fake_alloc_max = 0;
+	vm_stage_fini();
+	fake_memtype = 0xD000;
+	fake_meminfo_type = 0;
+	fake_pid = 0;
 	/* read again, but too late for the cache (each entry too old by then):
 	 * it reads again often enough to come on, yet hardly anything is read
 	 * from it - off for its yield, and held off a while */

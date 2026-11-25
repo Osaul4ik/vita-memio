@@ -314,10 +314,14 @@ static struct {
 	uint32_t    gen, seen;                 /* gen: atomic, bumped by the host's take */
 	uint32_t    next;                      /* the unit the next entry goes to   */
 	RcEnt       e[RC_UNITS];               /* by the unit each starts at        */
-	SceUID      uid;                       /* its own block (no host)           */
-	void       *own;                       /* atomic                            */
+	SceUID      uid, uid2;                 /* its own blocks (no host): as a    */
+	void       *own, *own2;                /* storage's two buffers; own atomic,
+	                                        * published after own2              */
+	SceUID      own_fail;                  /* atomic: the app they could not be
+	                                        * made for (not asked again for it) */
 	int         want_own;                  /* atomic: the worker makes it       */
 	uint32_t    own_freed;                 /* atomic: times it was given back   */
+	uint32_t    own_errs;                  /* atomic: times they could not be made */
 	/* the app it is for, and whether it reads again what it read (by size: 0
 	 * 32 KiB, 1 large): the last reads the standard way, and the counts */
 	SceUID      pid;
@@ -333,7 +337,7 @@ static struct {
 	uint32_t    hold_n[2];                 /* ... the next time: doubled each time */
 	uint32_t    hits, hit_kib, lost;       /* atomics: for the log              */
 	uint32_t    kept_k[2], hits_k[2], moved_k[2], yoff_k[2];   /* ... by size   */
-} g_rc = { .uid = -1 };
+} g_rc = { .uid = -1, .uid2 = -1 };
 
 /* Another app's request than the one in front's (another process: the
  * system's own, one in the background) while an app is in front. The
@@ -5080,11 +5084,12 @@ static int rc_hold(void)
 		uint8_t *const own = __atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE);
 
 		if (!own) {
-			__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);   /* the worker makes it */
+			if (__atomic_load_n(&g_rc.own_fail, __ATOMIC_RELAXED) != g_rc.pid)
+				__atomic_store_n(&g_rc.want_own, 1, __ATOMIC_RELAXED);   /* the worker makes it */
 			return 0;
 		}
 		zb[0] = own;
-		zb[1] = own + STAGE_BYTES;
+		zb[1] = g_rc.own2;
 	} else {
 		if (__sync_lock_test_and_set(dbusy(h), 1))
 			return 0;                         /* its own request: it comes first */
@@ -6415,11 +6420,15 @@ void vm_stage_fini(void)
 			d->t_cached = 0;
 		}
 	}
-	if (g_rc.uid >= 0) {                  /* the again cache's own block */
+	if (g_rc.uid >= 0) {                  /* the again cache's own blocks */
 		__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
 		ksceKernelFreeMemBlock(g_rc.uid);
 		g_rc.uid = -1;
+		ksceKernelFreeMemBlock(g_rc.uid2);
+		g_rc.uid2 = -1;
+		g_rc.own2 = NULL;
 	}
+	__atomic_store_n(&g_rc.own_fail, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&g_rc.host, NULL, __ATOMIC_SEQ_CST);
 	g_rc.user = NULL;
 	rc_clear();
@@ -7029,7 +7038,7 @@ static void lg_session(const char *who, uint32_t ms, const LgSnap *a, const LgSn
  * new block has none of it). A request in the cache: the next tick. Worker. */
 static void rc_own_idle(void)
 {
-	SceUID uid;
+	SceUID uid, uid2;
 	int lent;
 
 	if (!__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE) ||
@@ -7044,10 +7053,13 @@ static void rc_own_idle(void)
 	lent = g_rc.host != NULL;
 	__atomic_store_n(&g_rc.own, NULL, __ATOMIC_RELEASE);
 	uid = g_rc.uid;
-	g_rc.uid = -1;
+	uid2 = g_rc.uid2;
+	g_rc.uid = g_rc.uid2 = -1;
+	g_rc.own2 = NULL;
 	rc_clear();
 	__sync_lock_release(&g_rc.lock);
 	ksceKernelFreeMemBlock(uid);
+	ksceKernelFreeMemBlock(uid2);
 	ADD(g_rc.own_freed, 1);
 	VM_KLOGI("stage: again cache's own block freed (%s)",
 	         lent ? "another storage lends its buffers" : "its game left the front");
@@ -7064,14 +7076,35 @@ void vm_stage_worker_tick(void)
 	/* the again cache's own block, with no other storage to lend it buffers */
 	if (__atomic_load_n(&g_rc.want_own, __ATOMIC_RELAXED) && LD(g_live) &&
 	    !__atomic_load_n(&g_rc.own, __ATOMIC_ACQUIRE)) {
-		void *b = NULL;
+		/* two blocks, as a storage's buffers (one contiguous 384 KiB is
+		 * often not there once games run) */
+		const uint32_t b0 = RC_UNITS0 * RC_UNIT * 512, b1 = (RC_UNITS - RC_UNITS0) * RC_UNIT * 512;
+		void *a = NULL, *b = NULL;
+		int r;
 
 		__atomic_store_n(&g_rc.want_own, 0, __ATOMIC_RELAXED);
-		if (alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, RC_UNITS * RC_UNIT * 512, &g_rc.uid, &b) >= 0) {
-			__atomic_store_n(&g_rc.own, b, __ATOMIC_RELEASE);
-			mem_report_one("again cache", -1, g_rc.uid, RC_UNITS * RC_UNIT * 512);
+		r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b0, &g_rc.uid, &a);
+		if (r >= 0) {
+			r = alloc_buf(MEMBLOCK_KERNEL_NC_RW, 1, b1, &g_rc.uid2, &b);
+			if (r < 0) {
+				ksceKernelFreeMemBlock(g_rc.uid);
+				g_rc.uid2 = -1;
+			}
+		}
+		if (r >= 0) {
+			g_rc.own2 = b;
+			__atomic_store_n(&g_rc.own, a, __ATOMIC_RELEASE);   /* published last */
+			mem_report_one("again cache", -1, g_rc.uid, b0);
+			mem_report_one("again cache 2nd", -1, g_rc.uid2, b1);
 		} else {
+			const SceUID fg = __atomic_load_n(&g_ra_fg, __ATOMIC_ACQUIRE);
+
 			g_rc.uid = -1;
+			/* not asked again for this app: it reads as without the cache */
+			__atomic_store_n(&g_rc.own_fail, fg, __ATOMIC_RELAXED);
+			ADD(g_rc.own_errs, 1);
+			VM_KLOGW("stage: again cache: no memory for its own blocks (0x%08x) - off for "
+			         "this launch", (unsigned)r);
 		}
 	}
 	ra_adapt_tick();                      /* Adaptive's rounds that are due */

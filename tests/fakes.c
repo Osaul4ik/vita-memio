@@ -284,18 +284,27 @@ static void *g_blocks[64];
 unsigned fake_alloc_max;
 unsigned fake_alloc_type_fail;
 unsigned fake_block_type[64];
+static SceSize g_block_size[64];
+int fake_alloc_fail_after;
+unsigned fake_block_size(int uid)
+{
+	return uid > 0 && uid < 64 ? (unsigned)g_block_size[uid] : 0;
+}
 
 SceUID ksceKernelAllocMemBlock(const char *name, unsigned type, SceSize size, void *opt)
 {
 	(void)name; (void)opt;
 	fake_alloc_calls++;
 	if (fake_alloc_fail || (fake_alloc_max && size > fake_alloc_max) ||
-	    (fake_alloc_type_fail && type == fake_alloc_type_fail))
+	    (fake_alloc_type_fail && type == fake_alloc_type_fail) || fake_alloc_fail_after < 0)
 		return -6;
+	if (fake_alloc_fail_after > 0 && --fake_alloc_fail_after == 0)
+		fake_alloc_fail_after = -1;             /* the next ones fail */
 	for (int i = 1; i < 64; i++) {
 		if (!g_blocks[i]) {
 			g_blocks[i] = calloc(1, size);
 			fake_block_type[i] = type;
+			g_block_size[i] = size;
 			return i;
 		}
 	}

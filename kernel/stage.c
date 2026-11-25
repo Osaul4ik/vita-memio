@@ -137,10 +137,7 @@ typedef struct RaPiece {
 	int            state;             /* RA_*, atomic                         */
 	uint32_t       seq;               /* the order the thread reads them in    */
 	uint32_t       sector, n;         /* atomic: a write looks at them         */
-	uint32_t       off;               /* sectors already handed out (a piece
-	                                   * of a stream read backwards: from its
-	                                   * end down - see RaPiece.back)          */
-	int            back;              /* atomic: for a stream read backwards  */
+	uint32_t       off;               /* sectors already handed out            */
 	io_fn          io;
 	tai_hook_ref_t ref;
 	void          *part;
@@ -218,9 +215,7 @@ typedef struct Dev {
 	RaPiece       ra[RA_PIECES];
 	uint32_t      ra_seq;                 /* the last piece queued            */
 	uint32_t      ra_last_end, ra_streak; /* the read stream so far           */
-	uint32_t      ra_last_start;          /* ... where its last read began     */
 	int           ra_overlap;             /* its last read overlapped its end  */
-	int           ra_back;                /* it is read backwards (see ra_note) */
 	uint32_t      gap_end[2];             /* when the last read of each memory kind ended (us) */
 	int           ra_nc;                  /* ... into non-cacheable memory     */
 	/* the stream of 32 KiB reads, kept apart (see RA_SMALL_SECTORS) */
@@ -4143,8 +4138,6 @@ static int ra_holds(const Dev *d, int i, uint32_t at, int full)
 
 	if (at < s0 || at - s0 >= n)
 		return 0;
-	if (LD(pc->back))
-		return 1;                             /* anywhere in it: checked when served */
 	if (at - s0 == o)
 		return 1;                             /* (the front: checked when served) */
 	/* the part handed out: only from a piece that can be (a write since, or
@@ -4227,7 +4220,7 @@ static uint32_t ra_over_head(const Dev *d, void *part, io_fn io, uint32_t sector
 		const RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE && pc->part == part &&
-		    pc->io == io && LD(pc->off) < LD(pc->n) && !LD(pc->back)) {
+		    pc->io == io && LD(pc->off) < LD(pc->n)) {
 			const uint32_t at = LD(pc->sector) + LD(pc->off);
 
 			if (!any || at < front)
@@ -4368,12 +4361,9 @@ static uint32_t ra_serve(Dev *d, void *part, io_fn io, uint32_t sector, uint8_t 
 	for (int j = 0; j < cnt; j++) {
 		RaPiece *pc = &d->ra[idx[j]];
 
-		/* handed out up to here (a read of what it had already moves nothing);
-		 * read backwards: down to here, from its end */
-		const uint32_t to = pc->back ? pc->n - st[j] : st[j] + sz[j];
-
-		if (to > pc->off)
-			ST(pc->off, to);                  /* (ra_at looks at it unlocked) */
+		/* handed out up to here (a read of what it had already moves nothing) */
+		if (st[j] + sz[j] > pc->off)
+			ST(pc->off, st[j] + sz[j]);       /* (ra_at looks at it unlocked) */
 		/* used up: kept READY for a read of it again (ra_spent) */
 	}
 	ADD(g_ra_hits, 1);
@@ -4435,17 +4425,16 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 	d->ra_noted_small = 0;
 	if (n < RA_SMALL_SECTORS)
 		return 0;                           /* neither part of a stream nor a break */
-	/* wholly inside the large reads' stream's last read (read again, from
-	 * the pieces if they still hold it): neither part of it nor a break -
-	 * one ending where it began is the stream read backwards (below) */
-	if (part == d->ra_last_part && d->ra_streak && nc == d->ra_nc && sector >= d->ra_last_start &&
-	    sector < d->ra_last_end && n <= d->ra_last_end - sector)
+	/* wholly inside what the large reads' stream just read (read again, from
+	 * the pieces if they still hold it): neither part of it nor a break */
+	if (part == d->ra_last_part && d->ra_streak && nc == d->ra_nc && sector < d->ra_last_end &&
+	    n <= d->ra_last_end - sector && d->ra_last_end - sector <= 2 * RA_PIECE_SECTORS)
 		return 0;
 	if (n < RA_MIN_SECTORS) {
 		ra_note_small(d, part, sector, n, nc);
 		d->ra_noted_small = 1;
 		if (part == d->ra_last_part && ra_goes_on(sector, n, d->ra_last_end) && d->ra_streak &&
-		    nc == d->ra_nc && !d->ra_back) {
+		    nc == d->ra_nc) {
 			d->ra_last_end = sector + n;      /* the large reads' stream goes on past it */
 			d->ra_noted_small = 0;
 		}
@@ -4453,32 +4442,19 @@ static int ra_note(Dev *d, void *part, uint32_t sector, uint32_t n, int nc)
 		const int ready = __atomic_load_n(&d->ra_ready, __ATOMIC_ACQUIRE);
 		const uint32_t now = ready ? ksceKernelGetSystemTimeLow() : 0;
 
-		const int same = part == d->ra_last_part && d->ra_streak && nc == d->ra_nc &&
-		                 (!ready || now - d->ra_us < RA_MAX_AGE_US);
-		/* ending where the last began (or inside it): a file read backwards
-		 * (PCSF00024: two thirds of its large reads that lie just before
-		 * one) - followed as the other way, its pieces queued before it */
-		const int back = same && sector < d->ra_last_start && sector + n >= d->ra_last_start &&
-		                 sector + n <= d->ra_last_end && (d->ra_back || d->ra_streak == 1);
-
-		if (same && !d->ra_back && ra_goes_on(sector, n, d->ra_last_end)) {
+		if (part == d->ra_last_part && ra_goes_on(sector, n, d->ra_last_end) && d->ra_streak &&
+		    nc == d->ra_nc && (!ready || now - d->ra_us < RA_MAX_AGE_US)) {
 			ST(d->ra_streak, d->ra_streak + (d->ra_streak < 1000));   /* (gap_note reads it unlocked) */
 			d->ra_overlap = sector != d->ra_last_end;
-		} else if (back) {
-			ST(d->ra_streak, d->ra_streak + (d->ra_streak < 1000));
-			d->ra_overlap = 0;
-			d->ra_back = 1;
 		} else {
 			ra_adapt_end(d, 0, d->ra_nc, d->ra_streak);
 			ST(d->ra_streak, 1);
 			d->ra_overlap = 0;
-			d->ra_back = 0;
 		}
 		ra_adapt_read(d, 0, d->ra_streak, n);
 		d->ra_us = now;
 		d->ra_nc = nc;
 		d->ra_last_part = part;
-		d->ra_last_start = sector;
 		d->ra_last_end = sector + n;
 		/* ... and the 32 KiB reads' stream past it (lost if another thread
 		 * holds it: the next 32 KiB read then starts afresh) */
@@ -4501,7 +4477,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	const int small = d->ra_noted_small;
 	int nc;
 	uint32_t streak, thr, next, end;
-	int want, live = 0, over, back = 0;
+	int want, live = 0, over;
 
 	if (small) {
 		/* the 32 KiB stream's fields: a read the standard way on another
@@ -4518,7 +4494,6 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		streak = d->ra_streak;
 		next = d->ra_last_end;
 		over = d->ra_overlap;
-		back = d->ra_back;
 	}
 	thr = ra_threshold(nc);
 
@@ -4539,20 +4514,17 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 	}
 	ST(d->ra_small, small);
 	end = over ? next : 0;          /* (0: no piece ends there - see below) */
-	if (back)
-		next = d->ra_last_start;      /* backwards: the pieces go before it */
 	for (int i = 0; i < RA_PIECES; i++) {
 		const RaPiece *pc = &d->ra[i];
 
 		if (__atomic_load_n(&pc->state, __ATOMIC_ACQUIRE) != RA_FREE) {
 			if (!ra_spent(pc))
 				live++;
-			if (back ? pc->back && pc->sector < next : pc->sector + pc->n > next)
-				next = back ? pc->sector : pc->sector + pc->n;
+			if (pc->sector + pc->n > next)
+				next = pc->sector + pc->n;
 		}
 	}
-	while (live < want &&
-	       (back ? next >= RA_PIECE_SECTORS : next <= 0xFFFFFFFFu - RA_PIECE_SECTORS)) {
+	while (live < want && next <= 0xFFFFFFFFu - RA_PIECE_SECTORS) {
 		RaPiece *pc = NULL;
 
 		/* a free slot, else the oldest used up piece's - in a stream whose
@@ -4579,11 +4551,8 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		__atomic_store_n(&pc->state, RA_FREE, __ATOMIC_RELEASE);
 		live++;
 		pc->seq = ++d->ra_seq;
-		if (back)
-			next -= RA_PIECE_SECTORS;
 		ST(pc->sector, next);
 		ST(pc->n, (uint32_t)RA_PIECE_SECTORS);
-		ST(pc->back, back);
 		ST(pc->off, 0);                   /* (ra_spent looks at it unlocked) */
 		__atomic_store_n(&pc->dirty, 0, __ATOMIC_RELAXED);
 		pc->io = io;
@@ -4592,8 +4561,7 @@ static void ra_refill(Dev *d, io_fn io, tai_hook_ref_t ref, void *part)
 		pc->epoch = LD(d->ra_epoch);
 		pc->ok = 0;
 		pc->nc = nc;
-		if (!back)
-			next += RA_PIECE_SECTORS;
+		next += RA_PIECE_SECTORS;
 		__atomic_store_n(&pc->state, RA_QUEUED, __ATOMIC_RELEASE);
 		ksceKernelSignalSema(d->ra_go, 1);
 	}

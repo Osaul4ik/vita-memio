@@ -5287,56 +5287,6 @@ static void test_mixed_sizes(void)
  * follows it, the part read again comes from the card and the rest from the
  * pieces - the right data, into ordinary and non-cacheable memory; a read
  * that only reaches into a later piece is not one of these. */
-/* A file read backwards (PCSF00024: two thirds of its large reads that lie
- * just before one end where the last began): followed the other way, its
- * pieces queued before it, the reads from them with the right data - whole
- * pieces or not, into ordinary and non-cacheable memory. Turning forward
- * again: the stream as before. */
-static void test_backward_reads(void)
-{
-	uint8_t *u = user_buf(256);
-	VmSettings s;
-	Dev *d = &g_dev[M];
-
-	for (int nc = 0; nc < 2; nc++)
-		for (uint32_t len = 256; len >= 200; len -= 56) {
-			uint32_t at = 4090, h0, k0;
-
-			reset();
-			ra_settings(&s, 0, VM_OFFLOAD_OFF, VM_PIPE_AUTO);   /* On: from the 5th */
-			if (nc) {
-				fake_pid = 0x42;
-				fake_memtype = MEMTYPE_NC;
-				fake_meminfo_type = 0x10208006;
-			}
-			h0 = g_ra_hits;
-			k0 = g_ra_kib;
-			for (int r = 0; r < 10; r++) {
-				at -= len;
-				CHECK(rd_ok(u, at, len));
-				ra_settled(d);
-			}
-			/* one stream, backwards; from the 6th read on every one wholly
-			 * from the pieces (the 5th queued them) */
-			CHECK(d->ra_back && d->ra_streak == 10);
-			CHECK(g_ra_hits - h0 == 5 && (g_ra_kib - k0) * 2 == 5 * len);
-			/* forward again, elsewhere: a stream the usual way, the
-			 * backwards one gone */
-			h0 = g_ra_hits;
-			for (int r = 0; r < 8; r++) {
-				CHECK(rd_ok(u, r * 128, 128));
-				ra_settled(d);
-			}
-			CHECK(!d->ra_back && d->ra_streak == 8 && g_ra_hits - h0 >= 3);
-			ra_drop(d);
-			vm_stage_fini();
-			fake_memtype = 0xD000;
-			fake_meminfo_type = 0;
-			fake_pid = 0;
-		}
-	free(u);
-}
-
 static void test_overlapping_reads(void)
 {
 	uint8_t *u = user_buf(256);
@@ -6492,7 +6442,6 @@ int main(void)
 	RUN(test_read_order);
 	RUN(test_mixed_sizes);
 	RUN(test_overlapping_reads);
-	RUN(test_backward_reads);
 	RUN(test_tiny_reads);
 	RUN(test_readahead_adaptive);
 	RUN(test_readahead_adaptive_small);

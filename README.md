@@ -86,7 +86,7 @@ Turn this on only if you get error C1-2569-2 or other plugins run out of memory.
 - **Only the game in front is sped up.** Other apps' reads, such as the system's or music in the background, go the normal way.
 - **Copying between the two cards** (for example in VitaShell) gains less.
 
-If you play from one card only, it is better to switch the other storage off instead: that saves the same memory and keeps all of read ahead.
+If you play from one card only, you can switch the other storage off instead: that keeps all of read ahead and saves about as much memory, except while a commercial game is in front, when reading again from memory sets aside its own 384 KiB.
 
 ### Reading again from memory
 

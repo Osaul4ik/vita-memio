@@ -2,20 +2,33 @@
 
 <p align="center"><img src="assets/logo.png" alt="vita-memio: faster storage for PS Vita" width="720"></p>
 
-**Faster storage for your PS Vita.** vita-memio speeds up a microSD in an SD2Vita and the Sony memory card. Copies, VPK installs and game loading get quicker, and your files stay exactly as they are.
+**Faster storage for your PS Vita.** vita-memio makes a microSD card in an **SD2Vita** adapter and the official **Sony memory card** faster. Games load quicker, and copying files and installing VPKs take less time. Your files stay exactly as they are: nothing is converted, nothing is stored in a new way.
 
-It is a taiHEN plugin for HENkaku/Ensō, tested on firmware **3.65**, and a fork of **[Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage)** by [Juan Garcia Alvite](https://github.com/juanjsebgarcia), whose idea and research it builds on.
+You install it once, switch on your storage in Settings, and that's it. Everything else is already set the way that works best.
 
-DO NOT use these two plugins together under any circumstances.
+- **What you need:** a PS Vita (or PS TV) with **HENkaku / Ensō** (taiHEN) on firmware **3.60–3.74**. It is tested on a PCH-1000 with firmware 3.65.
+- **What it speeds up:** an SD2Vita and the Sony memory card. It never touches the internal storage, game cards, USB storage or Wi-Fi.
+- **Not together with Vita Turbo Storage.** vita-memio is a fork of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage) by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). Never use both at the same time: remove Vita Turbo Storage first.
 
-**Your data is safe by design.** Games and apps get exactly the data they would get without the plugin. Writes are never held back: when a write is done, the data is on the card. If anything goes wrong, that storage goes back to the normal way until the next restart.
+## Is it safe?
+
+- **Games get exactly the same data** as without the plugin. It only changes *how* the data is moved, not *what* is moved.
+- **Writes are never held back.** When a game or VitaShell says a file is saved, it really is on the card.
+- **If anything goes wrong,** that storage simply goes back to the normal (slower) way until the next restart.
+- **No boot loops.** If the console ever restarts before the plugin has shown that it works, the next start loads nothing (*safe mode*). You can also hold **L** while the console starts to skip all plugins.
+
+Still, as with any plugin that touches storage: **back up your memory card and SD card first.**
 
 ## Install
 
-Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it. It holds the plugin (`vitamemio_kernel.skprx`, `vitamemio_hud.skprx`, `vitamemio.suprx`), the tester (`vitamemio_tester.vpk`) and `SHA256SUMS`.
+You need a file manager such as [VitaShell](https://github.com/TheOfficialFloW/VitaShell) to copy files and edit a text file on the Vita.
 
-1. Copy `vitamemio_kernel.skprx`, `vitamemio_hud.skprx` and `vitamemio.suprx` to `ur0:tai/`.
-2. Add these lines to your taiHEN config (`ux0:tai/config.txt` if it exists, otherwise `ur0:tai/config.txt`). `vitamemio_hud.skprx` does not go there: the plugin loads it by itself.
+1. Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it on your PC.
+2. Copy these **three** files to the folder **`ur0:tai/`** on the Vita:
+   - `vitamemio_kernel.skprx`
+   - `vitamemio_hud.skprx`
+   - `vitamemio.suprx`
+3. Open your taiHEN config file in VitaShell (select it and press Cross to edit it). It is **`ux0:tai/config.txt`** if that file exists, otherwise **`ur0:tai/config.txt`**. Add these lines:
 
    ```
    *KERNEL
@@ -24,98 +37,74 @@ Download `vita-memio-<version>.zip` from the [latest release](https://github.com
    *NPXS10015
    ur0:tai/vitamemio.suprx
    ```
-3. Restart the console.
-4. Open **Settings > Devices > vita-memio** and switch on the storage you use. Everything else is already set as recommended.
 
-Back up your cards first, as with any plugin that touches storage.
+   If your file already has a `*KERNEL` line, put `ur0:tai/vitamemio_kernel.skprx` under the existing one instead of adding a second `*KERNEL`. The same goes for `*NPXS10015`. Do **not** add `vitamemio_hud.skprx`: the plugin loads it by itself.
+4. Restart the console.
+5. Open **Settings → Devices → vita-memio** and switch on the storage you use:
+   - **Faster SD2Vita** if your games are on a microSD in an SD2Vita;
+   - **Faster Vita memory card** if they are on the Sony memory card.
+
+Done. You don't need to change anything else.
+
+**How do I know it works?** The row under the title says **Driver: active**. Press it to see the version, the status and how much memory the plugin uses. In a game, **SELECT + Right** opens the plugin's overlay (see [Overlay and HUD](#overlay-and-hud)).
+
+The zip also contains `vitamemio_tester.vpk`, an optional app that measures your card (see [Tester](#tester)), and `SHA256SUMS` to check the downloaded files.
 
 ## Update
 
-1. Open **Settings > Devices > vita-memio** and switch **Driver** off.
+1. Open **Settings → Devices → vita-memio** and switch **Driver** off.
 2. Restart the console.
-3. Replace `vitamemio_kernel.skprx`, `vitamemio_hud.skprx` and `vitamemio.suprx` in `ur0:tai/` with the new ones. Always replace all three together.
+3. Replace the three files in `ur0:tai/` with the new ones. **Always replace all three together.**
 4. Delete the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
 5. Restart the console.
-6. Open **Settings > Devices > vita-memio** again and switch on the storage you use.
+6. Open **Settings → Devices → vita-memio** again and switch your storage on.
 
-Deleting the folders sets everything back to the defaults: settings, the games' overlay profiles and *Tuning*'s measurements. Tuning measures your card again by itself while you play.
+Deleting the folders resets everything to the defaults: the settings, the per-game overlay settings and the card measurements. The plugin measures your card again by itself while you play. If you forget this step, nothing breaks: files from another version are simply deleted and the defaults are used.
 
 ## Uninstall
 
-Switch **Driver** off, remove the plugin's lines from `config.txt` and restart. Then delete the three files from `ur0:tai/` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+1. Switch **Driver** off and restart.
+2. Remove the plugin's lines from `config.txt`.
+3. Delete the three files from `ur0:tai/` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+4. Restart.
 
-## Settings
+## Problems
 
-Everything is in **Settings > Devices > vita-memio** and takes effect at once, except *Driver*. You only need to switch on the storage you use: the rest is already set the way that works best.
+**Error C1-2569-2, or a crash right after switching the plugin on.** The console is out of kernel memory, usually because of many kernel plugins. Try these, one after another:
+1. Set **Kernel memory** to **Low** and restart.
+2. Switch off **Overlay**, **Read ahead** and **Overlapped reads**.
+3. Remove kernel plugins you don't need.
 
-| Setting | What it does | Default |
-|---|---|---|
-| Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on | On |
-| Faster SD2Vita / memory card | Speeds up that storage | Off |
-| Kernel memory | How much memory the plugin keeps for its buffers: **Full** (768 KiB), **Medium** (640 KiB) or **Low** (512 KiB). See below. Takes effect after a restart | Medium |
-| *Advanced* | | |
-| GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows graphics glitches, choose **All** | Non-DMA |
-| Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
-| Copy on the system core | Lets the console's spare core do copies that would otherwise keep the game's core busy. With *DMA copy* on, most copying is done by the DMA chip anyway, so this only handles what is left. Choices: *Off*, *Cached only* (copies into ordinary memory), *C + NC R/A* (also graphics data from Read ahead). Keep **C + NC R/A**: *Off* and *Cached only* also switch off reading again from memory (see below) | C + NC R/A |
-| DMA copy | Copies are made by the console's DMA chip, about twice as fast as by the processor. Switches itself off if anything goes wrong | On |
-| Read ahead | Reads the next part of a file before the game asks for it: **Adaptive**, **On** or **Off**. See below | Adaptive |
-| Small transfers too | Also speeds up transfers under 32 KiB, such as opening folders and small files | On |
-| Overlay (SELECT + arrows) | A menu and an information panel (HUD) over any game. Off takes effect at once; On after a restart if it was off when the console started | On |
-| Profiles for system apps | The home screen and the system's apps get their own settings and learning, like games | On |
-| *Developer settings* | | |
-| Verify transfers | Reads every transfer a second time the normal way and compares. Slow, for checking only; nothing is learned meanwhile | Off |
-| Enable log | Writes a log to `ur0:data/vita-memio/`, with a summary of each game's reads when you leave it | Off |
-| Statistics | Collects timings for the tester app | Off |
+**The status says "Driver: safe mode".** The console restarted (or crashed) last time before the plugin had shown that it works, so this start loaded nothing. Switch off whatever you changed last, press **Reset safe mode** and restart.
 
-Press the **Driver: …** status row to see the plugin's version and status, the kernel memory it uses and how much is still free (measured when you press it), and the storage driver.
+**The status says "Driver: not loaded".** `vitamemio_kernel.skprx` is not running: check that it is in `ur0:tai/` and listed under `*KERNEL` in the right `config.txt` (step 3 of [Install](#install)), then restart.
 
-If the plugin ever could not start properly, a **Reset safe mode** row appears under the status.
+**The vita-memio page is missing from Settings.** `vitamemio.suprx` is not loaded: check the `*NPXS10015` lines in `config.txt`.
 
-### Read ahead
+**A game shows broken graphics.** Set **GPU-safe reads** to **All**. If that does not help, switch the storage off and [open an issue](https://github.com/Osaul4ik/vita-memio/issues).
 
-A memory card is slowest when it has to wait for the next request. While a game reads a file in order, vita-memio reads the next part early, so it is already in memory when the game asks for it. It also recognises games that read a file in big and small pieces in turn, or that read again a little of what they just read. Data read early is thrown away if anything writes over it, so a game never gets old data. Read ahead works for the game in front; other apps (the system, music in the background) are still sped up but don't get it.
-
-**Adaptive** (the default) learns while you play, separately for each kind of read, when reading ahead saves time in that game. Where it doesn't, it switches read ahead off for that kind of read, and back on when it would help again. Every launch starts learning afresh; if you go to the home screen and come back, the game goes on where it was.
-
-**On** always reads ahead after a fixed number of reads in a row; **Off** never does.
-
-### Kernel memory
-
-- **Full** (768 KiB): each storage has its own set of buffers (384 KiB). Reading again from memory uses the set of the storage the game is not reading from. The fastest when you copy between the two cards or use both at once.
-- **Medium** (640 KiB, the default): the SD2Vita and the memory card share one set of buffers, and reading again from memory has a block of 256 KiB of its own. A game reads from one card at a time, so in games it is as fast as *Full*.
-- **Low** (512 KiB): the same, with a block of 128 KiB for reading again from memory, so that helps less. Choose it if you get error C1-2569-2 or other plugins run out of memory.
-
-With *Medium* and *Low*, while both cards are in use at the same moment (for example copying between them in VitaShell), one of them goes the normal, slower way for a moment, and data read ahead for one card is thrown away when the other is used.
-
-### Reading again from memory
-
-Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of from the card. There is nothing to set:
-
-- With *Kernel memory* at *Medium* or *Low* it has a block of its own (256 or 128 KiB). At *Full* it uses the buffers of the storage the game is not reading from: the SD2Vita's while you play from the memory card, or the other way round. If that storage is on, its own reads come first and take the buffers back.
-- It works only for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps.
-- It switches itself off in a game where it does not pay off.
-- It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A.
+**Something else.** Switch on **Enable log**, reproduce the problem and attach `ur0:data/vita-memio/kernel.log` to an [issue](https://github.com/Osaul4ik/vita-memio/issues).
 
 ## How much faster
 
-Measured with the tester (quick profile, every byte checked) on a PCH-1000, firmware 3.65, with a microSD in an SD2Vita, default settings. Higher is better.
+Measured with the tester (quick profile, every byte checked) on a PCH-1000, firmware 3.65, microSD in an SD2Vita, default settings. Higher is better.
 
 | Test | Unit | Without plugin | vita-memio 1.6.0 |
 |---|---|---:|---:|
-| Reading a big file in 1 MiB pieces | MiB/s | 14.9 | 28.7 |
-| Reading a big file in 128 KiB pieces | MiB/s | 14.3 | 32.9 |
-| Random reads of 4 KiB | per second | 379 | 444 |
-| Random reads of 32 KiB | per second | 361 | 430 |
-| Random reads of 128 KiB | per second | 114 | 144 |
-| Graphics data, 1 MiB pieces | MiB/s | 21.0 | 29.9 |
-| Graphics data, 128 KiB pieces | MiB/s | 19.7 | 48.0 |
-| Reading many small files | files/s | 207 | 298 |
-| Creating many small files | files/s | 46 | 116 |
-| Writing a big file in 1 MiB pieces | MiB/s | 14.1 | 15.8 |
+| Reading a big file in 1 MiB pieces | MiB/s | 14.9 | 28.9 |
+| Reading a big file in 128 KiB pieces | MiB/s | 14.3 | 33.0 |
+| Random reads of 4 KiB | per second | 379 | 438 |
+| Random reads of 32 KiB | per second | 361 | 425 |
+| Random reads of 128 KiB | per second | 114 | 143 |
+| Graphics data, 1 MiB pieces | MiB/s | 21.0 | 30.2 |
+| Graphics data, 128 KiB pieces | MiB/s | 19.7 | 49.4 |
+| Reading many small files | files/s | 207 | 321 |
+| Creating many small files | files/s | 46 | 113 |
+| Writing a big file in 1 MiB pieces | MiB/s | 14.1 | 13.6–17.3 |
 
 The *Without plugin* figures are from an earlier run on the same card. Your card will give other numbers, especially for writes, which also change from run to run as the card does its own housekeeping.
 
-In games the gain depends on how the game loads. Below are the plugin's own estimates from its log (one short session per game, with loading screens, measured with 1.5.0; rough figures, not stopwatch times): how long the game still waited for the card, and how much waiting read ahead saved on top of that. 85% means the game waited 85% less than it would have without read ahead.
+**In games** the gain depends on how the game loads. These are the plugin's own estimates from its log (one session per game, measured with 1.5.0; rough figures, not stopwatch times): how long the game still waited for the card, and how much waiting *Read ahead* saved on top of that.
 
 | Game | Still waited | Saved by read ahead |
 |---|---:|---:|
@@ -130,13 +119,66 @@ In games the gain depends on how the game loads. Below are the plugin's own esti
 
 Games that read their files in many tiny pieces gain the most. Gravity Rush jumps around its files, so there is little to read ahead. A loading screen gets shorter by less than these figures, because most loading is not limited by the card.
 
+## Settings
+
+Everything is in **Settings → Devices → vita-memio**. Changes work at once, except where the table says *after a restart*. **For normal use you only need the first two rows**: the rest is already set the way that works best.
+
+| Setting | What it does | Default |
+|---|---|---|
+| Driver | Whether the plugin starts with the console. Off: from the next start it loads nothing, but this page stays so you can switch it back on. *After a restart* | On |
+| Faster SD2Vita / memory card | Speeds up that storage. Switch on the one your games are on | Off |
+| Kernel memory | How much memory the plugin keeps for itself: **Full**, **Medium** or **Low**. See [Kernel memory](#kernel-memory). *After a restart* | Medium |
+| *Advanced* | | |
+| GPU-safe reads | Makes sure the graphics chip sees the data a game loads. **Non-DMA** is faster; if a game ever shows broken graphics, choose **All** | Non-DMA |
+| Overlapped reads | Reads big files in parts, so the card never waits for the copying. **Auto** tunes itself to your card | Auto |
+| Copy on the system core | Lets the console's spare core help with copying. With *DMA copy* on, the DMA chip does almost all of it anyway. Keep **C + NC R/A**: *Off* and *Cached only* also switch off [reading again from memory](#reading-again-from-memory) | C + NC R/A |
+| DMA copy | The console's DMA chip copies the data, about twice as fast as the processor. Switches itself off if anything goes wrong | On |
+| Read ahead | Reads the next part of a file before the game asks for it: **Adaptive**, **On** or **Off**. See [Read ahead](#read-ahead) | Adaptive |
+| Small transfers too | Also speeds up transfers under 32 KiB, such as opening folders and small files | On |
+| Overlay (SELECT + arrows) | A menu and an information panel over any game. Off works at once; On *after a restart* if it was off when the console started | On |
+| Profiles for system apps | The home screen and the system's apps get their own settings and learning, like games | On |
+| *Developer settings* | | |
+| Verify transfers | Reads every transfer a second time the normal way and compares. Slow, for checking only | Off |
+| Enable log | Writes `ur0:data/vita-memio/kernel.log`, with a summary of each game's reads when you leave it. Useful for bug reports | Off |
+| Statistics | Collects timings for the tester app | Off |
+
+**The status row** (*Driver: active* and so on): press it to see the version, the status, the kernel memory the plugin uses and how much is still free (measured the moment you press it), and the storage driver.
+
+**Reset safe mode** appears only when the plugin is in safe mode (see [Problems](#problems)).
+
+### Kernel memory
+
+The plugin keeps a little of the console's kernel memory for its buffers. You can choose how much:
+
+- **Medium** (640 KiB) — **the default, best for most people.** The SD2Vita and the memory card share one set of buffers. A game only reads from one card at a time, so in games it is as fast as *Full*.
+- **Full** (768 KiB) — each storage gets its own buffers. A little faster only when you copy between the SD2Vita and the memory card (for example in VitaShell).
+- **Low** (512 KiB) — like *Medium*, but [reading again from memory](#reading-again-from-memory) keeps less, so it helps a bit less. Choose it if you get error C1-2569-2 or other plugins run out of memory.
+
+The change works after a restart.
+
+### Read ahead
+
+A memory card is slowest when it has to wait for the next request. While a game reads a file in order, vita-memio reads the next part early, so it is already in memory when the game asks for it. Data read early is thrown away as soon as anything writes over it, so a game never gets old data. Read ahead is used for the game you are playing; other apps (the system, music in the background) are still sped up, just without it.
+
+- **Adaptive** (the default) learns while you play when reading ahead saves time in this game, and switches it off where it doesn't. It starts learning afresh at every launch; if you go to the home screen and come back, it goes on where it was.
+- **On** always reads ahead after a few reads in a row. **Off** never does.
+
+### Reading again from memory
+
+Many commercial games read the same graphics data again a moment later. vita-memio keeps the latest such reads in memory and gives them to the game from there instead of reading the card again. There is nothing to set: it works for commercial games (title IDs starting with PCS), not for homebrew, Adrenaline or the system's apps, and switches itself off in a game where it does not pay off. It needs *Read ahead* (Adaptive or On) and *Copy on the system core* at C + NC R/A.
+
 ## Overlay and HUD
 
-In any game, **SELECT + Right** opens the overlay; pressed again, it closes it and shows the HUD. **SELECT + Left** goes back; **SELECT + Up/Down** closes everything. In the overlay, Up/Down choose a line, Left/Right or Cross change it. While it is open, the game gets no buttons.
+In any game:
+- **SELECT + Right** opens the overlay. Pressed again, it closes the overlay and shows the HUD (a small information panel).
+- **SELECT + Left** goes back. **SELECT + Up/Down** closes everything.
+- In the overlay, **Up/Down** choose a line, **Left/Right** or **Cross** change it. While it is open, the game gets no buttons.
 
-The overlay sets things **for this game only**. Each line says *Global* (as in Settings) until you change it: white is standard, blue changed but not saved, green saved. **Save** keeps them for next time. *Show advanced* adds Overlapped reads and GPU-safe reads.
+The overlay changes settings **for this game only**. Each line says *Global* (as in Settings) until you change it: white is the standard value, blue changed but not saved, green saved. **Save** keeps them for the next time you play this game. *Show advanced* adds more lines.
 
-- **Tuning** (*Auto* by default) measures how fast your card and console are, so Adaptive knows when reading ahead pays off. The figures are kept in `ux0:data/vita-memio/tuning.bin`. Triangle, twice, forgets them and measures again.
+- **Tuning** (*Auto* by default) measures how fast your card and console are, so *Adaptive* knows when reading ahead pays off. The results are kept in `ux0:data/vita-memio/tuning.bin`. Press Triangle twice on this line to forget them and measure again.
+
+What the HUD shows:
 
 ```
 SD2VITA R: 21.8 W:  0.0 MB/s
@@ -146,37 +188,27 @@ C:5:5/16/3 NC:3:2/16/3 Auto
 Core 3 B C: 0%  NC: 0%  DMA: 98%
 ```
 
-- **R / W:** read and write speed now; **R/W:** how much was read and written while the HUD was shown.
+- **R / W:** read and write speed right now. **R/W:** how much was read and written while the HUD was shown. **Err:** errors (should be 0).
 - **C / NC:** read ahead for normal memory (C) and graphics memory (NC); `-` means Adaptive switched it off there. **Auto** is green while Tuning measures.
-- **Core 3 C / NC:** how much of the copying the spare core did. **DMA:** how much the DMA chip did. With *DMA copy* on, DMA near 100% and Core 3 near 0% is normal.
+- **Core 3 C / NC:** how much of the copying the spare core did. **DMA:** how much the DMA chip did. DMA near 100% and Core 3 near 0% is normal.
 
 ## Tester
 
-`vitamemio_tester.vpk` measures your own card: reads and writes of several sizes, many small files, and reads the way games do them, every byte checked. Each result is added to `ur0:data/vita-memio/results.txt`. It never changes the plugin's settings. For copy timings, switch on *Statistics* first.
-
-## Error C1-2569-2
-
-The console is out of kernel memory (it can also show as a crash right after switching the plugin on). Close other apps, set *Kernel memory* to *Low*, switch off *Read ahead*, *Overlapped reads*, *Copy on the system core* and *Overlay*, restart, and remove other kernel plugins if needed.
+`vitamemio_tester.vpk` is an optional app that measures your own card: reads and writes of several sizes, many small files, and reads the way games do them, with every byte checked. Install it like any VPK. Each result is added to `ur0:data/vita-memio/results.txt`, so you can compare runs. It never changes the plugin's settings. For copy timings, switch on *Statistics* first.
 
 ## Good to know
 
-- Only the storages you switch on are touched; never the internal storage, game cards, USB storage or Wi-Fi.
-- Memory: 768, 640 or 512 KiB of buffers by *Kernel memory*, about 40 KiB with *Read ahead* and 40 KiB with *Overlay*. It is set aside when the console starts and kept.
-- Settings, profiles and `tuning.bin` from another version are not converted: such a file is deleted and everything starts from the defaults.
-- When the console is restarted (from VitaShell, HENkaku or the system) or switched off, the plugin first puts every storage back the normal way, lets what it was reading finish and saves its files, so the cards are shut down cleanly.
-- While the console starts, everything goes the normal way; the plugin comes on once the home screen is up. If the console restarts before the plugin has shown it works, the next start loads nothing, so a bad setting cannot cause a reboot loop. Holding **L** at start skips all plugins.
-- On the internal storage it keeps only its settings, the boot guard and the log; everything else goes to `ux0:data/vita-memio/`.
-- Tested on one console: a PCH-1000 on firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
-
-## Building
-
-GitHub Actions builds every push; *Run workflow* on the **build** workflow has a **Session statistics in the log** switch. Off leaves the log's `session …` lines out: a smaller kernel module and fewer counts on every transfer. Such a build's version ends in `-nodiag`. Locally: `make build VM_DIAG=OFF`.
+- **Memory:** 768, 640 or 512 KiB for the buffers (see [Kernel memory](#kernel-memory)), plus about 40 KiB with *Read ahead* and about 40 KiB with the *Overlay*. It is set aside when the console starts.
+- **Starting up:** while the console starts, everything goes the normal way; the plugin comes on once the home screen is up.
+- **Restart and power off:** before the console restarts (from VitaShell, HENkaku or the system) or switches off, the plugin puts every storage back the normal way, lets its reads finish and saves its files, so the cards are shut down cleanly.
+- **Files:** on the internal storage it keeps only its settings, the boot guard and the log (when on); everything else goes to `ux0:data/vita-memio/`. Files from another version are not converted: they are deleted and the defaults are used.
+- **Consoles:** tested on one PCH-1000 with firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
 
 ## Disclaimer
 
 This software is provided **"as is", without warranty of any kind**, and you use it at your own risk. **Back up your memory card and SD card before installing.** See the [MIT License](LICENSE).
 
-## Build
+## For developers
 
 ```sh
 make build        # the modules and the tester, in the pinned VitaSDK Docker image
@@ -184,7 +216,7 @@ make test         # host tests (no VitaSDK needed)
 make config       # prints the config.txt lines
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
+GitHub Actions builds every push. *Run workflow* on the **build** workflow has a **Session statistics in the log** switch: off leaves the log's `session …` lines out, for a smaller kernel module and less counting on every transfer; such a build's version ends in `-nodiag`. Locally: `make build VM_DIAG=OFF`. See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
 ## Credits
 

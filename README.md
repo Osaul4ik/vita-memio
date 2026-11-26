@@ -8,6 +8,7 @@ You install it once, switch on your storage in Settings, and that's it. Everythi
 
 - **What you need:** a PS Vita (or PS TV) with **HENkaku / Ensō** (taiHEN) on firmware **3.60–3.74**. It is tested on a PCH-1000 with firmware 3.65.
 - **What it speeds up:** an SD2Vita and the Sony memory card. It never touches the internal storage, game cards, USB storage or Wi-Fi.
+- **Recommended together with [vita_cpu_tweaks](https://github.com/devnoname120/vita_cpu_tweaks)** by devnoname120. It switches on the Vita's hardware data prefetchers, which the firmware turns off at every start, so memory reads that miss the cache get faster - in games and in vita-memio's copies. The two plugins do different things and work side by side; install it as its page says.
 - **Not together with Vita Turbo Storage.** vita-memio is a fork of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage) by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). Never use both at the same time: remove Vita Turbo Storage first.
 
 ## Is it safe?
@@ -54,11 +55,14 @@ Example: in 87 seconds of Catherine, the game waited 7 seconds in total for the 
 | GTA Vice City (port) | 114 s | 7.3 s | 5.2 s | 41% |
 | PCSB01257 | 45 s | 1.4 s | 1.1 s | 43% |
 | PCSB00867 | 103 s | 2.9 s | 2.1 s | 42% |
+| PCSB00296 | 161 s | 5.7 s | 5.9 s | 50% |
 | Persona 4 Golden (PCSB00245) | 74 s | 1.7 s | 0.9 s | 33% |
 | Hatsune Miku: Project DIVA F 2nd (PCSB00554) | 252 s | 5.4 s | 2.6 s | 32% |
+| PCSB01007 | 85 s | 3.0 s | 1.4 s | 32% |
+| PCSF00007 | 145 s | 13.2 s | 2.2 s | 14% |
 | Gravity Rush (PCSF00024) | 103 s | 21.6 s | 1.0 s | 4% |
 
-One session per game with vita-memio 1.6.0 on the console above; your figures will differ with your card and how you play. Games that read their files in many tiny pieces, such as Catherine and the GTA ports, gain the most: those pieces now come from memory in about 15 µs instead of about 0.5 ms from the card. Gravity Rush jumps around its files, so there is little to read ahead; it gets only the basic speed-up.
+One session per game with vita-memio 1.6.0 on the console above (Catherine, both GTA ports and Gravity Rush with the final build, the others with a build just before it); your figures will differ with your card and how you play. Games that read their files in many tiny pieces, such as Catherine and the GTA ports, gain the most: those pieces now come from memory in about 15 µs instead of about 0.5 ms from the card. Gravity Rush jumps around its files, so there is little to read ahead; it gets only the basic speed-up.
 
 ## Settings
 

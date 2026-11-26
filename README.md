@@ -120,7 +120,7 @@ Switch **Driver** off, remove the lines from `config.txt`, restart, then delete 
 - **Error C1-2569-2** (out of kernel memory): close one of two open apps (e.g. VitaShell and Settings), hide the HUD, switch off *Verify*, *Enable log* and *Statistics*. Still there: *Kernel memory* → **Low**, restart.
 - **Driver: safe mode:** undo what you changed last, press **Reset safe mode**, restart.
 - **Driver: not loaded** / no vita-memio page: check the files in `ur0:tai/` and the lines in `config.txt`.
-- **Broken graphics in a game:** *GPU-safe reads* → **All**.
+- **Broken graphics in a game:** *GPU-safe reads* → **All**. (No graphical issues were observed during an hour of testing. The switch is included just in case.)
 - **Anything else:** switch on *Enable log*, reproduce, and attach `ur0:data/vita-memio/kernel.log` to an [issue](https://github.com/Osaul4ik/vita-memio/issues).
 
 ## Disclaimer

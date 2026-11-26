@@ -60,17 +60,18 @@ if(NOT VM_GIT_HASH)
     set(VM_GIT_HASH "")
   endif()
 endif()
-# The log's session statistics (kernel/stage.c, Diag): OFF leaves them out
-# (a smaller kernel module, fewer counts on every transfer); the build is
-# then marked "-nodiag".
+# The log's session statistics (kernel/stage.c, Diag): ON builds them in and
+# marks the build "-more_logs" (the release's second archive); OFF leaves
+# them out (a smaller kernel module, fewer counts on every transfer).
 option(VM_DIAG "Session statistics in the log" ON)
 set(VM_SFX "")
 if(VM_GIT_HASH)
   set(VM_SFX "+${VM_GIT_HASH}")
 endif()
-if(NOT VM_DIAG)
+if(VM_DIAG)
+  set(VM_SFX "${VM_SFX}-more_logs")
+else()
   add_definitions(-DVM_DIAG=0)
-  set(VM_SFX "${VM_SFX}-nodiag")
 endif()
 if(VM_SFX)
   add_definitions(-DVM_BUILD_SUFFIX=\"${VM_SFX}\")

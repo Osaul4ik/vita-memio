@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       diag:
-        description: "Session statistics in the log (off: smaller module, build marked -nodiag)"
+        description: "Session statistics in the log (on: build marked -more_logs; off: smaller module)"
         type: boolean
         default: true
 
@@ -79,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: vita-memio-${{ github.sha }}${{ github.event.inputs.diag == 'false' && '-nodiag' || '' }}
+          name: vita-memio-${{ github.sha }}${{ github.event.inputs.diag != 'false' && '-more_logs' || '' }}
           path: |
             build/vitamemio_kernel.skprx
             build/vitamemio_hud.skprx

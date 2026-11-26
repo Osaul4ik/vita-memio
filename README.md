@@ -84,7 +84,7 @@ Everything is in **Settings → Devices → vita-memio**. Changes work at once, 
 | Profiles for system apps | The home screen and the system's apps get their own settings and learning, like games | On |
 | *Developer settings* | | |
 | Verify transfers | Reads every transfer a second time the normal way and compares. **Only for testing for errors**: slow, and it needs 256 KiB more memory. Keep it off otherwise | Off |
-| Enable log | Writes `ur0:data/vita-memio/kernel.log`, with a summary of each game's reads when you leave it. **For measuring performance** and for bug reports; keep it off otherwise | Off |
+| Enable log | Writes `ur0:data/vita-memio/kernel.log`: the start and any problems. The **more_logs** build also adds a detailed summary of each game's reads when you leave it. **For measuring performance** and for bug reports; keep it off otherwise | Off |
 | Statistics | Collects timings for the tester app. **For measuring performance**; keep it off otherwise | Off |
 
 **The status row** (*Driver: active* and so on): press it to see the version, the status, the kernel memory the plugin uses and how much is still free (measured the moment you press it), and the storage driver.
@@ -155,7 +155,7 @@ Core 3 B C: 0%  NC: 0%  DMA: 98%
 
 You need a file manager such as [VitaShell](https://github.com/TheOfficialFloW/VitaShell) to copy files and edit a text file on the Vita.
 
-1. Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it on your PC.
+1. Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it on your PC. (The release also has `vita-memio-<version>-more_logs.zip`: the same plugin with detailed statistics in its log, for people who measure performance or help with testing. If unsure, take the normal one.)
 2. Copy these **three** files to the folder **`ur0:tai/`** on the Vita:
    - `vitamemio_kernel.skprx`
    - `vitamemio_hud.skprx`
@@ -232,7 +232,7 @@ make test         # host tests (no VitaSDK needed)
 make config       # prints the config.txt lines
 ```
 
-GitHub Actions builds every push. *Run workflow* on the **build** workflow has a **Session statistics in the log** switch: off leaves the log's `session …` lines out, for a smaller kernel module and less counting on every transfer; such a build's version ends in `-nodiag`. Locally: `make build VM_DIAG=OFF`. See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
+GitHub Actions builds every push. *Run workflow* on the **build** workflow has a **Session statistics in the log** switch: on (the default) builds the log's `session …` lines in and marks the version `-more_logs`; off leaves them out, for a smaller kernel module and less counting on every transfer. Locally: `make build VM_DIAG=OFF`. The **release** workflow builds both and publishes `vita-memio-<version>.zip` (off) and `vita-memio-<version>-more_logs.zip` (on). See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
 ## Credits
 

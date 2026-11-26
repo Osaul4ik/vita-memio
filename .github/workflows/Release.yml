@@ -3,8 +3,9 @@ name: release
 # Publishes a GitHub release, started by hand only (Actions > release > Run
 # workflow). It runs the same checks as the build workflow - host tests,
 # cppcheck and the VitaSDK build - and only then creates the tag on the commit
-# it built and the release with the built files in one archive,
-# vita-memio-<version>.zip. The release text is
+# it built and the release with two archives: vita-memio-<version>.zip (the
+# standard build) and vita-memio-<version>-more_logs.zip (the log's session
+# statistics built in). The release text is
 # .github/release-notes/<tag>.md, which must exist on that commit.
 
 on:
@@ -53,15 +54,27 @@ jobs:
       - name: cppcheck
         run: make cppcheck
 
+  # Two builds: the standard one (no session statistics: a smaller kernel
+  # module) and "more_logs" (the log's session statistics built in), each
+  # into an archive of its own.
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - diag: "OFF"
+            name: release-files
+          - diag: "ON"
+            name: release-files-more_logs
     steps:
       - uses: actions/checkout@v4
       - name: Release notes exist
         run: test -f ".github/release-notes/${{ inputs.release }}.md"
       - name: Build (pinned VitaSDK image)
-        run: make build
+        run: make build VM_DIAG=${{ matrix.diag }}
+      - name: No VFP/NEON in the kernel and HUD modules
+        run: make check-novfp
       - name: Check the files exist and are not empty
         run: |
           for f in build/vitamemio_kernel.skprx build/vitamemio_hud.skprx build/vitamemio.suprx build/vitamemio_tester.vpk; do
@@ -73,7 +86,7 @@ jobs:
           sha256sum vitamemio_kernel.skprx vitamemio_hud.skprx vitamemio.suprx vitamemio_tester.vpk | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: release-files
+          name: ${{ matrix.name }}
           path: |
             build/vitamemio_kernel.skprx
             build/vitamemio_hud.skprx
@@ -94,11 +107,16 @@ jobs:
         with:
           name: release-files
           path: dist
-      - name: One archive
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files-more_logs
+          path: dist-more_logs
+      - name: Two archives
         run: |
-          cd dist
-          zip -X -9 "../vita-memio-${TAG#v}.zip" vitamemio_kernel.skprx vitamemio_hud.skprx \
-            vitamemio.suprx vitamemio_tester.vpk SHA256SUMS
+          (cd dist && zip -X -9 "../vita-memio-${TAG#v}.zip" vitamemio_kernel.skprx vitamemio_hud.skprx \
+            vitamemio.suprx vitamemio_tester.vpk SHA256SUMS)
+          (cd dist-more_logs && zip -X -9 "../vita-memio-${TAG#v}-more_logs.zip" vitamemio_kernel.skprx \
+            vitamemio_hud.skprx vitamemio.suprx vitamemio_tester.vpk SHA256SUMS)
         env:
           TAG: ${{ inputs.release }}
       - name: Publish
@@ -111,4 +129,5 @@ jobs:
             gh release delete "$REMOVE" --yes --cleanup-tag
           fi
           gh release create "$TAG" --target "$GITHUB_SHA" --title "vita-memio ${TAG#v}" \
-            --notes-file ".github/release-notes/${TAG}.md" "vita-memio-${TAG#v}.zip"
+            --notes-file ".github/release-notes/${TAG}.md" "vita-memio-${TAG#v}.zip" \
+            "vita-memio-${TAG#v}-more_logs.zip"

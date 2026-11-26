@@ -101,7 +101,7 @@ The plugin keeps a little of the console's kernel memory for its buffers. You ca
 
 The change works after a restart.
 
-*From the author:* I use **Full** myself, because my console has enough memory for it. **Medium** is the default because nobody can know how many other plugins you run: it keeps games just as fast while leaving more memory for them. If you have few other kernel plugins and copy a lot between the SD2Vita and the memory card, try **Full**.
+I use **Full** myself, because my console has enough memory for it. **Medium** is the default because nobody can know how many other plugins you run: it keeps games just as fast while leaving more memory for them. If you have few other kernel plugins and copy a lot between the SD2Vita and the memory card, try **Full**.
 
 ### Read ahead
 

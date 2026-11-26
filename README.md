@@ -104,21 +104,27 @@ Measured with the tester (quick profile, every byte checked) on a PCH-1000, firm
 
 The *Without plugin* figures are from an earlier run on the same card. Your card will give other numbers, especially for writes, which also change from run to run as the card does its own housekeeping.
 
-**In games** the gain depends on how the game loads. These are the plugin's own estimates from its log (one play session per game with vita-memio 1.6.0; rough figures, not stopwatch times): how long the game still waited for the card, and how much waiting *Read ahead* and *reading again from memory* saved on top of the faster path. 86% means the game waited 86% less than it would have without them.
+**In games** the gain depends on how the game reads its files. The figures below are **not loading-screen times.** They come from the plugin's own log and add up *all* the time a game spent waiting for the card during one play session: every read, in loading screens and while you play (a game streams textures, sounds and map data the whole time).
 
-| Game | Session | Still waited | Saved |
-|---|---:|---:|---:|
-| Catherine: Full Body (PCSG01179) | 87 s | 7.0 s | 46.2 s (86%) |
-| GTA San Andreas (port) | 156 s | 16.1 s | 23.1 s (58%) |
-| PCSB00404 | 131 s | 3.1 s | 16.3 s (83%) |
-| GTA Vice City (port) | 114 s | 7.3 s | 5.2 s (41%) |
-| PCSB01257 | 45 s | 1.4 s | 1.1 s (43%) |
-| PCSB00867 | 103 s | 2.9 s | 2.1 s (42%) |
-| Persona 4 Golden (PCSB00245) | 74 s | 1.7 s | 0.9 s (33%) |
-| Hatsune Miku: Project DIVA F 2nd (PCSB00554) | 252 s | 5.4 s | 2.6 s (32%) |
-| Gravity Rush (PCSF00024) | 103 s | 21.6 s | 1.0 s (4%) |
+- **Play time:** how long the session was.
+- **Waited for the card:** all reads of the session together, with vita-memio.
+- **Saved:** how much longer those same reads would have taken without *Read ahead* and *reading again from memory*. The plugin knows this because it measures, for each kind of read, how long it takes from the card. The basic speed-up of the faster path comes on top and is not counted here, so the real gain over playing without vita-memio is even a little bigger.
 
-Games that read their files in many tiny pieces, such as Catherine and the GTA ports, gain the most: those pieces now come from memory in about 15 µs instead of about 0.5 ms from the card. Gravity Rush jumps around its files, so there is little to read ahead; it only gets the faster path. A loading screen gets shorter by less than these figures, because most loading is not limited by the card.
+Example: in 87 seconds of Catherine, the game waited 7 seconds in total for the card; without read ahead the same reads would have taken about 53 seconds. That does not mean one loading screen got 46 seconds shorter: the time is spread over tens of thousands of small reads, so you notice it as shorter loading, less stutter and fewer pauses while the game streams data.
+
+| Game | Play time | Waited for the card | Saved | Waited less by |
+|---|---:|---:|---:|---:|
+| Catherine: Full Body (PCSG01179) | 87 s | 7.0 s | 46.2 s | 86% |
+| GTA San Andreas (port) | 156 s | 16.1 s | 23.1 s | 58% |
+| PCSB00404 | 131 s | 3.1 s | 16.3 s | 83% |
+| GTA Vice City (port) | 114 s | 7.3 s | 5.2 s | 41% |
+| PCSB01257 | 45 s | 1.4 s | 1.1 s | 43% |
+| PCSB00867 | 103 s | 2.9 s | 2.1 s | 42% |
+| Persona 4 Golden (PCSB00245) | 74 s | 1.7 s | 0.9 s | 33% |
+| Hatsune Miku: Project DIVA F 2nd (PCSB00554) | 252 s | 5.4 s | 2.6 s | 32% |
+| Gravity Rush (PCSF00024) | 103 s | 21.6 s | 1.0 s | 4% |
+
+One session per game with vita-memio 1.6.0 on the console above; your figures will differ with your card and how you play. Games that read their files in many tiny pieces, such as Catherine and the GTA ports, gain the most: those pieces now come from memory in about 15 µs instead of about 0.5 ms from the card. Gravity Rush jumps around its files, so there is little to read ahead; it gets only the basic speed-up.
 
 ## Settings
 

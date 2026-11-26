@@ -83,9 +83,9 @@ Everything is in **Settings → Devices → vita-memio**. Changes work at once, 
 | Overlay (SELECT + arrows) | A menu and an information panel over any game. Off works at once; On *after a restart* if it was off when the console started | On |
 | Profiles for system apps | The home screen and the system's apps get their own settings and learning, like games | On |
 | *Developer settings* | | |
-| Verify transfers | Reads every transfer a second time the normal way and compares. Slow, for checking only | Off |
-| Enable log | Writes `ur0:data/vita-memio/kernel.log`, with a summary of each game's reads when you leave it. Useful for bug reports | Off |
-| Statistics | Collects timings for the tester app | Off |
+| Verify transfers | Reads every transfer a second time the normal way and compares. **Only for testing for errors**: slow, and it needs 256 KiB more memory. Keep it off otherwise | Off |
+| Enable log | Writes `ur0:data/vita-memio/kernel.log`, with a summary of each game's reads when you leave it. **For measuring performance** and for bug reports; keep it off otherwise | Off |
+| Statistics | Collects timings for the tester app. **For measuring performance**; keep it off otherwise | Off |
 
 **The status row** (*Driver: active* and so on): press it to see the version, the status, the kernel memory the plugin uses and how much is still free (measured the moment you press it), and the storage driver.
 
@@ -200,10 +200,13 @@ Deleting the folders resets everything to the defaults: the settings, the per-ga
 
 ## Problems
 
-**Error C1-2569-2, or a crash right after switching the plugin on.** The console is out of kernel memory, usually because of many kernel plugins. Try these, one after another:
-1. Set **Kernel memory** to **Low** and restart.
-2. Switch off **Overlay**, **Read ahead** and **Overlapped reads**.
-3. Remove kernel plugins you don't need.
+**Error C1-2569-2, or a crash right after switching the plugin on.** The console is out of kernel memory. Try these, one after another:
+1. **Close one of the open apps** if two are running at once (for example VitaShell and Settings): each open app takes kernel memory too.
+2. **Hide the HUD** (SELECT + Up/Down) when you don't need it.
+3. Make sure **Verify transfers**, **Enable log** and **Statistics** are off unless you need them right now (see below).
+4. Set **Kernel memory** to **Low** and restart.
+5. Switch off **Overlay**, **Read ahead** and **Overlapped reads**.
+6. Remove kernel plugins you don't need.
 
 **The status says "Driver: safe mode".** The console restarted (or crashed) last time before the plugin had shown that it works, so this start loaded nothing. Switch off whatever you changed last, press **Reset safe mode** and restart.
 

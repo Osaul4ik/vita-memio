@@ -9,7 +9,7 @@ You install it once, switch on your storage in Settings, and that's it. Everythi
 - **What you need:** a PS Vita (or PS TV) with **HENkaku / Ensō** (taiHEN) on firmware **3.60–3.74**. It is tested on a PCH-1000 with firmware 3.65.
 - **What it speeds up:** an SD2Vita and the Sony memory card. It never touches the internal storage, game cards, USB storage or Wi-Fi.
 - **Recommended together with [vita_cpu_tweaks](https://github.com/devnoname120/vita_cpu_tweaks)** by devnoname120. It switches on the Vita's hardware data prefetchers, which the firmware turns off at every start, so memory reads that miss the cache get faster - in games and in vita-memio's copies. The two plugins do different things and work side by side; install it as its page says.
-- **Not together with Vita Turbo Storage.** vita-memio is a fork of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage) by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). Never use both at the same time: remove Vita Turbo Storage first.
+- **Not together with Vita Turbo Storage.** vita-memio is a fork of [Vita Turbo Storage](https://github.com/juanjsebgarcia/vita-turbo-storage) by [Juan Garcia Alvite](https://github.com/juanjsebgarcia). Never use both at the same time.
 
 ## Is it safe?
 

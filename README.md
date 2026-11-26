@@ -101,6 +101,8 @@ The plugin keeps a little of the console's kernel memory for its buffers. You ca
 
 The change works after a restart.
 
+*From the author:* I use **Full** myself, because my console has enough memory for it. **Medium** is the default because nobody can know how many other plugins you run: it keeps games just as fast while leaving more memory for them. If you have few other kernel plugins and copy a lot between the SD2Vita and the memory card, try **Full**.
+
 ### Read ahead
 
 A memory card is slowest when it has to wait for the next request. While a game reads a file in order, vita-memio reads the next part early, so it is already in memory when the game asks for it. Data read early is thrown away as soon as anything writes over it, so a game never gets old data. Read ahead is used for the game you are playing; other apps (the system, music in the background) are still sped up, just without it.

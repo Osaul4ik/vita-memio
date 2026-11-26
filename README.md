@@ -4,7 +4,7 @@
 
 **Faster storage for your PS Vita.** vita-memio makes a microSD card in an **SD2Vita** adapter and the official **Sony memory card** faster. Games load quicker, and copying files and installing VPKs take less time. Your files stay exactly as they are: nothing is converted, nothing is stored in a new way.
 
-You install it once, switch on your storage in Settings, and that's it. Everything else is already set the way that works best.
+You install it once, switch on your storage in Settings, and that's it. Everything else is already set the way that works best. **To install, see [Install](#install)**; if something does not work, see [Problems](#problems).
 
 - **What you need:** a PS Vita (or PS TV) with **HENkaku / Ensō** (taiHEN) on firmware **3.60–3.74**. It is tested on a PCH-1000 with firmware 3.65.
 - **What it speeds up:** an SD2Vita and the Sony memory card. It never touches the internal storage, game cards, USB storage or Wi-Fi.
@@ -18,72 +18,6 @@ You install it once, switch on your storage in Settings, and that's it. Everythi
 - **No boot loops.** If the console ever restarts before the plugin has shown that it works, the next start loads nothing (*safe mode*). You can also hold **L** while the console starts to skip all plugins.
 
 Still, as with any plugin that touches storage: **back up your memory card and SD card first.**
-
-## Install
-
-You need a file manager such as [VitaShell](https://github.com/TheOfficialFloW/VitaShell) to copy files and edit a text file on the Vita.
-
-1. Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it on your PC.
-2. Copy these **three** files to the folder **`ur0:tai/`** on the Vita:
-   - `vitamemio_kernel.skprx`
-   - `vitamemio_hud.skprx`
-   - `vitamemio.suprx`
-3. Open your taiHEN config file in VitaShell (select it and press Cross to edit it). It is **`ux0:tai/config.txt`** if that file exists, otherwise **`ur0:tai/config.txt`**. Add these lines:
-
-   ```
-   *KERNEL
-   ur0:tai/vitamemio_kernel.skprx
-
-   *NPXS10015
-   ur0:tai/vitamemio.suprx
-   ```
-
-   If your file already has a `*KERNEL` line, put `ur0:tai/vitamemio_kernel.skprx` under the existing one instead of adding a second `*KERNEL`. The same goes for `*NPXS10015`. Do **not** add `vitamemio_hud.skprx`: the plugin loads it by itself.
-4. Restart the console.
-5. Open **Settings → Devices → vita-memio** and switch on the storage you use:
-   - **Faster SD2Vita** if your games are on a microSD in an SD2Vita;
-   - **Faster Vita memory card** if they are on the Sony memory card.
-
-Done. You don't need to change anything else.
-
-**How do I know it works?** The row under the title says **Driver: active**. Press it to see the version, the status and how much memory the plugin uses. In a game, **SELECT + Right** opens the plugin's overlay (see [Overlay and HUD](#overlay-and-hud)).
-
-The zip also contains `vitamemio_tester.vpk`, an optional app that measures your card (see [Tester](#tester)), and `SHA256SUMS` to check the downloaded files.
-
-## Update
-
-1. Open **Settings → Devices → vita-memio** and switch **Driver** off.
-2. Restart the console.
-3. Replace the three files in `ur0:tai/` with the new ones. **Always replace all three together.**
-4. Delete the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
-5. Restart the console.
-6. Open **Settings → Devices → vita-memio** again and switch your storage on.
-
-Deleting the folders resets everything to the defaults: the settings, the per-game overlay settings and the card measurements. The plugin measures your card again by itself while you play. If you forget this step, nothing breaks: files from another version are simply deleted and the defaults are used.
-
-## Uninstall
-
-1. Switch **Driver** off and restart.
-2. Remove the plugin's lines from `config.txt`.
-3. Delete the three files from `ur0:tai/` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
-4. Restart.
-
-## Problems
-
-**Error C1-2569-2, or a crash right after switching the plugin on.** The console is out of kernel memory, usually because of many kernel plugins. Try these, one after another:
-1. Set **Kernel memory** to **Low** and restart.
-2. Switch off **Overlay**, **Read ahead** and **Overlapped reads**.
-3. Remove kernel plugins you don't need.
-
-**The status says "Driver: safe mode".** The console restarted (or crashed) last time before the plugin had shown that it works, so this start loaded nothing. Switch off whatever you changed last, press **Reset safe mode** and restart.
-
-**The status says "Driver: not loaded".** `vitamemio_kernel.skprx` is not running: check that it is in `ur0:tai/` and listed under `*KERNEL` in the right `config.txt` (step 3 of [Install](#install)), then restart.
-
-**The vita-memio page is missing from Settings.** `vitamemio.suprx` is not loaded: check the `*NPXS10015` lines in `config.txt`.
-
-**A game shows broken graphics.** Set **GPU-safe reads** to **All**. If that does not help, switch the storage off and [open an issue](https://github.com/Osaul4ik/vita-memio/issues).
-
-**Something else.** Switch on **Enable log**, reproduce the problem and attach `ur0:data/vita-memio/kernel.log` to an [issue](https://github.com/Osaul4ik/vita-memio/issues).
 
 ## How much faster
 
@@ -210,6 +144,72 @@ Core 3 B C: 0%  NC: 0%  DMA: 98%
 - **Restart and power off:** before the console restarts (from VitaShell, HENkaku or the system) or switches off, the plugin puts every storage back the normal way, lets its reads finish and saves its files, so the cards are shut down cleanly.
 - **Files:** on the internal storage it keeps only its settings, the boot guard and the log (when on); everything else goes to `ux0:data/vita-memio/`. Files from another version are not converted: they are deleted and the defaults are used.
 - **Consoles:** tested on one PCH-1000 with firmware 3.65. PCH-2000 and PS TV use the same storage system but are untested.
+
+## Install
+
+You need a file manager such as [VitaShell](https://github.com/TheOfficialFloW/VitaShell) to copy files and edit a text file on the Vita.
+
+1. Download `vita-memio-<version>.zip` from the [latest release](https://github.com/Osaul4ik/vita-memio/releases/latest) and unpack it on your PC.
+2. Copy these **three** files to the folder **`ur0:tai/`** on the Vita:
+   - `vitamemio_kernel.skprx`
+   - `vitamemio_hud.skprx`
+   - `vitamemio.suprx`
+3. Open your taiHEN config file in VitaShell (select it and press Cross to edit it). It is **`ux0:tai/config.txt`** if that file exists, otherwise **`ur0:tai/config.txt`**. Add these lines:
+
+   ```
+   *KERNEL
+   ur0:tai/vitamemio_kernel.skprx
+
+   *NPXS10015
+   ur0:tai/vitamemio.suprx
+   ```
+
+   If your file already has a `*KERNEL` line, put `ur0:tai/vitamemio_kernel.skprx` under the existing one instead of adding a second `*KERNEL`. The same goes for `*NPXS10015`. Do **not** add `vitamemio_hud.skprx`: the plugin loads it by itself.
+4. Restart the console.
+5. Open **Settings → Devices → vita-memio** and switch on the storage you use:
+   - **Faster SD2Vita** if your games are on a microSD in an SD2Vita;
+   - **Faster Vita memory card** if they are on the Sony memory card.
+
+Done. You don't need to change anything else.
+
+**How do I know it works?** The row under the title says **Driver: active**. Press it to see the version, the status and how much memory the plugin uses. In a game, **SELECT + Right** opens the plugin's overlay (see [Overlay and HUD](#overlay-and-hud)).
+
+The zip also contains `vitamemio_tester.vpk`, an optional app that measures your card (see [Tester](#tester)), and `SHA256SUMS` to check the downloaded files.
+
+## Update
+
+1. Open **Settings → Devices → vita-memio** and switch **Driver** off.
+2. Restart the console.
+3. Replace the three files in `ur0:tai/` with the new ones. **Always replace all three together.**
+4. Delete the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+5. Restart the console.
+6. Open **Settings → Devices → vita-memio** again and switch your storage on.
+
+Deleting the folders resets everything to the defaults: the settings, the per-game overlay settings and the card measurements. The plugin measures your card again by itself while you play. If you forget this step, nothing breaks: files from another version are simply deleted and the defaults are used.
+
+## Uninstall
+
+1. Switch **Driver** off and restart.
+2. Remove the plugin's lines from `config.txt`.
+3. Delete the three files from `ur0:tai/` and the folders `ur0:data/vita-memio/` and `ux0:data/vita-memio/`.
+4. Restart.
+
+## Problems
+
+**Error C1-2569-2, or a crash right after switching the plugin on.** The console is out of kernel memory, usually because of many kernel plugins. Try these, one after another:
+1. Set **Kernel memory** to **Low** and restart.
+2. Switch off **Overlay**, **Read ahead** and **Overlapped reads**.
+3. Remove kernel plugins you don't need.
+
+**The status says "Driver: safe mode".** The console restarted (or crashed) last time before the plugin had shown that it works, so this start loaded nothing. Switch off whatever you changed last, press **Reset safe mode** and restart.
+
+**The status says "Driver: not loaded".** `vitamemio_kernel.skprx` is not running: check that it is in `ur0:tai/` and listed under `*KERNEL` in the right `config.txt` (step 3 of [Install](#install)), then restart.
+
+**The vita-memio page is missing from Settings.** `vitamemio.suprx` is not loaded: check the `*NPXS10015` lines in `config.txt`.
+
+**A game shows broken graphics.** Set **GPU-safe reads** to **All**. If that does not help, switch the storage off and [open an issue](https://github.com/Osaul4ik/vita-memio/issues).
+
+**Something else.** Switch on **Enable log**, reproduce the problem and attach `ur0:data/vita-memio/kernel.log` to an [issue](https://github.com/Osaul4ik/vita-memio/issues).
 
 ## Disclaimer
 
